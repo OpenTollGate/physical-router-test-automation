@@ -1,0 +1,6 @@
+node_modules/
+test-results/
+report/
+playwright-report/
+.DS_Store
+*.ipk

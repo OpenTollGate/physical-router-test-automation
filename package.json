@@ -1,0 +1,12 @@
+{
+  "name": "physical-router-test-automation",
+  "version": "1.0.0",
+  "private": true,
+  "description": "E2E test suite for physical router tollgate deployments",
+  "scripts": {
+    "test": "cd tests && npx playwright test --config=playwright.config.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0"
+  }
+}
