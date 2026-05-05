@@ -69,3 +69,65 @@ Defaults to `desktop` viewport. The full suite runs ~3 minutes with 35 tests.
 ## cashu CLI Notes
 
 The test suite uses [cashu](https://github.com/cashubtc/cashu) to mint testnet tokens from `testnut.cashu.exchange` (a FakeWallet mint that auto-pays invoices). The `setup-cashu.sh` script applies a one-line patch to cashu's `models.py` to handle a version mismatch with the testnut mint's API (missing `active` field on keysets).
+
+---
+
+## Manual Hardware Test Suites
+
+In addition to the Playwright tests, this repo contains Makefile-based test suites for manual hardware testing against physical routers via SSH.
+
+### Directory Structure
+
+```
+upstream-wifi/       # Upstream WiFi daemon tests (scan, connect, switch, reseller mode)
+  Makefile           # make -f upstream-wifi/Makefile r-smoke ROUTER=alpha SSID=MyNet PASS=secret
+  routers.env.example
+  docs/              # Incident notes, device test reports
+
+mint-health/         # Mint health tracking tests (degraded mode, offline payment, recovery)
+  Makefile           # make -f mint-health/Makefile r-smoke-degraded ROUTER=alpha
+  routers.env.example
+  docs/              # Router test plan, mutex protocol
+```
+
+### Setup for Manual Tests
+
+```bash
+# Copy the env template for the test suite you want and fill in real values
+cp upstream-wifi/routers.env.example upstream-wifi/routers.env   # edit with real IPs/passwords
+cp mint-health/routers.env.example mint-health/routers.env       # edit with real IPs/passwords
+
+# Deploy the latest binary
+scripts/local-compile-to-router.sh <ROUTER_IP>
+```
+
+### Mint Health Test Quick Reference
+
+```bash
+# Single-router degraded mode lifecycle (~5 min)
+make -f mint-health/Makefile r-smoke-degraded ROUTER=alpha
+
+# Two-router combined test (~20 min)
+make -f mint-health/Makefile r-smoke-degraded-upstream     # Scenario A: connect online, then degrade
+make -f mint-health/Makefile r-smoke-degraded-connect       # Scenario B: connect while degraded
+
+# STA health check
+make -f mint-health/Makefile r-check-sta-health ROUTER=alpha
+```
+
+See `mint-health/docs/router-test-plan.md` for the full test plan.
+
+### Upstream WiFi Test Quick Reference
+
+```bash
+# Smoke test (~5 min)
+make -f upstream-wifi/Makefile r-smoke ROUTER=alpha SSID=MyNet PASS=secret
+
+# Full test suite (~30 min)
+make -f upstream-wifi/Makefile r-full ROUTER=alpha SSID=MyNet PASS=secret
+
+# STA health check
+make -f upstream-wifi/Makefile r-check-sta-health ROUTER=alpha
+```
+
+See `upstream-wifi/docs/upstream-wifi-test-report.md` for test results and `docs/router-b-incident-2026-04-30.md` for incident notes.
