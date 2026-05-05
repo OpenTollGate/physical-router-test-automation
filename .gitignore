@@ -6,3 +6,5 @@ test-run-*
 .DS_Store
 *.ipk
 .env
+
+config/routers.json
