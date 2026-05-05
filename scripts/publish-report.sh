@@ -4,6 +4,7 @@ set -euo pipefail
 REPORT_DIR="${1:?Usage: $0 <report-dir> <branch-name>}"
 BRANCH_NAME="${2:?Usage: $0 <report-dir> <branch-name>}"
 
+REPORT_DIR="$(cd "$(dirname "$REPORT_DIR")" && pwd)/$(basename "$REPORT_DIR")"
 if [ ! -d "$REPORT_DIR" ]; then
   echo "ERROR: report dir not found: $REPORT_DIR" >&2
   exit 1
