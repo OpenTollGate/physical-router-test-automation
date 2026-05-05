@@ -9,7 +9,8 @@ from lib.constants import TEST_MINT_URL
 
 
 class CashuMint:
-    def __init__(self, venv_path: str = "/tmp/cashu-venv", mint_url: str = TEST_MINT_URL):
+    def __init__(self, venv_path: str = None, mint_url: str = TEST_MINT_URL):
+        venv_path = venv_path or os.environ.get("TOLLGATE_CASHU_VENV", "/tmp/cashu-venv")
         self.venv_path = venv_path
         self.mint_url = mint_url
         self._python = os.path.join(venv_path, "bin", "python")
