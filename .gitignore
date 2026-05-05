@@ -4,3 +4,4 @@ report/
 playwright-report/
 .DS_Store
 *.ipk
+.env
