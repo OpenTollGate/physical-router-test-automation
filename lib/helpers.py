@@ -24,6 +24,11 @@ def is_mac_lookup_failure(resp: dict) -> bool:
                and "mac-address-lookup-failed" in t[1] for t in tags)
 
 
+def require_client_identity(router):
+    if not router.phone_ip and not router.phone_mac:
+        pytest.skip("Set TOLLGATE_CLIENT_IP/TOLLGATE_CLIENT_MAC or run a phone client on the TollGate AP")
+
+
 def parse_json_or_fail(text, label="response", skip=False):
     try:
         return json.loads(text)

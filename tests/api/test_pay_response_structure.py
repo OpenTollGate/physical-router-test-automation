@@ -1,6 +1,6 @@
 import json
 import pytest
-from lib.helpers import is_session_event, is_mac_lookup_failure
+from lib.helpers import is_session_event, is_mac_lookup_failure, require_client_identity
 
 pytestmark = [pytest.mark.api, pytest.mark.critical]
 
@@ -35,6 +35,7 @@ def test_pay_rejects_fake_token(router):
 
 
 def test_pay_success_returns_session(router, cashu):
+    require_client_identity(router)
     token = cashu.mint(3)
     resp = router.pay_direct(token)
 
