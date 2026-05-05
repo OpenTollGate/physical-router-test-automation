@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Makefile.test — Manual testing for upstream WiFi management & mint health
+# Makefile — Manual testing for upstream WiFi management & mint health
 #
 # Two modes:
 #   1. LOCAL  — run directly on the router (SSH into it first)
@@ -10,17 +10,17 @@
 #   ssh-copy-id root@<router-ip>         # SSH key auth, no passwords
 #
 # Quick reference:
-#   make -f Makefile.test smoke   SSID=MyNet PASS=secret          # local upstream wifi
-#   make -f Makefile.test r-smoke SSID=MyNet PASS=secret ROUTER=alpha  # remote upstream wifi
-#   make -f Makefile.test r-smoke-offline ROUTER=alpha               # test degraded mode
-#   make -f Makefile.test r-smoke-recovery ROUTER=alpha              # test recovery
-#   make -f Makefile.test r-smoke-degraded ROUTER=alpha              # full degraded lifecycle (single router)
-#   make -f Makefile.test r-smoke-degraded-upstream                  # degraded payment renewal (two routers)
-#   make -f Makefile.test r-deploy ROUTER=alpha                      # deploy binaries
-#   make -f Makefile.test r-full ROUTER=alpha                        # full mint health suite
-#   make -f Makefile.test r-full-upstream SSID=MyNet PASS=secret ROUTER=alpha  # full wifi suite
-#   make -f Makefile.test r-lock PHASE="description"                 # acquire router lock
-#   make -f Makefile.test r-unlock                                   # release router lock
+#   make -f Makefile smoke   SSID=MyNet PASS=secret          # local upstream wifi
+#   make -f Makefile r-smoke SSID=MyNet PASS=secret ROUTER=alpha  # remote upstream wifi
+#   make -f Makefile r-smoke-offline ROUTER=alpha               # test degraded mode
+#   make -f Makefile r-smoke-recovery ROUTER=alpha              # test recovery
+#   make -f Makefile r-smoke-degraded ROUTER=alpha              # full degraded lifecycle (single router)
+#   make -f Makefile r-smoke-degraded-upstream                  # degraded payment renewal (two routers)
+#   make -f Makefile r-deploy ROUTER=alpha                      # deploy binaries
+#   make -f Makefile r-full ROUTER=alpha                        # full mint health suite
+#   make -f Makefile r-full-upstream SSID=MyNet PASS=secret ROUTER=alpha  # full wifi suite
+#   make -f Makefile r-lock PHASE="description"                 # acquire router lock
+#   make -f Makefile r-unlock                                   # release router lock
 #
 # Router mutex: all r-* targets that modify router state check routers.lock
 # first. See docs/router-mutex.md for details.
@@ -99,8 +99,8 @@ if [ -f "$(ROUTER_LOCK)" ]; then \
 	grep "^phase:" $(ROUTER_LOCK) | sed 's/^phase:/  Phase:/'; \
 	grep "^timestamp:" $(ROUTER_LOCK) | sed 's/^timestamp:/  Since:/'; \
 	echo ""; \
-	echo "$(YELLOW)To check status: make -f Makefile.test r-status-lock$(RESET)"; \
-	echo "$(YELLOW)To force-release: make -f Makefile.test force-unlock$(RESET)"; \
+	echo "$(YELLOW)To check status: make -f Makefile r-status-lock$(RESET)"; \
+	echo "$(YELLOW)To force-release: make -f Makefile force-unlock$(RESET)"; \
 	exit 1; \
 fi
 endef
@@ -113,8 +113,8 @@ help: ## Show this help
 	@echo "Router Manual Testing — Upstream WiFi & Mint Health"
 	@echo "====================================================="
 	@echo ""
-	@echo "Usage (local):  make -f Makefile.test <target> SSID=x PASS=y"
-	@echo "Usage (remote): make -f Makefile.test r-<target> SSID=x PASS=y ROUTER=alpha"
+	@echo "Usage (local):  make -f Makefile <target> SSID=x PASS=y"
+	@echo "Usage (remote): make -f Makefile r-<target> SSID=x PASS=y ROUTER=alpha"
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  $(CYAN)%-35s$(RESET) %s\n", $$1, $$2}'
@@ -127,10 +127,10 @@ help: ## Show this help
 	@echo "  PHASE   - description for router lock (default: unspecified)"
 	@echo ""
 	@echo "Degraded mode testing:"
-	@echo "  make -f Makefile.test r-setup-test-mint ROUTER=alpha      # switch to test mint"
-	@echo "  make -f Makefile.test r-smoke-degraded ROUTER=alpha       # single-router lifecycle"
-	@echo "  make -f Makefile.test r-smoke-degraded-upstream           # two-router payment test"
-	@echo "  make -f Makefile.test r-restore-prod-config ROUTER=alpha  # restore production config"
+	@echo "  make -f Makefile r-setup-test-mint ROUTER=alpha      # switch to test mint"
+	@echo "  make -f Makefile r-smoke-degraded ROUTER=alpha       # single-router lifecycle"
+	@echo "  make -f Makefile r-smoke-degraded-upstream           # two-router payment test"
+	@echo "  make -f Makefile r-restore-prod-config ROUTER=alpha  # restore production config"
 
 # ---------------------------------------------------------------------------
 #  Upstream WiFi — Local targets
@@ -163,7 +163,7 @@ scan: ## [local] Phase 2: Scan for available upstream WiFi networks
 	@logread -e tollgate | grep -i "scan" | tail -5
 
 connect: ## [local] Phase 3: Connect to upstream WiFi (requires SSID, optional PASS)
-	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile.test connect SSID=MyNet PASS=secret$(RESET)"; exit 1; fi
+	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile connect SSID=MyNet PASS=secret$(RESET)"; exit 1; fi
 	@echo "$(BOLD)=== Phase 3: Upstream Connect ===$(RESET)"
 	@echo ""
 	@echo "$(YELLOW)Connecting to '$(SSID)'...$(RESET)"
@@ -227,7 +227,7 @@ simulate-connectivity-loss: ## [local] Phase 5.3: Simulate connectivity loss
 	echo "$(GREEN)Unblocked $$ifname$(RESET)"
 
 remove: ## [local] Phase 6: Remove a disabled upstream STA (requires SSID)
-	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile.test remove SSID=MyNet$(RESET)"; exit 1; fi
+	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile remove SSID=MyNet$(RESET)"; exit 1; fi
 	@echo "$(BOLD)=== Phase 6: Remove Upstream ===$(RESET)"
 	@echo ""
 	@echo "$(YELLOW)Attempting to remove '$(SSID)'...$(RESET)"
@@ -292,7 +292,7 @@ test-cleanup: ## [local] Phase 9: Verify old shell scripts are gone
 		echo "$(RED)FAIL: upstream command not found in CLI help$(RESET)"
 
 smoke: ## [local] Run the upstream WiFi smoke test (requires SSID, optional PASS)
-	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile.test smoke SSID=MyNet PASS=secret$(RESET)"; exit 1; fi
+	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile smoke SSID=MyNet PASS=secret$(RESET)"; exit 1; fi
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(BOLD)  Upstream WiFi Smoke Test (5 min)$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
@@ -336,34 +336,34 @@ smoke: ## [local] Run the upstream WiFi smoke test (requires SSID, optional PASS
 	@echo "$(BOLD)=======================================$(RESET)"
 
 full-upstream: ## [local] Run the full upstream WiFi test suite (requires SSID, optional PASS)
-	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile.test full-upstream SSID=MyNet PASS=secret$(RESET)"; exit 1; fi
+	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile full-upstream SSID=MyNet PASS=secret$(RESET)"; exit 1; fi
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(BOLD)  Upstream WiFi Full Test Suite$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo ""
-	@$(MAKE) -f Makefile.test status
+	@$(MAKE) -f Makefile status
 	@echo ""
-	@$(MAKE) -f Makefile.test scan
+	@$(MAKE) -f Makefile scan
 	@echo ""
-	@$(MAKE) -f Makefile.test connect SSID="$(SSID)" PASS="$(PASS)"
+	@$(MAKE) -f Makefile connect SSID="$(SSID)" PASS="$(PASS)"
 	@echo ""
-	@$(MAKE) -f Makefile.test list
+	@$(MAKE) -f Makefile list
 	@echo ""
-	@$(MAKE) -f Makefile.test verify-uci
+	@$(MAKE) -f Makefile verify-uci
 	@echo ""
-	@$(MAKE) -f Makefile.test test-edge-cases SSID="$(SSID)"
+	@$(MAKE) -f Makefile test-edge-cases SSID="$(SSID)"
 	@echo ""
-	@$(MAKE) -f Makefile.test test-cleanup
+	@$(MAKE) -f Makefile test-cleanup
 	@echo ""
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(GREEN)$(BOLD)  Full test suite PASSED$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo ""
 	@echo "$(YELLOW)Remaining manual steps:$(RESET)"
-	@echo "  - Phase 5:  make -f Makefile.test wait-daemon"
-	@echo "  - Phase 5.3: make -f Makefile.test simulate-connectivity-loss"
-	@echo "  - Phase 6:   make -f Makefile.test remove SSID=<old-ssid> (after connecting to a different one)"
-	@echo "  - Phase 7:   make -f Makefile.test test-reseller-guard"
+	@echo "  - Phase 5:  make -f Makefile wait-daemon"
+	@echo "  - Phase 5.3: make -f Makefile simulate-connectivity-loss"
+	@echo "  - Phase 6:   make -f Makefile remove SSID=<old-ssid> (after connecting to a different one)"
+	@echo "  - Phase 7:   make -f Makefile test-reseller-guard"
 
 # ---------------------------------------------------------------------------
 #  Mint Health — Local targets
@@ -499,8 +499,8 @@ smoke-offline: ## [local] Quick offline test: block + restart + verify degraded
 	echo "  Baseline: $$balance sats"
 	@echo ""
 	@echo "$(CYAN)2/4 — Blocking mint and restarting...$(RESET)"
-	@$(MAKE) -f Makefile.test block-mint MINT="$(MINT)"
-	@$(MAKE) -f Makefile.test restart-service
+	@$(MAKE) -f Makefile block-mint MINT="$(MINT)"
+	@$(MAKE) -f Makefile restart-service
 	@echo ""
 	@echo "$(CYAN)3/4 — Checking degraded mode...$(RESET)"
 	@logread -e tollgate | grep -q "Starting in degraded mode" && \
@@ -515,7 +515,7 @@ smoke-offline: ## [local] Quick offline test: block + restart + verify degraded
 	@echo "$(GREEN)$(BOLD)  Offline smoke test complete$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo ""
-	@echo "$(YELLOW)Restore: make -f Makefile.test unblock-mint MINT='$(MINT)' && make -f Makefile.test restart-service$(RESET)"
+	@echo "$(YELLOW)Restore: make -f Makefile unblock-mint MINT='$(MINT)' && make -f Makefile restart-service$(RESET)"
 
 smoke-recovery: ## [local] Quick recovery test: unblock + wait
 	@echo "$(BOLD)=======================================$(RESET)"
@@ -523,35 +523,35 @@ smoke-recovery: ## [local] Quick recovery test: unblock + wait
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo ""
 	@echo "$(CYAN)1/2 — Unblocking mint...$(RESET)"
-	@$(MAKE) -f Makefile.test unblock-mint MINT="$(MINT)"
+	@$(MAKE) -f Makefile unblock-mint MINT="$(MINT)"
 	@echo ""
 	@echo "$(CYAN)2/2 — Watching for recovery...$(RESET)"
-	@$(MAKE) -f Makefile.test wait-recovery
+	@$(MAKE) -f Makefile wait-recovery
 
 full: ## [local] Run the full mint health test suite (~20 min)
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(BOLD)  Degraded Merchant Full Test Suite$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo ""
-	@$(MAKE) -f Makefile.test status
+	@$(MAKE) -f Makefile status
 	@echo ""
-	@$(MAKE) -f Makefile.test check-merchant
+	@$(MAKE) -f Makefile check-merchant
 	@echo ""
-	@$(MAKE) -f Makefile.test record-baseline
+	@$(MAKE) -f Makefile record-baseline
 	@echo ""
-	@$(MAKE) -f Makefile.test block-mint MINT="$(MINT)"
+	@$(MAKE) -f Makefile block-mint MINT="$(MINT)"
 	@echo ""
-	@$(MAKE) -f Makefile.test restart-service
+	@$(MAKE) -f Makefile restart-service
 	@echo ""
-	@$(MAKE) -f Makefile.test check-degraded
+	@$(MAKE) -f Makefile check-degraded
 	@echo ""
-	@$(MAKE) -f Makefile.test test-offline-ops
+	@$(MAKE) -f Makefile test-offline-ops
 	@echo ""
-	@$(MAKE) -f Makefile.test unblock-mint MINT="$(MINT)"
+	@$(MAKE) -f Makefile unblock-mint MINT="$(MINT)"
 	@echo ""
-	@$(MAKE) -f Makefile.test wait-recovery
+	@$(MAKE) -f Makefile wait-recovery
 	@echo ""
-	@$(MAKE) -f Makefile.test cleanup
+	@$(MAKE) -f Makefile cleanup
 	@echo ""
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(GREEN)$(BOLD)  Full test suite complete$(RESET)"
@@ -571,7 +571,7 @@ r-lock: ## [remote] Acquire router lock (set PHASE="description")
 		grep "^phase:" $(ROUTER_LOCK) | sed 's/^phase:/  Phase:/'; \
 		grep "^timestamp:" $(ROUTER_LOCK) | sed 's/^timestamp:/  Since:/'; \
 		echo ""; \
-		echo "$(YELLOW)Use 'make -f Makefile.test force-unlock' to override (with caution).$(RESET)"; \
+		echo "$(YELLOW)Use 'make -f Makefile force-unlock' to override (with caution).$(RESET)"; \
 		exit 1; \
 	fi; \
 	branch=$$(git branch --show-current 2>/dev/null || echo "unknown"); \
@@ -619,7 +619,7 @@ r-status-lock: ## [remote] Show current router lock status
 			age=$$(($$(date +%s) - $$(date -d "$$ts" +%s 2>/dev/null || echo 0))); \
 			if [ $$age -gt 7200 ]; then \
 				echo "$(YELLOW)WARNING: Lock is over 2 hours old — likely stale.$(RESET)"; \
-				echo "$(YELLOW)Consider: make -f Makefile.test force-unlock$(RESET)"; \
+				echo "$(YELLOW)Consider: make -f Makefile force-unlock$(RESET)"; \
 			fi; \
 		fi; \
 	fi
@@ -682,7 +682,7 @@ r-list: ## [remote] Phase 4 via SSH
 	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate upstream list"
 
 r-connect: ## [remote] Phase 3 via SSH (requires SSID, optional PASS)
-	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile.test r-connect SSID=MyNet PASS=secret ROUTER=alpha$(RESET)"; exit 1; fi
+	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile r-connect SSID=MyNet PASS=secret ROUTER=alpha$(RESET)"; exit 1; fi
 	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
 	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
 	echo "$(BOLD)=== Phase 3: Upstream Connect [$(ROUTER)] ===$(RESET)"; \
@@ -696,7 +696,7 @@ r-connect: ## [remote] Phase 3 via SSH (requires SSID, optional PASS)
 	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "ping -c 3 -W 5 8.8.8.8" && echo "$(GREEN)Online!$(RESET)" || echo "$(RED)Not reachable$(RESET)"
 
 r-remove: ## [remote] Phase 6 via SSH (requires SSID)
-	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile.test r-remove SSID=MyNet ROUTER=alpha$(RESET)"; exit 1; fi
+	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile r-remove SSID=MyNet ROUTER=alpha$(RESET)"; exit 1; fi
 	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
 	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
 	echo "$(BOLD)=== Phase 6: Remove Upstream [$(ROUTER)] ===$(RESET)"; \
@@ -858,7 +858,7 @@ r-cleanup: ## [remote] Phase 8: Remove /etc/hosts overrides and restore
 # ---------------------------------------------------------------------------
 
 r-smoke: ## [remote] Run upstream WiFi smoke test via SSH (requires SSID, optional PASS, ROUTER)
-	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile.test r-smoke SSID=MyNet PASS=secret ROUTER=alpha$(RESET)"; exit 1; fi
+	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile r-smoke SSID=MyNet PASS=secret ROUTER=alpha$(RESET)"; exit 1; fi
 	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
 	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
 	echo "$(BOLD)=======================================$(RESET)"; \
@@ -893,30 +893,30 @@ r-smoke: ## [remote] Run upstream WiFi smoke test via SSH (requires SSID, option
 	echo "$(BOLD)=======================================$(RESET)"
 
 r-smoke-offline: ## [remote] Quick offline smoke: block + restart + verify degraded
-	@$(MAKE) -f Makefile.test r-record-baseline ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-record-baseline ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-block-mint ROUTER=$(ROUTER) MINT="$(MINT)"
+	@$(MAKE) -f Makefile r-block-mint ROUTER=$(ROUTER) MINT="$(MINT)"
 	@echo ""
-	@$(MAKE) -f Makefile.test r-restart-service ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-restart-service ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-check-degraded ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-check-degraded ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-test-offline-ops ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-test-offline-ops ROUTER=$(ROUTER)
 	@echo ""
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(GREEN)$(BOLD)  Offline smoke test complete [$(ROUTER)]$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo ""
 	@echo "$(YELLOW)To test recovery:$(RESET)"
-	@echo "  make -f Makefile.test r-smoke-recovery ROUTER=$(ROUTER)"
+	@echo "  make -f Makefile r-smoke-recovery ROUTER=$(ROUTER)"
 	@echo ""
 	@echo "$(YELLOW)To restore immediately:$(RESET)"
-	@echo "  make -f Makefile.test r-cleanup ROUTER=$(ROUTER)"
+	@echo "  make -f Makefile r-cleanup ROUTER=$(ROUTER)"
 
 r-smoke-recovery: ## [remote] Quick recovery smoke: unblock + wait
-	@$(MAKE) -f Makefile.test r-unblock-mint ROUTER=$(ROUTER) MINT="$(MINT)"
+	@$(MAKE) -f Makefile r-unblock-mint ROUTER=$(ROUTER) MINT="$(MINT)"
 	@echo ""
-	@$(MAKE) -f Makefile.test r-wait-recovery ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-wait-recovery ROUTER=$(ROUTER)
 
 # ---------------------------------------------------------------------------
 #  Test mint setup & degraded mode suites
@@ -992,36 +992,36 @@ r-smoke-degraded: ## [remote] Single-router degraded mode lifecycle
 	@echo "$(BOLD)  Degraded Mode Smoke Test [$(ROUTER)]$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo ""
-	@$(MAKE) -f Makefile.test r-setup-test-mint ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-setup-test-mint ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-fund-wallet ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-fund-wallet ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-check-merchant ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-check-merchant ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-record-baseline ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-record-baseline ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-block-mint ROUTER=$(ROUTER) MINT="$(MINT)"
+	@$(MAKE) -f Makefile r-block-mint ROUTER=$(ROUTER) MINT="$(MINT)"
 	@echo ""
-	@$(MAKE) -f Makefile.test r-restart-service ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-restart-service ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-check-degraded ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-check-degraded ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-test-offline-ops ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-test-offline-ops ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-unblock-mint ROUTER=$(ROUTER) MINT="$(MINT)"
+	@$(MAKE) -f Makefile r-unblock-mint ROUTER=$(ROUTER) MINT="$(MINT)"
 	@echo ""
-	@$(MAKE) -f Makefile.test r-restart-service ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-restart-service ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-check-merchant ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-check-merchant ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-restore-prod-config ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-restore-prod-config ROUTER=$(ROUTER)
 	@echo ""
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(GREEN)$(BOLD)  Degraded mode smoke test PASSED [$(ROUTER)]$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
 
 r-rescue-router: ## [remote] Rescue a router with dead NetBird via another router's LAN. Usage: r-rescue-router ROUTER=beta VIA=alpha
-	@if [ -z "$(VIA)" ]; then echo "$(RED)Error: VIA is required. Usage: make -f Makefile.test r-rescue-router ROUTER=beta VIA=alpha$(RESET)"; exit 1; fi
+	@if [ -z "$(VIA)" ]; then echo "$(RED)Error: VIA is required. Usage: make -f Makefile r-rescue-router ROUTER=beta VIA=alpha$(RESET)"; exit 1; fi
 	@target_upper=$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]'); \
 	via_upper=$$(echo $(VIA) | tr '[:lower:]' '[:upper:]'); \
 	via_lan=$$(grep -E "^ROUTER_$${via_upper}_LAN_HOST=" routers.env | cut -d= -f2); \
@@ -1138,15 +1138,15 @@ r-smoke-degraded-upstream: ## [remote] Two-router: connect online, degrade, veri
 	\
 	echo ""; \
 	echo "$(CYAN)Step 2: Setup test mint on both routers$(RESET)"; \
-	$(MAKE) -f Makefile.test r-setup-test-mint ROUTER=alpha ROUTER_USE_LAN=1; \
+	$(MAKE) -f Makefile r-setup-test-mint ROUTER=alpha ROUTER_USE_LAN=1; \
 	echo ""; \
-	$(MAKE) -f Makefile.test r-setup-test-mint ROUTER=beta; \
+	$(MAKE) -f Makefile r-setup-test-mint ROUTER=beta; \
 	\
 	echo ""; \
 	echo "$(CYAN)Step 3: Fund both wallets$(RESET)"; \
-	$(MAKE) -f Makefile.test r-fund-wallet ROUTER=alpha ROUTER_USE_LAN=1; \
+	$(MAKE) -f Makefile r-fund-wallet ROUTER=alpha ROUTER_USE_LAN=1; \
 	echo ""; \
-	$(MAKE) -f Makefile.test r-fund-wallet ROUTER=beta; \
+	$(MAKE) -f Makefile r-fund-wallet ROUTER=beta; \
 	\
 	echo ""; \
 	echo "$(CYAN)Step 4: Verify both routers are merchant-ready$(RESET)"; \
@@ -1166,7 +1166,7 @@ r-smoke-degraded-upstream: ## [remote] Two-router: connect online, degrade, veri
 	echo "$(CYAN)Step 6: Wait for alpha to get DHCP on beta's LAN (up to 60s)$(RESET)"; \
 	for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
 		sleep 5; \
-		if ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_lan "ifconfig phy1-sta0 2>/dev/null | grep -q 'inet addr'" 2>/dev/null; then \
+		if ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_lan "ifstatus wwan 2>/dev/null | jsonfilter -e '@.up' 2>/dev/null | grep -q true" 2>/dev/null; then \
 			echo "$(GREEN)Alpha connected to beta's AP after $$((i*5))s$(RESET)"; \
 			break; \
 		fi; \
@@ -1202,7 +1202,7 @@ r-smoke-degraded-upstream: ## [remote] Two-router: connect online, degrade, veri
 	\
 	echo ""; \
 	echo "$(CYAN)Step 9: Block mint on alpha (degrade)$(RESET)"; \
-	$(MAKE) -f Makefile.test r-block-mint ROUTER=alpha MINT="$(MINT)" ROUTER_USE_LAN=1; \
+	$(MAKE) -f Makefile r-block-mint ROUTER=alpha MINT="$(MINT)" ROUTER_USE_LAN=1; \
 	\
 	echo ""; \
 	echo "$(CYAN)Step 10: Wait for session renewal with offline wallet (up to 60s)$(RESET)"; \
@@ -1232,9 +1232,9 @@ r-smoke-degraded-upstream: ## [remote] Two-router: connect online, degrade, veri
 	\
 	echo ""; \
 	echo "$(CYAN)Step 13: Restore production configs on both routers$(RESET)"; \
-	$(MAKE) -f Makefile.test r-restore-prod-config ROUTER=alpha; \
+	$(MAKE) -f Makefile r-restore-prod-config ROUTER=alpha; \
 	echo ""; \
-	$(MAKE) -f Makefile.test r-restore-prod-config ROUTER=beta; \
+	$(MAKE) -f Makefile r-restore-prod-config ROUTER=beta; \
 	\
 	echo ""; \
 	echo "$(BOLD)=======================================$(RESET)"
@@ -1254,21 +1254,21 @@ r-smoke-degraded-connect: ## [remote] WARNING: may strand router. Connect to ups
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo ""
 	@echo "$(CYAN)Step 1: Setup test mint on both routers$(RESET)"
-	@$(MAKE) -f Makefile.test r-setup-test-mint ROUTER=alpha ROUTER_USE_LAN=1
+	@$(MAKE) -f Makefile r-setup-test-mint ROUTER=alpha ROUTER_USE_LAN=1
 	@echo ""
-	@$(MAKE) -f Makefile.test r-setup-test-mint ROUTER=beta
+	@$(MAKE) -f Makefile r-setup-test-mint ROUTER=beta
 	@echo ""
 	@echo "$(CYAN)Step 1b: Fund both wallets$(RESET)"
-	@$(MAKE) -f Makefile.test r-fund-wallet ROUTER=alpha ROUTER_USE_LAN=1
+	@$(MAKE) -f Makefile r-fund-wallet ROUTER=alpha ROUTER_USE_LAN=1
 	@echo ""
-	@$(MAKE) -f Makefile.test r-fund-wallet ROUTER=beta
+	@$(MAKE) -f Makefile r-fund-wallet ROUTER=beta
 	@echo ""
 	@echo "$(CYAN)Step 2: Degrade alpha FIRST$(RESET)"
-	@$(MAKE) -f Makefile.test r-block-mint ROUTER=alpha MINT="$(MINT)" ROUTER_USE_LAN=1
+	@$(MAKE) -f Makefile r-block-mint ROUTER=alpha MINT="$(MINT)" ROUTER_USE_LAN=1
 	@echo ""
-	@$(MAKE) -f Makefile.test r-restart-service ROUTER=alpha ROUTER_USE_LAN=1
+	@$(MAKE) -f Makefile r-restart-service ROUTER=alpha ROUTER_USE_LAN=1
 	@echo ""
-	@$(MAKE) -f Makefile.test r-check-degraded ROUTER=alpha ROUTER_USE_LAN=1
+	@$(MAKE) -f Makefile r-check-degraded ROUTER=alpha ROUTER_USE_LAN=1
 	@echo ""
 	@echo "$(CYAN)Step 3: Connect alpha to beta while degraded$(RESET)"
 	@echo "$(YELLOW)If degraded payment fails, alpha may become unreachable.$(RESET)"
@@ -1281,9 +1281,9 @@ r-smoke-degraded-connect: ## [remote] WARNING: may strand router. Connect to ups
 		ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_lan "ping -c 2 -W 5 9.9.9.9" && echo "$(GREEN)ONLINE$(RESET)" || echo "$(RED)No internet$(RESET)"; \
 		echo ""; \
 		echo "$(CYAN)Step 5: Restore both routers$(RESET)"; \
-	$(MAKE) -f Makefile.test r-restore-prod-config ROUTER=alpha ROUTER_USE_LAN=1; \
+	$(MAKE) -f Makefile r-restore-prod-config ROUTER=alpha ROUTER_USE_LAN=1; \
 		echo ""; \
-		$(MAKE) -f Makefile.test r-restore-prod-config ROUTER=beta; \
+		$(MAKE) -f Makefile r-restore-prod-config ROUTER=beta; \
 		echo ""; \
 		echo "$(GREEN)$(BOLD)  Degraded connect test PASSED$(RESET)"; \
 	else \
@@ -1301,60 +1301,60 @@ r-full: ## [remote] Run the full mint health test suite (~20 min)
 	@echo "$(BOLD)  Degraded Merchant Full Test Suite [$(ROUTER)]$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo ""
-	@$(MAKE) -f Makefile.test r-deploy ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-deploy ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-status ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-status ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-check-merchant ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-check-merchant ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-record-baseline ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-record-baseline ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-block-mint ROUTER=$(ROUTER) MINT="$(MINT)"
+	@$(MAKE) -f Makefile r-block-mint ROUTER=$(ROUTER) MINT="$(MINT)"
 	@echo ""
-	@$(MAKE) -f Makefile.test r-restart-service ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-restart-service ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-check-degraded ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-check-degraded ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-test-offline-ops ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-test-offline-ops ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-unblock-mint ROUTER=$(ROUTER) MINT="$(MINT)"
+	@$(MAKE) -f Makefile r-unblock-mint ROUTER=$(ROUTER) MINT="$(MINT)"
 	@echo ""
-	@$(MAKE) -f Makefile.test r-wait-recovery ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-wait-recovery ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-cleanup ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-cleanup ROUTER=$(ROUTER)
 	@echo ""
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(GREEN)$(BOLD)  Full test suite complete [$(ROUTER)]$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo ""
 	@echo "$(YELLOW)Remaining manual steps (remote):$(RESET)"
-	@echo "  - Phase 6: make -f Makefile.test r-test-first-boot-offline ROUTER=beta"
-	@echo "  - Phase 7: make -f Makefile.test r-test-no-mints ROUTER=$(ROUTER)"
+	@echo "  - Phase 6: make -f Makefile r-test-first-boot-offline ROUTER=beta"
+	@echo "  - Phase 7: make -f Makefile r-test-no-mints ROUTER=$(ROUTER)"
 
 r-full-upstream: ## [remote] Run full upstream WiFi test suite via SSH (requires SSID, optional PASS, ROUTER)
-	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile.test r-full-upstream SSID=MyNet PASS=secret ROUTER=alpha$(RESET)"; exit 1; fi
-	@$(MAKE) -f Makefile.test r-status ROUTER=$(ROUTER)
+	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile r-full-upstream SSID=MyNet PASS=secret ROUTER=alpha$(RESET)"; exit 1; fi
+	@$(MAKE) -f Makefile r-status ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-scan ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-scan ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-connect SSID="$(SSID)" PASS="$(PASS)" ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-connect SSID="$(SSID)" PASS="$(PASS)" ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-list ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-list ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-verify-uci ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-verify-uci ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-test-edge-cases ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-test-edge-cases ROUTER=$(ROUTER)
 	@echo ""
-	@$(MAKE) -f Makefile.test r-test-cleanup ROUTER=$(ROUTER)
+	@$(MAKE) -f Makefile r-test-cleanup ROUTER=$(ROUTER)
 	@echo ""
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(GREEN)$(BOLD)  Full upstream test suite PASSED [$(ROUTER)]$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo ""
 	@echo "$(YELLOW)Remaining manual steps (remote):$(RESET)"
-	@echo "  - Phase 5:   make -f Makefile.test r-wait-daemon ROUTER=$(ROUTER)"
-	@echo "  - Phase 6:   make -f Makefile.test r-remove SSID=<old-ssid> ROUTER=$(ROUTER)"
-	@echo "  - Phase 7:   make -f Makefile.test r-test-reseller-guard ROUTER=$(ROUTER)"
+	@echo "  - Phase 5:   make -f Makefile r-wait-daemon ROUTER=$(ROUTER)"
+	@echo "  - Phase 6:   make -f Makefile r-remove SSID=<old-ssid> ROUTER=$(ROUTER)"
+	@echo "  - Phase 7:   make -f Makefile r-test-reseller-guard ROUTER=$(ROUTER)"
 
 define _resolve_router
 $(eval include routers.env) \
