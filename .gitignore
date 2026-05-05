@@ -5,3 +5,8 @@ playwright-report/
 .DS_Store
 *.ipk
 .env
+report.html
+results/
+__pycache__/
+*.pyc
+_cashu_db/
