@@ -4,7 +4,9 @@
   "private": true,
   "description": "E2E test suite for physical router tollgate deployments",
   "scripts": {
-    "test": "cd tests && npx playwright test --config=playwright.config.mjs"
+    "test": "cd tests && npx playwright test --config=playwright.config.mjs",
+    "test:list": "npx playwright test --config=tests/playwright.config.mjs --list",
+    "flash:routers": "node scripts/flash-routers.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0"

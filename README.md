@@ -42,10 +42,10 @@ Takes a branch name, tag, or commit hash. Defaults to router at `192.168.13.112`
 ## Run Tests
 
 ```bash
-TOLLGATE_LUCI_PASSWORD=<password> ./scripts/run-tests.sh [desktop|mobile]
+TOLLGATE_LUCI_PASSWORD=<password> ./scripts/run-tests.sh <tollgate-commit> [desktop|mobile] [router-id]
 ```
 
-Defaults to `desktop` viewport. The full suite runs ~3 minutes with 35 tests.
+Defaults to `desktop` viewport. The full UI suite runs against a physical router and writes `test-run-*/run.json` plus an HTML report.
 
 ## Environment Variables
 
@@ -69,3 +69,24 @@ Defaults to `desktop` viewport. The full suite runs ~3 minutes with 35 tests.
 ## cashu CLI Notes
 
 The test suite uses [cashu](https://github.com/cashubtc/cashu) to mint testnet tokens from `testnut.cashu.exchange` (a FakeWallet mint that auto-pays invoices). The `setup-cashu.sh` script applies a one-line patch to cashu's `models.py` to handle a version mismatch with the testnut mint's API (missing `active` field on keysets).
+
+
+## Migrated Physical-Router Coverage
+
+The framework now keeps the Playwright LuCI UI suite and adds opt-in physical-router coverage extracted from the old `tollgate-module-basic-go/tests` directory:
+
+- `tests/router-network-config.spec.mjs` — OpenWrt `wwan`/station-mode UCI configuration and network restart verification.
+- `tests/tollgate-payment-protocol.spec.mjs` — TollGate discovery event, Cashu payment token, Nostr payment event signing via `nak`, and client connectivity verification.
+- `tests/data-allotment.spec.mjs` — bandwidth consumption until the paid data allotment closes connectivity.
+- `scripts/flash-routers.mjs` — ethernet hotplug firmware flashing utility for physical routers.
+
+Network-changing tests are opt-in and skip unless their required `TOLLGATE_*` environment variables are set. No router passwords, upstream WiFi credentials, firmware image paths, reports, screenshots, or generated results belong in git.
+
+## Multi-Router Inventory
+
+For multiple router models, copy `config/routers.example.json` to `config/routers.json` and set `TOLLGATE_ROUTER_ID`. The private inventory file is ignored by git.
+
+```bash
+cp config/routers.example.json config/routers.json
+TOLLGATE_ROUTER_ID=lab-router-a ./scripts/run-tests.sh <tollgate-commit>
+```
