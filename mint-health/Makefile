@@ -27,6 +27,11 @@
 #
 # Router mutex: all r-* targets that modify router state check routers.lock
 # first. See docs/router-mutex.md for details.
+#
+# WARNING: Dual-WWAN routing conflict — do NOT create a second wwan interface
+# (e.g. wwan2) on any router. Having two wwan interfaces simultaneously breaks
+# the default gateway routing and kills internet connectivity. Always use a
+# single wwan interface and switch its upstream when needed.
 # ---------------------------------------------------------------------------
 
 .PHONY: smoke smoke-offline smoke-recovery full full-upstream \
@@ -49,6 +54,7 @@
         r-smoke-degraded r-smoke-degraded-upstream r-smoke-degraded-connect \
         r-rescue-router r-save-upstream r-restore-upstream \
         r-diagnose-config-path r-test-default-mints \
+        r-guard-no-dual-wwan \
         r-lock r-unlock force-unlock r-status-lock \
         s-shell s-boot-log s-wait-boot s-status s-recovery s-wait-pattern \
         s-cleanup s-cold-boot-test s-check-merchant s-check-degraded \
@@ -980,6 +986,13 @@ r-fund-wallet: ## [remote] Fund wallet with 1013 sats from nofee.testnut.cashu.s
 	fi
 	@$(RESOLVE_ROUTER); \
 	echo "$(BOLD)=== Fund Wallet [$(ROUTER)] ===$(RESET)"; \
+	config_line=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "logread | grep 'config paths' | tail -1" 2>/dev/null); \
+	if ! echo "$$config_line" | grep -q '/etc/tollgate/config.json'; then \
+		echo "$(RED)FAIL: Service not reading from /etc/tollgate/config.json$(RESET)"; \
+		echo "  $$config_line"; \
+		echo "$(YELLOW)This means the binary has the 000_main_test_env.go bug. Rebuild with the build tag fix.$(RESET)"; \
+		exit 1; \
+	fi; \
 	echo "Minting 1013 sats from nofee.testnut.cashu.space..."; \
 	TOKEN=$$($(MINT_TOKEN_BIN) 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])"); \
 	if [ -z "$$TOKEN" ]; then echo "$(RED)Failed to mint token$(RESET)"; exit 1; fi; \
@@ -1031,6 +1044,16 @@ r-smoke-degraded: ## [remote] Single-router degraded mode lifecycle
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(GREEN)$(BOLD)  Degraded mode smoke test PASSED [$(ROUTER)]$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
+
+r-guard-no-dual-wwan: ## [internal] Assert no second wwan interface exists (dual-WWAN breaks routing)
+	@$(RESOLVE_ROUTER); \
+	wwan_count=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci show network | grep 'wwan.*proto' | grep -c ''" 2>/dev/null); \
+	if [ "$$wwan_count" -gt 1 ] 2>/dev/null; then \
+		echo "$(RED)FAIL: $$wwan_count wwan interfaces detected on $(ROUTER). Dual-WWAN breaks gateway routing.$(RESET)"; \
+		echo "$(YELLOW)Remove the extra wwan interface (e.g. 'uci delete network.wwan2 && uci commit && wifi reload')$(RESET)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)OK: $$wwan_count wwan interface(s)$(RESET)"
 
 r-diagnose-config-path: ## [remote] Verify service reads config from /etc/tollgate not /tmp
 	@$(RESOLVE_ROUTER); \
@@ -1177,6 +1200,7 @@ r-restore-upstream: ## [remote] Restore previously saved upstream SSID
 	echo "$(GREEN)Restored upstream to $$saved_ssid$(RESET)"
 
 r-smoke-degraded-upstream: ## [remote] Two-router: connect online, degrade, verify offline renewal (uses LAN for alpha)
+	@$(MAKE) -f Makefile r-guard-no-dual-wwan ROUTER=alpha
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(BOLD)  Two-Router Degraded Upstream Test$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
@@ -1308,6 +1332,7 @@ r-smoke-degraded-upstream: ## [remote] Two-router: connect online, degrade, veri
 	@echo "$(BOLD)=======================================$(RESET)"
 
 r-smoke-degraded-connect: ## [remote] WARNING: may strand router. Connect to upstream while already degraded.
+	@$(MAKE) -f Makefile r-guard-no-dual-wwan ROUTER=alpha
 	@echo "$(RED)$(BOLD)!!! WARNING: This test may strand the router !!!$(RESET)"
 	@echo "$(RED)$(BOLD)!!! Alpha's WiFi will be reloaded, potentially losing NetBird   !!!$(RESET)"
 	@echo "$(RED)$(BOLD)!!! Only run if someone is available for physical recovery        !!!$(RESET)"

@@ -108,3 +108,29 @@ These targets are defined in `Makefile.test`:
 All `r-*` targets that modify router state check the lock before proceeding.
 Local targets (run on the router itself) do not check the lock — they assume
 you're already on the router and know what you're doing.
+
+## Known Pitfall: Dual-WWAN Routing Conflict
+
+**Never create a second `wwan` interface (e.g. `wwan2`) on any router.**
+
+When two WWAN interfaces exist simultaneously (e.g. `wwan` and `wwan2`), the
+kernel gets two default gateway routes and routing breaks — the router loses
+internet connectivity even though individual interfaces may have valid DHCP leases.
+
+**Symptoms:** `ping 9.9.9.9` returns "Network unreachable" despite `ifconfig`
+showing an IP on `phy0-sta0`.
+
+**Correct approach:** Use a single `wwan` interface. When you need to connect
+to a different network, switch the existing STA (disable old, enable new) rather
+than adding a second interface. The `r-rescue-router` target follows this pattern.
+
+**Guard:** The `r-guard-no-dual-wwan` target checks for multiple wwan interfaces
+and fails fast. It runs automatically as a prerequisite in two-router tests
+(`r-smoke-degraded-upstream`, `r-smoke-degraded-connect`).
+
+**Recovery if you accidentally create a second wwan:**
+```sh
+uci delete network.wwan2
+uci commit network
+wifi reload
+```
