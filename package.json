@@ -4,7 +4,14 @@
   "private": true,
   "description": "E2E test suite for physical router tollgate deployments",
   "scripts": {
-    "test": "cd tests && npx playwright test --config=playwright.config.mjs"
+    "test": "npx playwright test --config=tests/playwright.config.mjs",
+    "test:list": "npx playwright test --config=tests/playwright.config.mjs --list",
+    "test:ui": "npx playwright test --config=tests/playwright.config.mjs --ui",
+    "flash:routers": "node scripts/flash-routers.mjs",
+    "run-tests": "bash scripts/run-tests.sh",
+    "deploy": "bash scripts/deploy.sh",
+    "publish-report": "bash scripts/publish-report.sh",
+    "setup-cashu": "bash scripts/setup-cashu.sh"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0"

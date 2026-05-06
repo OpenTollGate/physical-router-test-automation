@@ -2,11 +2,17 @@ node_modules/
 test-results/
 report/
 playwright-report/
+test-run-*
 .DS_Store
 *.ipk
 .env
-report.html
-results/
+
+# Python
 __pycache__/
 *.pyc
 _cashu_db/
+report.html
+results/
+
+# Router inventory (contains IPs, SSIDs)
+config/routers.json
