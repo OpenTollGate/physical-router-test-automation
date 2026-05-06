@@ -60,6 +60,10 @@ def _client_mode(request):
     return request.config.getoption("--client")
 
 
+def _is_publish_mode(config):
+    return config.getoption("--publish", default=False)
+
+
 def pytest_addoption(parser):
     parser.addoption("--binary", default=None,
                      help="Install .ipk file on router before tests")
@@ -72,6 +76,8 @@ def pytest_addoption(parser):
     parser.addoption("--client", default="adb",
                      choices=["adb", "mac", "linux"],
                      help="WiFi client mode: adb (Android phone), mac (macOS), or linux (NetworkManager/nmcli)")
+    parser.addoption("--publish", action="store_true",
+                     help="Publish mode: only include screenshots from @pytest.mark.publish_screenshot tests in report")
 
 
 @pytest.fixture(scope="session")
@@ -199,10 +205,16 @@ def test_pricing(router):
 @pytest.fixture
 def screenshot_portal(adb, results_dir, request):
     report_dir = os.path.join(results_dir, "report")
+    publish_mode = _is_publish_mode(request.config)
+    can_publish = "publish_screenshot" in request.keywords
 
     def take(name: str):
         raw_path = os.path.join(results_dir, "raw", name)
         adb.screenshot_portal(raw_path, report_dir=report_dir)
+
+        if publish_mode and not can_publish:
+            return
+
         try:
             with open(raw_path, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode()
@@ -305,11 +317,16 @@ def pytest_runtest_makereport(item, call):
         raw = os.path.join(results_dir, "raw")
         os.makedirs(raw, exist_ok=True)
 
+        publish_mode = _is_publish_mode(item.config)
+        can_publish = "publish_screenshot" in item.keywords
+
         if adb:
             try:
                 img_path = os.path.join(raw, f"{item.name}-failed.png")
                 adb.screenshot(img_path)
-                if os.path.isfile(img_path) and html_extras is not None:
+
+                should_embed = not publish_mode or can_publish
+                if should_embed and os.path.isfile(img_path) and html_extras is not None:
                     with open(img_path, "rb") as f:
                         b64 = base64.b64encode(f.read()).decode()
                     if b64:
