@@ -16,6 +16,7 @@ class Router:
         self.phone_ip = phone_ip
         self.phone_mac = phone_mac
         self.domain = domain
+        self.identity_file = identity_file
         self._ssh_base = [
             "ssh",
             "-o", "ConnectTimeout=5",
@@ -266,8 +267,8 @@ class Router:
         with open(tmp, "w") as f:
             json.dump(cfg, f, indent=2)
         scp_cmd = ["scp", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR"]
-        if identity_file:
-            scp_cmd += ["-i", identity_file]
+        if self.identity_file:
+            scp_cmd += ["-i", self.identity_file]
         scp_cmd += [tmp, f"root@{self.host}:/etc/tollgate/config.json"]
         subprocess.run(scp_cmd, check=True, capture_output=True)
         os.remove(tmp)
