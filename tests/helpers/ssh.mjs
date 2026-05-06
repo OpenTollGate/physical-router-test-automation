@@ -24,7 +24,8 @@ export function ssh(routerOrCommand, maybeCommand, options = {}) {
 export function copyToRouter(router, localPath, remotePath, options = {}) {
 	const password = process.env.TOLLGATE_SSH_PASSWORD || process.env.TOLLGATE_LUCI_PASSWORD;
 	if (!password) requireEnv('TOLLGATE_LUCI_PASSWORD');
-	runCommand('sshpass', ['-e', 'scp', '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', localPath, `${router.sshUser}@${router.sshHost}:${remotePath}`], {
+	// -O forces legacy SCP protocol; OpenWrt busybox lacks sftp-server subsystem
+	runCommand('sshpass', ['-e', 'scp', '-O', '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', localPath, `${router.sshUser}@${router.sshHost}:${remotePath}`], {
 		timeout: options.timeout ?? 120000,
 		env: { SSHPASS: password },
 	});
