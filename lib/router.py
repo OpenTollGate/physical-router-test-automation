@@ -16,7 +16,6 @@ class Router:
         self.phone_ip = phone_ip
         self.phone_mac = phone_mac
         self.domain = domain
-        self.identity_file = identity_file
         self._ssh_base = [
             "ssh",
             "-o", "ConnectTimeout=5",
@@ -266,8 +265,11 @@ class Router:
         tmp = "/tmp/config-testmint.json"
         with open(tmp, "w") as f:
             json.dump(cfg, f, indent=2)
-        cmd = self._ssh_base + ["scp", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", f"{tmp}", f"root@{self.host}:/etc/tollgate/config.json"]
-        subprocess.run(cmd, check=True, capture_output=True)
+        scp_cmd = ["scp", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR"]
+        if identity_file:
+            scp_cmd += ["-i", identity_file]
+        scp_cmd += [tmp, f"root@{self.host}:/etc/tollgate/config.json"]
+        subprocess.run(scp_cmd, check=True, capture_output=True)
         os.remove(tmp)
         self.ssh("/etc/init.d/tollgate-wrt restart")
         log.info(f"Added {TEST_MINT_URL} to accepted mints, restarted backend")

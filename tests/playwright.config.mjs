@@ -34,7 +34,7 @@ export default defineConfig({
 		['list'],
 	],
 	use: {
-		baseURL: process.env.TOLLGATE_LUCI_URL ?? 'http://192.168.13.112:8080',
+		baseURL: process.env.TOLLGATE_LUCI_URL ?? 'http://192.168.1.1:8080',
 		screenshot: 'on',
 		trace: 'on-first-retry',
 		actionTimeout: 10000,
