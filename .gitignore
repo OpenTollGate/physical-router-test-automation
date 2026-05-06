@@ -7,4 +7,12 @@ test-run-*
 *.ipk
 .env
 
+# Python
+__pycache__/
+*.pyc
+_cashu_db/
+report.html
+results/
+
+# Router inventory (contains IPs, SSIDs)
 config/routers.json
