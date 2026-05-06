@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { getRouter } from './helpers/inventory.mjs';
-import { ensureWwanInterface, configureStationInterfaces, restartNetwork, waitForRouterCommand } from './helpers/router-config.mjs';
-import { isSafeForNetworkTests } from './helpers/network.mjs';
+import { getRouter } from '../helpers/inventory.mjs';
+import { ensureWwanInterface, configureStationInterfaces, restartNetwork, waitForRouterCommand } from '../helpers/router-config.mjs';
+import { isSafeForNetworkTests } from '../helpers/network.mjs';
 
 test.describe('router network configuration', () => {
 	test('configures upstream station interface and keeps router online', async () => {

@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test';
-import { getRouter } from './helpers/inventory.mjs';
-import { rebootRouter, waitForRouterCommand, getPrivateSSID } from './helpers/router-config.mjs';
-import { ssh } from './helpers/ssh.mjs';
-import { isSafeForNetworkTests } from './helpers/network.mjs';
-import { getWalletBalance } from './helpers/router-wallet.mjs';
+import { getRouter } from '../helpers/inventory.mjs';
+import { rebootRouter, waitForRouterCommand, getPrivateSSID } from '../helpers/router-config.mjs';
+import { ssh } from '../helpers/ssh.mjs';
+import { isSafeForNetworkTests } from '../helpers/network.mjs';
+import { getWalletBalance } from '../helpers/router-wallet.mjs';
 
 test.describe('reboot recovery', () => {
 	// No retries — these tests reboot the router and must not repeat

@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test';
-import { getRouter } from './helpers/inventory.mjs';
-import { ssh, copyToRouter, remotePathFor, shellQuote } from './helpers/ssh.mjs';
-import { waitForRouterCommand } from './helpers/router-config.mjs';
-import { isSafeForNetworkTests } from './helpers/network.mjs';
-import { installPackage, listInstalledPackages } from './helpers/router-packages.mjs';
+import { getRouter } from '../helpers/inventory.mjs';
+import { ssh, copyToRouter, remotePathFor, shellQuote } from '../helpers/ssh.mjs';
+import { waitForRouterCommand } from '../helpers/router-config.mjs';
+import { isSafeForNetworkTests } from '../helpers/network.mjs';
+import { installPackage, listInstalledPackages } from '../helpers/router-packages.mjs';
 
 /**
  * Upgrade tests support two paths, but only package install is enabled by

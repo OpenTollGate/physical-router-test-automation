@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { runCommand } from './helpers/command.mjs';
-import { canReachInternet } from './helpers/payment-protocol.mjs';
+import { runCommand } from '../helpers/command.mjs';
+import { canReachInternet } from '../helpers/payment-protocol.mjs';
 
 test.describe('data allotment enforcement', () => {
 	test('cuts connectivity after traffic consumes the paid allotment', async () => {

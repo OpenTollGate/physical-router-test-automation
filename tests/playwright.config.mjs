@@ -25,7 +25,7 @@ const viewports = {
 // the router in a transitional state.
 export default defineConfig({
 	testDir: '.',
-	testMatch: '*.spec.mjs',
+	testMatch: '**/*.spec.mjs',
 	retries: 1,
 	timeout: 60000,
 	workers: 1,
@@ -43,18 +43,18 @@ export default defineConfig({
 	projects: [
 		{
 			name: `${viewport}-luci`,
-			testMatch: 'tollgate.spec.mjs',
+			testMatch: 'web/tollgate.spec.mjs',
 			use: { viewport: viewports[viewport] || viewports.desktop },
 		},
 		{
 			name: `${viewport}-protocol`,
-			testMatch: /(?:payment-protocol|payment-lifecycle|data-allotment|router-network-config)\.spec\.mjs/,
+			testMatch: /protocol\/(?:payment-protocol|payment-lifecycle|data-allotment|router-network-config|tollgate-payment-protocol)\.spec\.mjs/,
 			dependencies: [`${viewport}-luci`],
 			use: { viewport: viewports[viewport] || viewports.desktop },
 		},
 		{
 			name: `${viewport}-destructive`,
-			testMatch: /(?:reboot-recovery|firmware-upgrade)\.spec\.mjs/,
+			testMatch: /destructive\/(?:reboot-recovery|firmware-upgrade)\.spec\.mjs/,
 			dependencies: [`${viewport}-protocol`],
 			retries: 0,
 			use: { viewport: viewports[viewport] || viewports.desktop },

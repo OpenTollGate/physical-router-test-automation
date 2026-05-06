@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test';
-import { fileExists, readFile, cleanupFiles } from './helpers/router-files.mjs';
-import { getWalletBalance, getWalletInfo, drainViaCLI, fundViaCLI } from './helpers/router-wallet.mjs';
-import { mintTestnutTokens } from './helpers/payment-protocol.mjs';
-import { getPrivateSSID, setPrivateSSID } from './helpers/router-config.mjs';
-import { isSafeForNetworkTests } from './helpers/network.mjs';
+import { fileExists, readFile, cleanupFiles } from '../helpers/router-files.mjs';
+import { getWalletBalance, getWalletInfo, drainViaCLI, fundViaCLI } from '../helpers/router-wallet.mjs';
+import { mintTestnutTokens } from '../helpers/payment-protocol.mjs';
+import { getPrivateSSID, setPrivateSSID } from '../helpers/router-config.mjs';
+import { isSafeForNetworkTests } from '../helpers/network.mjs';
 
 const username = process.env.TOLLGATE_LUCI_USER;
 const password = process.env.TOLLGATE_LUCI_PASSWORD;

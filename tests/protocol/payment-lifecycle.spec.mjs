@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { getRouter } from './helpers/inventory.mjs';
-import { findTollGateNetworks, connectToWifi, restoreWifi, currentWifiConnection, gatewayForInterface } from './helpers/network.mjs';
-import { mintTestnutTokens, fetchDiscoveryEvent, pricePerStep, generateCustomerIdentity, signPaymentEvent, sendPaymentEvent, paymentMacAddress, canReachInternet } from './helpers/payment-protocol.mjs';
+import { getRouter } from '../helpers/inventory.mjs';
+import { findTollGateNetworks, connectToWifi, restoreWifi, currentWifiConnection, gatewayForInterface } from '../helpers/network.mjs';
+import { mintTestnutTokens, fetchDiscoveryEvent, pricePerStep, generateCustomerIdentity, signPaymentEvent, sendPaymentEvent, paymentMacAddress, canReachInternet } from '../helpers/payment-protocol.mjs';
 
 test.describe('payment lifecycle', () => {
 	test('pay → use → disconnect → pay again', async () => {
