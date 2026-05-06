@@ -5,7 +5,7 @@ import { getRouter } from './inventory.mjs';
 export function installPackage(router = getRouter(), localPath, options = {}) {
 	const remotePath = remotePathFor(localPath);
 	copyToRouter(router, localPath, remotePath, { timeout: options.copyTimeout ?? 120000 });
-	const flags = options.forceReplace === false ? '' : '--force-replace ';
+	const flags = options.forceOverwrite === false ? '' : '--force-overwrite ';
 	return ssh(router, `opkg install ${flags}${shellQuote(remotePath)}; status=$?; rm -f ${shellQuote(remotePath)}; exit $status`, {
 		check: options.check,
 		timeout: options.timeout ?? 60000,
