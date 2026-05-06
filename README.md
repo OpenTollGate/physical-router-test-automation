@@ -25,16 +25,28 @@ npx playwright install
 
 ## Deploy to Router
 
-Builds the ipk from a given git hash and installs it on the router:
+Two deployment paths are available:
+
+### Option 1: CI-built artifact (recommended)
+
+Download a production-grade `.ipk` from GitHub Actions and deploy it:
+
+```bash
+TOLLGATE_LUCI_PASSWORD=<password> ./scripts/deploy-ci.sh <branch> [run-id] [router-ip]
+```
+
+This downloads the artifact built by the same CI pipeline used for releases, copies it to the router, installs via `opkg`, restarts services, and verifies.
+
+```bash
+TOLLGATE_LUCI_PASSWORD=secretpass ./scripts/deploy-ci.sh feat/luci-admin-ui
+```
+
+### Option 2: Local build
+
+Build the ipk from source and deploy it:
 
 ```bash
 TOLLGATE_LUCI_PASSWORD=<password> ./scripts/deploy.sh <git-hash>
-```
-
-Example:
-
-```bash
-TOLLGATE_LUCI_PASSWORD=secretpass ./scripts/deploy.sh feat/luci-admin-ui
 ```
 
 Takes a branch name, tag, or commit hash. Defaults to router at `192.168.13.112`.
@@ -42,10 +54,10 @@ Takes a branch name, tag, or commit hash. Defaults to router at `192.168.13.112`
 ## Run Tests
 
 ```bash
-TOLLGATE_LUCI_PASSWORD=<password> ./scripts/run-tests.sh <tollgate-commit> [desktop|mobile] [router-id]
+TOLLGATE_LUCI_PASSWORD=<password> ./scripts/run-tests.sh [tollgate-commit] [desktop|mobile] [router-id]
 ```
 
-Defaults to `desktop` viewport. The full UI suite runs against a physical router and writes `test-run-*/run.json` plus an HTML report.
+The commit hash is optional — if omitted, it falls back to `TOLLGATE_BRANCH` then `HEAD`. The script verifies SSH connectivity to the router before running any tests. Defaults to `desktop` viewport. The full UI suite runs against a physical router and writes `test-run-*/run.json` plus an HTML report.
 
 ## Environment Variables
 
@@ -87,12 +99,20 @@ Defaults to `desktop` viewport. The full UI suite runs against a physical router
 
 ## Test Categories
 
+### LuCI Admin UI (Playwright — 35 tests)
 - **Tab loading** — all 5 tabs render without errors
 - **Dashboard** — restart modal, fund warning, drain modal
-- **Network** — show password, rename SSID round-trip, change password
-- **Configuration** — profit share sliders, add/remove mint/share/identity, save round-trip
+- **Network** — show password, rename SSID round-trip, change password, enable/disable
+- **Configuration** — profit share sliders, add/remove mint/share/identity, save round-trip, proportional squeeze
 - **Advanced** — JSON validation, reload files, identity editor
-- **Fund/Drain** — real testnut.cashu.exchange tokens, SSH file verification, lifecycle round-trips
+- **Fund/Drain** — real testnut.cashu.exchange tokens, SSH file verification, lifecycle round-trips, drain-twice zero check
+
+### Destructive Tests (Playwright — 2 tests)
+- **Reboot recovery** — router comes back online after reboot with settings intact, network connectivity restored
+
+### Skipped Tests (6 — require additional hardware or explicit opt-in)
+- **Protocol** (4 tests) — payment lifecycle, data allotment, router network config, payment protocol — require a client WiFi device
+- **Firmware** (2 tests) — package install + sysupgrade — `TOLLGATE_PACKAGE_PATH` or `TOLLGATE_ENABLE_SYSUPGRADE_TESTS` required
 
 ## cashu CLI Notes
 
