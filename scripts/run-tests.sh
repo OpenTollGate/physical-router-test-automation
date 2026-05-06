@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ── Arguments ───────────────────────────────────────────────────────────
-TOLLGATE_COMMIT="${1:?Usage: $0 <tollgate-commit-hash> [viewport] [router-id]}"
+TOLLGATE_COMMIT="${1:-}"
 VIEWPORT="${2:-desktop}"
 ROUTER_ID="${3:-${TOLLGATE_ROUTER_ID:-$(hostname -s 2>/dev/null || echo unknown)}}"
 
@@ -28,6 +28,30 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TESTS_DIR="$REPO_DIR/tests"
+
+# ── Pre-flight connectivity check ───────────────────────────────────────
+echo "==> Checking router connectivity..."
+ROUTER_PASSWORD="$TOLLGATE_LUCI_PASSWORD"
+export SSHPASS="$ROUTER_PASSWORD"
+if ! sshpass -e ssh -O -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
+  "root@${TOLLGATE_ROUTER_IP}" 'echo ok' &>/dev/null; then
+  echo "ERROR: Cannot reach router at ${TOLLGATE_ROUTER_IP}" >&2
+  echo "  - Is the router powered on?" >&2
+  echo "  - Is SSH enabled?" >&2
+  echo "  - Is TOLLGATE_LUCI_URL correct?" >&2
+  exit 1
+fi
+echo "==> Router reachable at ${TOLLGATE_ROUTER_IP}"
+
+# Resolve commit hash from branch if not provided
+if [ -z "$TOLLGATE_COMMIT" ]; then
+  if [ -n "$TOLLGATE_BRANCH" ]; then
+    echo "==> Resolving commit from branch ${TOLLGATE_BRANCH}..."
+    TOLLGATE_COMMIT=$(git -C "$REPO_DIR" rev-parse "origin/${TOLLGATE_BRANCH}" 2>/dev/null || echo "unknown")
+  else
+    TOLLGATE_COMMIT=$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
+  fi
+fi
 
 # ── Run directory ───────────────────────────────────────────────────────
 TIMESTAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
