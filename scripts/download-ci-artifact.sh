@@ -50,7 +50,7 @@ gh run download "$RUN_ID" \
 		exit 1
 	}
 
-IPK_FILE=$(find "$OUTDIR" -name "*${ARCH}*.ipk" -type f | head -1)
+IPK_FILE=$(find "$OUTDIR" -name "*${ARCH}*.ipk" -not -name "*upx*" -type f | head -1)
 if [ -z "$IPK_FILE" ]; then
 	echo "ERROR: No .ipk found for arch ${ARCH} in ${OUTDIR}" >&2
 	echo "==> Available files:"
