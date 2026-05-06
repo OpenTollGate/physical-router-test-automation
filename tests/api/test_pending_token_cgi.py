@@ -1,6 +1,6 @@
 import pytest
 
-pytestmark = [pytest.mark.api, pytest.mark.extended]
+pytestmark = [pytest.mark.api, pytest.mark.critical]
 
 
 def test_pending_token_empty_when_none(router):

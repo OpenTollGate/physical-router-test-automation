@@ -2,3 +2,4 @@ pytest>=7.0
 pytest-html>=4.0
 pytest-timeout>=2.0
 pytest-rerunfailures>=10.0
+coincurve>=18.0
