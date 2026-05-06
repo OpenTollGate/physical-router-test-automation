@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { existsSync } from 'fs';
 import { runCommand } from '../tests/helpers/command.mjs';
-import { copyToRouter, remotePathFor, ssh } from '../tests/helpers/ssh.mjs';
+import { copyToRouter, remotePathFor, shellQuote, ssh } from '../tests/helpers/ssh.mjs';
 
 function usage() {
-	console.log('Usage: TOLLGATE_ETHERNET_INTERFACES=enx0,enx1 TOLLGATE_LUCI_PASSWORD=<password> scripts/flash-routers.mjs <firmware-image>');
+	console.log('Usage: TOLLGATE_ENABLE_SYSUPGRADE_FLASHING=true TOLLGATE_ETHERNET_INTERFACES=enx0,enx1 TOLLGATE_LUCI_PASSWORD=<password> scripts/flash-routers.mjs <firmware-image>');
+	console.log('WARNING: this performs sysupgrade and can make a router unreachable. Prefer TOLLGATE_PACKAGE_PATH/package install for routine tests.');
 }
 
 function interfaceIp(interfaceName) {
@@ -20,7 +21,9 @@ function gatewayForInterface(interfaceName) {
 function flashRouter(router, imagePath) {
 	const remotePath = remotePathFor(imagePath);
 	copyToRouter(router, imagePath, remotePath, { timeout: 180000 });
-	ssh(router, `sysupgrade -n ${remotePath}`, { check: false, timeout: 10000 });
+	const wipeConfig = process.env.TOLLGATE_SYSUPGRADE_WIPE_CONFIG === 'true';
+	const flags = wipeConfig ? '-n ' : '';
+	ssh(router, `sysupgrade ${flags}${shellQuote(remotePath)}`, { check: false, timeout: 10000 });
 }
 
 const imagePath = process.argv[2] || process.env.TOLLGATE_FIRMWARE_IMAGE;
@@ -31,6 +34,10 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 if (!imagePath || !existsSync(imagePath)) {
 	usage();
 	throw new Error('firmware image path is required and must exist');
+}
+if (process.env.TOLLGATE_ENABLE_SYSUPGRADE_FLASHING !== 'true') {
+	usage();
+	throw new Error('sysupgrade flashing is disabled by default; set TOLLGATE_ENABLE_SYSUPGRADE_FLASHING=true only when recovery is available');
 }
 const interfaces = (process.env.TOLLGATE_ETHERNET_INTERFACES || '').split(',').map(value => value.trim()).filter(Boolean);
 if (!interfaces.length) throw new Error('TOLLGATE_ETHERNET_INTERFACES is required');
