@@ -553,7 +553,7 @@ test.describe('desktop interactions', () => {
 		expect(fileExists(filePath)).toBeTruthy();
 		const content = readFile(filePath);
 		expect(content).toContain('TollGate Wallet Drain');
-		expect(content).toMatch(/cashuA/i);
+		expect(content).toMatch(/cashu[AB]/i);
 
 		expect(getWalletBalance()).toBe(0);
 
@@ -625,7 +625,7 @@ test.describe('desktop interactions', () => {
 				expect(fileExists(filePath)).toBeTruthy();
 				const content = readFile(filePath);
 				expect(content).toContain('TollGate Wallet Drain');
-				expect(content).toMatch(/cashuA/i);
+				expect(content).toMatch(/cashu[AB]/i);
 				cleanupFiles(filePath);
 			}
 		}
