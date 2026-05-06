@@ -17,6 +17,9 @@
 #   make -f Makefile r-smoke-degraded ROUTER=alpha              # full degraded lifecycle (single router)
 #   make -f Makefile r-smoke-degraded-upstream                  # degraded payment renewal (two routers)
 #   make -f Makefile r-deploy ROUTER=alpha                      # deploy binaries
+#   make -f Makefile r-diagnose-config-path ROUTER=alpha        # verify config path
+#   make -f Makefile r-test-default-mints ROUTER=alpha          # verify default mint config
+#   make -f Makefile r-rescue-router ROUTER=beta VIA=alpha      # rescue offline router
 #   make -f Makefile r-full ROUTER=alpha                        # full mint health suite
 #   make -f Makefile r-full-upstream SSID=MyNet PASS=secret ROUTER=alpha  # full wifi suite
 #   make -f Makefile r-lock PHASE="description"                 # acquire router lock
@@ -45,6 +48,7 @@
         r-setup-test-mint r-restore-prod-config r-fund-wallet \
         r-smoke-degraded r-smoke-degraded-upstream r-smoke-degraded-connect \
         r-rescue-router r-save-upstream r-restore-upstream \
+        r-diagnose-config-path r-test-default-mints \
         r-lock r-unlock force-unlock r-status-lock \
         s-shell s-boot-log s-wait-boot s-status s-recovery s-wait-pattern \
         s-cleanup s-cold-boot-test s-check-merchant s-check-degraded \
@@ -134,6 +138,11 @@ help: ## Show this help
 	@echo "  make -f Makefile r-smoke-degraded ROUTER=alpha       # single-router lifecycle"
 	@echo "  make -f Makefile r-smoke-degraded-upstream           # two-router payment test"
 	@echo "  make -f Makefile r-restore-prod-config ROUTER=alpha  # restore production config"
+	@echo ""
+	@echo "Diagnostics & rescue:"
+	@echo "  make -f Makefile r-diagnose-config-path ROUTER=alpha # verify config path"
+	@echo "  make -f Makefile r-test-default-mints ROUTER=alpha   # verify mint config"
+	@echo "  make -f Makefile r-rescue-router ROUTER=beta VIA=alpha # rescue offline router"
 
 # ---------------------------------------------------------------------------
 #  Upstream WiFi — Local targets
@@ -1023,7 +1032,41 @@ r-smoke-degraded: ## [remote] Single-router degraded mode lifecycle
 	@echo "$(GREEN)$(BOLD)  Degraded mode smoke test PASSED [$(ROUTER)]$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
 
-r-rescue-router: ## [remote] Rescue a router with dead NetBird via another router's LAN. Usage: r-rescue-router ROUTER=beta VIA=alpha
+r-diagnose-config-path: ## [remote] Verify service reads config from /etc/tollgate not /tmp
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== Diagnose Config Path [$(ROUTER)] ===$(RESET)"; \
+	config_line=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "logread | grep 'config paths' | tail -1" 2>/dev/null); \
+	if echo "$$config_line" | grep -q '/etc/tollgate/config.json'; then \
+		echo "$(GREEN)OK: Service using /etc/tollgate/config.json$(RESET)"; \
+		echo "  $$config_line"; \
+	else \
+		echo "$(RED)FAIL: Service NOT using /etc/tollgate/config.json$(RESET)"; \
+		echo "  $$config_line"; \
+		echo "$(YELLOW)This usually means the binary was built without excluding 000_main_test_env.go$(RESET)"; \
+		exit 1; \
+	fi
+
+r-test-default-mints: ## [remote] Verify default mint config matches expected branch behavior
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== Test Default Mints [$(ROUTER)] ===$(RESET)"; \
+	mint_count=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "cat /etc/tollgate/config.json" 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('accepted_mints',[])))" 2>/dev/null); \
+	if [ -z "$$mint_count" ]; then \
+		mint_count=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "cat /etc/tollgate/config.json" 2>/dev/null | grep -o '"url"' | wc -l); \
+	fi; \
+	echo "Mint count: $$mint_count"; \
+	if [ "$$mint_count" -ge "2" ] 2>/dev/null; then \
+		echo "$(GREEN)OK: $$mint_count mints configured$(RESET)"; \
+	else \
+		echo "$(RED)FAIL: Expected at least 2 mints, got $$mint_count$(RESET)"; \
+		exit 1; \
+	fi; \
+	if ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "cat /etc/tollgate/config.json" 2>/dev/null | grep -q 'nofee.testnut.cashu.space'; then \
+		echo "$(GREEN)OK: Test mint present in config (dev build)$(RESET)"; \
+	else \
+		echo "$(YELLOW)INFO: Test mint not in config (production build or custom config)$(RESET)"; \
+	fi
+
+r-rescue-router: ## [remote] Rescue a router with dead NetBird via another router. Usage: r-rescue-router ROUTER=beta VIA=alpha
 	@if [ -z "$(VIA)" ]; then echo "$(RED)Error: VIA is required. Usage: make -f Makefile r-rescue-router ROUTER=beta VIA=alpha$(RESET)"; exit 1; fi
 	@target_upper=$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]'); \
 	via_upper=$$(echo $(VIA) | tr '[:lower:]' '[:upper:]'); \
@@ -1031,50 +1074,63 @@ r-rescue-router: ## [remote] Rescue a router with dead NetBird via another route
 	target_lan=$$(grep -E "^ROUTER_$${target_upper}_LAN_HOST=" routers.env | cut -d= -f2); \
 	target_ssid=$$(grep -E "^ROUTER_$${target_upper}_SSID=" routers.env | cut -d= -f2); \
 	target_netbird=$$(grep -E "^ROUTER_$${target_upper}_HOST=" routers.env | cut -d= -f2); \
+	stargate_pass=$$(grep -E "^STARGATE_PASS=" routers.env | cut -d= -f2); \
 	if [ -z "$$via_lan" ]; then echo "$(RED)No LAN_HOST for $(VIA). Check routers.env$(RESET)"; exit 1; fi; \
 	if [ -z "$$target_lan" ]; then echo "$(RED)No LAN_HOST for $(ROUTER). Check routers.env$(RESET)"; exit 1; fi; \
 	if [ -z "$$target_ssid" ]; then echo "$(RED)No SSID for $(ROUTER). Check routers.env$(RESET)"; exit 1; fi; \
 	echo "$(BOLD)=== Rescue $(ROUTER) via $(VIA) ===$(RESET)"; \
-	echo "Connecting $(VIA) ($$via_lan) to $(ROUTER)'s open AP ($$target_ssid)..."; \
+	echo "Step 1: Saving $(VIA)'s current upstream..."; \
+	via_ssid=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$via_lan "tollgate upstream list 2>/dev/null" | grep ACTIVE | awk '{print $$1}'); \
+	if [ -z "$$via_ssid" ]; then via_ssid="StarGate"; fi; \
+	echo "  $(VIA) active upstream: $$via_ssid"; \
+	echo ""; \
+	echo "Step 2: Connecting $(VIA) to $(ROUTER)'s open AP ($$target_ssid) on single wwan..."; \
 	sta_name=$$(echo "$$target_ssid" | tr '[:upper:][:space:]' '[:lower:]_' | sed 's/[^a-z0-9_]//g'); \
 	ssh $(SSH_OPTS) $(ROUTER_USER)@$$via_lan "\
-		if uci get wireless.upstream_$$sta_name >/dev/null 2>&1; then \
-			uci set wireless.upstream_$$sta_name.disabled='0'; \
-		else \
-			uci set wireless.upstream_$$sta_name=wifi-iface; \
-			uci set wireless.upstream_$$sta_name.device='radio1'; \
-			uci set wireless.upstream_$$sta_name.mode='sta'; \
-			uci set wireless.upstream_$$sta_name.network='wwan'; \
-			uci set wireless.upstream_$$sta_name.ssid='$$target_ssid'; \
-			uci set wireless.upstream_$$sta_name.encryption='none'; \
-			uci set wireless.upstream_$$sta_name.disabled='0'; \
-		fi; \
+		uci set wireless.upstream_$$sta_name=wifi-iface; \
+		uci set wireless.upstream_$$sta_name.device='radio0'; \
+		uci set wireless.upstream_$$sta_name.mode='sta'; \
+		uci set wireless.upstream_$$sta_name.network='wwan'; \
+		uci set wireless.upstream_$$sta_name.ssid='$$target_ssid'; \
+		uci set wireless.upstream_$$sta_name.encryption='none'; \
+		uci set wireless.upstream_$$sta_name.disabled='0'; \
 		uci commit wireless; \
-		wifi reload radio1; \
-		echo 'Waiting for DHCP on radio1...'; \
+		echo 'Waiting for DHCP...'; \
 		for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
 			sleep 5; \
-			if ifconfig phy1-sta0 2>/dev/null | grep -q 'inet addr'; then \
-				echo 'Got DHCP on phy1-sta0'; \
+			if ifstatus wwan 2>/dev/null | jsonfilter -e '@.up' 2>/dev/null | grep -q true; then \
+				echo 'Got DHCP on wwan'; \
 				break; \
 			fi; \
 			echo \"  ... \$\$((i*5))s\"; \
 			if [ \"\$$i\" = '12' ]; then \
-				echo 'TIMEOUT: no DHCP on radio1'; \
-				uci set wireless.upstream_$$sta_name.disabled='1'; \
-				uci commit wireless; \
-				wifi reload radio1; \
+				echo 'TIMEOUT: no DHCP'; \
 				exit 1; \
 			fi; \
 		done; \
-		echo 'SSHing to $(ROUTER) at $$target_lan to restart NetBird...'; \
-		ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new $(ROUTER_USER)@$$target_lan '/etc/init.d/netbird restart'; \
-		sleep 5; \
-		echo 'Disabling rescue STA...'; \
+	"; \
+	echo ""; \
+	echo "Step 3: Fixing $(ROUTER)'s DNS and upstream via relay..."; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$via_lan "\
+		ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$$target_lan '\
+			rm -f /etc/resolv.conf; \
+			echo nameserver 8.8.8.8 > /etc/resolv.conf; \
+			iwinfo radio0 scan 2>/dev/null | grep -q StarGate && { \
+				uci set wireless.upstream_stargate.disabled=0; \
+				uci commit wireless; \
+				wifi reload; \
+				echo Switched to StarGate; \
+			}; \
+			/etc/init.d/netbird restart; \
+			echo NetBird restarted; \
+		'; \
+	"; \
+	echo ""; \
+	echo "Step 4: Restoring $(VIA) to $$via_ssid..."; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$via_lan "\
 		uci set wireless.upstream_$$sta_name.disabled='1'; \
 		uci commit wireless; \
-		wifi reload radio1; \
-		echo 'Rescue complete'; \
+		wifi reload; \
 	"; \
 	echo ""; \
 	echo "$(YELLOW)Waiting for $(ROUTER) NetBird ($$target_netbird) to come up...$(RESET)"; \
@@ -1082,11 +1138,18 @@ r-rescue-router: ## [remote] Rescue a router with dead NetBird via another route
 		sleep 10; \
 		if ssh $(SSH_OPTS) $(ROUTER_USER)@$$target_netbird "echo netbird-ok" 2>/dev/null | grep -q netbird-ok; then \
 			echo "$(GREEN)$(ROUTER) NetBird recovered after $$((i*10))s!$(RESET)"; \
+			echo ""; \
+			echo "$(YELLOW)Restoring $(VIA) upstream to $$via_ssid...$(RESET)"; \
+			if [ "$$via_ssid" = "StarGate" ]; then \
+				ssh $(SSH_OPTS) $(ROUTER_USER)@$$via_lan "uci set wireless.upstream_stargate.disabled=0; uci commit wireless; wifi reload" 2>/dev/null; \
+			fi; \
 			exit 0; \
 		fi; \
 		echo "  ... $$((i*10))s"; \
 	done; \
 	echo "$(RED)$(ROUTER) NetBird not reachable after 120s$(RESET)"; \
+	echo "$(YELLOW)Restoring $(VIA) upstream manually...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$via_lan "uci set wireless.upstream_stargate.disabled=0; uci commit wireless; wifi reload" 2>/dev/null; \
 	exit 1
 
 r-save-upstream: ## [remote] Save current active upstream SSID for later restore
