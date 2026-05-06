@@ -131,3 +131,44 @@ make -f upstream-wifi/Makefile r-check-sta-health ROUTER=alpha
 ```
 
 See `upstream-wifi/docs/upstream-wifi-test-report.md` for test results and `docs/router-b-incident-2026-04-30.md` for incident notes.
+
+## Serial Console Integration
+
+In addition to SSH, routers can be managed via USB-TTL serial connections. Serial works even when the router has no network connectivity (during cold boot, WiFi reload, or NetBird outages).
+
+### Setup
+
+```bash
+# Install serial dependencies
+pip3 install -r scripts/requirements-serial.txt
+
+# Add serial port config to routers.env
+# See mint-health/routers.env.example for the SERIAL fields
+```
+
+See `docs/serial-integration-plan.md` for the full hardware setup guide (USB-TTL adapters, udev rules, mini PC orchestrator).
+
+### Target Prefix Convention
+
+| Prefix | Transport | Use Case |
+|--------|-----------|----------|
+| `r-`   | SSH       | Normal operations (existing) |
+| `s-`   | Serial    | No-network scenarios: cold boot, recovery, monitoring |
+| `h-`   | Hybrid    | Tries SSH first, falls back to serial if unreachable |
+
+### Serial Quick Reference
+
+```bash
+# Interactive serial console
+make -f mint-health/Makefile s-shell ROUTER=alpha
+
+# Watch full boot output (reboot or power-cycle the router)
+make -f mint-health/Makefile s-cold-boot-test ROUTER=alpha
+
+# Emergency recovery on a stranded router
+make -f mint-health/Makefile s-recovery ROUTER=alpha CMD="sed -i '/nofee.testnut/d' /etc/hosts && /etc/init.d/tollgate-wrt restart"
+
+# Hybrid: SSH first, serial fallback
+make -f mint-health/Makefile h-status ROUTER=alpha
+make -f mint-health/Makefile h-cleanup ROUTER=alpha
+```

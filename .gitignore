@@ -6,3 +6,4 @@ playwright-report/
 *.ipk
 .env
 **/routers.env
+scripts/__pycache__/

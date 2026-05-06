@@ -20,7 +20,11 @@
         r-smoke r-full r-status r-logs r-scan r-list r-connect \
         r-remove r-verify-uci r-wait-daemon r-test-cleanup \
         r-test-edge-cases r-test-reseller-guard r-push r-shell \
-        r-check-sta-health routers help
+        r-check-sta-health \
+        s-shell s-watch s-login s-status s-recovery s-wait-pattern \
+        s-cleanup s-cold-boot-test s-boot-log s-wait-boot \
+        h-status h-restart-and-watch h-cleanup \
+        routers help
 
 SSID   ?=
 PASS   ?=
@@ -489,3 +493,135 @@ r-check-sta-health: ## [remote] Verify no stale/duplicate STA sections exist
 		exit 1; \
 	fi; \
 	echo "$(GREEN)OK: 1 active STA, no duplicates, $$total_count total STAs$(RESET)"
+
+# ===========================================================================
+#  SERIAL TARGETS (run via USB-TTL serial console)
+# ===========================================================================
+# Uses scripts/router-serial.py for reliable command execution over serial.
+# These targets work even when the router has no network connectivity.
+# Requires: pyserial (pip install pyserial)
+
+define RESOLVE_SERIAL
+serial_port=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_SERIAL=" routers.env | cut -d= -f2); \
+if [ -z "$$serial_port" ]; then echo "$(RED)No serial port for '$(ROUTER)'. Check routers.env$(RESET)" >&2; exit 1; fi
+endef
+
+SERIAL_EXEC = python3 scripts/router-serial.py exec --port
+SERIAL_WAIT = python3 scripts/router-serial.py wait --port
+SERIAL_BOOTLOG = python3 scripts/router-serial.py bootlog --port
+SERIAL_WATCH = python3 scripts/router-serial.py watch --port
+
+s-shell: ## [serial] Interactive serial console (picocom)
+	@$(RESOLVE_SERIAL); \
+	echo "$(GREEN)Connecting to $(ROUTER) on $$serial_port...$(RESET)"; \
+	echo "$(YELLOW)Exit: Ctrl+A then Ctrl+X$(RESET)"; \
+	picocom $$serial_port -b 115200
+
+s-watch: ## [serial] Watch serial output (router-serial.py watch, Ctrl+C to stop)
+	@$(RESOLVE_SERIAL); \
+	$(SERIAL_WATCH) $$serial_port
+
+s-login: ## [serial] Send login credentials if at login prompt
+	@$(RESOLVE_SERIAL); \
+	python3 scripts/router-serial.py login --port $$serial_port
+
+s-status: ## [serial] Check tollgate status via serial
+	@$(RESOLVE_SERIAL); \
+	echo "$(BOLD)=== Status via Serial [$(ROUTER)] ===$(RESET)"; \
+	$(SERIAL_EXEC) $$serial_port "logread -e tollgate | tail -20"; \
+	$(SERIAL_EXEC) $$serial_port "tollgate version"; \
+	$(SERIAL_EXEC) $$serial_port "tollgate status"
+
+s-wait-boot: ## [serial] Wait for router to fully boot (login prompt)
+	@$(RESOLVE_SERIAL); \
+	echo "$(BOLD)=== Waiting for Boot [$(ROUTER)] ===$(RESET)"; \
+	$(SERIAL_WAIT) $$serial_port --pattern "login:" --timeout 120
+
+s-boot-log: ## [serial] Capture full boot output (send reboot first or power-cycle)
+	@$(RESOLVE_SERIAL); \
+	echo "$(BOLD)=== Boot Log Capture [$(ROUTER)] ===$(RESET)"; \
+	$(SERIAL_BOOTLOG) $$serial_port --timeout 180 --end-pattern "login:" | tee /tmp/boot-log-$(ROUTER).log; \
+	echo "$(GREEN)Boot log saved to /tmp/boot-log-$(ROUTER).log$(RESET)"
+
+s-wait-pattern: ## [serial] Wait for a log pattern (PATTERN=, TIMEOUT=120)
+	@$(RESOLVE_SERIAL); \
+	if [ -z "$(PATTERN)" ]; then echo "$(RED)Error: PATTERN is required. Usage: make -f Makefile s-wait-pattern ROUTER=alpha PATTERN='Upstream WiFi manager'$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=== Waiting for Pattern [$(ROUTER)] ===$(RESET)"; \
+	echo "$(YELLOW)Pattern: $(PATTERN), Timeout: $(TIMEOUT)s$(RESET)"; \
+	$(SERIAL_WAIT) $$serial_port --pattern "$(PATTERN)" --timeout $(TIMEOUT)
+
+s-recovery: ## [serial] Emergency recovery — run any command via serial (CMD="...")
+	@$(RESOLVE_SERIAL); \
+	if [ -z "$(CMD)" ]; then echo "$(RED)Error: CMD is required. Usage: make -f Makefile s-recovery ROUTER=alpha CMD='wifi reload'$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=== Serial Recovery [$(ROUTER)] ===$(RESET)"; \
+	echo "$(YELLOW)Running: $(CMD)$(RESET)"; \
+	$(SERIAL_EXEC) $$serial_port "$(CMD)"
+
+s-cleanup: ## [serial] Cleanup upstream state via serial
+	@$(RESOLVE_SERIAL); \
+	echo "$(BOLD)=== Serial Cleanup [$(ROUTER)] ===$(RESET)"; \
+	echo "$(YELLOW)Disabling upstream STAs...$(RESET)"; \
+	$(SERIAL_EXEC) $$serial_port "uci show wireless | grep 'upstream_.*disabled=0' | cut -d. -f2 | while read s; do uci set wireless.\$$s.disabled=1; done; uci commit wireless"; \
+	$(SERIAL_EXEC) $$serial_port "wifi reload"; \
+	echo "$(GREEN)Cleanup complete via serial$(RESET)"
+
+s-cold-boot-test: ## [serial] Full cold boot test with serial monitoring
+	@$(RESOLVE_SERIAL); \
+	echo "$(BOLD)=======================================$(RESET)"; \
+	echo "$(BOLD)  Cold Boot Test [$(ROUTER)]$(RESET)"; \
+	echo "$(BOLD)=======================================$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)1/4 — Issuing reboot...$(RESET)"; \
+	$(SERIAL_EXEC) $$serial_port "reboot" 2>/dev/null || echo "$(YELLOW)Reboot command sent (or router already rebooting)$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)2/4 — Capturing boot log (up to 3 min)...$(RESET)"; \
+	$(SERIAL_BOOTLOG) $$serial_port --timeout 180 --end-pattern "login:" > /tmp/cold-boot-$(ROUTER).log 2>/tmp/cold-boot-$(ROUTER)-stderr.txt; \
+	cat /tmp/cold-boot-$(ROUTER).log; \
+	cat /tmp/cold-boot-$(ROUTER)-stderr.txt >&2; \
+	echo ""; \
+	echo "$(CYAN)3/4 — Checking tollgate status...$(RESET)"; \
+	python3 scripts/router-serial.py login --port $$serial_port 2>/dev/null; \
+	$(SERIAL_EXEC) $$serial_port "tollgate status"; \
+	echo ""; \
+	echo "$(CYAN)4/4 — Checking upstream manager...$(RESET)"; \
+	$(SERIAL_EXEC) $$serial_port "logread -e tollgate | grep -E 'Upstream WiFi manager|tollgate' | tail -5"; \
+	echo ""; \
+	echo "$(BOLD)=======================================$(RESET)"; \
+	echo "$(GREEN)$(BOLD)  Cold boot test complete [$(ROUTER)]$(RESET)"; \
+	echo "$(BOLD)=======================================$(RESET)"; \
+	echo "$(GREEN)Log: /tmp/cold-boot-$(ROUTER).log$(RESET)"
+
+# ===========================================================================
+#  HYBRID TARGETS (SSH first, serial fallback)
+# ===========================================================================
+
+h-status: ## [hybrid] Status check — SSH first, serial fallback
+	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
+	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
+	if ssh $(SSH_OPTS) -o ConnectTimeout=5 $(ROUTER_USER)@$$router_host "echo ok" >/dev/null 2>&1; then \
+		$(MAKE) -f Makefile r-status ROUTER=$(ROUTER); \
+	else \
+		echo "$(YELLOW)SSH unreachable, falling back to serial...$(RESET)"; \
+		$(MAKE) -f Makefile s-status ROUTER=$(ROUTER); \
+	fi
+
+h-restart-and-watch: ## [hybrid] Restart service via SSH, verify via serial if SSH drops
+	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
+	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=== Restart & Watch [$(ROUTER)] ===$(RESET)"; \
+	ssh $(SSH_OPTS) -o ConnectTimeout=5 $(ROUTER_USER)@$$router_host "/etc/init.d/tollgate-wrt restart" 2>/dev/null && \
+		echo "$(GREEN)Service restarted via SSH$(RESET)" || \
+		echo "$(YELLOW)SSH lost during restart — checking via serial...$(RESET)"; \
+	sleep 5; \
+	$(MAKE) -f Makefile s-status ROUTER=$(ROUTER)
+
+h-cleanup: ## [hybrid] Cleanup — SSH first, serial rescue if stranded
+	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
+	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
+	if ssh $(SSH_OPTS) -o ConnectTimeout=5 $(ROUTER_USER)@$$router_host "echo ok" >/dev/null 2>&1; then \
+		echo "$(GREEN)SSH OK — running normal cleanup$(RESET)"; \
+		ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "rm -f /tmp/tollgate-baseline.txt /etc/tollgate/config.json.bak 2>/dev/null; echo Cleanup done"; \
+	else \
+		echo "$(RED)Router unreachable via SSH! Using serial recovery...$(RESET)"; \
+		$(MAKE) -f Makefile s-cleanup ROUTER=$(ROUTER); \
+	fi
