@@ -1,5 +1,57 @@
+import { execSync } from 'child_process';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import { runCommand } from './command.mjs';
 import { hostMacAddress } from './network.mjs';
+
+const LOCK_DIR = join(tmpdir(), 'cashu-lock');
+
+function withLock(fn) {
+	if (!existsSync(LOCK_DIR)) mkdirSync(LOCK_DIR, { recursive: true });
+	const lockFile = join(LOCK_DIR, 'mint.lock');
+	let acquired = false;
+	for (let i = 0; i < 60; i++) {
+		try {
+			writeFileSync(lockFile, process.pid.toString(), { flag: 'wx' });
+			acquired = true;
+			break;
+		} catch {
+			const age = Date.now() - (parseInt(readFileSync(lockFile, 'utf8').split('\n')[1] || '0', 10) || 0);
+			if (age > 30000) { try { unlinkSync(lockFile); } catch {} }
+			execSync('sleep 1', { timeout: 2000 });
+		}
+	}
+	if (!acquired) {
+		try { unlinkSync(lockFile); } catch {}
+		writeFileSync(lockFile, process.pid.toString(), { flag: 'wx' });
+	}
+	writeFileSync(lockFile, process.pid.toString() + '\n' + Date.now());
+	try {
+		return fn();
+	} finally {
+		try { unlinkSync(lockFile); } catch {}
+	}
+}
+
+const MINT_URL = process.env.TOLLGATE_TEST_MINT_URL || 'https://testnut.cashu.exchange';
+const CASHU = `echo "" | cashu -h ${MINT_URL}`;
+
+export function mintTestnutTokens(amountSats) {
+	return withLock(() => {
+		const mintAmount = amountSats + 10;
+		const createOut = execSync(`${CASHU} invoice ${mintAmount} --no-check`, { encoding: 'utf8', timeout: 30000, shell: '/bin/bash' });
+		const idMatch = createOut.match(/--id ([a-f0-9]+)/);
+		if (idMatch) {
+			execSync(`${CASHU} invoice ${mintAmount} --id ${idMatch[1]}`, { encoding: 'utf8', timeout: 30000, shell: '/bin/bash' });
+		}
+		const out = execSync(`${CASHU} send ${amountSats}`, { encoding: 'utf8', timeout: 30000, shell: '/bin/bash' });
+		const lines = out.split('\n');
+		const tokenLine = lines.find(l => l.startsWith('cashuA') || l.startsWith('cashuB'));
+		if (!tokenLine) throw new Error('No token in cashu output: ' + out);
+		return tokenLine.trim();
+	});
+}
 
 export async function fetchDiscoveryEvent(routerIp) {
 	const response = await fetch(`http://${routerIp}:2121/`);

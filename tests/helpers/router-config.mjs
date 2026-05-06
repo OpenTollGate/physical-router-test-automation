@@ -55,3 +55,13 @@ export function restartNetwork(router = getRouter()) {
 export function rebootRouter(router = getRouter()) {
 	ssh(router, 'reboot', { check: false, timeout: 5000 });
 }
+
+export function getPrivateSSID(router = getRouter()) {
+	return ssh(router, 'uci get wireless.private_radio0.ssid').trim();
+}
+
+export function setPrivateSSID(ssid, router = getRouter()) {
+	ssh(router, `uci set wireless.private_radio0.ssid=${shellQuote(ssid)}`);
+	ssh(router, `uci set wireless.private_radio1.ssid=${shellQuote(ssid)}`);
+	ssh(router, 'uci commit wireless && wifi reload');
+}

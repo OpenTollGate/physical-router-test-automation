@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { getRouter } from './helpers/inventory.mjs';
 import { findTollGateNetworks, connectToWifi, restoreWifi, currentWifiConnection, gatewayForInterface } from './helpers/network.mjs';
-import { mintTestnutTokens } from './helpers/router.mjs';
+import { mintTestnutTokens } from './helpers/payment-protocol.mjs';
 import { fetchDiscoveryEvent, pricePerStep, generateCustomerIdentity, signPaymentEvent, sendPaymentEvent, paymentMacAddress, canReachInternet } from './helpers/payment-protocol.mjs';
 
 test.describe('payment protocol', () => {

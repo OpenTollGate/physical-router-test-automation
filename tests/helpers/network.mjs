@@ -42,3 +42,18 @@ export function hostMacAddress(interfaceName) {
 	if (!match) throw new Error(`No MAC address for ${interfaceName}`);
 	return match[1];
 }
+
+export function isSafeForNetworkTests() {
+	const routerIP = getRouter().sshHost;
+	try {
+		const routeOut = runCommand('netstat', ['-rn'], { check: false, timeout: 5000 });
+		const routeLine = routeOut.stdout.split('\n').find(l => l.includes(routerIP) && l.includes('UH'));
+		if (!routeLine) return false;
+		const match = routeLine.match(/\s+(en\d+|eth\d+)\s+/);
+		if (!match) return false;
+		try { runCommand('ping', ['-c', '1', '-t', '2', routerIP], { check: false, timeout: 5000 }); } catch { return false; }
+		return true;
+	} catch {
+		return false;
+	}
+}
