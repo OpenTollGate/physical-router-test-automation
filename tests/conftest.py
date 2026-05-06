@@ -92,7 +92,7 @@ def results_dir(request):
 @pytest.fixture(scope="session")
 def router(request):
     host = os.environ.get("TOLLGATE_SSH_HOST") or os.environ.get("ROUTER_IP")
-    password = os.environ.get("TOLLGATE_LUCI_PASSWORD") or os.environ.get("ROUTER_PASSWORD")
+    identity_file = os.environ.get("TOLLGATE_SSH_KEY", "")
     client = _client_mode(request)
     phone_ip = os.environ.get("TOLLGATE_CLIENT_IP", "")
     phone_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
@@ -117,10 +117,9 @@ def router(request):
     domain = os.environ.get("TOLLGATE_DOMAIN", "")
 
     assert host, "TOLLGATE_SSH_HOST or ROUTER_IP not set in .env"
-    assert password, "TOLLGATE_LUCI_PASSWORD or ROUTER_PASSWORD not set in .env"
 
-    return Router(host=host, password=password, phone_ip=phone_ip,
-                  phone_mac=phone_mac, domain=domain)
+    return Router(host=host, phone_ip=phone_ip,
+                  phone_mac=phone_mac, domain=domain, identity_file=identity_file or None)
 
 
 @pytest.fixture(scope="session", autouse=True)

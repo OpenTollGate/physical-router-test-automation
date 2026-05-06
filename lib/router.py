@@ -11,28 +11,29 @@ log = logging.getLogger("tollgate.router")
 
 
 class Router:
-    def __init__(self, host: str, password: str, phone_ip: str, phone_mac: str, domain: str):
+    def __init__(self, host: str, phone_ip: str, phone_mac: str, domain: str, identity_file: str = None):
         self.host = host
-        self.password = password
         self.phone_ip = phone_ip
         self.phone_mac = phone_mac
         self.domain = domain
+        self.identity_file = identity_file
         self._ssh_base = [
-            "sshpass", "-e", "ssh",
+            "ssh",
             "-o", "ConnectTimeout=5",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "LogLevel=ERROR",
-            f"root@{host}",
         ]
-        os.environ["SSHPASS"] = password
+        if identity_file:
+            self._ssh_base.extend(["-i", identity_file])
+        self._ssh_base.append(f"root@{host}")
 
     def resolve_phone_client(self, adb) -> tuple:
         mac = adb.wifi_mac()
         if mac:
             self.phone_mac = mac
         ip = adb.wifi_ip()
-        if mac and ip and ip.startswith("172.24."):
+        if mac and ip:
             self.phone_ip = ip
             log.info(f"Phone auto-detected: MAC={mac} IP={ip}")
             return mac, ip
@@ -51,7 +52,21 @@ class Router:
 
     @property
     def gateway_ip(self) -> str:
-        return self.domain or "172.24.193.1"
+        if self.domain:
+            return self.domain
+        gw = self._detect_gateway()
+        if gw:
+            return gw
+        return self.host
+
+    def _detect_gateway(self) -> str:
+        try:
+            out = self.ssh("ip -4 route show default 2>/dev/null | awk '{print $3}'")
+            if out and not out.startswith("Usage"):
+                return out.split("\n")[0].strip()
+        except Exception:
+            pass
+        return ""
 
     def backend_url(self, path="/"):
         return f"http://127.0.0.1:{BACKEND_PORT}{path}"
@@ -251,13 +266,8 @@ class Router:
         tmp = "/tmp/config-testmint.json"
         with open(tmp, "w") as f:
             json.dump(cfg, f, indent=2)
-        subprocess.run(
-            ["sshpass", "-e", "scp", "-O",
-             "-o", "StrictHostKeyChecking=no",
-             "-o", "UserKnownHostsFile=/dev/null",
-             tmp, f"root@{self.host}:/etc/tollgate/config.json"],
-            check=True, capture_output=True,
-        )
+        cmd = self._ssh_base + ["scp", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", f"{tmp}", f"root@{self.host}:/etc/tollgate/config.json"]
+        subprocess.run(cmd, check=True, capture_output=True)
         os.remove(tmp)
         self.ssh("/etc/init.d/tollgate-wrt restart")
         log.info(f"Added {TEST_MINT_URL} to accepted mints, restarted backend")
