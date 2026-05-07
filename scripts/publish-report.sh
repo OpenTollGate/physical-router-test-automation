@@ -126,6 +126,14 @@ mkdir -p "$TARGET_DIR"
 cp -r "$RUN_DIR/report" "$TARGET_DIR/report"
 cp "$RUN_DIR/run.json" "$TARGET_DIR/run.json"
 
+# ── Strip non-whitelisted screenshots ─────────────────────────────────
+# Playwright reports: strip PNGs unless the test has publish-screenshot annotation.
+# pytest reports: screenshots are already filtered by --publish flag at collection time.
+if [ -f "$TARGET_DIR/report/report.json" ]; then
+	REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+	bash "$REPO_DIR/scripts/strip-screenshots.sh" "$TARGET_DIR/report" 2>/dev/null || true
+fi
+
 echo "==> Copied report to ${TARGET_DIR}"
 
 # ── Purge old runs ───────────────────────────────────────────────────
