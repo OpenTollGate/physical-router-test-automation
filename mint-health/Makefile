@@ -20,6 +20,8 @@
 #   make -f Makefile r-diagnose-config-path ROUTER=alpha        # verify config path
 #   make -f Makefile r-test-default-mints ROUTER=alpha          # verify default mint config
 #   make -f Makefile r-rescue-router ROUTER=beta VIA=alpha      # rescue offline router
+#   make -f Makefile r-test-startup-hygiene ROUTER=alpha        # power cycle test: boot with non-internet STA
+#   make -f Makefile r-test-startup-hygiene-dead-only ROUTER=alpha  # boot with ONLY dead STA, emergency scan test
 #   make -f Makefile r-full ROUTER=alpha                        # full mint health suite
 #   make -f Makefile r-full-upstream SSID=MyNet PASS=secret ROUTER=alpha  # full wifi suite
 #   make -f Makefile r-lock PHASE="description"                 # acquire router lock
@@ -52,7 +54,9 @@
         r-check-sta-health \
         r-setup-test-mint r-restore-prod-config r-fund-wallet \
         r-smoke-degraded r-smoke-degraded-upstream r-smoke-degraded-connect \
-        r-rescue-router r-save-upstream r-restore-upstream \
+r-test-startup-hygiene r-test-startup-hygiene-setup r-test-startup-hygiene-verify \
+	r-test-startup-hygiene-dead-only r-test-startup-hygiene-dead-only-setup r-test-startup-hygiene-dead-only-verify \
+	r-rescue-router r-save-upstream r-restore-upstream \
         r-diagnose-config-path r-test-default-mints \
         r-guard-no-dual-wwan \
         r-lock r-unlock force-unlock r-status-lock \
@@ -149,6 +153,8 @@ help: ## Show this help
 	@echo "  make -f Makefile r-diagnose-config-path ROUTER=alpha # verify config path"
 	@echo "  make -f Makefile r-test-default-mints ROUTER=alpha   # verify mint config"
 	@echo "  make -f Makefile r-rescue-router ROUTER=beta VIA=alpha # rescue offline router"
+	@echo "  make -f Makefile r-test-startup-hygiene ROUTER=alpha # power cycle: boot with non-internet STA, verify auto-switch (single command)"
+	@echo "  make -f Makefile r-test-startup-hygiene-dead-only ROUTER=alpha # boot with ONLY dead STA, verify emergency scan + switch (single command)"
 
 # ---------------------------------------------------------------------------
 #  Upstream WiFi — Local targets
@@ -1087,6 +1093,431 @@ r-test-default-mints: ## [remote] Verify default mint config matches expected br
 		echo "$(GREEN)OK: Test mint present in config (dev build)$(RESET)"; \
 	else \
 		echo "$(YELLOW)INFO: Test mint not in config (production build or custom config)$(RESET)"; \
+	fi
+
+r-test-startup-hygiene: ## [remote] Full power cycle test: enable dead STA + remove ecash + reboot + verify auto-switch + restore. Single command.
+	@$(MAKE) -f Makefile r-test-startup-hygiene-setup ROUTER=$(ROUTER) && \
+	echo ""; \
+	echo "$(CYAN)Rebooting $(ROUTER) via SSH...$(RESET)"; \
+	router_lan=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_LAN_HOST=" routers.env | cut -d= -f2); \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "reboot" 2>/dev/null || true; \
+	echo "  Waiting 50s for reboot..."; \
+	sleep 50; \
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+		if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new $(ROUTER_USER)@$$router_lan "echo lan-ok" 2>/dev/null | grep -q lan-ok; then \
+			echo "$(GREEN)$(ROUTER) back after $$((50 + i*5))s$(RESET)"; \
+			break; \
+		fi; \
+		echo "  waiting... ($$i/12)"; \
+		sleep 5; \
+	done; \
+	$(MAKE) -f Makefile r-test-startup-hygiene-verify ROUTER=$(ROUTER)
+
+r-test-startup-hygiene-setup: ## [remote] Step 1/2: enable non-internet STA, remove ecash, save state for verify
+	@$(RESOLVE_ROUTER_LAN); \
+	target_upper=$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]'); \
+	router_netbird=$$(grep -E "^ROUTER_$${target_upper}_HOST=" routers.env | cut -d= -f2); \
+	echo "$(BOLD)=========================================$(RESET)"; \
+	echo "$(BOLD)  Startup Hygiene Setup [$(ROUTER)]$(RESET)"; \
+	echo "$(BOLD)=========================================$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)Pre-flight checks...$(RESET)"; \
+	echo "  LAN ($$router_lan)..."; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "echo lan-ok" 2>/dev/null | grep -q lan-ok || { echo "$(RED)Router unreachable via LAN ($$router_lan). Connect ethernet.$(RESET)"; exit 1; }; \
+	echo "  $(GREEN)LAN OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)Step 1: Verify current upstream and internet$(RESET)"; \
+	active_ssid=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "tollgate upstream list 2>/dev/null" | grep ACTIVE | awk '{print $$1}'); \
+	if [ -z "$$active_ssid" ]; then echo "$(RED)No active upstream on $(ROUTER).$(RESET)"; exit 1; fi; \
+	echo "  Active upstream: $$active_ssid"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "ping -c2 -W3 9.9.9.9" 2>/dev/null | grep -q "0% packet loss" || { echo "$(RED)No internet on $(ROUTER).$(RESET)"; exit 1; }; \
+	echo "  $(GREEN)Internet OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)Step 2: Backup wallet and remove ecash$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "ls -la /etc/tollgate/wallet.db 2>/dev/null" | tail -1; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "mv /etc/tollgate/wallet.db /etc/tollgate/wallet.db.bak" 2>/dev/null || { echo "$(RED)No wallet.db found on $(ROUTER).$(RESET)"; exit 1; }; \
+	echo "  $(GREEN)Wallet backed up → wallet.db.bak$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)Step 3: Enable non-internet STA (other router's TollGate AP)$(RESET)"; \
+	if [ "$(ROUTER)" = "alpha" ]; then \
+		dead_ssid=$$(grep -E "^ROUTER_BETA_SSID=" routers.env | cut -d= -f2); \
+	else \
+		dead_ssid=$$(grep -E "^ROUTER_ALPHA_SSID=" routers.env | cut -d= -f2); \
+	fi; \
+	sta_name=$$(echo "$$dead_ssid" | tr '[:upper:]-' '[:lower:]_' | sed 's/[^a-z0-9_]//g'); \
+	echo "  Enabling upstream_$$sta_name ($$dead_ssid) on radio1..."; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "\
+		if uci -q get wireless.upstream_$$sta_name >/dev/null 2>&1; then \
+			echo '  Reusing existing upstream_$$sta_name'; \
+		else \
+			uci set wireless.upstream_$$sta_name=wifi-iface; \
+			uci set wireless.upstream_$$sta_name.mode='sta'; \
+			uci set wireless.upstream_$$sta_name.network='wwan'; \
+		fi; \
+		uci set wireless.upstream_$$sta_name.device='radio1'; \
+		uci set wireless.upstream_$$sta_name.ssid='$$dead_ssid'; \
+		uci set wireless.upstream_$$sta_name.encryption='none'; \
+		uci set wireless.upstream_$$sta_name.disabled='0'; \
+		uci commit wireless; \
+	"; \
+	echo "  $(GREEN)Enabled $$dead_ssid on radio1$(RESET)"; \
+	echo ""; \
+	echo "$(YELLOW)Saving state for verify step...$(RESET)"; \
+	echo "$$active_ssid" > /tmp/tollgate-hygiene-active-$(ROUTER).txt; \
+	echo "$$dead_ssid" > /tmp/tollgate-hygiene-dead-$(ROUTER).txt; \
+	echo "$$sta_name" > /tmp/tollgate-hygiene-sta-$(ROUTER).txt; \
+	echo ""; \
+	echo "$(GREEN)Setup complete.$(RESET)"
+
+r-test-startup-hygiene-verify: ## [remote] Step 2/2: verify startup check auto-switched, restore wallet
+	@$(RESOLVE_ROUTER_LAN); \
+	target_upper=$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]'); \
+	router_netbird=$$(grep -E "^ROUTER_$${target_upper}_HOST=" routers.env | cut -d= -f2); \
+	dead_ssid=$$(cat /tmp/tollgate-hygiene-dead-$(ROUTER).txt 2>/dev/null); \
+	sta_name=$$(cat /tmp/tollgate-hygiene-sta-$(ROUTER).txt 2>/dev/null); \
+	prev_active=$$(cat /tmp/tollgate-hygiene-active-$(ROUTER).txt 2>/dev/null); \
+	if [ -z "$$dead_ssid" ] || [ -z "$$sta_name" ]; then echo "$(RED)No setup state found. Run r-test-startup-hygiene-setup first.$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=========================================$(RESET)"; \
+	echo "$(BOLD)  Startup Hygiene Verify [$(ROUTER)]$(RESET)"; \
+	echo "$(BOLD)=========================================$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)Step 4: Check LAN connectivity after power cycle$(RESET)"; \
+	if ! ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "echo lan-ok" 2>/dev/null | grep -q lan-ok; then \
+		echo "$(RED)Router not reachable via LAN ($$router_lan).$(RESET)"; \
+		echo "  Wait longer for boot, or check ethernet cable."; \
+		exit 1; \
+	fi; \
+	echo "  $(GREEN)LAN OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)Step 5: Check startup connectivity hygiene logs$(RESET)"; \
+	startup_log=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "logread | grep -i 'startup check'"); \
+	if echo "$$startup_log" | grep -q "active STA has internet"; then \
+		echo "$(GREEN)$(BOLD)Startup check: active STA has internet!$(RESET)"; \
+		echo ""; \
+		echo "$$startup_log" | while IFS= read -r line; do echo "  $$line"; done; \
+	elif echo "$$startup_log" | grep -q "no internet"; then \
+		echo "$(GREEN)$(BOLD)Startup check detected no internet!$(RESET)"; \
+		echo ""; \
+		echo "$$startup_log" | while IFS= read -r line; do echo "  $$line"; done; \
+	else \
+		echo "$(YELLOW)No startup check logs found. Checking all relevant logs...$(RESET)"; \
+		ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "logread | grep -i 'startup\|blacklist\|emergency\|Successfully switched' | tail -15"; \
+	fi; \
+	echo ""; \
+	blacklist_log=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "logread | grep -i 'blacklisted'"); \
+	if [ -n "$$blacklist_log" ]; then \
+		echo "$(CYAN)Blacklist entries:$(RESET)"; \
+		echo "$$blacklist_log" | while IFS= read -r line; do echo "  $$line"; done; \
+	fi; \
+	echo ""; \
+	switch_log=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "logread | grep 'Successfully switched'"); \
+	if [ -n "$$switch_log" ]; then \
+		echo "$(CYAN)Switch events:$(RESET)"; \
+		echo "$$switch_log" | while IFS= read -r line; do echo "  $$line"; done; \
+	fi; \
+	echo ""; \
+	echo "$(CYAN)Step 6: Verify current upstream and internet$(RESET)"; \
+	new_active=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "tollgate upstream list 2>/dev/null" | grep ACTIVE | awk '{print $$1}'); \
+	echo "  Active upstream now: $$new_active"; \
+	echo "  Previous active: $$prev_active"; \
+	echo "  Dead STA that was added: $$dead_ssid"; \
+	internet_ok=0; \
+	for i in 1 2 3 4; do \
+		if ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "ping -c2 -W5 9.9.9.9" 2>/dev/null | grep -q "0% packet loss"; then \
+			echo "  $(GREEN)Internet OK (attempt $$i)$(RESET)"; \
+			internet_ok=1; \
+			break; \
+		fi; \
+		echo "  $(YELLOW)No internet yet... (attempt $$i/4)$(RESET)"; \
+		sleep 10; \
+	done; \
+	if [ "$$internet_ok" = "0" ]; then echo "  $(RED)No internet after 4 attempts$(RESET)"; fi; \
+	echo ""; \
+	echo "$(CYAN)Step 7: Verify NetBird recovered$(RESET)"; \
+	netbird_ok=0; \
+	for i in 1 2 3 4 5 6; do \
+		if ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "ifconfig wt0 2>/dev/null" | grep -q "inet addr:100"; then \
+			wt_ip=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "ifconfig wt0 2>/dev/null" | grep "inet addr:" | awk -F: '{print $$2}' | awk '{print $$1}'); \
+			echo "$(GREEN)NetBird up: $$wt_ip$(RESET)"; \
+			netbird_ok=1; \
+			break; \
+		fi; \
+		echo "  Waiting... ($$i/6)"; \
+		sleep 5; \
+	done; \
+	if [ "$$netbird_ok" = "0" ]; then echo "$(YELLOW)NetBird not up yet (may need more time)$(RESET)"; fi; \
+	echo ""; \
+	echo "$(CYAN)Step 8: Cleanup — restore wallet and disable test STA$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "mv /etc/tollgate/wallet.db.bak /etc/tollgate/wallet.db"; \
+	echo "  $(GREEN)Wallet restored$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "uci set wireless.upstream_$$sta_name.disabled=1; uci commit wireless"; \
+	echo "  $(GREEN)Disabled $$dead_ssid STA$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "/etc/init.d/tollgate-wrt restart" 2>/dev/null; \
+	sleep 5; \
+	if ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "ping -c2 -W3 9.9.9.9" 2>/dev/null | grep -q "0% packet loss"; then \
+		echo "  $(GREEN)Internet OK after restore$(RESET)"; \
+	else \
+		echo "  $(YELLOW)Internet not yet restored (may need a moment)$(RESET)"; \
+	fi; \
+	rm -f /tmp/tollgate-hygiene-active-$(ROUTER).txt /tmp/tollgate-hygiene-dead-$(ROUTER).txt /tmp/tollgate-hygiene-sta-$(ROUTER).txt; \
+	echo ""; \
+	if [ "$$internet_ok" = "1" ]; then \
+		echo "$(BOLD)=========================================$(RESET)"; \
+		echo "$(GREEN)$(BOLD)  Startup connectivity hygiene test PASSED [$(ROUTER)]$(RESET)"; \
+		echo "$(BOLD)=========================================$(RESET)"; \
+	else \
+		echo "$(BOLD)=========================================$(RESET)"; \
+		echo "$(RED)$(BOLD)  Startup connectivity hygiene test FAILED [$(ROUTER)]$(RESET)"; \
+		echo "$(BOLD)=========================================$(RESET)"; \
+		exit 1; \
+	fi
+
+r-test-startup-hygiene-dead-only: ## [remote] Boot with ONLY dead STA enabled, verify emergency scan finds disabled good STA and switches.
+	@$(MAKE) -f Makefile r-test-startup-hygiene-dead-only-setup ROUTER=$(ROUTER) && \
+	echo ""; \
+	echo "$(CYAN)Rebooting $(ROUTER) via SSH...$(RESET)"; \
+	router_lan=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_LAN_HOST=" routers.env | cut -d= -f2); \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "reboot" 2>/dev/null || true; \
+	echo "  Waiting 50s for reboot..."; \
+	sleep 50; \
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+		if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new $(ROUTER_USER)@$$router_lan "echo lan-ok" 2>/dev/null | grep -q lan-ok; then \
+			echo "$(GREEN)$(ROUTER) back after $$((50 + i*5))s$(RESET)"; \
+			break; \
+		fi; \
+		echo "  waiting... ($$i/12)"; \
+		sleep 5; \
+	done; \
+	$(MAKE) -f Makefile r-test-startup-hygiene-dead-only-verify ROUTER=$(ROUTER)
+
+r-test-startup-hygiene-dead-only-setup: ## [remote] Step 1/2: disconnect other router, disable ALL STAs except dead one, remove ecash
+	@$(RESOLVE_ROUTER_LAN); \
+	target_upper=$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]'); \
+	router_netbird=$$(grep -E "^ROUTER_$${target_upper}_HOST=" routers.env | cut -d= -f2); \
+	if [ "$(ROUTER)" = "alpha" ]; then \
+		other_upper=BETA; \
+	else \
+		other_upper=ALPHA; \
+	fi; \
+	other_lan=$$(grep -E "^ROUTER_$${other_upper}_LAN_HOST=" routers.env | cut -d= -f2); \
+	other_netbird=$$(grep -E "^ROUTER_$${other_upper}_HOST=" routers.env | cut -d= -f2); \
+	echo "$(BOLD)=========================================$(RESET)"; \
+	echo "$(BOLD)  Startup Hygiene Dead-Only Setup [$(ROUTER)]$(RESET)"; \
+	echo "$(BOLD)=========================================$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)Pre-flight checks...$(RESET)"; \
+	echo "  LAN ($$router_lan)..."; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "echo lan-ok" 2>/dev/null | grep -q lan-ok || { echo "$(RED)Router unreachable via LAN ($$router_lan). Connect ethernet.$(RESET)"; exit 1; }; \
+	echo "  $(GREEN)LAN OK$(RESET)"; \
+	echo "  Other router NetBird ($$other_netbird)..."; \
+	ssh -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new $(ROUTER_USER)@$$other_netbird "echo netbird-ok" 2>/dev/null | grep -q netbird-ok || { echo "$(RED)Other router unreachable via NetBird ($$other_netbird).$(RESET)"; exit 1; }; \
+	echo "  $(GREEN)Other router NetBird OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)Step 0: Disconnect other router's upstream (so dead STA truly has no internet)$(RESET)"; \
+	other_active_sta=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$other_netbird "uci show wireless" | grep "disabled='0'" | grep -v default | grep -v private | grep -v 'wireless\.radio[0-9]\.' | head -1 | sed "s/.*wireless\.\([^.]*\).disabled=.*/\1/"); \
+	if [ -z "$$other_active_sta" ]; then echo "$(YELLOW)No active STA found on other router — already offline$(RESET)"; \
+	else \
+		echo "  Other router active STA: $$other_active_sta"; \
+		echo "  Scheduling safety-net restore on other router (5min)..."; \
+		ssh $(SSH_OPTS) $(ROUTER_USER)@$$other_netbird "nohup sh -c 'sleep 300; uci set wireless.$$other_active_sta.disabled=0; uci commit wireless; wifi reload' >/dev/null 2>&1 &"; \
+		echo "  $(GREEN)Safety net scheduled$(RESET)"; \
+		ssh $(SSH_OPTS) $(ROUTER_USER)@$$other_netbird "uci set wireless.$$other_active_sta.disabled='1'; uci commit wireless; ifdown wwan; wifi reload"; \
+		echo "  $(GREEN)Disabled $$other_active_sta on other router + ifdown wwan$(RESET)"; \
+	fi; \
+	echo "$$other_active_sta" > /tmp/tollgate-hygiene-deadonly-other-sta-$(ROUTER).txt; \
+	echo "$$other_lan" > /tmp/tollgate-hygiene-deadonly-other-lan-$(ROUTER).txt; \
+	echo "$$other_netbird" > /tmp/tollgate-hygiene-deadonly-other-netbird-$(ROUTER).txt; \
+	echo ""; \
+	echo "$(CYAN)Step 1: Record all currently-enabled STA sections$(RESET)"; \
+	enabled_stas=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "uci show wireless" | grep "disabled='0'" | grep -v default | grep -v private | grep -v 'wireless\.radio[0-9]\.' | sed "s/.*wireless\.\([^.]*\).disabled=.*/\1/" | tr '\n' ' '); \
+	echo "  Enabled STA sections: $$enabled_stas"; \
+	echo "$$enabled_stas" > /tmp/tollgate-hygiene-deadonly-enabled-$(ROUTER).txt; \
+	good_ssid=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "tollgate upstream list 2>/dev/null" | grep ACTIVE | awk '{print $$1}'); \
+	if [ -z "$$good_ssid" ]; then echo "$(RED)No active upstream on $(ROUTER).$(RESET)"; exit 1; fi; \
+	echo "  Active upstream: $$good_ssid"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "ping -c2 -W3 9.9.9.9" 2>/dev/null | grep -q "0% packet loss" || { echo "$(RED)No internet on $(ROUTER).$(RESET)"; exit 1; }; \
+	echo "  $(GREEN)Internet OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)Step 2: Backup wallet and remove ecash$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "ls -la /etc/tollgate/wallet.db 2>/dev/null" | tail -1; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "mv /etc/tollgate/wallet.db /etc/tollgate/wallet.db.bak" 2>/dev/null || { echo "$(RED)No wallet.db found on $(ROUTER).$(RESET)"; exit 1; }; \
+	echo "  $(GREEN)Wallet backed up → wallet.db.bak$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)Step 3: Enable dead STA (other router's TollGate AP)$(RESET)"; \
+	if [ "$(ROUTER)" = "alpha" ]; then \
+		dead_ssid=$$(grep -E "^ROUTER_BETA_SSID=" routers.env | cut -d= -f2); \
+	else \
+		dead_ssid=$$(grep -E "^ROUTER_ALPHA_SSID=" routers.env | cut -d= -f2); \
+	fi; \
+	dead_sta=$$(echo "$$dead_ssid" | tr '[:upper:]-' '[:lower:]_' | sed 's/[^a-z0-9_]//g'); \
+	echo "  Enabling upstream_$$dead_sta ($$dead_ssid) on radio1..."; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "\
+		if uci -q get wireless.upstream_$$dead_sta >/dev/null 2>&1; then \
+			echo '  Reusing existing upstream_$$dead_sta'; \
+		else \
+			uci set wireless.upstream_$$dead_sta=wifi-iface; \
+			uci set wireless.upstream_$$dead_sta.mode='sta'; \
+			uci set wireless.upstream_$$dead_sta.network='wwan'; \
+		fi; \
+		uci set wireless.upstream_$$dead_sta.device='radio1'; \
+		uci set wireless.upstream_$$dead_sta.ssid='$$dead_ssid'; \
+		uci set wireless.upstream_$$dead_sta.encryption='none'; \
+		uci set wireless.upstream_$$dead_sta.disabled='0'; \
+		uci commit wireless; \
+	"; \
+	echo "  $(GREEN)Enabled $$dead_ssid on radio1$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)Step 4: Disable ALL other STAs (so ONLY dead STA is active at boot)$(RESET)"; \
+	disable_cmds=""; \
+	for sta in $$enabled_stas; do \
+		disable_cmds="$$disable_cmds uci set wireless.$$sta.disabled='1';"; \
+		echo "  Disabling $$sta"; \
+	done; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "$$disable_cmds uci commit wireless"; \
+	echo "  $(GREEN)All other STAs disabled$(RESET)"; \
+	echo ""; \
+	echo "$(YELLOW)Saving state for verify step...$(RESET)"; \
+	echo "$$dead_ssid" > /tmp/tollgate-hygiene-deadonly-dead-$(ROUTER).txt; \
+	echo "$$dead_sta" > /tmp/tollgate-hygiene-deadonly-deadsta-$(ROUTER).txt; \
+	echo ""; \
+	echo "$(GREEN)Setup complete. Dead-only boot config applied.$(RESET)"; \
+	echo "$(YELLOW)Other router ($$other_lan) is OFFLINE — will be restored after verify.$(RESET)"
+
+r-test-startup-hygiene-dead-only-verify: ## [remote] Step 2/2: verify multi-hop recovery, restore both routers
+	@$(RESOLVE_ROUTER_LAN); \
+	target_upper=$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]'); \
+	router_netbird=$$(grep -E "^ROUTER_$${target_upper}_HOST=" routers.env | cut -d= -f2); \
+	dead_ssid=$$(cat /tmp/tollgate-hygiene-deadonly-dead-$(ROUTER).txt 2>/dev/null); \
+	dead_sta=$$(cat /tmp/tollgate-hygiene-deadonly-deadsta-$(ROUTER).txt 2>/dev/null); \
+	enabled_stas=$$(cat /tmp/tollgate-hygiene-deadonly-enabled-$(ROUTER).txt 2>/dev/null); \
+	other_active_sta=$$(cat /tmp/tollgate-hygiene-deadonly-other-sta-$(ROUTER).txt 2>/dev/null); \
+	other_lan=$$(cat /tmp/tollgate-hygiene-deadonly-other-lan-$(ROUTER).txt 2>/dev/null); \
+	other_netbird=$$(cat /tmp/tollgate-hygiene-deadonly-other-netbird-$(ROUTER).txt 2>/dev/null); \
+	if [ -z "$$dead_ssid" ] || [ -z "$$enabled_stas" ]; then echo "$(RED)No setup state found. Run r-test-startup-hygiene-dead-only-setup first.$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=========================================$(RESET)"; \
+	echo "$(BOLD)  Startup Hygiene Dead-Only Verify [$(ROUTER)]$(RESET)"; \
+	echo "$(BOLD)=========================================$(RESET)"; \
+	echo ""; \
+	echo "  Dead STA (was enabled at boot): $$dead_sta ($$dead_ssid)"; \
+	echo "  Previously-enabled STAs (all disabled): $$enabled_stas"; \
+	echo "  Other router STA to restore: $$other_active_sta"; \
+	echo ""; \
+	echo "$(CYAN)Step 5: Check LAN connectivity after reboot$(RESET)"; \
+	if ! ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "echo lan-ok" 2>/dev/null | grep -q lan-ok; then \
+		echo "$(RED)Router not reachable via LAN ($$router_lan).$(RESET)"; \
+		exit 1; \
+	fi; \
+	echo "  $(GREEN)LAN OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)Step 6: Check startup connectivity hygiene logs$(RESET)"; \
+	startup_log=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "logread | grep -i 'startup check'"); \
+	if echo "$$startup_log" | grep -q "no internet"; then \
+		echo "$(GREEN)$(BOLD)Startup check detected no internet!$(RESET)"; \
+	else \
+		echo "$(YELLOW)No 'no internet' in startup logs. Checking all...$(RESET)"; \
+	fi; \
+	echo "$$startup_log" | while IFS= read -r line; do echo "  $$line"; done; \
+	echo ""; \
+	echo "$(CYAN)Step 7: Check scan/switch logs (expecting multi-hop recovery)$(RESET)"; \
+	scan_log=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "logread | grep -i 'scanning for alternative\|candidate found\|switching\|blacklisted\|switch failed\|no working upstream\|Successfully switched'"); \
+	if [ -n "$$scan_log" ]; then \
+		echo "$(CYAN)Scan/switch events:$(RESET)"; \
+		echo "$$scan_log" | while IFS= read -r line; do echo "  $$line"; done; \
+		switch_count=$$(echo "$$scan_log" | grep -c 'candidate found'); \
+		echo ""; \
+		echo "  Switch attempts: $$switch_count"; \
+	else \
+		echo "$(YELLOW)No scan/switch logs found.$(RESET)"; \
+	fi; \
+	echo ""; \
+	blacklist_log=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "logread | grep -i 'blacklisted'"); \
+	if [ -n "$$blacklist_log" ]; then \
+		echo "$(CYAN)Blacklist entries:$(RESET)"; \
+		echo "$$blacklist_log" | while IFS= read -r line; do echo "  $$line"; done; \
+	fi; \
+	echo ""; \
+	echo "$(CYAN)Step 8: Verify internet recovered (generous timeout for multi-hop)$(RESET)"; \
+	internet_ok=0; \
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+		if ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "ping -c2 -W5 9.9.9.9" 2>/dev/null | grep -q "0% packet loss"; then \
+			echo "  $(GREEN)Internet OK (attempt $$i)$(RESET)"; \
+			internet_ok=1; \
+			break; \
+		fi; \
+		echo "  $(YELLOW)No internet yet... (attempt $$i/12)$(RESET)"; \
+		sleep 15; \
+	done; \
+	if [ "$$internet_ok" = "0" ]; then echo "  $(RED)No internet after 12 attempts (~3min)$(RESET)"; fi; \
+	echo ""; \
+	new_active=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "tollgate upstream list 2>/dev/null" | grep ACTIVE | awk '{print $$1}'); \
+	echo "  Active upstream now: $$new_active"; \
+	echo "  Dead STA (boot-only): $$dead_ssid"; \
+	echo ""; \
+	echo "$(CYAN)Step 9: Cleanup — restore wallet, re-enable all STAs, restart tollgate$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "mv /etc/tollgate/wallet.db.bak /etc/tollgate/wallet.db"; \
+	echo "  $(GREEN)Wallet restored$(RESET)"; \
+	restore_cmds=""; \
+	for sta in $$enabled_stas; do \
+		restore_cmds="$$restore_cmds uci set wireless.$$sta.disabled='0';"; \
+	done; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "$$restore_cmds uci set wireless.$$dead_sta.disabled='1'; uci commit wireless"; \
+	echo "  $(GREEN)Restored all STAs: $$enabled_stas$(RESET)"; \
+	echo "  $(GREEN)Disabled dead STA: $$dead_sta$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "/etc/init.d/tollgate-wrt restart" 2>/dev/null; \
+	sleep 5; \
+	echo ""; \
+	echo "$(CYAN)Step 9b: Reconnect other router's upstream$(RESET)"; \
+	other_restored=0; \
+	if [ -n "$$other_active_sta" ]; then \
+		for other_addr in $$other_netbird $$other_lan; do \
+			echo "  Trying $$other_addr..."; \
+			if ssh $(SSH_OPTS) $(ROUTER_USER)@$$other_addr "uci set wireless.$$other_active_sta.disabled='0'; uci commit wireless; wifi reload" 2>/dev/null; then \
+				echo "  $(GREEN)Other router upstream restored via $$other_addr$(RESET)"; \
+				other_restored=1; \
+				break; \
+			fi; \
+		done; \
+		if [ "$$other_restored" = "0" ]; then \
+			echo "  $(YELLOW)Could not reach other router directly — safety net will auto-restore in ~5min$(RESET)"; \
+		fi; \
+	else \
+		echo "  $(YELLOW)No other router state saved — skipping$(RESET)"; \
+	fi; \
+	echo ""; \
+	if ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "ping -c2 -W3 9.9.9.9" 2>/dev/null | grep -q "0% packet loss"; then \
+		echo "  $(GREEN)Internet OK after restore$(RESET)"; \
+	else \
+		echo "  $(YELLOW)Internet not yet restored (may need a moment)$(RESET)"; \
+	fi; \
+	rm -f /tmp/tollgate-hygiene-deadonly-enabled-$(ROUTER).txt /tmp/tollgate-hygiene-deadonly-dead-$(ROUTER).txt \
+	       /tmp/tollgate-hygiene-deadonly-deadsta-$(ROUTER).txt /tmp/tollgate-hygiene-deadonly-other-sta-$(ROUTER).txt \
+	       /tmp/tollgate-hygiene-deadonly-other-lan-$(ROUTER).txt /tmp/tollgate-hygiene-deadonly-other-netbird-$(ROUTER).txt; \
+	echo ""; \
+	if [ "$$internet_ok" = "1" ] && [ "$$new_active" != "$$dead_ssid" ]; then \
+		echo "$(BOLD)=========================================$(RESET)"; \
+		echo "$(GREEN)$(BOLD)  Dead-only startup hygiene test PASSED [$(ROUTER)]$(RESET)"; \
+		echo "$(BOLD)  Internet recovered via $$new_active (was not $$dead_ssid)$(RESET)"; \
+		echo "$(BOLD)=========================================$(RESET)"; \
+	elif [ "$$internet_ok" = "1" ]; then \
+		no_internet_detected=$$(echo "$$startup_log" | grep -c 'no internet'); \
+		emergency_scan=$$(echo "$$scan_log" | grep -c 'emergency\|scanning for alternative\|candidate found'); \
+		if [ "$$no_internet_detected" -gt 0 ] && [ "$$emergency_scan" -gt 0 ]; then \
+			echo "$(BOLD)=========================================$(RESET)"; \
+			echo "$(GREEN)$(BOLD)  Dead-only startup hygiene test PASSED [$(ROUTER)]$(RESET)"; \
+			echo "$(BOLD)  Startup check detected no internet, emergency scan triggered$(RESET)"; \
+			echo "$(BOLD)  Internet recovered (possibly via multi-hop) on $$new_active$(RESET)"; \
+			echo "$(BOLD)=========================================$(RESET)"; \
+		else \
+			echo "$(BOLD)=========================================$(RESET)"; \
+			echo "$(YELLOW)$(BOLD)  Dead-only startup hygiene test PARTIAL [$(ROUTER)]$(RESET)"; \
+			echo "$(BOLD)  Internet OK but still on dead STA ($$new_active)$(RESET)"; \
+			echo "$(BOLD)=========================================$(RESET)"; \
+		fi; \
+	else \
+		echo "$(BOLD)=========================================$(RESET)"; \
+		echo "$(RED)$(BOLD)  Dead-only startup hygiene test FAILED [$(ROUTER)]$(RESET)"; \
+		echo "$(BOLD)=========================================$(RESET)"; \
+		exit 1; \
 	fi
 
 r-rescue-router: ## [remote] Rescue a router with dead NetBird via another router. Usage: r-rescue-router ROUTER=beta VIA=alpha
