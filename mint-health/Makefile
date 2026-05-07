@@ -942,6 +942,42 @@ r-smoke-recovery: ## [remote] Quick recovery smoke: unblock + wait
 	@echo ""
 	@$(MAKE) -f Makefile r-wait-recovery ROUTER=$(ROUTER)
 
+r-smoke-degraded-recovery: ## [remote] Full degraded→recovery lifecycle WITHOUT restart after unblock (tests BoltDB lock release)
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(BOLD)  Degraded Recovery Smoke Test [$(ROUTER)]$(RESET)"
+	@echo "$(BOLD)  (in-process recovery, NO restart after unblock)$(RESET)"
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo ""
+	@$(MAKE) -f Makefile r-setup-test-mint ROUTER=$(ROUTER)
+	@echo ""
+	@$(MAKE) -f Makefile r-fund-wallet ROUTER=$(ROUTER)
+	@echo ""
+	@$(MAKE) -f Makefile r-check-merchant ROUTER=$(ROUTER)
+	@echo ""
+	@$(MAKE) -f Makefile r-record-baseline ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(YELLOW)--- Blocking mint to force degraded mode ---$(RESET)"
+	@$(MAKE) -f Makefile r-block-mint ROUTER=$(ROUTER) MINT="$(MINT)"
+	@echo ""
+	@$(MAKE) -f Makefile r-restart-service ROUTER=$(ROUTER)
+	@echo ""
+	@$(MAKE) -f Makefile r-check-degraded ROUTER=$(ROUTER)
+	@echo ""
+	@$(MAKE) -f Makefile r-test-offline-ops ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(YELLOW)--- Unblocking mint (NO restart — tests in-process recovery) ---$(RESET)"
+	@$(MAKE) -f Makefile r-unblock-mint ROUTER=$(ROUTER) MINT="$(MINT)"
+	@echo ""
+	@$(MAKE) -f Makefile r-wait-recovery ROUTER=$(ROUTER)
+	@echo ""
+	@$(MAKE) -f Makefile r-check-merchant ROUTER=$(ROUTER)
+	@echo ""
+	@$(MAKE) -f Makefile r-restore-prod-config ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(GREEN)$(BOLD)  Degraded recovery smoke test PASSED [$(ROUTER)]$(RESET)"
+	@echo "$(BOLD)=======================================$(RESET)"
+
 # ---------------------------------------------------------------------------
 #  Test mint setup & degraded mode suites
 # ---------------------------------------------------------------------------
