@@ -16,3 +16,6 @@ results/
 
 # Router inventory (contains IPs, SSIDs)
 config/routers.json
+
+# Firmware build credentials (contains passwords)
+credentials/

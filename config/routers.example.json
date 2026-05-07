@@ -8,7 +8,10 @@
       "sshUser": "root",
       "arch": "aarch64_cortex-a53",
       "wifiInterface": "wlan0",
-      "tollgateSsidPrefix": "TollGate-"
+      "tollgateSsidPrefix": "TollGate-",
+      "openwrtVersion": "24.10.1",
+      "openwrtTarget": "mediatek/filogic",
+      "openwrtProfile": "glinet_gl-mt3000"
     }
   }
 }
