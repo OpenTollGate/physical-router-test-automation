@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""U-Boot recovery for GL.iNet GL-MT3000 with pcap monitor and event-driven state machine.
+"""U-Boot recovery for GL.iNet GL-MT3000 and D-Link COVR-X1860 with pcap monitor
+and event-driven state machine.
 
 Background pcap monitor thread parses packets in real-time and emits events
 to a queue. The main thread runs a state machine that consumes events and
 drives the recovery workflow.
+
+Supported devices (select via --device):
+  mt3000      GL.iNet Beryl AX (GL-MT3000) — default
+  covr-x1860  D-Link COVR-X1860 A1 mesh WiFi
 
 Network signatures (validated on MT3000 hardware):
   - U-Boot MAC:  86:4d:51:75:b7:65 (differs from OpenWrt MAC)
@@ -15,6 +20,7 @@ Network signatures (validated on MT3000 hardware):
 
 Usage:
     scripts/uboot-recover.py --image <firmware.bin> [--interface en6]
+    scripts/uboot-recover.py --image <fw.bin> --device covr-x1860
     scripts/uboot-recover.py --image <fw.bin> --no-upload   # dry run
     scripts/uboot-recover.py --image <fw.bin> --no-voice    # no audio
     scripts/uboot-recover.py --image <fw.bin> --capture /tmp/boot.pcap
@@ -43,6 +49,96 @@ UBOOT_FLASH_COUNT = 6
 UBOOT_FLASH_TIME_SECONDS = 240
 UBOOT_REBOOT_TIMEOUT = 360
 SILENCE_TIMEOUT_DEFAULT = 30
+
+
+@dataclass
+class DeviceProfile:
+    name: str
+    vendor: str
+    description: str
+    recovery_ip: str
+    client_ip: str
+    client_subnet: str
+    reset_instructions: str
+    led_pattern: str
+    upload_endpoint: str
+    upload_field: str
+    trigger_flash_endpoint: str  # empty string = no separate trigger needed
+    flash_time_seconds: int
+    silence_timeout: int
+    openwrt_ip: str = ""         # IP OpenWrt boots at (defaults to recovery_ip)
+    openwrt_client_ip: str = ""  # Client IP for OpenWrt subnet (defaults to client_ip)
+
+
+PROFILES = {
+    "mt3000": DeviceProfile(
+        name="mt3000",
+        vendor="GL.iNet",
+        description="GL.iNet Beryl AX (GL-MT3000)",
+        recovery_ip="192.168.1.1",
+        client_ip="192.168.1.254",
+        client_subnet="255.255.255.0",
+        reset_instructions="Press and hold the reset button on the side, under the antenna.",
+        led_pattern="blue flashes 6x then solid white",
+        upload_endpoint="/upload",
+        upload_field="firmware",
+        trigger_flash_endpoint="/flashing.html",
+        flash_time_seconds=240,
+        silence_timeout=30,
+    ),
+    "covr-x1860": DeviceProfile(
+        name="covr-x1860",
+        vendor="D-Link",
+        description="D-Link COVR-X1860 A1 mesh WiFi",
+        recovery_ip="192.168.0.1",
+        client_ip="192.168.0.10",
+        client_subnet="255.255.255.0",
+        reset_instructions="Use a pin to press and hold the reset button UNDER the device.",
+        led_pattern="status LED blinks red",
+        upload_endpoint="/upload",
+        upload_field="firmware",
+        trigger_flash_endpoint="",
+        flash_time_seconds=120,
+        silence_timeout=30,
+        openwrt_ip="192.168.1.1",
+        openwrt_client_ip="192.168.1.254",
+    ),
+}
+
+
+def _setup_interface_ips(interface: str, profile: DeviceProfile) -> None:
+    existing = subprocess.run(
+        ["ifconfig", interface], capture_output=True, text=True, check=False,
+    ).stdout
+
+    if profile.client_ip not in existing:
+        result = subprocess.run(
+            ["ifconfig", interface, profile.client_ip, "netmask", profile.client_subnet, "up"],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            print(f"ERROR: need sudo to configure {interface}: {result.stderr.strip()}", file=sys.stderr)
+            print(f"  sudo ifconfig {interface} {profile.client_ip} netmask {profile.client_subnet} up", file=sys.stderr)
+            sys.exit(1)
+        log(f"Configured {interface}: {profile.client_ip}/{profile.client_subnet}")
+    else:
+        log(f"Interface {interface} already has {profile.client_ip}")
+
+    openwrt_client = profile.openwrt_client_ip
+    if openwrt_client and openwrt_client != profile.client_ip and openwrt_client not in existing:
+        result = subprocess.run(
+            ["ifconfig", interface, openwrt_client, "netmask", "255.255.255.0", "alias"],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            log(f"WARNING: could not add alias {openwrt_client}: {result.stderr.strip()}")
+        else:
+            log(f"Added alias {interface}: {openwrt_client}/255.255.255.0")
+
+
+def _arp_target_for_profile(profile: DeviceProfile) -> str:
+    parts = profile.recovery_ip.rsplit(".", 1)
+    return f"{parts[0]}.2"
 
 
 class Event(Enum):
@@ -87,6 +183,7 @@ class Timeline:
 class PcapMonitorConfig:
     interface: str
     pcap_path: str
+    recovery_ip: str = UBOOT_IP
     router_mac_openwrt: str = ""
     router_mac_uboot: str = ""
     uboot_ip: str = UBOOT_IP
@@ -130,10 +227,10 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
-def detect_uboot_http() -> tuple[bool, str]:
+def detect_uboot_http(recovery_ip: str = UBOOT_IP) -> tuple[bool, str]:
     try:
         r = subprocess.run(
-            ["curl", "-s", "--max-time", "2", f"http://{UBOOT_IP}/"],
+            ["curl", "-s", "--max-time", "2", f"http://{recovery_ip}/"],
             capture_output=True, text=True, timeout=5, check=False,
         )
         if "FIRMWARE UPDATE" in r.stdout or "firmware" in r.stdout.lower():
@@ -145,16 +242,17 @@ def detect_uboot_http() -> tuple[bool, str]:
         return False, str(e)[:80]
 
 
-def upload_firmware(image_path: str, timeout: int = 300) -> tuple[bool, str]:
+def upload_firmware(image_path: str, profile: DeviceProfile, timeout: int = 300) -> tuple[bool, str]:
     size_mb = os.path.getsize(image_path) / 1024 / 1024
-    log(f"Uploading {os.path.basename(image_path)} ({size_mb:.1f} MB) to /upload...")
+    endpoint = f"http://{profile.recovery_ip}{profile.upload_endpoint}"
+    log(f"Uploading {os.path.basename(image_path)} ({size_mb:.1f} MB) to {profile.upload_endpoint}...")
     try:
         r = subprocess.run(
             [
                 "curl", "-sk", "--show-error",
                 "--max-time", str(timeout),
-                "-F", f"firmware=@{image_path};type=application/octet-stream",
-                f"http://{UBOOT_IP}/upload",
+                "-F", f"{profile.upload_field}=@{image_path};type=application/octet-stream",
+                endpoint,
             ],
             capture_output=True, text=True, timeout=timeout + 30, check=False,
         )
@@ -173,11 +271,14 @@ def upload_firmware(image_path: str, timeout: int = 300) -> tuple[bool, str]:
         return False, str(e)
 
 
-def trigger_flash() -> bool:
-    log("Triggering flash via /flashing.html...")
+def trigger_flash(profile: DeviceProfile) -> bool:
+    if not profile.trigger_flash_endpoint:
+        return True
+    log(f"Triggering flash via {profile.trigger_flash_endpoint}...")
     try:
         r = subprocess.run(
-            ["curl", "-s", "--max-time", "5", f"http://{UBOOT_IP}/flashing.html"],
+            ["curl", "-s", "--max-time", "5",
+             f"http://{profile.recovery_ip}{profile.trigger_flash_endpoint}"],
             capture_output=True, text=True, timeout=10, check=False,
         )
         if "Update in progress" in r.stdout:
@@ -326,13 +427,14 @@ class PcapMonitor:
             return
 
         lower = line.lower()
+        recovery_ip = self.config.recovery_ip
+        arp_target = recovery_ip.rsplit(".", 1)[0] + ".2"
 
-        if "http" in lower and "192.168.1.1" in lower:
+        if "http" in lower and recovery_ip in lower:
             if "length" in lower:
                 self._emit(Event.UBOOT_HTTP, line[:120])
 
-        # U-Boot ARPs "who-has 192.168.1.2" right before rebooting (flash-complete signal)
-        if "arp" in lower and "who-has 192.168.1.2" in lower:
+        if "arp" in lower and f"who-has {arp_target}" in lower:
             mac_match = re.search(
                 r'([0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:'
                 r'[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2})', line,
@@ -480,6 +582,7 @@ class SSHMonitor:
 
 @dataclass
 class RecoveryContext:
+    profile: DeviceProfile
     image_path: str
     interface: str
     pcap_path: str
@@ -491,7 +594,7 @@ class RecoveryContext:
     state: State = State.WAITING_FOR_POWER_OFF
     sha256_before: str = ""
     sha256_after: str = ""
-    _say_fn = None
+    _say_fn: object = field(default=None, repr=False)
 
     def __post_init__(self):
         if self._say_fn is None:
@@ -533,11 +636,11 @@ def _run_state_machine(
 def _handle_waiting_for_power_off(ctx: RecoveryContext, eq: queue.Queue) -> None:
     link_up = get_link_state(ctx.interface)
     if link_up:
-        ctx._say_fn("Router is on. Unplug the power cable now. Keep the ethernet cable in the LAN port.")
+        ctx._say_fn("Ready. Please unplug the power cable from the router now.")
         log("STEP 1: Unplug power (keep ethernet in LAN port)")
 
-        ctx.state = _wait_for_event_or_timeout(
-            eq, timeout=120,
+        _wait_for_event_or_timeout(
+            eq, timeout=300,
             target_events={Event.LINK_DOWN},
             success_state=State.WAITING_FOR_UBOOT,
             fail_message="Timed out waiting for power off.",
@@ -556,8 +659,9 @@ def _handle_waiting_for_power_off(ctx: RecoveryContext, eq: queue.Queue) -> None
 
 def _handle_waiting_for_uboot(ctx: RecoveryContext, eq: queue.Queue, link_monitor: LinkMonitor) -> None:
     print()
-    ctx._say_fn("Press and hold the reset button on the side, under the antenna. No paperclip needed.")
-    log("STEP 2: Press and HOLD the reset button (side, under antenna)")
+    profile = ctx.profile
+    ctx._say_fn(profile.reset_instructions)
+    log(f"STEP 2: {profile.reset_instructions}")
     time.sleep(4)
 
     ctx._say_fn("While still holding reset, plug in the power cable.")
@@ -565,10 +669,10 @@ def _handle_waiting_for_uboot(ctx: RecoveryContext, eq: queue.Queue, link_monito
     time.sleep(2)
 
     ctx._say_fn(
-        f"Watch the LED. Blue flashes {UBOOT_FLASH_COUNT} times, then solid white. "
-        "Release reset when it turns white."
+        f"Watch the LED. {profile.led_pattern}. "
+        "Release reset when the LED shows the recovery pattern."
     )
-    log(f"Waiting: blue LED {UBOOT_FLASH_COUNT}x -> solid white -> release reset")
+    log(f"Waiting for recovery LED pattern: {profile.led_pattern}")
     print()
 
     got_link_up = _wait_for_event_or_timeout(
@@ -584,27 +688,21 @@ def _handle_waiting_for_uboot(ctx: RecoveryContext, eq: queue.Queue, link_monito
         return
 
     ctx.timeline.link_up = ts()
-    ctx._say_fn("Link up. Keep holding reset until the LED is solid white.")
-    log("Link up — waiting for LED sequence...")
+    ctx._say_fn("Link detected. Waiting for recovery mode.")
+    log(f"Link up — waiting for recovery HTTP: {profile.led_pattern}")
     time.sleep(8)
 
-    ctx._say_fn("Release the reset button now. The LED should be solid white.")
-    log("STEP 4: Release reset (LED should be SOLID WHITE)")
-    print()
-
-    link_thread = threading.Thread(target=link_monitor.run, daemon=True)
-    link_thread.start()
-
-    log("Scanning for U-Boot HTTP server...")
+    log("Scanning for recovery HTTP server...")
     uboot_found = False
     probe_start = ts()
     probe_timeout = 90
 
     while ts() - probe_start < probe_timeout:
-        found, detail = detect_uboot_http()
+        found, detail = detect_uboot_http(profile.recovery_ip)
         if found:
-            log(f"U-Boot detected: {detail}")
+            log(f"Recovery mode detected: {detail}")
             ctx.timeline.uboot_http_first = ts()
+            ctx._say_fn("Recovery mode detected. You can release the button now.")
             ctx.state = State.UBOOT_UPLOADING
             uboot_found = True
             break
@@ -614,17 +712,19 @@ def _handle_waiting_for_uboot(ctx: RecoveryContext, eq: queue.Queue, link_monito
         time.sleep(1)
 
     if not uboot_found:
-        ctx._say_fn("U-Boot not found. Check the LED: solid white means try again. Flashing blue means normal boot.")
-        log("FAIL: U-Boot not detected.")
+        ctx._say_fn(f"Recovery mode not found. Check the LED pattern: {profile.led_pattern}")
+        log("FAIL: Recovery HTTP server not detected.")
         ctx.state = State.FAILED
 
 
 def _handle_uboot_uploading(ctx: RecoveryContext, eq: queue.Queue) -> None:
+    profile = ctx.profile
     if ctx.no_upload:
-        ctx._say_fn("Dry run. U-Boot is ready but not uploading.")
-        log("DRY RUN: U-Boot ready at http://192.168.1.1")
-        log(f"  Upload: curl -F firmware=@{ctx.image_path} http://192.168.1.1/upload")
-        log(f"  Flash:  curl http://192.168.1.1/flashing.html")
+        ctx._say_fn("Dry run. Recovery server is ready but not uploading.")
+        log(f"DRY RUN: Recovery server ready at http://{profile.recovery_ip}")
+        log(f"  Upload: curl -F {profile.upload_field}=@{ctx.image_path} http://{profile.recovery_ip}{profile.upload_endpoint}")
+        if profile.trigger_flash_endpoint:
+            log(f"  Flash:  curl http://{profile.recovery_ip}{profile.trigger_flash_endpoint}")
         ctx.state = State.COMPLETE
         return
 
@@ -632,9 +732,9 @@ def _handle_uboot_uploading(ctx: RecoveryContext, eq: queue.Queue) -> None:
     log(f"SHA-256 (before upload): {ctx.sha256_before}")
 
     ctx.timeline.upload_start = ts()
-    ok, response = upload_firmware(ctx.image_path)
+    ok, response = upload_firmware(ctx.image_path, profile)
     if not ok:
-        ctx._say_fn("Upload failed. Try Chrome or Edge at http://192.168.1.1 (not Firefox).")
+        ctx._say_fn(f"Upload failed. Try a browser at http://{profile.recovery_ip} instead.")
         ctx.state = State.FAILED
         return
 
@@ -647,7 +747,7 @@ def _handle_uboot_uploading(ctx: RecoveryContext, eq: queue.Queue) -> None:
     else:
         log(f"SHA-256 verified (after upload): {ctx.sha256_after}")
 
-    if trigger_flash():
+    if trigger_flash(profile):
         ctx.timeline.flash_triggered = ts()
         eq.put((Event.FLASH_TRIGGERED, ts(), ""))
     else:
@@ -659,8 +759,8 @@ def _handle_uboot_uploading(ctx: RecoveryContext, eq: queue.Queue) -> None:
 
 
 def _handle_uboot_flashing(ctx: RecoveryContext, eq: queue.Queue, pcap_monitor: PcapMonitor) -> None:
-    # Flash complete = U-Boot ARPs for 192.168.1.2 or link goes down (reboot)
-    timeout = UBOOT_FLASH_TIME_SECONDS + 120
+    profile = ctx.profile
+    timeout = profile.flash_time_seconds + 120
     result = _wait_for_event_or_timeout(
         eq, timeout=timeout,
         target_events={Event.UBOOT_ARP_192_168_1_2, Event.LINK_DOWN},
@@ -697,7 +797,8 @@ def _handle_rebooting(ctx: RecoveryContext, eq: queue.Queue) -> None:
 
 
 def _handle_openwrt_booting(ctx: RecoveryContext, eq: queue.Queue) -> None:
-    ssh_monitor = SSHMonitor(UBOOT_IP, eq, poll_interval=5.0)
+    openwrt_ip = ctx.profile.openwrt_ip or ctx.profile.recovery_ip
+    ssh_monitor = SSHMonitor(openwrt_ip, eq, poll_interval=5.0)
     ssh_thread = threading.Thread(target=ssh_monitor.run, daemon=True)
     ssh_thread.start()
 
@@ -717,14 +818,14 @@ def _handle_openwrt_booting(ctx: RecoveryContext, eq: queue.Queue) -> None:
         ctx.timeline.ssh_available = ts()
         ctx._say_fn("Recovery complete! Router is back online.")
         log("SUCCESS — router recovered.")
-        verify_router()
+        verify_router(openwrt_ip)
         ctx.state = State.COMPLETE
     else:
-        if check_ssh():
+        if check_ssh(openwrt_ip):
             ctx.timeline.ssh_available = ts()
             ctx._say_fn("Recovery complete! Router is back online.")
             log("SUCCESS — router recovered (SSH fallback check).")
-            verify_router()
+            verify_router(openwrt_ip)
             ctx.state = State.COMPLETE
         else:
             ctx.state = State.FAILED
@@ -831,7 +932,7 @@ def _print_timeline(ctx: RecoveryContext) -> None:
 
 
 def _record_inventory(ctx: RecoveryContext) -> None:
-    info = probe_router_info()
+    info = probe_router_info(ctx.profile.recovery_ip)
     if not info:
         log("Could not probe router for inventory.")
         return
@@ -861,21 +962,50 @@ def _record_inventory(ctx: RecoveryContext) -> None:
         log(f"Failed to write inventory: {e}")
 
 
-def auto_detect_interface() -> Optional[str]:
-    for iface in ["en6", "en7", "en5", "en4", "en3", "en2", "en1", "en0"]:
+def auto_detect_interface(subnet_prefix: str = "") -> Optional[str]:
+    """Find the single active physical ethernet interface.
+
+    Skips en0 (WiFi), Thunderbolt bridge members, and Thunderbolt bridge
+    virtual interfaces (mtu 16000). Asserts exactly one candidate exists.
+    """
+    bridge_members = set()
+    br_r = subprocess.run(["ifconfig", "bridge0"], capture_output=True, text=True, check=False)
+    for line in br_r.stdout.splitlines():
+        if "member:" in line.lower():
+            bridge_members.add(line.strip().split()[1])
+
+    candidates = []
+    for n in range(1, 21):
+        iface = f"en{n}"
         r = subprocess.run(
             ["ifconfig", iface], capture_output=True, text=True, check=False,
         )
-        if "status: active" in r.stdout.lower() and "192.168.1." in r.stdout:
-            return iface
-    return None
+        if r.returncode != 0:
+            continue
+        if "status: active" not in r.stdout.lower():
+            continue
+        if iface in bridge_members:
+            continue
+        if "mtu 16000" in r.stdout:  # Thunderbolt bridge
+            continue
+        if "base" not in r.stdout or "duplex" not in r.stdout:
+            continue
+        candidates.append(iface)
+
+    if len(candidates) == 0:
+        return None
+    if len(candidates) > 1:
+        log(f"WARNING: multiple ethernet interfaces active: {candidates}, using first")
+    return candidates[0]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="U-Boot recovery for GL.iNet GL-MT3000 with pcap monitor and state machine",
+        description="U-Boot recovery for GL.iNet GL-MT3000 and D-Link COVR-X1860",
     )
     parser.add_argument("--image", required=True, help="Firmware image to upload")
+    parser.add_argument("--device", default="mt3000", choices=["mt3000", "covr-x1860"],
+                        help="Device profile (default: mt3000)")
     parser.add_argument("--interface", default=None,
                         help="Ethernet interface (auto-detected if omitted)")
     parser.add_argument("--no-voice", action="store_true", help="Disable voice guidance")
@@ -891,27 +1021,31 @@ def main() -> int:
                         help="Seconds of no packets before silence event")
     args = parser.parse_args()
 
+    profile = PROFILES[args.device]
+
     if not os.path.isfile(args.image):
         print(f"ERROR: image not found: {args.image}", file=sys.stderr)
         return 1
 
     interface = args.interface or auto_detect_interface()
     if not interface:
-        print("ERROR: could not auto-detect interface. Use --interface.", file=sys.stderr)
+        print("ERROR: no active ethernet interface found. Use --interface.", file=sys.stderr)
         return 1
 
     pcap_path = args.capture or os.path.join(tempfile.gettempdir(), "uboot-capture.pcap")
 
-    log("GL-MT3000 U-Boot Recovery")
+    log(f"{profile.description} Recovery")
+    log(f"Profile:    {profile.name} ({profile.vendor})")
     log(f"Image:      {args.image}")
     log(f"Interface:  {interface}")
     log(f"Pcap:       {pcap_path}")
-    log(f"LED signal: {UBOOT_LED_PATTERN}")
+    log(f"LED signal: {profile.led_pattern}")
     print()
 
     _say_fn = (lambda m: None) if args.no_voice else say
 
     ctx = RecoveryContext(
+        profile=profile,
         image_path=args.image,
         interface=interface,
         pcap_path=pcap_path,
@@ -924,9 +1058,12 @@ def main() -> int:
 
     event_queue: queue.Queue = queue.Queue()
 
+    _setup_interface_ips(interface, profile)
+
     monitor_config = PcapMonitorConfig(
         interface=interface,
         pcap_path=pcap_path,
+        recovery_ip=profile.recovery_ip,
         router_mac_openwrt=args.router_mac,
         router_mac_uboot=args.uboot_mac,
         silence_timeout=args.silence_timeout,
@@ -936,7 +1073,11 @@ def main() -> int:
     link_monitor = LinkMonitor(interface, event_queue)
 
     pcap_thread = threading.Thread(target=pcap_monitor.run, daemon=True)
+    link_thread = threading.Thread(target=link_monitor.run, daemon=True)
     pcap_thread.start()
+    link_thread.start()
+
+    _say_fn(f"Starting {profile.description} recovery. Listen for instructions.")
 
     try:
         rc = _run_state_machine(ctx, event_queue, pcap_monitor, link_monitor)
