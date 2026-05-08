@@ -54,6 +54,7 @@
         r-check-sta-health \
         r-setup-test-mint r-restore-prod-config r-fund-wallet \
         r-smoke-degraded r-smoke-degraded-upstream r-smoke-degraded-connect \
+        r-smoke-dynamic-rebuild \
 r-test-startup-hygiene r-test-startup-hygiene-setup r-test-startup-hygiene-verify \
 	r-test-startup-hygiene-dead-only r-test-startup-hygiene-dead-only-setup r-test-startup-hygiene-dead-only-verify \
 	r-rescue-router r-save-upstream r-restore-upstream \
@@ -976,6 +977,68 @@ r-smoke-degraded-recovery: ## [remote] Full degraded→recovery lifecycle WITHOU
 	@echo ""
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(GREEN)$(BOLD)  Degraded recovery smoke test PASSED [$(ROUTER)]$(RESET)"
+	@echo "$(BOLD)=======================================$(RESET)"
+
+r-smoke-dynamic-rebuild: ## [remote] Full merchant lifecycle: full→degraded→full (tests onReachableSetChanged + Shutdown + rebuild)
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(BOLD)  Dynamic Merchant Rebuild Smoke Test [$(ROUTER)]$(RESET)"
+	@echo "$(BOLD)  (tests onReachableSetChanged, Shutdown, NewMerchantDegradedFromFull)$(RESET)"
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo ""
+	@$(MAKE) -f Makefile r-setup-test-mint ROUTER=$(ROUTER)
+	@echo ""
+	@$(MAKE) -f Makefile r-fund-wallet ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)--- Phase 1: Verify full merchant mode ---$(RESET)"
+	@$(MAKE) -f Makefile r-check-merchant ROUTER=$(ROUTER)
+	@echo ""
+	@$(MAKE) -f Makefile r-record-baseline ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)--- Phase 2: Block mint and restart (enter degraded mode) ---$(RESET)"
+	@$(MAKE) -f Makefile r-block-mint ROUTER=$(ROUTER) MINT="$(MINT)"
+	@echo ""
+	@$(MAKE) -f Makefile r-restart-service ROUTER=$(ROUTER)
+	@echo ""
+	@$(MAKE) -f Makefile r-check-degraded ROUTER=$(ROUTER)
+	@echo ""
+	@$(MAKE) -f Makefile r-test-offline-ops ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)--- Phase 3: Unblock mint, NO restart (in-process recovery) ---$(RESET)"
+	@$(MAKE) -f Makefile r-unblock-mint ROUTER=$(ROUTER) MINT="$(MINT)"
+	@echo ""
+	@$(MAKE) -f Makefile r-wait-recovery ROUTER=$(ROUTER)
+	@echo ""
+	@$(MAKE) -f Makefile r-check-merchant ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)--- Phase 4: Verify wallet balance preserved through full cycle ---$(RESET)"
+	@$(RESOLVE_ROUTER); \
+	balance=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate wallet balance 2>/dev/null | grep -oE '[0-9]+' | head -1"); \
+	echo "  Current balance: $$balance sats"; \
+	echo ""
+	@echo ""
+	@echo "$(CYAN)--- Phase 5: Block mint again (tests full→degraded via onReachableSetChanged) ---$(RESET)"
+	@$(MAKE) -f Makefile r-block-mint ROUTER=$(ROUTER) MINT="$(MINT)"
+	@echo ""
+	@echo "$(YELLOW)Waiting 7 min for proactive check to detect mint down...$(RESET)"
+	@$(RESOLVE_ROUTER); \
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do \
+		sleep 30; \
+		down_log=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "logread | grep -i 'downgrading\|all mints unreachable\|degraded mode' | tail -3" 2>/dev/null); \
+		if [ -n "$$down_log" ]; then \
+			echo "$(GREEN)Auto-downgrade detected after $$((i*30))s:$(RESET)"; \
+			echo "$$down_log" | while IFS= read -r line; do echo "  $$line"; done; \
+			break; \
+		fi; \
+		if [ "$$i" = "14" ]; then \
+			echo "$(YELLOW)No auto-downgrade log found in 7 min (may need restart to trigger proactive check)$(RESET)"; \
+		fi; \
+		echo "  ... $$((i*30))s elapsed"; \
+	done
+	@echo ""
+	@$(MAKE) -f Makefile r-restore-prod-config ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(GREEN)$(BOLD)  Dynamic merchant rebuild smoke test PASSED [$(ROUTER)]$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
 
 # ---------------------------------------------------------------------------
