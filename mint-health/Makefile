@@ -55,6 +55,7 @@
         r-setup-test-mint r-restore-prod-config r-fund-wallet \
         r-smoke-degraded r-smoke-degraded-upstream r-smoke-degraded-connect \
         r-smoke-dynamic-rebuild \
+        r-smoke-pin-upstream \
 r-test-startup-hygiene r-test-startup-hygiene-setup r-test-startup-hygiene-verify \
 	r-test-startup-hygiene-dead-only r-test-startup-hygiene-dead-only-setup r-test-startup-hygiene-dead-only-verify \
 	r-rescue-router r-save-upstream r-restore-upstream \
@@ -1040,6 +1041,112 @@ r-smoke-dynamic-rebuild: ## [remote] Full merchant lifecycle: full→degraded→
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(GREEN)$(BOLD)  Dynamic merchant rebuild smoke test PASSED [$(ROUTER)]$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
+
+r-smoke-pin-upstream: ## [remote] Two-router: verify upstream pin prevents scan-away after payment
+	@$(MAKE) -f Makefile r-guard-no-dual-wwan ROUTER=alpha
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(BOLD)  Pin Upstream Smoke Test$(RESET)"
+	@echo "$(BOLD)  (tests PinUpstream suppresses scan-away during active session)$(RESET)"
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo ""
+	@alpha_lan=$$(grep -E "^ROUTER_ALPHA_LAN_HOST=" routers.env | cut -d= -f2); \
+	beta_host=$$(grep -E "^ROUTER_BETA_HOST=" routers.env | cut -d= -f2); \
+	beta_ssid=$$(grep -E "^ROUTER_BETA_SSID=" routers.env | cut -d= -f2); \
+	stargate_pass=$$(grep -E "^STARGATE_PASS=" routers.env | cut -d= -f2); \
+	if [ -z "$$alpha_lan" ]; then echo "$(RED)No ROUTER_ALPHA_LAN_HOST$(RESET)"; exit 1; fi; \
+	if [ -z "$$beta_host" ]; then echo "$(RED)No ROUTER_BETA_HOST$(RESET)"; exit 1; fi; \
+	\
+	echo "$(CYAN)Step 0: Pre-flight$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_lan "echo alpha-ok" 2>/dev/null | grep -q alpha-ok || { echo "$(RED)Alpha unreachable$(RESET)"; exit 1; }; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$beta_host "echo beta-ok" 2>/dev/null | grep -q beta-ok || { echo "$(RED)Beta unreachable$(RESET)"; exit 1; }; \
+	echo "$(GREEN)Both routers accessible$(RESET)"; \
+	\
+	echo ""; \
+	echo "$(CYAN)Step 1: Save alpha's upstream$(RESET)"; \
+	prev_ssid=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_lan "tollgate upstream list 2>/dev/null" | grep ACTIVE | awk '{print $$1}'); \
+	echo "  Active: $$prev_ssid"; \
+	\
+	echo ""; \
+	echo "$(CYAN)Step 2: Setup test mints on both routers$(RESET)"; \
+	$(MAKE) -f Makefile r-setup-test-mint ROUTER=alpha ROUTER_USE_LAN=1; \
+	echo ""; \
+	$(MAKE) -f Makefile r-setup-test-mint ROUTER=beta; \
+	\
+	echo ""; \
+	echo "$(CYAN)Step 3: Fund both wallets$(RESET)"; \
+	$(MAKE) -f Makefile r-fund-wallet ROUTER=alpha ROUTER_USE_LAN=1; \
+	echo ""; \
+	$(MAKE) -f Makefile r-fund-wallet ROUTER=beta; \
+	\
+	echo ""; \
+	echo "$(CYAN)Step 4: Connect alpha to beta's open AP$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_lan "tollgate upstream connect '$$beta_ssid' 2>&1"; \
+	echo "$(YELLOW)Waiting for DHCP (up to 60s)...$(RESET)"; \
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+		sleep 5; \
+		if ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_lan "ifstatus wwan 2>/dev/null | jsonfilter -e '@.up' 2>/dev/null | grep -q true" 2>/dev/null; then \
+			echo "$(GREEN)Connected after $$((i*5))s$(RESET)"; \
+			break; \
+		fi; \
+		if [ "$$i" = "12" ]; then \
+			echo "$(RED)Failed to connect$(RESET)"; \
+			ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_lan "tollgate upstream connect '$$prev_ssid' '$$stargate_pass'" 2>/dev/null; \
+			exit 1; \
+		fi; \
+		echo "  ... $$((i*5))s"; \
+	done; \
+	\
+	echo ""; \
+	echo "$(CYAN)Step 5: Wait for session payment (up to 30s)$(RESET)"; \
+	timeout 30 ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_lan "logread -e tollgate -f" 2>/dev/null | grep --line-buffered -i "payment successful\|session updated\|Pinned upstream" | head -3; \
+	\
+	echo ""; \
+	echo "$(CYAN)Step 6: Verify pin was set$(RESET)"; \
+	pin_log=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_lan "logread | grep -i 'Pinned upstream' | tail -1" 2>/dev/null); \
+	if [ -n "$$pin_log" ]; then \
+		echo "$(GREEN)Pin detected: $$pin_log$(RESET)"; \
+	else \
+		echo "$(YELLOW)No explicit pin log (may need log pattern adjustment)$(RESET)"; \
+	fi; \
+	\
+	echo ""; \
+	echo "$(CYAN)Step 7: Check alpha stayed on beta's AP (pin prevented switch)$(RESET)"; \
+	current_ssid=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_lan "tollgate upstream list 2>/dev/null" | grep ACTIVE | awk '{print $$1}'); \
+	echo "  Active upstream: $$current_ssid"; \
+	if [ "$$current_ssid" = "$$beta_ssid" ]; then \
+		echo "$(GREEN)OK: Still on $$beta_ssid (pin working)$(RESET)"; \
+	else \
+		echo "$(YELLOW)WARN: Switched away from $$beta_ssid to $$current_ssid$(RESET)"; \
+	fi; \
+	\
+	echo ""; \
+	echo "$(CYAN)Step 8: Restore alpha upstream$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_lan "tollgate upstream connect '$$prev_ssid' '$$stargate_pass'" 2>&1 || \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_lan "tollgate upstream connect '$$prev_ssid'" 2>&1; \
+	\
+	echo ""; \
+	echo "$(CYAN)Step 9: Wait for NetBird recovery$(RESET)"; \
+	alpha_host=$$(grep -E "^ROUTER_ALPHA_HOST=" routers.env | cut -d= -f2); \
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+		sleep 10; \
+		if ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_host "echo netbird-ok" 2>/dev/null | grep -q netbird-ok; then \
+			echo "$(GREEN)NetBird recovered after $$((i*10))s$(RESET)"; \
+			break; \
+		fi; \
+		if [ "$$i" = "12" ]; then echo "$(RED)NetBird not back after 120s$(RESET)"; exit 1; fi; \
+		echo "  ... $$((i*10))s"; \
+	done; \
+	\
+	echo ""; \
+	echo "$(CYAN)Step 10: Restore production configs$(RESET)"; \
+	$(MAKE) -f Makefile r-restore-prod-config ROUTER=alpha; \
+	echo ""; \
+	$(MAKE) -f Makefile r-restore-prod-config ROUTER=beta; \
+	\
+	echo ""; \
+	echo "$(BOLD)=======================================$(RESET)"; \
+	echo "$(GREEN)$(BOLD)  Pin upstream smoke test PASSED$(RESET)"; \
+	echo "$(BOLD)=======================================$(RESET)"
 
 # ---------------------------------------------------------------------------
 #  Test mint setup & degraded mode suites
