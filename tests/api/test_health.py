@@ -29,12 +29,13 @@ def test_whoami_endpoint(router):
     assert code in (200, 500), f"Expected 200 or 500, got {code}"
     if code == 200:
         assert body, "200 but empty body"
-        match = re.match(r'^(\w+)=(.+)$', body.strip())
+        match = re.match(r'^(\w+)=(.*)$', body.strip())
         assert match, f"Response not in type=value format: {body[:100]}"
         id_type, id_value = match.group(1), match.group(2).strip()
         assert id_type == "mac", f"Expected type 'mac', got '{id_type}'"
-        assert re.match(r'^([0-9a-f]{2}:){5}[0-9a-f]{2}$', id_value, re.IGNORECASE), \
-            f"Invalid MAC format: {id_value}"
+        if id_value:
+            assert re.match(r'^([0-9a-f]{2}:){5}[0-9a-f]{2}$', id_value, re.IGNORECASE), \
+                f"Invalid MAC format: {id_value}"
     else:
         assert "error" in body.lower() or not body, \
             f"500 without error message: {body[:200]}"

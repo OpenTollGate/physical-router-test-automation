@@ -69,10 +69,24 @@ class Router:
         return ""
 
     def backend_url(self, path="/"):
-        return f"http://127.0.0.1:{BACKEND_PORT}{path}"
+        return f"http://[::1]:{BACKEND_PORT}{path}"
+
+    def _detect_cgi_port(self) -> int:
+        """Auto-detect the NDS gateway port serving CGI scripts."""
+        try:
+            out = self.ssh(
+                "netstat -tlnp 2>/dev/null | grep nodogsplash | head -1"
+            )
+            if out and ":" in out:
+                port = out.split(":")[1].split()[0]
+                return int(port)
+        except Exception:
+            pass
+        return CGI_PORT
 
     def cgi_url(self, endpoint):
-        return f"http://127.0.0.1:{CGI_PORT}/cgi-bin/{endpoint}"
+        port = self._detect_cgi_port()
+        return f"http://127.0.0.1:{port}/cgi-bin/{endpoint}"
 
     def ssh(self, cmd: str, timeout: int = 30) -> str:
         r = subprocess.run(
@@ -128,10 +142,11 @@ class Router:
         tmpf = "/tmp/tg-pay-token.txt"
         self.ssh_stdin(f"cat > {tmpf}", token)
         resp = self.ssh(
-            f"curl -s -X POST '{self.backend_url('/')}' "
+            f"curl -s -m 20 -X POST '{self.backend_url('/')}' "
             f"-H 'Content-Type: text/plain' "
             f"-H 'X-Forwarded-For: {ip}' "
-            f"-d @{tmpf}; rm -f {tmpf}"
+            f"-d @{tmpf}; rm -f {tmpf}",
+            timeout=60,
         )
         try:
             return json.loads(resp)
@@ -142,12 +157,12 @@ class Router:
         mac = mac or self.phone_mac
         return self.ssh(
             f"curl -s -H 'X-Cashu: {token}' "
-            f"'http://127.0.0.1:{BACKEND_PORT}/pay?mac={mac}'"
+            f"'http://[::1]:{BACKEND_PORT}/pay?mac={mac}'"
         )
 
     def get_nds_state(self, mac: str = None) -> str:
         mac = mac or self.phone_mac
-        out = self.ssh("ndsctl clients 2>/dev/null")
+        out = self.ssh("timeout 5 ndsctl clients 2>/dev/null || true", timeout=10)
         lines = out.split("\n")
         for i, line in enumerate(lines):
             if mac in line or mac.replace(":", "").upper() in line.replace(":", "").upper():
@@ -199,11 +214,12 @@ class Router:
         self.ssh("echo '{}' > /etc/tollgate/sessions.json")
         self.ssh("service tollgate-wrt restart")
         time.sleep(2)
-        self.ssh(f"ndsctl deauth {mac} 2>/dev/null; ndsctl block {mac} 2>/dev/null")
+        self.ssh(f"( ndsctl deauth {mac} & pid=$! ; sleep 3 ; kill $pid 2>/dev/null ) 2>/dev/null; "
+                   f"( ndsctl block {mac} & pid=$! ; sleep 3 ; kill $pid 2>/dev/null ) 2>/dev/null")
         for iface in ["phy0-ap0", "phy0-ap1", "phy1-ap0", "phy1-ap1"]:
             self.ssh(f"iw dev {iface} station del {mac} 2>/dev/null")
         time.sleep(3)
-        self.ssh(f"ndsctl unblock {mac} 2>/dev/null")
+        self.ssh(f"( ndsctl unblock {mac} & pid=$! ; sleep 3 ; kill $pid 2>/dev/null ) 2>/dev/null")
         self.ssh("echo '' > /tmp/tollgate-portal.log")
         self.ssh("echo '' > /www/pending-token.txt")
 
@@ -266,7 +282,7 @@ class Router:
         tmp = "/tmp/config-testmint.json"
         with open(tmp, "w") as f:
             json.dump(cfg, f, indent=2)
-        scp_cmd = ["scp", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR"]
+        scp_cmd = ["scp", "-O", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR"]
         if self.identity_file:
             scp_cmd += ["-i", self.identity_file]
         scp_cmd += [tmp, f"root@{self.host}:/etc/tollgate/config.json"]
@@ -275,18 +291,46 @@ class Router:
         self.ssh("/etc/init.d/tollgate-wrt restart")
         log.info(f"Added {TEST_MINT_URL} to accepted mints, restarted backend")
 
+    def cli_command(self, command: str, args: list | None = None, timeout: int = 10) -> dict:
+        payload = {"command": command}
+        if args:
+            payload["args"] = args
+        raw = self.ssh(
+            f"echo '{json.dumps(payload)}' | socat - UNIX-CONNECT:/var/run/tollgate.sock",
+            timeout=timeout,
+        )
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {"raw": raw}
+
+    def get_tollgate_version(self) -> dict:
+        return self.cli_command("version")
+
+    def get_wallet_info(self) -> dict:
+        return self.cli_command("wallet", args=["info"])
+
+    def get_wallet_balance(self) -> dict:
+        return self.cli_command("wallet", args=["balance"])
+
+    def get_tollgate_status(self) -> dict:
+        return self.cli_command("status")
+
+    def get_tollgate_logs(self, filter_expr: str = "tollgate", lines: int = 200) -> str:
+        return self.ssh(f"logread -l {lines} -e {filter_expr} 2>/dev/null")
+
     def collect_logs(self, results_dir: str, adb=None):
         raw = os.path.join(results_dir, "raw")
         os.makedirs(raw, exist_ok=True)
         for name, cmd in [
             ("portal.log", "cat /tmp/tollgate-portal.log"),
             ("backend.log", "logread -l 200 -e tollgate 2>/dev/null"),
-            ("ndsctl-status.txt", "ndsctl status 2>/dev/null"),
-            ("ndsctl-clients.txt", "ndsctl clients 2>/dev/null"),
+            ("ndsctl-status.txt", "timeout 5 ndsctl status 2>/dev/null || true"),
+            ("ndsctl-clients.txt", "timeout 5 ndsctl clients 2>/dev/null || true"),
         ]:
             try:
                 with open(os.path.join(raw, name), "w") as f:
-                    f.write(self.ssh(cmd))
+                    f.write(self.ssh(cmd, timeout=10))
             except Exception:
                 pass
         if adb:

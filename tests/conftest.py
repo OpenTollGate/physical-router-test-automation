@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import re
 import socket
@@ -50,6 +51,46 @@ def load_env():
 load_env()
 
 
+# Map inventory fields to environment variables they override (only if not already set).
+_INVENTORY_ENV_MAP = {
+    "sshHost": "TOLLGATE_SSH_HOST",
+    "sshUser": "TOLLGATE_SSH_USER",
+    "luciUrl": "TOLLGATE_LUCI_URL",
+    "arch": "TOLLGATE_ROUTER_ARCH",
+    "wifiInterface": "TOLLGATE_WIFI_INTERFACE",
+    "tollgateSsidPrefix": "TOLLGATE_SSID_PREFIX",
+}
+
+
+def _load_router_inventory():
+    router_id = os.environ.get("TOLLGATE_ROUTER_ID")
+    if not router_id:
+        return
+    inventory_path = os.environ.get(
+        "TOLLGATE_ROUTER_INVENTORY",
+        os.path.join(SCRIPT_DIR, "config", "routers.json"),
+    )
+    if not os.path.isfile(inventory_path):
+        log.warning("Router inventory not found: %s", inventory_path)
+        return
+    with open(inventory_path) as f:
+        inventory = json.load(f)
+    routers = inventory.get("routers", {})
+    if router_id not in routers:
+        log.warning("Router ID '%s' not in inventory (available: %s)",
+                     router_id, list(routers.keys()))
+        return
+    entry = routers[router_id]
+    for field, env_var in _INVENTORY_ENV_MAP.items():
+        value = entry.get(field)
+        if value:
+            os.environ[env_var] = value
+    log.info("Loaded router inventory: %s (%s)", router_id, entry.get("model", "unknown"))
+
+
+_load_router_inventory()
+
+
 def _results_dir():
     ts = time.strftime("%Y%m%d-%H%M%S")
     base = os.path.join(SCRIPT_DIR, "results")
@@ -78,6 +119,18 @@ def pytest_addoption(parser):
                      help="WiFi client mode: adb (Android phone), mac (macOS), or linux (NetworkManager/nmcli)")
     parser.addoption("--publish", action="store_true",
                      help="Publish mode: only include screenshots from @pytest.mark.publish_screenshot tests in report")
+    parser.addoption("--tollgate-branch", default=None,
+                     help="Deploy this branch from CI before tests (e.g. 94-mint-health-rebase-clean)")
+    parser.addoption("--tollgate-run-id", default=None,
+                     help="Specific CI run ID (implies --tollgate-branch)")
+    parser.addoption("--tollgate-force", action="store_true",
+                     help="Force redeploy even if router is already healthy")
+    parser.addoption("--tollgate-factory-reset", action="store_true",
+                     help="Remove TollGate before deploying (clean slate)")
+    parser.addoption("--tollgate-arch", default=None,
+                     help="Router architecture (default: TOLLGATE_ROUTER_ARCH or aarch64_cortex-a53)")
+    parser.addoption("--tollgate-reboot", action="store_true",
+                     help="Reboot router after deploy and wait for it to come back")
 
 
 @pytest.fixture(scope="session")
@@ -124,21 +177,51 @@ def router(request):
 
 @pytest.fixture(scope="session", autouse=True)
 def deploy_session(request, router):
+    from lib import deploy as deploy_lib
+
     binary = request.config.getoption("--binary")
     restore = request.config.getoption("--restore")
+    tg_branch = request.config.getoption("--tollgate-branch")
+    tg_run_id = request.config.getoption("--tollgate-run-id")
+    tg_force = request.config.getoption("--tollgate-force")
+    tg_reset = request.config.getoption("--tollgate-factory-reset")
+    tg_arch = request.config.getoption("--tollgate-arch")
+    tg_reboot = request.config.getoption("--tollgate-reboot")
+    no_deploy = request.config.getoption("--no-deploy")
 
     if binary:
         subprocess.run(
             ["bash", os.path.join(SCRIPT_DIR, "scripts", "deploy.sh"), binary, "--restart"],
             check=False,
         )
+    elif tg_branch or tg_run_id:
+        if tg_reset:
+            log.info("Factory resetting router before deploy")
+            deploy_lib.factory_reset(router, reboot=tg_reboot)
 
-    code = router.api_status("/")
-    if code != 200:
-        pytest.exit(f"Backend not reachable at {router.host}:2121 (HTTP {code})", returncode=1)
+        branch = tg_branch or "main"
+        result = deploy_lib.deploy_branch(
+            router, branch,
+            arch=tg_arch,
+            run_id=tg_run_id,
+            force=tg_force,
+            reboot=tg_reboot,
+        )
+        if not result["success"]:
+            pytest.exit(
+                f"Deploy failed: version={result.get('installed_version')}, "
+                f"health={result.get('health_code')}",
+                returncode=1,
+            )
+        log.info("Deployed: version=%s", result.get("installed_version"))
 
-    router.enable_debug_portal()
-    router.ensure_test_mint()
+    if not no_deploy:
+        code = router.api_status("/")
+        if code != 200:
+            pytest.exit(f"Backend not reachable at {router.host}:2121 (HTTP {code})", returncode=1)
+
+        router.enable_debug_portal()
+        router.ensure_test_mint()
 
     yield
 
@@ -146,7 +229,8 @@ def deploy_session(request, router):
         if restore:
             print("\n[deploy] Restoring previous binary")
     finally:
-        router.disable_debug_portal()
+        if not no_deploy:
+            router.disable_debug_portal()
 
 
 @pytest.fixture(scope="session")

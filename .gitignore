@@ -19,3 +19,6 @@ config/routers.json
 
 # Firmware build credentials (contains passwords)
 credentials/
+
+# Temporary work directories
+.tmp/
