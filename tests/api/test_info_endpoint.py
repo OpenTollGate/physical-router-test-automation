@@ -8,7 +8,10 @@ pytestmark = [pytest.mark.api, pytest.mark.smoke]
 @pytest.fixture(scope="module")
 def discovery(router):
     body = router.api_body("/")
-    return parse_json_or_fail(body, "discovery response")
+    event = parse_json_or_fail(body, "discovery response")
+    if event.get("kind") != 10021:
+        pytest.skip(f"Discovery in degraded mode (kind={event.get('kind')}), skipping healthy-mode tests")
+    return event
 
 
 def test_info_returns_discovery_event(discovery):

@@ -186,6 +186,8 @@ def test_service_health_while_mints_reachable(router, discovery):
     PR #118 support. It establishes that the service is healthy under
     normal conditions before we start breaking things.
     """
+    if discovery.get("kind") == 21023:
+        pytest.skip("All mints currently unreachable (degraded mode), cannot verify healthy baseline")
     code = router.api_status("/")
     assert code == 200, f"Expected 200 from GET /, got {code}"
     assert discovery.get("kind") == 10021, \
