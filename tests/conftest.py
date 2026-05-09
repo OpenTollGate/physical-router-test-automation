@@ -364,30 +364,14 @@ def _get_pr_marker(item):
     return None
 
 
-def pytest_report_teststatus(report, config):
-    """Annotate test results with PR marker in terminal output."""
-    if not hasattr(report, "wasxfail"):
-        pr_num = None
-        if hasattr(report, "nodeid"):
-            items = [i for i in config.items if i.nodeid == report.nodeid]
-            if items:
-                pr_num = _get_pr_marker(items[0])
-        if pr_num and report.when == "call":
-            if report.outcome == "failed":
-                report._pr_annotation = f"PR#{pr_num}"
-            elif report.outcome == "passed":
-                report._pr_annotation = f"PR#{pr_num}"
-
-    return None
-
-
-@pytest.hookimpl(trylast=True)
-def pytest_json_runtest_metadata(item, call):
-    """Add PR number to JSON report metadata (if pytest-json-report installed)."""
+def _pr_label_for_item(item):
     pr_num = _get_pr_marker(item)
-    if pr_num and call.when == "call":
-        return {"pr": pr_num}
-    return {}
+    return f" [PR#{pr_num}]" if pr_num else ""
+
+
+def pytest_runtest_logreport(report):
+    if report.when == "call" and hasattr(report, "nodeid"):
+        report._pr_label = ""
 
 
 def _debug_summary(adb, router) -> str:
