@@ -26,7 +26,7 @@ from lib.helpers import parse_json_or_fail
 
 log = logging.getLogger("tollgate.degraded_mode")
 
-pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.timeout(300)]
+pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.timeout(300), pytest.mark.pr(118)]
 
 SERVICE_RESTART_WAIT = 10
 HEALTH_POLL_INTERVAL = 15
@@ -417,3 +417,78 @@ def test_block_one_mint_others_still_work(router, block_one_mint, mint_urls,
         kind = resp.get("kind")
         assert kind in (1022, 21023), \
             f"Unexpected response kind with one mint blocked: {kind}, body: {str(resp)[:200]}"
+
+
+def test_degraded_mode_notice_event_content(router):
+    """Verify the degraded mode notice event has correct structure.
+
+    When all mints are unreachable, GET / should return a kind 21023 event
+    with a 'code' tag containing 'no-reachable-mints' and a human-readable
+    content message mentioning recovery.
+    """
+    _skip_if_no_degraded_support(router)
+
+    body = router.api_body("/")
+    data = json.loads(body)
+    kind = data.get("kind")
+
+    if kind == 10021:
+        tags = data.get("tags", [])
+        price_tags = [t for t in tags if isinstance(t, list) and t[0] == "price_per_step"]
+        if price_tags:
+            pytest.skip("Service not in degraded mode — mints are reachable")
+
+    if kind != 21023:
+        pytest.skip(f"Expected degraded mode (kind 21023), got kind {kind}")
+
+    tags = data.get("tags", [])
+    code_tags = [t for t in tags if isinstance(t, list) and len(t) >= 2 and t[0] == "code"]
+    assert code_tags, "Degraded notice event missing 'code' tag"
+    assert any("reachable" in t[1].lower() or "degraded" in t[1].lower()
+               for t in code_tags), \
+        f"Expected 'no-reachable-mints' or 'degraded' in code tag, got: {code_tags}"
+
+    content = data.get("content", "")
+    assert content, "Degraded notice event has empty content"
+    assert any(kw in content.lower() for kw in ["recover", "auto", "mint"]), \
+        f"Content should mention recovery/mints: {content[:200]}"
+
+
+def test_service_survives_restart_in_degraded(router):
+    """Verify service can restart successfully while mints are unreachable.
+
+    PR #118's key fix: the service should NOT enter a crash loop when
+    starting with no reachable mints. It should boot into degraded mode.
+    """
+    _skip_if_no_degraded_support(router)
+
+    body = router.api_body("/")
+    data = json.loads(body)
+    kind = data.get("kind")
+
+    if kind == 10021:
+        tags = data.get("tags", [])
+        price_tags = [t for t in tags if isinstance(t, list) and t[0] == "price_per_step"]
+        if price_tags:
+            pytest.skip("Service not in degraded mode — can't test degraded restart")
+
+    router.ssh("service tollgate-wrt restart")
+    time.sleep(15)
+
+    ps_out = router.ssh("ps | grep tollgate-wrt | grep -v grep")
+    assert "tollgate-wrt" in ps_out, "Service failed to start in degraded mode"
+
+    code = router.api_status("/")
+    assert code in (200, 503), \
+        f"Expected 200 or 503 after degraded restart, got {code}"
+
+    body2 = router.api_body("/")
+    data2 = json.loads(body2)
+    kind2 = data2.get("kind")
+    assert kind2 in (10021, 21023), \
+        f"Unexpected kind after degraded restart: {kind2}"
+
+    if kind2 == 21023:
+        tags2 = data2.get("tags", [])
+        code_tags = [t for t in tags2 if isinstance(t, list) and len(t) >= 2 and t[0] == "code"]
+        assert code_tags, "Degraded mode after restart missing code tag"

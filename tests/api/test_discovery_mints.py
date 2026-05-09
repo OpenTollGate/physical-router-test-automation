@@ -73,6 +73,7 @@ def test_configured_mints_subset_in_discovery(discovery, config):
         f"Discovery has unknown mints: {discovery_mint_urls - config_urls}"
 
 
+@pytest.mark.pr(118)
 def test_unreachable_mint_not_in_discovery(discovery, backend_logs):
     unreachable = re.findall(
         r"mint (\S+) (?:unreachable|marked.*unreachable)",
@@ -99,6 +100,7 @@ def test_discovery_mint_count_reasonable(discovery, config):
         f"Discovery has {len(price_tags)} mints, more than config's {config_count}"
 
 
+@pytest.mark.pr(118)
 def test_bad_mint_handled_gracefully(router, config):
     """Add a known-bad mint (mint.example.com) to config and verify:
     1. Service does not crash

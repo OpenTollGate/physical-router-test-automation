@@ -131,6 +131,8 @@ def pytest_addoption(parser):
                      help="Router architecture (default: TOLLGATE_ROUTER_ARCH or aarch64_cortex-a53)")
     parser.addoption("--tollgate-reboot", action="store_true",
                      help="Reboot router after deploy and wait for it to come back")
+    parser.addoption("--expected-pr", default=None, type=int,
+                     help="PR number being tested. Tests marked @pytest.mark.pr(N) where N != expected_pr are expected to fail/skip.")
 
 
 @pytest.fixture(scope="session")
@@ -352,6 +354,40 @@ def pytest_collection_modifyitems(items):
     phone = [t for t in items if "phone" in t.keywords]
     other = [t for t in items if "api" not in t.keywords and "phone" not in t.keywords]
     items[:] = api + other + phone
+
+
+def _get_pr_marker(item):
+    """Extract PR number from @pytest.mark.pr(N) marker."""
+    for marker in item.iter_markers("pr"):
+        if marker.args:
+            return marker.args[0]
+    return None
+
+
+def pytest_report_teststatus(report, config):
+    """Annotate test results with PR marker in terminal output."""
+    if not hasattr(report, "wasxfail"):
+        pr_num = None
+        if hasattr(report, "nodeid"):
+            items = [i for i in config.items if i.nodeid == report.nodeid]
+            if items:
+                pr_num = _get_pr_marker(items[0])
+        if pr_num and report.when == "call":
+            if report.outcome == "failed":
+                report._pr_annotation = f"PR#{pr_num}"
+            elif report.outcome == "passed":
+                report._pr_annotation = f"PR#{pr_num}"
+
+    return None
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_json_runtest_metadata(item, call):
+    """Add PR number to JSON report metadata (if pytest-json-report installed)."""
+    pr_num = _get_pr_marker(item)
+    if pr_num and call.when == "call":
+        return {"pr": pr_num}
+    return {}
 
 
 def _debug_summary(adb, router) -> str:
