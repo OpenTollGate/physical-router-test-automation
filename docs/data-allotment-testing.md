@@ -2,7 +2,7 @@
 
 These tests validate that TollGate cuts client connectivity after a paid data allotment is consumed.
 
-The automated Playwright coverage lives in `tests/data-allotment.spec.mjs`. It is opt-in because it intentionally consumes bandwidth and expects the host to be connected through a paid TollGate session.
+The automated Playwright coverage lives in `tests/protocol/data-allotment.spec.mjs`. It is opt-in because it intentionally consumes bandwidth and expects the host to be connected through a paid TollGate session.
 
 ```bash
 TOLLGATE_ENABLE_DATA_ALLOTMENT_TESTS=true \

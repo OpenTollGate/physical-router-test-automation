@@ -22,3 +22,4 @@ credentials/
 
 # Temporary work directories
 .tmp/
+findings/

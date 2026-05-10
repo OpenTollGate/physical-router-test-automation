@@ -53,6 +53,14 @@ Internet → Main Router (192.168.13.1) → Switch → TollGate Router WAN (192.
 
 When connected directly to the TollGate router's LAN port, the test machine gets an IP in 192.168.1.0/24 (en6 on current setup).
 
+## Primary Test Workflow
+
+```bash
+./scripts/test-pr.sh --pr <N> [--reset] [--test api|all] [--publish]
+```
+
+This is the main entry point for testing a PR. It resolves the PR to a branch/commit, deploys to the router, runs tests, and generates reports. See README.md for full usage.
+
 ## Firmware Build + Flash Workflow
 
 ### Build
