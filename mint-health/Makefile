@@ -62,6 +62,7 @@ r-test-startup-hygiene r-test-startup-hygiene-setup r-test-startup-hygiene-verif
         r-diagnose-config-path r-test-default-mints \
         r-guard-no-dual-wwan \
         r-lock r-unlock force-unlock r-status-lock \
+        r-fix-dns r-test-captive-portal r-test-captive-portal-happy \
         s-shell s-boot-log s-wait-boot s-status s-recovery s-wait-pattern \
         s-cleanup s-cold-boot-test s-check-merchant s-check-degraded \
         h-status h-check-merchant h-restart-and-watch h-cleanup \
@@ -2259,11 +2260,64 @@ h-restart-and-watch: ## [hybrid] Restart service via SSH, verify via serial if S
 	sleep 5; \
 	$(MAKE) -f Makefile s-status ROUTER=$(ROUTER)
 
-h-cleanup: ## [hybrid] Cleanup — SSH first, serial rescue if stranded
+r-fix-dns: ## [remote] Fix NetBird DNS hijack: disable NetBird DNS, restore resolv.conf, restart tollgate
+	@$(CHECK_LOCK)
 	@$(RESOLVE_ROUTER); \
-	if ssh $(SSH_OPTS) -o ConnectTimeout=5 $(ROUTER_USER)@$$router_host "echo ok" >/dev/null 2>&1; then \
-		$(MAKE) -f Makefile r-cleanup ROUTER=$(ROUTER); \
+	echo "$(BOLD)=== Fix DNS [$(ROUTER)] ===$(RESET)"; \
+	echo "$(CYAN)Step 1: Disable NetBird DNS management in config...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "cd /etc/netbird && cat config.json | sed 's/\"DisableDNS\": false/\"DisableDNS\": true/' > config.json.tmp && mv config.json.tmp config.json && echo 'DisableDNS set to true' || echo 'No NetBird config found'"; \
+	echo ""; \
+	echo "$(CYAN)Step 2: Disable NetBird at boot and stop...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "/etc/init.d/netbird disable 2>/dev/null; /etc/init.d/netbird stop 2>/dev/null; echo 'NetBird disabled+stopped'"; \
+	echo ""; \
+	echo "$(CYAN)Step 3: Restore resolv.conf from netifd auto...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "cp /tmp/resolv.conf.d/resolv.conf.auto /etc/resolv.conf 2>/dev/null && echo 'resolv.conf restored' || echo 'No auto resolv.conf, keeping current'"; \
+	echo ""; \
+	echo "$(CYAN)Step 4: Verify DNS...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "cat /etc/resolv.conf; echo '---'; nslookup nofee.testnut.cashu.space 2>&1 | head -5"; \
+	echo ""; \
+	echo "$(CYAN)Step 5: Restart tollgate...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "/etc/init.d/tollgate-wrt restart"; \
+	echo "$(YELLOW)Waiting 15s for startup...$(RESET)"; \
+	sleep 15; \
+	echo ""; \
+	echo "$(CYAN)Step 6: Verify merchant mode...$(RESET)"; \
+	resp=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "wget -qO- --timeout=10 http://localhost:2121/ 2>&1"); \
+	echo "$$resp" | grep -q 'price_per_step' && echo "$(GREEN)OK: Full merchant mode (price_per_step found)$(RESET)" || echo "$(RED)WARN: Still in degraded mode (no price_per_step)$(RESET)"
+
+r-test-captive-portal: ## [remote] Run Playwright captive portal tests against physical router
+	@$(CHECK_LOCK)
+	@echo "$(BOLD)=== Captive Portal Tests [$(ROUTER)] ===$(RESET)"; \
+	router_lan=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_LAN_HOST=" routers.env | cut -d= -f2); \
+	if [ -z "$$router_lan" ]; then echo "$(RED)No LAN_HOST for $(ROUTER)$(RESET)"; exit 1; fi; \
+	echo "$(CYAN)Running Playwright tests against $$router_lan:2050...$(RESET)"; \
+	cd $$(dirname $$(pwd))/tests && npx playwright test captive-portal --project=alpha 2>&1; \
+	test_rc=$$?; \
+	echo ""; \
+	if [ $$test_rc -eq 0 ]; then \
+		echo "$(GREEN)$(BOLD)Captive portal tests PASSED$(RESET)"; \
 	else \
-		echo "$(RED)Router unreachable via SSH! Using serial recovery...$(RESET)"; \
-		$(MAKE) -f Makefile s-cleanup ROUTER=$(ROUTER); \
+		echo "$(RED)$(BOLD)Captive portal tests FAILED (exit $$test_rc)$(RESET)"; \
+		exit $$test_rc; \
+	fi
+
+r-test-captive-portal-happy: ## [remote] Run only happy-path Playwright captive portal tests (requires merchant mode)
+	@$(CHECK_LOCK)
+	@echo "$(BOLD)=== Happy Path Captive Portal Tests [$(ROUTER)] ===$(RESET)"; \
+	router_lan=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_LAN_HOST=" routers.env | cut -d= -f2); \
+	if [ -z "$$router_lan" ]; then echo "$(RED)No LAN_HOST for $(ROUTER)$(RESET)"; exit 1; fi; \
+	echo "$(CYAN)Verifying merchant mode...$(RESET)"; \
+	resp=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_lan "wget -qO- --timeout=10 http://localhost:2121/ 2>&1"); \
+	echo "$$resp" | grep -q 'price_per_step' || { echo "$(RED)Not in merchant mode. Run r-fix-dns first.$(RESET)"; exit 1; }; \
+	echo "$(GREEN)Merchant mode confirmed$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)Running happy-path Playwright tests...$(RESET)"; \
+	cd $$(dirname $$(pwd))/tests && npx playwright test captive-portal -g "happy" --project=alpha 2>&1; \
+	test_rc=$$?; \
+	echo ""; \
+	if [ $$test_rc -eq 0 ]; then \
+		echo "$(GREEN)$(BOLD)Happy path tests PASSED$(RESET)"; \
+	else \
+		echo "$(RED)$(BOLD)Happy path tests FAILED (exit $$test_rc)$(RESET)"; \
+		exit $$test_rc; \
 	fi
