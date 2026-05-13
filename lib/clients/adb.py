@@ -150,3 +150,20 @@ class ADBDevice:
     def is_wifi_connected(self, ssid: str) -> bool:
         out = self.shell("dumpsys wifi 2>/dev/null | grep 'mWifiInfo'")
         return ssid in out
+
+    def open_url(self, url: str):
+        """Open a URL in the phone's default browser via intent resolution."""
+        self.shell(f"am start -a android.intent.action.VIEW -d '{url}'")
+
+    def open_portal(self, host: str, port: int = 2050) -> bool:
+        """Open the TollGate captive portal in the phone's browser."""
+        url = f"http://{host}:{port}/"
+        log.info(f"Opening portal at {url}")
+        self.open_url(url)
+        time.sleep(3)
+        return True
+
+    def force_stop_browser(self):
+        """Kill browser apps to clean up stale tabs between tests."""
+        self.shell("am force-stop com.sec.android.app.sbrowser")
+        self.shell("am force-stop com.android.chrome")

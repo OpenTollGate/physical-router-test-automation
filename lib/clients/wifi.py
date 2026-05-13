@@ -190,6 +190,19 @@ class WiFi:
                 log.info(f"Found SSID via prefix match: {self.ssid}")
                 found = True
                 break
+            self.adb.shell("input swipe 540 1600 540 800 300")
+            time.sleep(1)
+            xml = self.adb.ui_xml()
+            if self.ssid in xml:
+                log.info(f"Found {self.ssid} after scrolling on attempt {attempt}")
+                found = True
+                break
+            m = re.search(f'text="({self.ssid_prefix}-[^"]*)"', xml)
+            if m:
+                self.ssid = m.group(1)
+                log.info(f"Found SSID via prefix match after scroll: {self.ssid}")
+                found = True
+                break
             log.info(f"Scan {attempt}: {self.ssid} not visible yet")
             if attempt == 5:
                 log.info("Re-opening WiFi settings for fresh scan")
@@ -255,16 +268,34 @@ class WiFi:
             r'data-sm="[^"]*"|Tollgate Captive Portal|TollGate.*portal_ready',
         )
 
-    def _open_portal_on_phone(self, state_pattern: str, timeout: int = 30) -> bool:
-        self.router.ssh("echo '' > /tmp/tollgate-portal.log")
-        self._tap_ssid(self.adb.ui_xml(), self.ssid)
-        time.sleep(4)
-        if not self._tap_sign_in():
-            self._tap_ssid_captive_entry()
-        if not self._tap_sign_in():
-            log.info("Sign-in button not found — waiting for portal auto-redirect")
+    def _get_portal_host(self) -> str:
+        """Get the router's LAN gateway IP from br-lan interface."""
+        ip = self.router.ssh("ip addr show br-lan | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
+        if not ip:
+            raise RuntimeError("Could not determine router LAN IP from br-lan interface")
+        log.info(f"Detected router LAN IP: {ip}")
+        return ip
 
-        log.info("Waiting for portal to render in captive WebView...")
+    def _open_portal_on_phone(self, state_pattern: str, timeout: int = 30) -> bool:
+        # Get portal host IP dynamically from router
+        if not hasattr(self, '_portal_host'):
+            self._portal_host = self._get_portal_host()
+        portal_url = f"http://{self._portal_host}:2050/"
+        log.info(f"Opening portal at {portal_url}")
+
+        # Clear any previous browser state
+        if hasattr(self.adb, 'force_stop_browser'):
+            self.adb.force_stop_browser()
+        else:
+            # Fallback: manually force stop common browsers
+            self.adb.shell("am force-stop com.android.chrome")
+            self.adb.shell("am force-stop com.sec.android.app.sbrowser")
+
+        # Open portal URL in phone's browser
+        self.adb.start_activity(action="android.intent.action.VIEW", data_uri=portal_url)
+        time.sleep(3)
+
+        log.info("Waiting for portal to render...")
         start = time.time()
         while time.time() - start < timeout:
             xml = self.adb.ui_xml()
@@ -273,11 +304,118 @@ class WiFi:
                 if sm:
                     log.info(f"Portal reached state '{sm.group(1)}' after {int(time.time()-start)}s")
                 else:
-                    log.info(f"Portal page loaded in WebView after {int(time.time()-start)}s")
+                    log.info(f"Portal page loaded after {int(time.time()-start)}s")
                 return True
             time.sleep(3)
 
         log.warning(f"Portal did not reach expected state within {timeout}s")
+        return False
+
+    def _type_token_in_portal(self, token: str, timeout: int = 60) -> bool:
+        """Type a cashu token into the portal's input field and submit."""
+        # Step 1: Wait for portal to be ready
+        log.info("Waiting for portal to be ready for token input...")
+        start = time.time()
+        while time.time() - start < timeout:
+            xml = self.adb.ui_xml()
+            sm = re.search(r'data-sm="(portal_ready|token_typing)"', xml)
+            if sm:
+                log.info(f"Portal ready for input (state: {sm.group(1)})")
+                break
+            time.sleep(3)
+        else:
+            log.warning("Portal did not reach portal_ready state")
+            return False
+
+        # Step 2: Find and tap the token input field
+        # Portal is a React SPA in a WebView. Look for EditText or input nodes.
+        xml = self.adb.ui_xml()
+        input_match = re.search(
+            r'<node[^>]*class="android.widget.EditText"[^>]*bounds="\[([^]]*)\]\[([^]]*)\]"',
+            xml,
+        )
+        if not input_match:
+            # Fallback: look for any editable text field
+            input_match = re.search(
+                r'<node[^>]*clickable="true"[^>]*text="[^"]*"[^>]*bounds="\[([^]]*)\]\[([^]]*)\]"',
+                xml,
+            )
+        if not input_match:
+            log.warning("Could not find token input field in portal")
+            return False
+
+        # Tap the input field
+        bounds_str = f"[{input_match.group(1)}][{input_match.group(2)}]"
+        self.adb.tap_bounds(bounds_str)
+        time.sleep(1)
+        log.info("Tapped token input field")
+
+        # Step 3: Type the token
+        # ADB input text doesn't handle some special chars well (%, spaces, etc.)
+        # Cashu tokens are URL-safe base64 (A-Za-z0-9+/=) — +/= can be problematic
+        # Use clipboard as reliable fallback
+        try:
+            # Try direct input first (works for most chars)
+            escaped = token.replace(" ", "%s").replace("&", "\\&").replace("%", "\\%")
+            self.adb.input_text(escaped)
+            time.sleep(1)
+        except Exception:
+            log.info("Direct input failed, trying clipboard approach")
+            # Use Android clipboard to paste
+            self.adb.shell(f"am broadcast -a clipper.set -e text '{token}'")
+            time.sleep(0.5)
+            # Long press to show paste option
+            self.adb.shell("input swipe 540 1200 540 1200 1000")
+            time.sleep(1)
+            # Look for and tap "Paste" button
+            paste_xml = self.adb.ui_xml()
+            paste_match = re.search(
+                r'text="Paste"[^>]*bounds="\[([^]]*)\]\[([^]]*)\]"', paste_xml
+            )
+            if paste_match:
+                self.adb.tap_bounds(f"[{paste_match.group(1)}][{paste_match.group(2)}]")
+                time.sleep(1)
+
+        log.info(f"Typed token ({len(token)} chars)")
+
+        # Step 4: Find and tap submit button
+        time.sleep(1)
+        xml = self.adb.ui_xml()
+        # Look for a button/clickable element — try common patterns
+        submit_patterns = [
+            r'text="Submit"[^>]*bounds="\[([^]]*)\]\[([^]]*)\]"',
+            r'text="Pay"[^>]*bounds="\[([^]]*)\]\[([^]]*)\]"',
+            r'text="Connect"[^>]*bounds="\[([^]]*)\]\[([^]]*)\]"',
+            r'text="Go"[^>]*bounds="\[([^]]*)\]\[([^]]*)\]"',
+        ]
+        submitted = False
+        for pattern in submit_patterns:
+            btn_match = re.search(pattern, xml, re.IGNORECASE)
+            if btn_match:
+                self.adb.tap_bounds(f"[{btn_match.group(1)}][{btn_match.group(2)}]")
+                log.info(f"Tapped submit button matching: {pattern[:30]}")
+                submitted = True
+                break
+
+        if not submitted:
+            # Try pressing Enter as fallback
+            log.info("No submit button found, pressing Enter as fallback")
+            self.adb.press_key("KEYCODE_ENTER")
+
+        # Step 5: Wait for auth confirmation
+        log.info("Waiting for authentication...")
+        start = time.time()
+        while time.time() - start < timeout:
+            xml = self.adb.ui_xml()
+            sm = re.search(r'data-sm="(authed|countdown|usage_dashboard)"', xml)
+            if sm:
+                log.info(
+                    f"Portal reached authenticated state '{sm.group(1)}' after {int(time.time()-start)}s"
+                )
+                return True
+            time.sleep(3)
+
+        log.warning(f"Portal did not reach authenticated state within {timeout}s")
         return False
 
     def _reconnect_desktop(self) -> bool:
