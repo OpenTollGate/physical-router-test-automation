@@ -1,4 +1,13 @@
 import { test, expect } from '@playwright/test';
+import { execSync } from 'child_process';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const MINT_TOKEN_BIN = path.resolve(__dirname, '..', 'scripts', 'mint-token', 'mint-token');
+const MINT_URL = 'https://nofee.testnut.cashu.space';
+const MINT_AMOUNT = '1';
 
 const ROUTER_IP = process.env.TOLLGATE_CAPTIVE_PORTAL_HOST || '192.168.41.1';
 const API_BASE = `http://${ROUTER_IP}:2121`;
@@ -18,7 +27,7 @@ async function getApiResponse(request) {
 
 test.describe('Captive Portal — no bare "0" literals (bug fix verification)', () => {
 	test('portal cashu tab has no bare "0" text nodes', async ({ page }) => {
-		await page.goto(`${PORTAL_BASE}/`, { waitUntil: 'networkidle', timeout: 30000 });
+		await page.goto(`${PORTAL_BASE}/splash.html`, { waitUntil: 'networkidle', timeout: 30000 });
 		await page.waitForSelector('.tollgate-captive-portal-view', { timeout: 15000 });
 		await page.waitForTimeout(3000);
 
@@ -30,7 +39,7 @@ test.describe('Captive Portal — no bare "0" literals (bug fix verification)', 
 	});
 
 	test('portal lightning tab has no bare "0" text nodes', async ({ page }) => {
-		await page.goto(`${PORTAL_BASE}/`, { waitUntil: 'networkidle', timeout: 30000 });
+		await page.goto(`${PORTAL_BASE}/splash.html`, { waitUntil: 'networkidle', timeout: 30000 });
 
 		const lightningTab = page.locator('#tab-lightning');
 		if (await lightningTab.isVisible()) {
@@ -54,7 +63,7 @@ test.describe('Captive Portal — degraded mode (backend notice)', () => {
 			return;
 		}
 
-		await page.goto(`${PORTAL_BASE}/`, { waitUntil: 'networkidle', timeout: 30000 });
+		await page.goto(`${PORTAL_BASE}/splash.html`, { waitUntil: 'networkidle', timeout: 30000 });
 		await page.waitForSelector('.status.error', { timeout: 15000 });
 
 		const errorBox = page.locator('.status.error');
@@ -73,7 +82,7 @@ test.describe('Captive Portal — degraded mode (backend notice)', () => {
 			return;
 		}
 
-		await page.goto(`${PORTAL_BASE}/`, { waitUntil: 'networkidle', timeout: 30000 });
+		await page.goto(`${PORTAL_BASE}/splash.html`, { waitUntil: 'networkidle', timeout: 30000 });
 		await page.waitForSelector('.status.error', { timeout: 15000 });
 
 		const retrying = page.locator('.tollgate-captive-portal-retrying');
@@ -90,7 +99,7 @@ test.describe('Captive Portal — degraded mode (backend notice)', () => {
 			return;
 		}
 
-		await page.goto(`${PORTAL_BASE}/`, { waitUntil: 'networkidle', timeout: 30000 });
+		await page.goto(`${PORTAL_BASE}/splash.html`, { waitUntil: 'networkidle', timeout: 30000 });
 		await page.waitForSelector('.status.error', { timeout: 15000 });
 
 		const cashuInput = page.locator('#cashu-token');
@@ -113,22 +122,57 @@ test.describe('Captive Portal — happy path (mints reachable)', () => {
 	});
 
 	test('portal shows cashu token input', async ({ page }) => {
-		await page.goto(`${PORTAL_BASE}/`, { waitUntil: 'networkidle', timeout: 30000 });
+		await page.goto(`${PORTAL_BASE}/splash.html`, { waitUntil: 'networkidle', timeout: 30000 });
 		await page.waitForSelector('#cashu-token', { timeout: 15000 });
 		await expect(page.locator('#cashu-token')).toBeVisible();
 	});
 
 	test('portal shows lightning amount input', async ({ page }) => {
-		await page.goto(`${PORTAL_BASE}/`, { waitUntil: 'networkidle', timeout: 30000 });
+		await page.goto(`${PORTAL_BASE}/splash.html`, { waitUntil: 'networkidle', timeout: 30000 });
 		await page.locator('#tab-lightning').click();
 		await page.waitForSelector('#lightning-unit-amount', { timeout: 10000 });
 		await expect(page.locator('#lightning-unit-amount')).toBeVisible();
 	});
 
 	test('portal shows mint selection pricing buttons', async ({ page }) => {
-		await page.goto(`${PORTAL_BASE}/`, { waitUntil: 'networkidle', timeout: 30000 });
+		await page.goto(`${PORTAL_BASE}/splash.html`, { waitUntil: 'networkidle', timeout: 30000 });
 		await page.waitForSelector('.tollgate-captive-portal-method-options', { timeout: 15000 });
 		const count = await page.locator('.tollgate-captive-portal-method-options button').count();
 		expect(count, 'Should have at least one mint option').toBeGreaterThan(0);
+	});
+});
+
+test.describe('Captive Portal — cashu e2e payment', () => {
+	test.skip(async ({ request }) => {
+		const event = await getApiResponse(request);
+		return !event || event.kind !== 10021 || !event.tags?.some(t => t[0] === 'price_per_step');
+	}, 'Skipped: tollgate service has no reachable mints (degraded mode)');
+
+	test('cashu token payment grants access and shows checkmark', async ({ page }) => {
+		const raw = execSync(`${MINT_TOKEN_BIN} ${MINT_URL} ${MINT_AMOUNT}`, {
+			timeout: 60000,
+			encoding: 'utf-8',
+		});
+		const { token, amount } = JSON.parse(raw);
+		expect(token, 'mint-token should produce a non-empty token').toBeTruthy();
+		expect(amount, 'minted amount should be >= 1').toBeGreaterThanOrEqual(1);
+
+		await page.goto(`${PORTAL_BASE}/splash.html`, { waitUntil: 'networkidle', timeout: 30000 });
+		await page.waitForSelector('#cashu-token', { timeout: 15000 });
+
+		const input = page.locator('#cashu-token');
+		await input.fill(token);
+
+		await page.waitForSelector('.tollgate-captive-portal-method-submit button.cta:not([disabled])', { timeout: 10000 });
+
+		await page.click('.tollgate-captive-portal-method-submit button.cta');
+
+		await page.waitForSelector('.checkmark', { timeout: 35000 });
+		const checkmark = page.locator('.checkmark');
+		await expect(checkmark).toBeVisible();
+
+		const content = page.locator('.tollgate-captive-portal-method-content');
+		const text = await content.innerText();
+		expect(text, 'Should show allotment with MB or GB unit').toMatch(/\d+\s*(MB|GB|MiB|GiB)/i);
 	});
 });
