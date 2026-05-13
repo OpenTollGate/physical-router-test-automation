@@ -1,6 +1,6 @@
 # AGENTS.md — Operational Knowledge for physical-router-test-automation
 
-This file contains hard-won operational knowledge for agents and humans working with physical GL.iNet GL-MT3000 routers running OpenWrt. Read this before touching a router.
+This file contains hard-won operational knowledge for agents and humans working with physical OpenWrt routers (D-Link COVR-X1860, GL.iNet GL-MT3000). Read this before touching a router.
 
 ## Lessons Learned
 
@@ -27,6 +27,55 @@ The OpenWrt ASU (Attended Sysupgrade) server at `sysupgrade.openwrt.org` returns
 ### Don't accidentally modify the main router
 
 When testing router access from a machine that also has SSH access to the upstream/main router, be extremely careful with IP addresses. Commands like `passwd` or `chpasswd` run without confirmation. Always verify which host you're SSH'd into before running destructive commands.
+
+### Offline router deployment (no internet, no opkg update)
+
+When a router has no internet (e.g., downstream/reseller behind a jump host), `opkg update` and `opkg install` will fail. You must manually SCP all packages and their dependencies.
+
+**TollGate's declared dependencies** (from the Makefile `DEPENDS`):
+- `nodogsplash`, `luci`, `jq`, `px5g-mbedtls`
+
+**Test framework dependencies** (from `lib/deploy.py` `TEST_DEPS`):
+- `curl`, `socat`, `nodogsplash`, `jq`, `luci`, `px5g-mbedtls`
+
+Combined, these require ~52 packages (including transitive deps like `iptables-nft`, `kmod-*`, `rpcd`, `uhttpd`, `liblucihttp0`, etc.).
+
+**Procedure:**
+
+1. **Get the package diff** — compare a fresh OpenWrt install against a router that has TollGate + deps installed:
+   ```bash
+   # Fresh router (offline)
+   ssh -J <jump-host> root@<offline-router> "opkg list-installed" | sort > /tmp/fresh-pkgs.txt
+   # Router with internet + TollGate
+   ssh root@<online-router> "opkg list-installed" | sort > /tmp/full-pkgs.txt
+   # Diff
+   comm -13 /tmp/fresh-pkgs.txt /tmp/full-pkgs.txt | grep -v "tollgate-wrt" | awk '{print $1}'
+   ```
+
+2. **Download all deps on the online router:**
+   ```bash
+   ssh root@<online-router> "mkdir -p /tmp/deps && cd /tmp/deps && \
+     for pkg in <package-list>; do opkg download \$pkg; done"
+   ssh root@<online-router> "cd /tmp/deps && tar czf /tmp/tollgate-deps.tar.gz *.ipk"
+   ```
+
+3. **Relay to Mac, then to offline router through jump host:**
+   ```bash
+   scp -O root@<online-router>:/tmp/tollgate-deps.tar.gz /tmp/tollgate-deps.tar.gz
+   scp -O -J <jump-host> /tmp/tollgate-deps.tar.gz /tmp/tollgate-build/tollgate-wrt-*.ipk \
+     root@<offline-router>:/tmp/
+   ```
+
+4. **Install on offline router:**
+   ```bash
+   ssh -J <jump-host> root@<offline-router> "
+     cd /tmp && mkdir -p deps && cd deps && tar xzf ../tollgate-deps.tar.gz
+     opkg install /tmp/deps/*.ipk
+     opkg install --force-overwrite /tmp/tollgate-wrt-*.ipk
+   "
+   ```
+
+**Note:** Always use `scp -O` for OpenWrt (no sftp-server). The total dependency bundle for mipsel_24kc is ~1.8MB. The TollGate ipk itself is ~6.3MB.
 
 ## Router Access Patterns
 

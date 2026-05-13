@@ -23,3 +23,9 @@ credentials/
 # Temporary work directories
 .tmp/
 findings/
+
+# Screenshots and test artifacts — never commit or publish these
+*.png
+*.jpg
+*.jpeg
+*.gif

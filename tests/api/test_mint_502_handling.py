@@ -4,13 +4,11 @@ Configures mint.coinos.io (currently returning 502) as the sole accepted
 mint, then restarts the service to observe how the binary handles a mint
 that is reachable but returning errors.
 
-Expected behavior by branch:
-  main (no PR #118): Service may hang or crash during wallet init
-  PR #118:           Service enters degraded mode (kind 21023),
-                     stays up, auto-recovers when mint recovers
+Expected behavior with degraded mode support:
+  Service enters degraded mode (kind 21023), stays up, auto-recovers
+  when mint recovers.
 
-Run with --expected-pr=118 to assert PR #118 degraded mode behavior.
-Run without to observe raw main branch behavior.
+Tests skip cleanly on versions that do not support degraded mode.
 """
 
 import json
@@ -23,7 +21,7 @@ from lib.helpers import parse_json_or_fail
 COINOS_MINT = "https://mint.coinos.io"
 CONFIG_BACKUP = "/etc/tollgate/config.json.coinos-test-backup"
 
-pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.timeout(300), pytest.mark.pr(118)]
+pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.timeout(300)]
 
 
 def _write_single_mint_config(router, mint_url: str):

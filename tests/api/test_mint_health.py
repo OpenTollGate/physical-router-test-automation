@@ -4,7 +4,7 @@ import pytest
 
 from lib.helpers import parse_json_or_fail
 
-pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.pr(118)]
+pytestmark = [pytest.mark.api, pytest.mark.extended]
 
 
 @pytest.fixture(scope="module")
@@ -27,6 +27,7 @@ def test_logs_show_mint_health_tracking(backend_logs):
     assert len(health_signals) > 0
 
 
+@pytest.mark.pr(118)
 def test_logs_show_dynamic_rebuild(backend_logs):
     rebuild_signals = re.findall(
         r"(rebuilding merchant|reachable mint set changed|merchant rebuilt)",
@@ -37,6 +38,7 @@ def test_logs_show_dynamic_rebuild(backend_logs):
     assert len(rebuild_signals) > 0
 
 
+@pytest.mark.pr(118)
 def test_discovery_excludes_unhealthy_mints(backend_logs, discovery):
     unreachable = set(re.findall(
         r"mint (\S+) .*(?:unreachable|failed)",

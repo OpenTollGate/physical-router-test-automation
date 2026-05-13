@@ -126,15 +126,38 @@ mkdir -p "$TARGET_DIR"
 cp -r "$RUN_DIR/report" "$TARGET_DIR/report"
 cp "$RUN_DIR/run.json" "$TARGET_DIR/run.json"
 
-# ── Strip non-whitelisted screenshots ─────────────────────────────────
-# Playwright reports: strip PNGs unless the test has publish-screenshot annotation.
-# pytest reports: screenshots are already filtered by --publish flag at collection time.
+# ── Strip screenshots and XML ──────────────────────────────────────────
+# Never publish screenshots, XML, or raw debug files to gh-pages.
+
+# Playwright reports: strip non-whitelisted PNGs from data/
 if [ -f "$TARGET_DIR/report/report.json" ]; then
-	REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 	bash "$REPO_DIR/scripts/strip-screenshots.sh" "$TARGET_DIR/report" 2>/dev/null || true
 fi
 
-echo "==> Copied report to ${TARGET_DIR}"
+# All reports: remove any stray PNG, XML, TXT asset files
+find "$TARGET_DIR" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.gif' -o -name '*.xml' \) -print -delete 2>/dev/null || true
+
+# Strip image tags and asset references from HTML files (pytest-html embeds them)
+for html_file in "$TARGET_DIR"/*.html "$TARGET_DIR"/report/*.html "$TARGET_DIR"/report/index.html; do
+	[ -f "$html_file" ] || continue
+	python3 -c "
+import re, sys
+with open(sys.argv[1], 'r') as f:
+    html = f.read()
+# Remove <img> tags (screenshots and image embeds)
+html = re.sub(r'<img[^>]*/?\s*>', '', html, flags=re.IGNORECASE)
+# Remove links to image/text assets
+html = re.sub(r'<a[^>]*(?:href|HREF)[^>]*assets/[^>]*\.(?:png|txt|xml)[^>]*>.*?</a>', '', html, flags=re.IGNORECASE | re.DOTALL)
+# Remove JS string literals referencing .png/.txt/.xml assets
+html = re.sub(r'assets/[^\"'\''\\s<>]*\.(?:png|txt|xml)', '', html, flags=re.IGNORECASE)
+with open(sys.argv[1], 'w') as f:
+    f.write(html)
+" "$html_file" 2>/dev/null || true
+done
+
+find "$TARGET_DIR" -type d -empty -delete 2>/dev/null || true
+
+echo "==> Copied and cleaned report to ${TARGET_DIR}"
 
 # ── Purge old runs ───────────────────────────────────────────────────
 

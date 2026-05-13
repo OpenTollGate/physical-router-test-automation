@@ -12,10 +12,14 @@ pytestmark = [pytest.mark.api, pytest.mark.extended]
 BAD_MINT_URL = "https://mint.example.com"
 
 
-def _skip_if_pre_pr118(router):
-    opkg_out = router.ssh("opkg list-installed | grep tollgate-wrt")
-    if "118-merge" not in opkg_out and "mint-health" not in opkg_out:
-        pytest.skip("PR #118 not deployed — bad-mint graceful handling test requires MintHealthTracker")
+def _skip_if_no_degraded_support(router):
+    resp = router.get_tollgate_status()
+    if resp.get("success") is not True:
+        pytest.skip("tollgate status command not available (no degraded mode support)")
+    raw = json.dumps(resp).lower()
+    has_mint_health = any(kw in raw for kw in ["degraded", "reachable", "mint_health"])
+    if not has_mint_health:
+        pytest.skip("No mint health tracking in status output (no degraded mode support)")
 
 
 def _write_config(router, config_str):
@@ -100,7 +104,6 @@ def test_discovery_mint_count_reasonable(discovery, config):
         f"Discovery has {len(price_tags)} mints, more than config's {config_count}"
 
 
-@pytest.mark.pr(118)
 def test_bad_mint_handled_gracefully(router, config):
     """Add a known-bad mint (mint.example.com) to config and verify:
     1. Service does not crash
@@ -108,7 +111,7 @@ def test_bad_mint_handled_gracefully(router, config):
     3. Bad mint never appears in discovery price_per_step tags
     4. Good mint(s) remain functional
     """
-    _skip_if_pre_pr118(router)
+    _skip_if_no_degraded_support(router)
 
     original_cfg = json.dumps(config, indent=4)
 

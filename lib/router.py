@@ -11,12 +11,14 @@ log = logging.getLogger("tollgate.router")
 
 
 class Router:
-    def __init__(self, host: str, phone_ip: str, phone_mac: str, domain: str, identity_file: str = None):
+    def __init__(self, host: str, phone_ip: str, phone_mac: str, domain: str,
+                 identity_file: str = None, jump_host: str = None):
         self.host = host
         self.phone_ip = phone_ip
         self.phone_mac = phone_mac
         self.domain = domain
         self.identity_file = identity_file
+        self.jump_host = jump_host
         self._ssh_base = [
             "ssh",
             "-o", "ConnectTimeout=5",
@@ -26,6 +28,8 @@ class Router:
         ]
         if identity_file:
             self._ssh_base.extend(["-i", identity_file])
+        if jump_host:
+            self._ssh_base.extend(["-J", jump_host])
         self._ssh_base.append(f"root@{host}")
 
     def resolve_phone_client(self, adb) -> tuple:
@@ -107,6 +111,66 @@ class Router:
             input=data, capture_output=True, text=True, timeout=timeout,
         )
 
+    def fix_nodogsplash_dhcp(self):
+        """Ensure nodogsplash allows DHCP through its ndsRTR chain.
+
+        Nodogsplash's ndsRTR chain drops ALL unauthenticated packets (mark
+        0x10000) at rule 1, which silently kills DHCP DISCOVER from clients
+        before they reach the port-67 ACCEPT rule further down the chain.
+        Without this fix, phones can associate at L2 but never get an IP,
+        causing Android to show "Connection failed" and auto-reconnect to
+        a known-good network.
+        """
+        try:
+            out = self.ssh("iptables -L ndsRTR -n 2>/dev/null", timeout=10)
+            if "udp dpt:67" in out:
+                # Check if DHCP accept is BEFORE the mark-based drop
+                lines = out.strip().split("\n")
+                dhcp_line = None
+                drop_line = None
+                for i, line in enumerate(lines):
+                    if "udp dpt:67" in line and dhcp_line is None:
+                        dhcp_line = i
+                    if "0x10000" in line and drop_line is None:
+                        drop_line = i
+                if dhcp_line is not None and drop_line is not None and dhcp_line < drop_line:
+                    log.debug("ndsRTR DHCP bypass already in place")
+                    return
+            self.ssh(
+                "iptables -I ndsRTR 1 -p udp --dport 67 -j ACCEPT && "
+                "iptables -I ndsRTR 1 -p udp --dport 68 -j ACCEPT",
+                timeout=10,
+            )
+            log.info("Inserted DHCP bypass rules in ndsRTR chain")
+        except Exception as e:
+            log.warning(f"Could not fix nodogsplash DHCP: {e}")
+
+    def disable_ipv6_on_lan(self):
+        """Disable IPv6 on the LAN interface to prevent captive portal bypass.
+
+        Nodogsplash only manages IPv4 iptables. If IPv6 Router Advertisements
+        are active, WiFi clients get global IPv6 addresses and Android validates
+        connectivity over IPv6, completely bypassing the captive portal.
+        """
+        try:
+            self.ssh(
+                "uci set dhcp.lan.ra='disabled' && "
+                "uci set dhcp.lan.dhcpv6='disabled' && "
+                "uci set network.lan.ip6assign='0' && "
+                "uci commit dhcp && uci commit network",
+                timeout=10,
+            )
+            # Flush any existing global IPv6 addresses from br-lan
+            self.ssh(
+                "ip -6 addr show br-lan scope global | grep inet6 | "
+                "awk '{print $2}' | while read addr; do "
+                "ip addr del \"$addr\" dev br-lan 2>/dev/null; done",
+                timeout=10,
+            )
+            log.info("IPv6 disabled on LAN (RA, DHCPv6, ip6assign=0)")
+        except Exception as e:
+            log.warning(f"Could not disable IPv6 on LAN: {e}")
+
     def api_status(self, path: str) -> int:
         r = subprocess.run(
             ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
@@ -162,7 +226,7 @@ class Router:
 
     def get_nds_state(self, mac: str = None) -> str:
         mac = mac or self.phone_mac
-        out = self.ssh("timeout 5 ndsctl clients 2>/dev/null || true", timeout=10)
+        out = self.ssh("ndsctl clients 2>&1", timeout=10)
         lines = out.split("\n")
         for i, line in enumerate(lines):
             if mac in line or mac.replace(":", "").upper() in line.replace(":", "").upper():
@@ -213,13 +277,8 @@ class Router:
             adb.shell("am force-stop com.android.captiveportallogin")
         self.ssh("echo '{}' > /etc/tollgate/sessions.json")
         self.ssh("service tollgate-wrt restart")
-        time.sleep(2)
-        self.ssh(f"( ndsctl deauth {mac} & pid=$! ; sleep 3 ; kill $pid 2>/dev/null ) 2>/dev/null; "
-                   f"( ndsctl block {mac} & pid=$! ; sleep 3 ; kill $pid 2>/dev/null ) 2>/dev/null")
-        for iface in ["phy0-ap0", "phy0-ap1", "phy1-ap0", "phy1-ap1"]:
-            self.ssh(f"iw dev {iface} station del {mac} 2>/dev/null")
         time.sleep(3)
-        self.ssh(f"( ndsctl unblock {mac} & pid=$! ; sleep 3 ; kill $pid 2>/dev/null ) 2>/dev/null")
+        self.ssh(f"ndsctl deauth {mac} 2>&1 || true")
         self.ssh("echo '' > /tmp/tollgate-portal.log")
         self.ssh("echo '' > /www/pending-token.txt")
 
@@ -291,6 +350,52 @@ class Router:
         self.ssh("/etc/init.d/tollgate-wrt restart")
         log.info(f"Added {TEST_MINT_URL} to accepted mints, restarted backend")
 
+    def replace_mints(self, mint_urls: list[str] | None = None):
+        """Replace all accepted mints with only the specified URLs.
+        
+        Args:
+            mint_urls: List of mint URLs to use. Defaults to [TEST_MINT_URL].
+        """
+        if mint_urls is None:
+            mint_urls = [TEST_MINT_URL]
+        
+        # Read current config
+        cfg_raw = self.ssh("cat /etc/tollgate/config.json")
+        cfg = json.loads(cfg_raw)
+        
+        # Build new accepted_mints list
+        new_mints = []
+        for url in mint_urls:
+            new_mints.append({
+                "url": url,
+                "min_balance": 0,
+                "balance_tolerance_percent": 0,
+                "payout_interval_seconds": 60,
+                "min_payout_amount": 0,
+                "price_per_step": 1,
+                "price_unit": "sats",
+                "purchase_min_steps": 0,
+            })
+        
+        cfg["accepted_mints"] = new_mints
+        
+        # Write to temp file and upload via SCP
+        tmp = "/tmp/config-replace-mints.json"
+        with open(tmp, "w") as f:
+            json.dump(cfg, f, indent=2)
+        scp_cmd = ["scp", "-O", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR"]
+        if self.identity_file:
+            scp_cmd += ["-i", self.identity_file]
+        scp_cmd += [tmp, f"root@{self.host}:/etc/tollgate/config.json"]
+        subprocess.run(scp_cmd, check=True, capture_output=True)
+        os.remove(tmp)
+        
+        # Restart backend
+        self.ssh("/etc/init.d/tollgate-wrt restart")
+        
+        mint_str = ", ".join(mint_urls)
+        log.info(f"Replaced accepted mints with: {mint_str}, restarted backend")
+
     def cli_command(self, command: str, args: list | None = None, timeout: int = 10) -> dict:
         payload = {"command": command}
         if args:
@@ -327,6 +432,13 @@ class Router:
             ("backend.log", "logread -l 200 -e tollgate 2>/dev/null"),
             ("ndsctl-status.txt", "timeout 5 ndsctl status 2>/dev/null || true"),
             ("ndsctl-clients.txt", "timeout 5 ndsctl clients 2>/dev/null || true"),
+            ("iptables-nds.txt", "iptables -L ndsRTR -n -v 2>/dev/null || true"),
+            ("iptables-nds-out.txt", "iptables -L ndsOUT -n -v 2>/dev/null || true"),
+            ("tollgate-config.json", "cat /etc/tollgate/config.json 2>/dev/null || true"),
+            ("tollgate-sessions.json", "cat /etc/tollgate/sessions.json 2>/dev/null || echo '{}'"),
+            ("process-list.txt", "ps | grep -E 'tollgate|nodog' 2>/dev/null || true"),
+            ("dhcp-leases.txt", "cat /tmp/dhcp.leases 2>/dev/null || true"),
+            ("ipv6-addrs.txt", "ip -6 addr show br-lan scope global 2>/dev/null || echo 'none'"),
         ]:
             try:
                 with open(os.path.join(raw, name), "w") as f:

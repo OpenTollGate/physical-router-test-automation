@@ -1,4 +1,4 @@
-.PHONY: smoke critical extended api phone test \
+.PHONY: smoke critical extended api phone smoke-phone test \
         smoke-mac critical-mac extended-mac api-mac test-mac \
         smoke-linux critical-linux api-linux test-linux \
         luci deploy setup sanitize publish clean
@@ -18,7 +18,10 @@ api:
 	pytest -m api
 
 phone:
-	pytest -m phone
+	pytest -m phone --publish
+
+smoke-phone:
+	pytest -m phone --quick-phone --publish
 
 test:
 	pytest

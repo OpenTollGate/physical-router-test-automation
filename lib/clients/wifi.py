@@ -16,6 +16,10 @@ class WiFi:
         self.ssid_prefix = ssid.split("-")[0] if "-" in ssid else ssid
         self.ssid = self._resolve_ssid(ssid)
 
+    def _ensure_phone_can_connect(self):
+        self.router.fix_nodogsplash_dhcp()
+        self.router.disable_ipv6_on_lan()
+
     def _resolve_ssid(self, fallback: str) -> str:
         try:
             out = self.router.ssh("iwinfo 2>/dev/null | grep ESSID | grep -v private")
@@ -53,6 +57,36 @@ class WiFi:
         x1, y1 = int(nums1[0]), int(nums1[1])
         x2, y2 = int(nums2[0]), int(nums2[1])
         self.adb.tap((x1 + x2) // 2, (y1 + y2) // 2)
+        return True
+
+    def _tap_ssid_captive_entry(self) -> bool:
+        xml = self.adb.ui_xml()
+        sign_in_match = re.search(r'text="Sign in to the network[^"]*"', xml)
+        if not sign_in_match:
+            return False
+        parent_match = re.search(
+            r'<node[^>]*clickable="true"[^>]*>[^<]*'
+            r'(?:<node[^>]*>[^<]*)*'
+            + re.escape(sign_in_match.group(0)),
+            xml,
+        )
+        if not parent_match:
+            parent_match = re.search(
+                r'<node[^>]*bounds="\[([^]]*)\]\[([^]]*)\]"[^>]*clickable="true"[^>]*>[^<]*(?:<node[^>]*>[^<]*)*'
+                + re.escape(sign_in_match.group(0)),
+                xml,
+            )
+        if not parent_match:
+            return False
+        bounds_match = re.search(r'bounds="\[([^]]*)\]\[([^]]*)\]"', parent_match.group(0))
+        if not bounds_match:
+            return False
+        nums1 = re.findall(r"\d+", bounds_match.group(1))
+        nums2 = re.findall(r"\d+", bounds_match.group(2))
+        x1, y1 = int(nums1[0]), int(nums1[1])
+        x2, y2 = int(nums2[0]), int(nums2[1])
+        self.adb.tap((x1 + x2) // 2, (y1 + y2) // 2)
+        time.sleep(4)
         return True
 
     def open_wifi_settings(self):
@@ -121,6 +155,8 @@ class WiFi:
     def _connect_to_wifi(self) -> bool:
         if _is_desktop_client(self.adb):
             return self._connect_to_wifi_desktop()
+
+        self._ensure_phone_can_connect()
 
         log.info("Ensuring airplane mode is off")
         self.adb.shell("settings put global airplane_mode_on 0")
@@ -196,6 +232,12 @@ class WiFi:
         log.error(f"Failed to connect to {self.ssid} from desktop")
         return False
 
+    def is_connected(self) -> bool:
+        if _is_desktop_client(self.adb):
+            return True
+        dump = self.adb.shell("dumpsys wifi | grep 'mWifiInfo'").strip()
+        return self.ssid in dump
+
     def reconnect(self, skip_portal: bool = False) -> bool:
         if not self._connect_to_wifi():
             return False
@@ -217,6 +259,8 @@ class WiFi:
         self.router.ssh("echo '' > /tmp/tollgate-portal.log")
         self._tap_ssid(self.adb.ui_xml(), self.ssid)
         time.sleep(4)
+        if not self._tap_sign_in():
+            self._tap_ssid_captive_entry()
         if not self._tap_sign_in():
             log.info("Sign-in button not found — waiting for portal auto-redirect")
 

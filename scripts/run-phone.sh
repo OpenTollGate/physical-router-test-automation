@@ -13,6 +13,7 @@ RAW_DIR="results/${RUN_ID}/raw"
 mkdir -p "$RAW_DIR"
 
 pytest -m phone \
+    --publish \
     --html="$RAW_DIR/report.html" \
     --self-contained-html \
     --junitxml="$RAW_DIR/junit.xml" \

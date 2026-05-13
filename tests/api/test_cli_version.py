@@ -5,6 +5,12 @@ pytestmark = [pytest.mark.api, pytest.mark.smoke]
 
 @pytest.fixture(scope="module")
 def version(router):
+    for attempt in range(5):
+        result = router.get_tollgate_version()
+        if result.get("success"):
+            return result
+        import time
+        time.sleep(2 * (attempt + 1))
     return router.get_tollgate_version()
 
 

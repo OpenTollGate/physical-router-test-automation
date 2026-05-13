@@ -59,6 +59,7 @@ _INVENTORY_ENV_MAP = {
     "arch": "TOLLGATE_ROUTER_ARCH",
     "wifiInterface": "TOLLGATE_WIFI_INTERFACE",
     "tollgateSsidPrefix": "TOLLGATE_SSID_PREFIX",
+    "jumpHost": "TOLLGATE_SSH_JUMP_HOST",
 }
 
 
@@ -119,6 +120,8 @@ def pytest_addoption(parser):
                      help="WiFi client mode: adb (Android phone), mac (macOS), or linux (NetworkManager/nmcli)")
     parser.addoption("--publish", action="store_true",
                      help="Publish mode: only include screenshots from @pytest.mark.publish_screenshot tests in report")
+    parser.addoption("--quick-phone", action="store_true",
+                     help="Quick phone mode: skip WiFi reconnect between tests (much faster)")
     parser.addoption("--tollgate-branch", default=None,
                      help="Deploy this branch from CI before tests (e.g. 94-mint-health-rebase-clean)")
     parser.addoption("--tollgate-run-id", default=None,
@@ -148,6 +151,7 @@ def results_dir(request):
 def router(request):
     host = os.environ.get("TOLLGATE_SSH_HOST") or os.environ.get("ROUTER_IP")
     identity_file = os.environ.get("TOLLGATE_SSH_KEY", "")
+    jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", "")
     client = _client_mode(request)
     phone_ip = os.environ.get("TOLLGATE_CLIENT_IP", "")
     phone_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
@@ -174,7 +178,9 @@ def router(request):
     assert host, "TOLLGATE_SSH_HOST or ROUTER_IP not set in .env"
 
     return Router(host=host, phone_ip=phone_ip,
-                  phone_mac=phone_mac, domain=domain, identity_file=identity_file or None)
+                  phone_mac=phone_mac, domain=domain,
+                  identity_file=identity_file or None,
+                  jump_host=jump_host or None)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -224,6 +230,7 @@ def deploy_session(request, router):
 
         router.enable_debug_portal()
         router.ensure_test_mint()
+        router.replace_mints()
 
     yield
 
@@ -255,6 +262,33 @@ def cashu():
 
 
 @pytest.fixture(scope="session")
+def all_routers():
+    identity_file = os.environ.get("TOLLGATE_SSH_KEY", "") or None
+    inventory_path = os.environ.get(
+        "TOLLGATE_ROUTER_INVENTORY",
+        os.path.join(SCRIPT_DIR, "config", "routers.json"),
+    )
+    if not os.path.isfile(inventory_path):
+        return {}
+    with open(inventory_path) as f:
+        inventory = json.load(f)
+    routers = {}
+    for router_id, entry in inventory.get("routers", {}).items():
+        host = entry.get("sshHost")
+        if not host:
+            continue
+        routers[router_id] = Router(
+            host=host,
+            phone_ip="",
+            phone_mac="",
+            domain="",
+            identity_file=identity_file,
+            jump_host=entry.get("jumpHost") or None,
+        )
+    return routers
+
+
+@pytest.fixture(scope="session")
 def wifi(adb, router):
     ssid = os.environ.get("TOLLGATE_SSID", "TollGate")
     return WiFi(adb=adb, router=router, ssid=ssid)
@@ -266,13 +300,17 @@ def attach_results(request, results_dir):
 
 
 @pytest.fixture
-def connected_wifi(router, wifi, adb):
+def connected_wifi(router, wifi, adb, request):
+    quick = request.config.getoption("--quick-phone", default=False)
     router.resolve_phone_client(adb)
     router.reset_state(adb=adb)
-    assert wifi.reconnect(), "WiFi reconnect failed — portal did not render"
+    if quick:
+        if not wifi.is_connected():
+            assert wifi.reconnect(), "WiFi reconnect failed — portal did not render"
+    else:
+        assert wifi.reconnect(), "WiFi reconnect failed — portal did not render"
     router.resolve_phone_client(adb)
     yield
-    router.reset_state(adb=adb)
 
 
 @pytest.fixture
@@ -335,6 +373,14 @@ def pytest_runtest_setup(item):
         if not serial:
             pytest.skip("PHONE_SERIAL not set, phone tests require ADB device")
 
+    expected_pr = item.config.getoption("--expected-pr")
+    if expected_pr:
+        pr_num = _get_pr_marker(item)
+        if pr_num is not None and pr_num != expected_pr:
+            pytest.skip(
+                f"PR-specific test for #{pr_num} (testing #{expected_pr})"
+            )
+
 
 def pytest_collection_modifyitems(items):
     # Tier hierarchy: smoke ⊂ critical ⊂ extended
@@ -391,6 +437,21 @@ def _debug_summary(adb, router) -> str:
         try:
             session = router.get_session()
             lines.append(f"session: {str(session)[:300]}")
+        except Exception:
+            pass
+        try:
+            nds_clients = router.ssh("timeout 5 ndsctl clients 2>/dev/null || true", timeout=10)
+            mac = router.phone_mac
+            if mac and mac in nds_clients:
+                for line in nds_clients.split("\n"):
+                    if "state=" in line:
+                        lines.append(f"ndsctl client detail: {line.strip()}")
+                        break
+        except Exception:
+            pass
+        try:
+            ipv6 = router.ssh("ip -6 addr show br-lan scope global 2>/dev/null | wc -l", timeout=5)
+            lines.append(f"global IPv6 on br-lan: {ipv6.strip()}")
         except Exception:
             pass
     if adb and hasattr(adb, "ui_xml"):

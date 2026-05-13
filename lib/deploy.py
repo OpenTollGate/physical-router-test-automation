@@ -12,6 +12,10 @@ REPO = "OpenTollGate/tollgate-module-basic-go"
 WORKFLOW = "Build and Publish"
 BUILD_DIR = Path("/tmp/tollgate-build")
 
+# Packages required by the test framework on the router.
+# Factory reset wipes all opkg packages; these must be reinstalled.
+TEST_DEPS = ["curl", "socat", "nodogsplash", "jq", "luci", "px5g-mbedtls"]
+
 
 def _ssh_env():
     pw = os.environ.get("TOLLGATE_SSH_PASSWORD") or os.environ.get("TOLLGATE_LUCI_PASSWORD")
@@ -34,6 +38,9 @@ def _scp_to_router(router, local_path, remote_path):
     else:
         pw = os.environ.get("TOLLGATE_SSH_PASSWORD") or os.environ.get("TOLLGATE_LUCI_PASSWORD")
         cmd = (["sshpass", "-e", "scp", "-O"] if pw else ["scp", "-O"]) + ssh_opts
+
+    if router.jump_host:
+        cmd += ["-J", router.jump_host]
 
     cmd += [str(local_path), f"root@{router.host}:{remote_path}"]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=_ssh_env())
@@ -73,36 +80,49 @@ def _wait_for_reboot(router, timeout=180):
     return False
 
 
-def download_artifact(branch: str, arch: str, run_id: str | None = None) -> Path:
+def install_test_deps(router):
+    log.info("Installing test dependencies: %s", ", ".join(TEST_DEPS))
+    router.ssh("opkg update", timeout=60)
+    router.ssh(f"opkg install {' '.join(TEST_DEPS)}", timeout=120)
+    log.info("Test dependencies installed")
+
+
+def download_artifact(branch: str, arch: str, run_id: str | None = None,
+                      repo: str | None = None) -> Path:
+    artifact_repo = repo or REPO
     if BUILD_DIR.exists():
         shutil.rmtree(BUILD_DIR)
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
 
     if not run_id:
-        log.info("Finding latest successful build for branch '%s'", branch)
-        r = subprocess.run(
-            [
-                "gh", "run", "list",
-                "--repo", REPO,
-                "--branch", branch,
-                "--status", "success",
-                "--workflow", WORKFLOW,
-                "--limit", "1",
-                "--json", "databaseId",
-                "--jq", ".[0].databaseId",
-            ],
-            capture_output=True, text=True, timeout=30,
-        )
-        if r.returncode != 0:
-            raise RuntimeError(f"gh run list failed: {r.stderr.strip()}")
-        run_id = r.stdout.strip()
+        log.info("Finding latest build for branch '%s'", branch)
+        for status_filter in ("success", "completed"):
+            r = subprocess.run(
+                [
+                    "gh", "run", "list",
+                    "--repo", artifact_repo,
+                    "--branch", branch,
+                    "--status", status_filter,
+                    "--workflow", WORKFLOW,
+                    "--limit", "1",
+                    "--json", "databaseId,status",
+                    "--jq", ".[0].databaseId",
+                ],
+                capture_output=True, text=True, timeout=30,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                run_id = r.stdout.strip()
+                break
         if not run_id:
-            raise RuntimeError(f"No successful runs found for branch '{branch}'")
+            if repo and repo != REPO:
+                log.info("No build found on fork '%s', trying upstream '%s'", repo, REPO)
+                return download_artifact(branch, arch, run_id=run_id, repo=None)
+            raise RuntimeError(f"No builds found for branch '{branch}' on {artifact_repo}")
         log.info("Found run: %s", run_id)
 
     log.info("Downloading artifacts from run %s", run_id)
     r = subprocess.run(
-        ["gh", "run", "download", run_id, "--repo", REPO, "--dir", str(BUILD_DIR)],
+        ["gh", "run", "download", run_id, "--repo", artifact_repo, "--dir", str(BUILD_DIR)],
         capture_output=True, text=True, timeout=300,
     )
     if r.returncode != 0:
@@ -127,8 +147,8 @@ def deploy(router, ipk_path: Path, reboot: bool = False) -> dict:
     if not ipk_path.exists():
         raise FileNotFoundError(f"IPK not found: {ipk_path}")
 
-    log.info("Ensuring curl is installed on router")
-    router.ssh("opkg update > /dev/null 2>&1; opkg list-installed | grep -q '^curl ' || opkg install curl", timeout=60)
+    log.info("Installing test dependencies on router")
+    install_test_deps(router)
 
     log.info("Copying %s to router", ipk_path.name)
     _scp_to_router(router, ipk_path, "/tmp/tollgate-wrt.ipk")
@@ -168,6 +188,7 @@ def reboot_router(router, wait: bool = True) -> dict:
 
     if wait:
         _wait_for_reboot(router)
+        install_test_deps(router)
         log.info("Waiting for backend health after reboot")
         healthy = _wait_for_health(router, timeout=120)
     else:
@@ -273,9 +294,43 @@ def factory_reset(router, reboot: bool = False, expected_mac: str | None = None)
     return {"success": True, "rebooted": False}
 
 
+def firstboot_reset(router, expected_mac: str | None = None) -> dict:
+    guard_mac = expected_mac or os.environ.get("TOLLGATE_EXPECTED_MAC", "")
+    if guard_mac:
+        log.info("Verifying router MAC address before firstboot reset")
+        try:
+            mac_out = router.ssh("cat /sys/class/net/br-lan/address 2>/dev/null || cat /sys/class/net/eth0/address 2>/dev/null", timeout=5)
+            actual_mac = mac_out.strip().lower()
+            expected = guard_mac.lower()
+            if actual_mac != expected:
+                raise RuntimeError(
+                    f"MAC MISMATCH — aborting firstboot reset! "
+                    f"Expected {expected}, got {actual_mac}. "
+                    f"Wrong router?"
+                )
+            log.info("MAC verified: %s", actual_mac)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            log.warning("Could not verify MAC (%s) — proceeding anyway", e)
+
+    log.info("Running firstboot -y && reboot")
+    try:
+        router.ssh("firstboot -y && reboot", timeout=10)
+    except (subprocess.TimeoutExpired, Exception):
+        pass
+
+    if not _wait_for_reboot(router):
+        return {"success": False, "rebooted": True, "error": "Router did not come back after firstboot"}
+
+    install_test_deps(router)
+
+    return {"success": True, "rebooted": True}
+
+
 def deploy_branch(router, branch: str, arch: str | None = None,
                   run_id: str | None = None, force: bool = False,
-                  reboot: bool = False) -> dict:
+                  reboot: bool = False, repo: str | None = None) -> dict:
     arch = arch or os.environ.get("TOLLGATE_ROUTER_ARCH", "aarch64_cortex-a53")
 
     if not force:
@@ -289,5 +344,5 @@ def deploy_branch(router, branch: str, arch: str | None = None,
                 "skipped": True,
             }
 
-    ipk_path = download_artifact(branch, arch, run_id=run_id)
+    ipk_path = download_artifact(branch, arch, run_id=run_id, repo=repo)
     return deploy(router, ipk_path, reboot=reboot)

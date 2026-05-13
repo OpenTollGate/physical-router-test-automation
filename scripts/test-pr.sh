@@ -25,6 +25,7 @@ RESET=false
 TEST_TYPE="api"
 PUBLISH=false
 ROUTER_ID=""
+ARTIFACT_REPO=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -52,13 +53,17 @@ while [[ $# -gt 0 ]]; do
       PUBLISH=true
       shift
       ;;
+    --repo)
+      ARTIFACT_REPO="$2"
+      shift 2
+      ;;
     --router)
       ROUTER_ID="$2"
       shift 2
       ;;
     *)
       echo "ERROR: Unknown option: $1" >&2
-      echo "Usage: $0 --pr <N> | --branch <NAME> [--reset] [--test api|all] [--publish] [--router ID]" >&2
+      echo "Usage: $0 --pr <N> | --branch <NAME> [--reset] [--test api|all] [--publish] [--repo REPO] [--router ID]" >&2
       exit 1
       ;;
   esac
@@ -89,6 +94,15 @@ ROUTER_IP="${ROUTER_IP:-${TOLLGATE_SSH_HOST:-}}"
 ROUTER_ID="${ROUTER_ID:-${TOLLGATE_ROUTER_ID:-}}"
 ROUTER_SSH_KEY="${TOLLGATE_SSH_KEY:-~/.ssh/id_ed25519}"
 
+# Auto-resolve arch from router inventory if not set
+if [[ -z "${TOLLGATE_ROUTER_ARCH:-}" && -n "$ROUTER_ID" && -f "$REPO_DIR/config/routers.json" ]]; then
+  TOLLGATE_ROUTER_ARCH=$(python3 -c "
+import json, sys
+inv = json.load(open('$REPO_DIR/config/routers.json'))
+print(inv.get('routers', {}).get('$ROUTER_ID', {}).get('arch', ''))
+" 2>/dev/null)
+fi
+
 # Check for password
 if [[ -z "$TOLLGATE_LUCI_PASSWORD" && -z "$TOLLGATE_SSH_PASSWORD" ]]; then
   echo "ERROR: TOLLGATE_LUCI_PASSWORD or TOLLGATE_SSH_PASSWORD is required" >&2
@@ -107,30 +121,51 @@ if [[ -n "$PR_NUM" ]]; then
   echo "==> Resolving PR $PR_NUM..."
   BRANCH=$(gh pr view "$PR_NUM" --repo OpenTollGate/tollgate-module-basic-go --json headRefName --jq '.headRefName')
   COMMIT_SHA=$(gh pr view "$PR_NUM" --repo OpenTollGate/tollgate-module-basic-go --json headRefOid --jq '.headRefOid')
+  FORK_REPO=$(gh pr view "$PR_NUM" --repo OpenTollGate/tollgate-module-basic-go --json headRepository --jq '.headRepository.owner.login + "/" + .headRepository.name' 2>/dev/null || echo "")
   TOLLGATE_COMMIT="${COMMIT_SHA:0:12}"
   TOLLGATE_PR="$PR_NUM"
   TOLLGATE_BRANCH="$BRANCH"
+  if [[ -n "$FORK_REPO" && -z "$ARTIFACT_REPO" ]]; then
+    ARTIFACT_REPO="$FORK_REPO"
+  fi
 else
   TOLLGATE_BRANCH="$BRANCH"
-  COMMIT_SHA=$(git -C "$REPO_DIR" rev-parse "origin/${BRANCH}" 2>/dev/null || echo "unknown")
+  LOOKUP_REPO="${ARTIFACT_REPO:-OpenTollGate/tollgate-module-basic-go}"
+  COMMIT_SHA=$(gh api "repos/${LOOKUP_REPO}/commits/${BRANCH}" --jq '.sha' 2>/dev/null || echo "unknown")
   TOLLGATE_COMMIT="${COMMIT_SHA:0:12}"
 fi
 
 echo "==> Tollgate branch: $TOLLGATE_BRANCH"
 echo "==> Tollgate commit: ${TOLLGATE_COMMIT:0:12}"
+if [[ -n "$ARTIFACT_REPO" ]]; then
+  echo "==> Artifact repo: $ARTIFACT_REPO"
+fi
 
 # ── Pre-flight connectivity check ───────────────────────────────────────
 echo "==> Checking router connectivity..."
-export SSHPASS="$TOLLGATE_LUCI_PASSWORD"
-if ! sshpass -e ssh -O -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
-  "root@${ROUTER_IP}" 'echo ok' &>/dev/null; then
-  echo "ERROR: Cannot reach router at ${ROUTER_IP}" >&2
-  echo "  - Is the router powered on?" >&2
-  echo "  - Is SSH enabled?" >&2
-  echo "  - Is TOLLGATE_LUCI_PASSWORD correct?" >&2
-  exit 1
+SSH_CHECK_KEY="${TOLLGATE_SSH_KEY:-}"
+_check_ssh() {
+  if [[ -n "$SSH_CHECK_KEY" ]]; then
+    ssh -i "$SSH_CHECK_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+      -o ConnectTimeout=5 -o LogLevel=ERROR "root@${ROUTER_IP}" 'echo ok' &>/dev/null
+  else
+    export SSHPASS="${TOLLGATE_SSH_PASSWORD:-$TOLLGATE_LUCI_PASSWORD}"
+    sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+      -o ConnectTimeout=5 -o LogLevel=ERROR "root@${ROUTER_IP}" 'echo ok' &>/dev/null
+  fi
+}
+if _check_ssh; then
+  echo "==> Router reachable at ${ROUTER_IP}"
+else
+  if [[ "$RESET" == "true" ]]; then
+    echo "WARNING: Router not reachable yet — firstboot_reset will wait for it" >&2
+  else
+    echo "ERROR: Cannot reach router at ${ROUTER_IP}" >&2
+    echo "  - Is the router powered on?" >&2
+    echo "  - Is SSH enabled?" >&2
+    exit 1
+  fi
 fi
-echo "==> Router reachable at ${ROUTER_IP}"
 
 # ── Run directory ───────────────────────────────────────────────────────
 TIMESTAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
@@ -145,15 +180,15 @@ echo "==> Router: ${ROUTER_ID:-$ROUTER_IP} ($ROUTER_IP)"
 
 # ── Factory reset (if requested) ─────────────────────────────────────────
 if [[ "$RESET" == "true" ]]; then
-  echo "==> Factory resetting router..."
+  echo "==> Factory resetting router (firstboot)..."
   python3 -c "
 import os, sys, logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message)s', datefmt='%H:%M:%S')
 from lib.router import Router
-from lib.deploy import factory_reset
+from lib.deploy import firstboot_reset
 r = Router(host='${ROUTER_IP}', phone_ip='', phone_mac='', domain='',
            identity_file=os.environ.get('TOLLGATE_SSH_KEY') or None)
-result = factory_reset(r, reboot=False, expected_mac='${TOLLGATE_EXPECTED_MAC:-}')
+result = firstboot_reset(r, expected_mac='${TOLLGATE_EXPECTED_MAC:-}')
 print(f'result={result[\"success\"]}')
 sys.exit(0 if result['success'] else 1)
 "
@@ -169,7 +204,8 @@ from lib.deploy import deploy_branch
 r = Router(host='${ROUTER_IP}', phone_ip='', phone_mac='', domain='',
            identity_file=os.environ.get('TOLLGATE_SSH_KEY') or None)
 result = deploy_branch(r, '${TOLLGATE_BRANCH}', arch='${TOLLGATE_ROUTER_ARCH:-aarch64_cortex-a53}',
-                       run_id=None, force=True, reboot=False)
+                       run_id=None, force=True, reboot=False,
+                       repo='${ARTIFACT_REPO:-}')
 print(f'version={result[\"installed_version\"]} health={result[\"health_code\"]} success={result[\"success\"]}')
 sys.exit(0 if result['success'] else 1)
 "

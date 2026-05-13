@@ -141,9 +141,50 @@ Markers are defined in `pytest.ini`. Tiers are hierarchical: `smoke` is a subset
 | `slow` | Takes more than 30s |
 | `android_only` | Requires Android device |
 | `publish_screenshot` | Screenshot from this test is safe for published reports |
-| `pr(N)` | Test introduced for upstream PR #N |
+| `pr(N)` | PR-gated test — only runs with `--expected-pr=N` (see below) |
 
 Phone-marked tests automatically get `flaky(reruns=1)` and `timeout(300s)`.
+
+### Test gating strategies
+
+Tests use one of two strategies to decide whether they should run against the deployed firmware:
+
+#### 1. PR-gated (`@pytest.mark.pr(N)`)
+
+Use when a test verifies behavior that **only exists in a specific PR**. When `--expected-pr=N` is passed, only tests marked `pr(N)` (and tests with no `pr()` marker at all) will run. Tests marked `pr(M)` where `M != N` are skipped.
+
+```python
+pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.pr(117)]
+```
+
+Example: `test_hostname.py` is marked `pr(117)` because hostname setup only exists in PR #117.
+
+#### 2. Feature-detected (no `pr()` marker)
+
+Use when a test verifies behavior that **may exist in multiple PRs or versions**. The test calls a skip function at runtime that probes the router for the required capability:
+
+```python
+def _skip_if_no_degraded_support(router):
+    resp = router.get_tollgate_status()
+    if resp.get("success") is not True:
+        pytest.skip("status command not available")
+    raw = json.dumps(resp).lower()
+    if not any(kw in raw for kw in ["degraded", "reachable", "mint_health"]):
+        pytest.skip("no degraded mode support detected")
+```
+
+These tests run against **any** PR or version that implements the feature — no `--expected-pr` needed. They skip cleanly when the feature is absent.
+
+Example: `test_degraded_mode.py` uses feature detection because degraded mode exists in both PR #118 (full health tracking) and PR #120 (mint resilience). Both PRs should pass the same degraded mode tests without duplicating them.
+
+#### When to use which
+
+| Situation | Strategy |
+|---|---|
+| Test for a feature unique to one PR | `@pytest.mark.pr(N)` |
+| Test for a feature shared across PRs | Feature detection (`_skip_if_no_*_support`) |
+| Test for baseline behavior that always works | No marker, no skip — runs unconditionally |
+| Module has some tests for PR-only features and some shared | Remove `pr(N)` from module marker, add `pr(N)` per-test on the PR-only tests |
 
 ## Project Structure
 
