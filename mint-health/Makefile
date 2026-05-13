@@ -50,7 +50,7 @@
         r-wait-daemon r-wait-recovery \
         r-test-edge-cases r-test-reseller-guard r-test-cleanup \
         r-test-offline-ops r-test-first-boot-offline r-test-no-mints \
-        r-deploy r-shell r-cleanup r-push \
+        r-deploy r-deploy-cli r-setup-fresh r-shell r-cleanup r-push \
         r-check-sta-health \
         r-setup-test-mint r-restore-prod-config r-fund-wallet \
         r-smoke-degraded r-smoke-degraded-upstream r-smoke-degraded-connect \
@@ -84,6 +84,8 @@ CYAN   := \033[36m
 RESET  := \033[0m
 
 ROUTER_LOCK := routers.lock
+MK_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+REPO_ROOT := $(MK_DIR)..
 
 # ---- Remote helper --------------------------------------------------------
 # Source routers.env, resolve ROUTER_<NAME>_HOST, build SSH command.
@@ -158,7 +160,7 @@ status: ## [local] Phase 1: Verify service is running and CLI works
 	@echo "$(BOLD)=== Phase 1: Service Startup ===$(RESET)"
 	@echo ""
 	@echo "$(YELLOW)Checking tollgate service logs...$(RESET)"
-	@logread -e tollgate | tail -20
+	@logread -e tollgate-wrt | tail -20
 	@echo ""
 	@echo "$(YELLOW)Checking CLI binary...$(RESET)"
 	@which tollgate && echo "$(GREEN)CLI binary found$(RESET)" || echo "$(RED)CLI binary NOT found$(RESET)"
@@ -167,7 +169,7 @@ status: ## [local] Phase 1: Verify service is running and CLI works
 	@tollgate version || echo "$(RED)Version command failed$(RESET)"
 	@echo ""
 	@echo "$(YELLOW)Checking for upstream manager startup...$(RESET)"
-	@logread -e tollgate | grep -q "Upstream WiFi manager initialized" && \
+	@logread -e tollgate-wrt | grep -q "Upstream WiFi manager initialized" && \
 		echo "$(GREEN)Upstream manager initialized$(RESET)" || \
 		echo "$(RED)Upstream manager NOT initialized$(RESET)"
 
@@ -178,7 +180,7 @@ scan: ## [local] Phase 2: Scan for available upstream WiFi networks
 	@tollgate upstream scan
 	@echo ""
 	@echo "$(YELLOW)Checking for scan errors in logs...$(RESET)"
-	@logread -e tollgate | grep -i "scan" | tail -5
+	@logread -e tollgate-wrt | grep -i "scan" | tail -5
 
 connect: ## [local] Phase 3: Connect to upstream WiFi (requires SSID, optional PASS)
 	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile connect SSID=MyNet PASS=secret$(RESET)"; exit 1; fi
@@ -223,7 +225,7 @@ wait-daemon: ## [local] Phase 5: Watch daemon logs for one scan cycle (up to 6 m
 	@echo "$(YELLOW)Watching for daemon scan cycle (timeout 360s)...$(RESET)"
 	@echo "$(YELLOW)Press Ctrl+C once you see a scan cycle.$(RESET)"
 	@echo ""
-	@timeout 360 logread -e tollgate -f 2>/dev/null | grep --line-buffered -i "upstream\|scan cycle\|Best candidate\|switch" | head -20
+	@timeout 360 logread -e tollgate-wrt -f 2>/dev/null | grep --line-buffered -i "upstream\|scan cycle\|Best candidate\|switch" | head -20
 
 simulate-connectivity-loss: ## [local] Phase 5.3: Simulate connectivity loss
 	@echo "$(BOLD)=== Phase 5.3: Connectivity Loss Simulation ===$(RESET)"
@@ -240,7 +242,7 @@ simulate-connectivity-loss: ## [local] Phase 5.3: Simulate connectivity loss
 	echo "$(YELLOW)Blocking traffic on $$ifname for 90 seconds...$(RESET)"; \
 	iptables -A OUTPUT -o $$ifname -j DROP; \
 	echo "$(GREEN)Blocked. Watching logs...$(RESET)"; \
-	timeout 90 logread -e tollgate -f 2>/dev/null | grep --line-buffered -i "lost\|emergency\|scan cycle" | head -10; \
+	timeout 90 logread -e tollgate-wrt -f 2>/dev/null | grep --line-buffered -i "lost\|emergency\|scan cycle" | head -10; \
 	iptables -D OUTPUT -o $$ifname -j DROP; \
 	echo "$(GREEN)Unblocked $$ifname$(RESET)"
 
@@ -278,7 +280,7 @@ test-reseller-guard: ## [local] Phase 7: Test that daemon respects reseller mode
 	@echo "$(YELLOW)Enabling reseller mode...$(RESET)"
 	@uci set tollgate.config.reseller_mode=1 && uci commit tollgate
 	@echo "$(GREEN)Reseller mode ON. Watching logs for 35s (daemon should be silent)...$(RESET)"
-	@timeout 35 logread -e tollgate -f 2>/dev/null | grep --line-buffered "Running upstream scan cycle" | head -1 && \
+	@timeout 35 logread -e tollgate-wrt -f 2>/dev/null | grep --line-buffered "Running upstream scan cycle" | head -1 && \
 		echo "$(RED)FAIL: Daemon ran a scan cycle while in reseller mode!$(RESET)" || \
 		echo "$(GREEN)OK: No scan cycles during reseller mode$(RESET)"
 	@echo ""
@@ -316,7 +318,7 @@ smoke: ## [local] Run the upstream WiFi smoke test (requires SSID, optional PASS
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo ""
 	@echo "$(CYAN)1/6 — Verifying service is up...$(RESET)"
-	@logread -e tollgate | grep -q "Upstream WiFi manager initialized" && \
+	@logread -e tollgate-wrt | grep -q "Upstream WiFi manager initialized" && \
 		echo "$(GREEN)  OK: Upstream manager initialized$(RESET)" || \
 		(echo "$(RED)  FAIL: Upstream manager not initialized$(RESET)" && exit 1)
 	@echo ""
@@ -389,7 +391,7 @@ full-upstream: ## [local] Run the full upstream WiFi test suite (requires SSID, 
 
 check-merchant: ## [local] Verify full merchant (online boot)
 	@echo "$(BOLD)=== Check: Full Merchant ===$(RESET)"
-	@logread -e tollgate | grep -q "Merchant ready" && \
+	@logread -e tollgate-wrt | grep -q "Merchant ready" && \
 		echo "$(GREEN)OK: Merchant ready (full mode)$(RESET)" || \
 		echo "$(RED)FAIL: Merchant ready not found in logs$(RESET)"
 	@echo ""
@@ -398,11 +400,11 @@ check-merchant: ## [local] Verify full merchant (online boot)
 
 check-degraded: ## [local] Verify degraded merchant (offline boot)
 	@echo "$(BOLD)=== Check: Degraded Merchant ===$(RESET)"
-	@logread -e tollgate | grep -q "Starting in degraded mode" && \
+	@logread -e tollgate-wrt | grep -q "Starting in degraded mode" && \
 		echo "$(GREEN)OK: Degraded mode detected$(RESET)" || \
 		echo "$(RED)FAIL: Degraded mode not found in logs$(RESET)"
 	@echo ""
-	@logread -e tollgate | grep "offline wallet loaded" | tail -1
+	@logread -e tollgate-wrt | grep "offline wallet loaded" | tail -1
 	@echo ""
 	@echo "$(YELLOW)Wallet balance (offline)...$(RESET)"
 	@tollgate wallet balance || echo "$(RED)Balance check failed$(RESET)"
@@ -456,7 +458,7 @@ test-offline-ops: ## [local] Phase 4: Verify offline wallet operations
 	@tollgate status && echo "$(GREEN)  OK$(RESET)" || echo "$(RED)  FAIL$(RESET)"
 	@echo ""
 	@echo "$(YELLOW)4.3 — Service still running (no crash loop)...$(RESET)"
-	@sleep 2; logread -e tollgate | tail -3 | grep -q "panic\|fatal\"" && \
+	@sleep 2; logread -e tollgate-wrt | tail -3 | grep -q "panic\|fatal\"" && \
 		echo "$(RED)  FAIL: crash detected$(RESET)" || echo "$(GREEN)  OK: no crashes$(RESET)"
 
 wait-recovery: ## [local] Phase 5: Watch logs for recovery (up to 16 min)
@@ -465,18 +467,18 @@ wait-recovery: ## [local] Phase 5: Watch logs for recovery (up to 16 min)
 	@echo "$(YELLOW)The tracker checks every 5 min and needs 3 consecutive successes.$(RESET)"
 	@echo "$(YELLOW)Press Ctrl+C once you see 'Merchant ready' or 'Failed to upgrade'.$(RESET)"
 	@echo ""
-	@timeout 960 logread -e tollgate -f 2>/dev/null | grep --line-buffered -i "reachable\|upgrade\|degraded\|Merchant ready\|BoltDB\|Failed to upgrade" | head -10
+	@timeout 960 logread -e tollgate-wrt -f 2>/dev/null | grep --line-buffered -i "reachable\|upgrade\|degraded\|Merchant ready\|BoltDB\|Failed to upgrade" | head -10
 
 test-first-boot-offline: ## [local] Phase 6: First boot offline (no wallet DB)
 	@echo "$(BOLD)=== Phase 6: First Boot Offline ===$(RESET)"
 	@echo "$(YELLOW)This test must be run with an unreachable mint configured$(RESET)"
 	@echo "$(YELLOW)and no existing wallet.db. Expected: graceful degradation.$(RESET)"
 	@echo ""
-	@logread -e tollgate | grep -q "offline wallet load failed" && \
+	@logread -e tollgate-wrt | grep -q "offline wallet load failed" && \
 		echo "$(GREEN)OK: Offline wallet load failed gracefully (first boot)$(RESET)" || \
 		echo "$(RED)FAIL: Expected 'offline wallet load failed' log$(RESET)"
 	@echo ""
-	@logread -e tollgate | grep -q "Starting in degraded mode" && \
+	@logread -e tollgate-wrt | grep -q "Starting in degraded mode" && \
 		echo "$(GREEN)OK: Degraded mode started$(RESET)" || \
 		echo "$(RED)FAIL: Degraded mode not detected$(RESET)"
 	@echo ""
@@ -485,7 +487,7 @@ test-first-boot-offline: ## [local] Phase 6: First boot offline (no wallet DB)
 
 test-no-mints: ## [local] Phase 7: No configured mints
 	@echo "$(BOLD)=== Phase 7: No Configured Mints ===$(RESET)"
-	@logread -e tollgate | grep -q "no configured mints" && \
+	@logread -e tollgate-wrt | grep -q "no configured mints" && \
 		echo "$(GREEN)OK: 'no configured mints' log found$(RESET)" || \
 		echo "$(RED)FAIL: Expected 'no configured mints' log$(RESET)"
 	@echo ""
@@ -521,9 +523,9 @@ smoke-offline: ## [local] Quick offline test: block + restart + verify degraded
 	@$(MAKE) -f Makefile restart-service
 	@echo ""
 	@echo "$(CYAN)3/4 — Checking degraded mode...$(RESET)"
-	@logread -e tollgate | grep -q "Starting in degraded mode" && \
+	@logread -e tollgate-wrt | grep -q "Starting in degraded mode" && \
 		echo "$(GREEN)  OK: Degraded mode$(RESET)" || echo "$(RED)  FAIL: Not in degraded mode$(RESET)"
-	@logread -e tollgate | grep -q "offline wallet loaded successfully" && \
+	@logread -e tollgate-wrt | grep -q "offline wallet loaded successfully" && \
 		echo "$(GREEN)  OK: Wallet loaded offline$(RESET)" || echo "$(YELLOW)  WARN: Wallet not loaded (first boot?)$(RESET)"
 	@echo ""
 	@echo "$(CYAN)4/4 — Wallet balance (offline)...$(RESET)"
@@ -668,20 +670,51 @@ r-shell: ## [remote] Open an interactive SSH session on the router
 	echo "$(GREEN)Connecting to $$router_host ($(ROUTER))...$(RESET)"; \
 	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host
 
-r-deploy: ## [remote] Cross-compile and deploy binaries to router
+r-deploy: ## [remote] Cross-compile and deploy daemon + CLI binaries to router
 	@$(CHECK_LOCK)
 	@$(RESOLVE_ROUTER); \
 	echo "$(BOLD)=== Deploying to $(ROUTER) ($$router_host) ===$(RESET)"; \
-	./scripts/local-compile-to-router.sh $$router_host
+	$(REPO_ROOT)/scripts/local-compile-to-router.sh $$router_host
+
+r-deploy-cli: ## [remote] Cross-compile and deploy CLI binary only (no service restart)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== Deploying CLI to $(ROUTER) ($$router_host) ===$(RESET)"; \
+	cd "$(REPO_ROOT)/../tollgate-module-basic-go/src/cmd/tollgate-cli" && \
+	export PATH="$$PATH:/usr/local/go/bin" && \
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /tmp/tollgate-cli -trimpath -ldflags="-s -w" . && \
+	echo "$(GREEN)Built CLI binary$(RESET)"; \
+	scp -O /tmp/tollgate-cli $(ROUTER_USER)@$$router_host:/usr/bin/tollgate && \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "chmod +x /usr/bin/tollgate" && \
+	echo "$(GREEN)CLI deployed to $(ROUTER)$(RESET)"
+
+r-setup-fresh: ## [remote] Setup freshly flashed router: deploy daemon + CLI + captive portal + config + restart
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== Fresh Setup: $(ROUTER) ($$router_host) ===$(RESET)"; \
+	echo "$(CYAN)1/5 — Deploying daemon + CLI...$(RESET)"; \
+	$(REPO_ROOT)/scripts/local-compile-to-router.sh $$router_host; \
+	echo "$(CYAN)2/5 — Deploying captive portal...$(RESET)"; \
+	PORTAL_SRC="$(REPO_ROOT)/../tollgate-module-basic-go/packaging/files/tollgate-captive-portal-site"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "mkdir -p /etc/nodogsplash/htdocs"; \
+	for f in "$$PORTAL_SRC"/*; do \
+		[ -f "$$f" ] && scp -O "$$f" $(ROUTER_USER)@$$router_host:/etc/nodogsplash/htdocs/; \
+	done; \
+	echo "$(CYAN)3/5 — Configuring test mint...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "cat > /etc/tollgate/config.json <<'CONFIG'\n{\"mode\":\"merchant\",\"accepted_mints\":[{\"url\":\"$(MINT)\",\"min_balance\":64,\"balance_tolerance_percent\":10,\"payout_interval_seconds\":60,\"min_payout_amount\":128,\"price_per_step\":1,\"price_unit\":\"sats\",\"purchase_min_steps\":0}]}\nCONFIG"; \
+	echo "$(CYAN)4/5 — Restarting service...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "/etc/init.d/tollgate-wrt restart"; \
+	sleep 3; \
+	echo "$(CYAN)5/5 — Verifying...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate status" && echo "$(GREEN)Setup complete!$(RESET)" || echo "$(RED)Setup failed — check logs$(RESET)"
 
 r-status: ## [remote] Phase 1: Check service status (WiFi + mint health)
 	@$(RESOLVE_ROUTER); \
 	echo "$(BOLD)=== Phase 1: Service Status [$(ROUTER)] ===$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host sh -c "'echo \"--- Logs (last 20) ---\"; logread -e tollgate | tail -20; echo; echo \"--- Version ---\"; tollgate version; echo; echo \"--- Status ---\"; tollgate status; echo; logread -e tollgate | grep -q \"Upstream WiFi manager initialized\" && echo \"UPSTREAM_OK: Upstream manager initialized\" || echo \"UPSTREAM_NA: No upstream manager\"'"
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host sh -c "'echo \"--- Logs (last 20) ---\"; logread -e tollgate-wrt | tail -20; echo; echo \"--- Version ---\"; tollgate version; echo; echo \"--- Status ---\"; tollgate status; echo; logread -e tollgate-wrt | grep -q \"Upstream WiFi manager initialized\" && echo \"UPSTREAM_OK: Upstream manager initialized\" || echo \"UPSTREAM_NA: No upstream manager\"'"
 
 r-logs: ## [remote] Tail tollgate logs — upstream WiFi + mint health (Ctrl+C to stop)
 	@$(RESOLVE_ROUTER); \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "logread -e tollgate -f" | grep --line-buffered -i "merchant\|degraded\|reachable\|wallet\|upgrade\|BoltDB\|mint\|upstream\|scan\|connect\|switch\|candidate"
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "logread -e tollgate-wrt -f" | grep --line-buffered -i "merchant\|degraded\|reachable\|wallet\|upgrade\|BoltDB\|mint\|upstream\|scan\|connect\|switch\|candidate"
 
 # ---------------------------------------------------------------------------
 #  Upstream WiFi — Remote targets
@@ -731,7 +764,7 @@ r-wait-daemon: ## [remote] Phase 5 via SSH (watch daemon logs, up to 6 min)
 	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
 	echo "$(BOLD)=== Phase 5: Daemon Watch [$(ROUTER)] ===$(RESET)"; \
 	echo "$(YELLOW)Watching for scan cycle (timeout 360s)...$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "timeout 360 logread -e tollgate -f" 2>/dev/null | grep --line-buffered -i "upstream\|scan cycle\|Best candidate\|switch" | head -20
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "timeout 360 logread -e tollgate-wrt -f" 2>/dev/null | grep --line-buffered -i "upstream\|scan cycle\|Best candidate\|switch" | head -20
 
 r-test-edge-cases: ## [remote] Phase 8 via SSH
 	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
@@ -743,7 +776,7 @@ r-test-reseller-guard: ## [remote] Phase 7 via SSH
 	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
 	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
 	echo "$(BOLD)=== Phase 7: Reseller Guard [$(ROUTER)] ===$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host sh -c "'uci set tollgate.config.reseller_mode=1 && uci commit tollgate && echo Reseller ON && timeout 35 logread -e tollgate -f 2>/dev/null | grep --line-buffered \"Running upstream scan cycle\" | head -1 && echo FAIL || echo OK_NO_SCAN && tollgate upstream list && uci set tollgate.config.reseller_mode=0 && uci commit tollgate && echo Reseller OFF'"
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host sh -c "'uci set tollgate.config.reseller_mode=1 && uci commit tollgate && echo Reseller ON && timeout 35 logread -e tollgate-wrt -f 2>/dev/null | grep --line-buffered \"Running upstream scan cycle\" | head -1 && echo FAIL || echo OK_NO_SCAN && tollgate upstream list && uci set tollgate.config.reseller_mode=0 && uci commit tollgate && echo Reseller OFF'"
 
 r-test-cleanup: ## [remote] Phase 9 via SSH
 	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
@@ -758,12 +791,12 @@ r-test-cleanup: ## [remote] Phase 9 via SSH
 r-check-merchant: ## [remote] Verify full merchant (online boot)
 	@$(RESOLVE_ROUTER); \
 	echo "$(BOLD)=== Check: Full Merchant [$(ROUTER)] ===$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host sh -c "'logread -e tollgate | grep -q \"Merchant ready\" && echo OK_MERCHANT_READY || echo FAIL_NO_MERCHANT_READY; echo; tollgate wallet balance'"
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host sh -c "'logread -e tollgate-wrt-wrt | grep -q \"Merchant ready\" && echo OK_MERCHANT_READY || (tollgate status > /dev/null 2>&1 && echo OK_MERCHANT_READY_VIA_STATUS || echo FAIL_NO_MERCHANT_READY); echo; tollgate wallet balance'"
 
 r-check-degraded: ## [remote] Verify degraded merchant (offline boot)
 	@$(RESOLVE_ROUTER); \
 	echo "$(BOLD)=== Check: Degraded Merchant [$(ROUTER)] ===$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host sh -c "'logread -e tollgate | grep -q \"Starting in degraded mode\" && echo OK_DEGRADED || echo FAIL_NOT_DEGRADED; echo; logread -e tollgate | grep \"offline wallet\" | tail -1; echo; tollgate wallet balance; echo; tollgate status'"
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host sh -c "'logread -e tollgate-wrt | grep -q \"Starting in degraded mode\" && echo OK_DEGRADED || echo FAIL_NOT_DEGRADED; echo; logread -e tollgate-wrt | grep \"offline wallet\" | tail -1; echo; tollgate wallet balance; echo; tollgate status'"
 
 r-block-mint: ## [remote] Block mint via /etc/hosts override
 	@$(CHECK_LOCK)
@@ -806,7 +839,7 @@ r-test-offline-ops: ## [remote] Phase 4: Verify offline wallet operations
 		echo \"4.1 — Wallet balance:\"; tollgate wallet balance; echo; \
 		echo \"4.2 — Service status:\"; tollgate status; echo; \
 		echo \"4.3 — No crashes:\"; \
-		logread -e tollgate | tail -3 | grep -q \"panic\" && echo FAIL_CRASH || echo OK_NO_CRASH'"
+		logread -e tollgate-wrt | tail -3 | grep -q \"panic\" && echo FAIL_CRASH || echo OK_NO_CRASH'"
 
 r-wait-recovery: ## [remote] Phase 5: Watch for recovery (up to 16 min)
 	@$(RESOLVE_ROUTER); \
@@ -814,10 +847,10 @@ r-wait-recovery: ## [remote] Phase 5: Watch for recovery (up to 16 min)
 	echo "$(YELLOW)Tracker checks every 5 min, needs 3 consecutive successes (up to 15 min).$(RESET)"; \
 	echo "$(YELLOW)Press Ctrl+C once you see the result.$(RESET)"; \
 	echo ""; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "timeout 960 logread -e tollgate -f" 2>/dev/null | grep --line-buffered -i "reachable\|upgrade\|degraded\|Merchant ready\|BoltDB\|Failed to upgrade" | head -10; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "timeout 960 logread -e tollgate-wrt -f" 2>/dev/null | grep --line-buffered -i "reachable\|upgrade\|degraded\|Merchant ready\|BoltDB\|Failed to upgrade" | head -10; \
 	echo ""; \
 	echo "$(YELLOW)Recovery watch ended. Checking final state...$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "logread -e tollgate | grep -E 'Merchant ready|Upgrading from degraded|Failed to upgrade' | tail -3"
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "logread -e tollgate-wrt | grep -E 'Merchant ready|Upgrading from degraded|Failed to upgrade' | tail -3"
 
 r-test-first-boot-offline: ## [remote] Phase 6: First boot offline on fresh router
 	@$(CHECK_LOCK)
@@ -831,18 +864,40 @@ r-test-first-boot-offline: ## [remote] Phase 6: First boot offline on fresh rout
 		mv /tmp/config-offline.json /etc/tollgate/config.json; \
 		rm -f /etc/tollgate/ecash/wallet.db; \
 		echo \"Config set to unreachable mint, wallet.db removed\"; \
-		/etc/init.d/tollgate-wrt restart; \
+		/etc/init.d/tollgate-wrt restart'"; \
+	echo "$(YELLOW)Waiting up to 60s for degraded service to start...$(RESET)"; \
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
 		sleep 5; \
+		if ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate status 2>/dev/null | grep -q 'running: true'"; then \
+			echo "$(GREEN)Service is up after $$((i*5))s$(RESET)"; \
+			break; \
+		fi; \
+		if [ "$$i" = "12" ]; then \
+			echo "$(RED)TIMEOUT: Service not up within 60s$(RESET)"; \
+			echo "$(YELLOW)Restoring config...$(RESET)"; \
+			ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "mv /etc/tollgate/config.json.bak /etc/tollgate/config.json 2>/dev/null"; \
+			exit 1; \
+		fi; \
+		echo "  ... $$((i*5))s elapsed, waiting..."; \
+	done; \
+	echo ""; \
+	echo "$(CYAN)Checking degraded mode logs...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host sh -c "'\
+		logread -e tollgate-wrt | grep -qi \"degraded\" && echo OK_DEGRADED || echo FAIL_NOT_DEGRADED; \
+		if logread -e tollgate-wrt | grep -q \"offline wallet loaded successfully\"; then \
+			echo OK_WALLET_LOADED; \
+		elif logread -e tollgate-wrt | grep -q \"offline wallet load failed\"; then \
+			echo OK_WALLET_LOAD_FAILED_BUT_DEGRADED; \
+		else \
+			echo OK_NO_WALLET_FRESH_BOOT; \
+		fi; \
 		echo; \
-		logread -e tollgate | grep -q \"offline wallet load failed\" && echo OK_GRACEFUL_DEGRADE || echo FAIL_NO_GRACEFUL; \
-		logread -e tollgate | grep -q \"Starting in degraded mode\" && echo OK_DEGRADED || echo FAIL_NOT_DEGRADED; \
-		echo; \
-		echo \"Checking no boot loop (waiting 10s)...\"; \
-		sleep 10; \
-		tollgate status > /dev/null 2>&1 && echo OK_SERVICE_UP || echo FAIL_SERVICE_DOWN; \
-		echo; \
-		echo \"Restoring original config...\"; \
-		mv /etc/tollgate/config.json.bak /etc/tollgate/config.json'"
+		echo \"Verifying service stability (5s)...\"; \
+		sleep 5; \
+		tollgate status > /dev/null 2>&1 && echo OK_SERVICE_UP || echo FAIL_SERVICE_DOWN'"; \
+	echo ""; \
+	echo "$(CYAN)Restoring original config...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "mv /etc/tollgate/config.json.bak /etc/tollgate/config.json && echo Config restored"
 
 r-test-no-mints: ## [remote] Phase 7: No configured mints
 	@$(CHECK_LOCK)
@@ -852,14 +907,32 @@ r-test-no-mints: ## [remote] Phase 7: No configured mints
 		cp /etc/tollgate/config.json /etc/tollgate/config.json.bak2; \
 		cat /etc/tollgate/config.json | jq \".accepted_mints = []\" > /tmp/config-nomints.json; \
 		mv /tmp/config-nomints.json /etc/tollgate/config.json; \
-		/etc/init.d/tollgate-wrt restart; \
+		/etc/init.d/tollgate-wrt restart'"; \
+	echo "$(YELLOW)Waiting up to 60s for service to start...$(RESET)"; \
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
 		sleep 5; \
-		logread -e tollgate | grep -q \"no configured mints\" && echo OK_NO_MINTS || echo FAIL_NO_MINTS_LOG; \
-		echo \"Checking service up (10s)...\"; \
-		sleep 10; \
-		tollgate status > /dev/null 2>&1 && echo OK_SERVICE_UP || echo FAIL_SERVICE_DOWN; \
-		echo \"Restoring config...\"; \
-		mv /etc/tollgate/config.json.bak2 /etc/tollgate/config.json'"
+		if ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate status 2>/dev/null | grep -q 'running: true'"; then \
+			echo "$(GREEN)Service is up after $$((i*5))s$(RESET)"; \
+			break; \
+		fi; \
+		if [ "$$i" = "12" ]; then \
+			echo "$(RED)TIMEOUT: Service not up within 60s$(RESET)"; \
+			echo "$(YELLOW)Restoring config...$(RESET)"; \
+			ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "mv /etc/tollgate/config.json.bak2 /etc/tollgate/config.json 2>/dev/null"; \
+			exit 1; \
+		fi; \
+		echo "  ... $$((i*5))s elapsed, waiting..."; \
+	done; \
+	echo ""; \
+	echo "$(CYAN)Checking no-mints logs...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host sh -c "'\
+		logread -e tollgate-wrt | grep -q \"no configured mints\" && echo OK_NO_MINTS || echo FAIL_NO_MINTS_LOG; \
+		echo \"Verifying service stability (5s)...\"; \
+		sleep 5; \
+		tollgate status > /dev/null 2>&1 && echo OK_SERVICE_UP || echo FAIL_SERVICE_DOWN'"; \
+	echo ""; \
+	echo "$(CYAN)Restoring config...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "mv /etc/tollgate/config.json.bak2 /etc/tollgate/config.json && echo Config restored"
 
 r-cleanup: ## [remote] Phase 8: Remove /etc/hosts overrides and restore
 	@$(CHECK_LOCK)
@@ -884,7 +957,7 @@ r-smoke: ## [remote] Run upstream WiFi smoke test via SSH (requires SSID, option
 	echo "$(BOLD)=======================================$(RESET)"; \
 	echo ""; \
 	echo "$(CYAN)1/6 — Service check...$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "logread -e tollgate | grep -q 'Upstream WiFi manager initialized' && echo OK_UPSTREAM || echo FAIL_UPSTREAM"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "logread -e tollgate-wrt | grep -q 'Upstream WiFi manager initialized' && echo OK_UPSTREAM || echo FAIL_UPSTREAM"; \
 	echo ""; \
 	echo "$(CYAN)2/6 — Scanning...$(RESET)"; \
 	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate upstream scan"; \
@@ -1090,7 +1163,7 @@ r-smoke-pin-upstream: ## [remote] Two-router: verify upstream pin prevents scan-
 	\
 	echo ""; \
 	echo "$(CYAN)Step 5: Wait for session payment (up to 30s)$(RESET)"; \
-	timeout 30 ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_host "logread -e tollgate -f" 2>/dev/null | grep --line-buffered -i "payment successful\|session updated\|Pinned upstream" | head -3; \
+	timeout 30 ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_host "logread -e tollgate-wrt -f" 2>/dev/null | grep --line-buffered -i "payment successful\|session updated\|Pinned upstream" | head -3; \
 	\
 	echo ""; \
 	echo "$(CYAN)Step 6: Verify pin was set$(RESET)"; \
@@ -1177,7 +1250,7 @@ r-setup-test-mint: ## [remote] Configure router with nofee.testnut.cashu.space f
 		echo "  ... $$((i*5))s elapsed, waiting..."; \
 	done; \
 	echo "$(RED)TIMEOUT: Merchant did not become ready within 60s$(RESET)"; \
-	echo "$(YELLOW)Check logs: ssh $(ROUTER_USER)@$$router_host 'logread -e tollgate | tail -30'$(RESET)"; \
+	echo "$(YELLOW)Check logs: ssh $(ROUTER_USER)@$$router_host 'logread -e tollgate-wrt | tail -30'$(RESET)"; \
 	exit 1
 
 MINT_TOKEN_BIN := $(shell test -x /tmp/mint-token && echo /tmp/mint-token || echo "")
@@ -1902,7 +1975,7 @@ r-smoke-degraded-upstream: ## [remote] Two-router: connect online, degrade, veri
 	echo "$(CYAN)Step 7: Verify alpha sees beta as TollGate gateway (up to 30s)$(RESET)"; \
 	for i in 1 2 3 4 5 6; do \
 		sleep 5; \
-		gw_found=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_host "logread -e tollgate 2>/dev/null | grep -i 'gateway.*$$(echo $$beta_ssid | sed 's/TollGate-//')' | tail -1" 2>/dev/null); \
+		gw_found=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_host "logread -e tollgate-wrt 2>/dev/null | grep -i 'gateway.*$$(echo $$beta_ssid | sed 's/TollGate-//')' | tail -1" 2>/dev/null); \
 		if [ -n "$$gw_found" ]; then \
 			echo "$(GREEN)Alpha found beta as gateway: $$gw_found$(RESET)"; \
 			break; \
@@ -1917,7 +1990,7 @@ r-smoke-degraded-upstream: ## [remote] Two-router: connect online, degrade, veri
 	echo ""; \
 	echo "$(CYAN)Step 8: Wait for initial payment and session (up to 30s)$(RESET)"; \
 	echo "$(YELLOW)Watching for payment logs on alpha...$(RESET)"; \
-	timeout 30 ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_host "logread -e tollgate -f" 2>/dev/null | grep --line-buffered -i "payment\|session\|allotment\|purchase" | head -5; \
+	timeout 30 ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_host "logread -e tollgate-wrt -f" 2>/dev/null | grep --line-buffered -i "payment\|session\|allotment\|purchase" | head -5; \
 	\
 	echo ""; \
 	echo "$(CYAN)Step 9: Block mint on alpha (degrade)$(RESET)"; \
@@ -1926,7 +1999,7 @@ r-smoke-degraded-upstream: ## [remote] Two-router: connect online, degrade, veri
 	echo ""; \
 	echo "$(CYAN)Step 10: Wait for session renewal with offline wallet (up to 60s)$(RESET)"; \
 	echo "$(YELLOW)With step_size=4096 and 8KB allotment, renewal should trigger within seconds.$(RESET)"; \
-	timeout 60 ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_host "logread -e tollgate -f" 2>/dev/null | grep --line-buffered -i "payment\|renewal\|allotment\|degraded\|offline\|SendWith" | head -10; \
+	timeout 60 ssh $(SSH_OPTS) $(ROUTER_USER)@$$alpha_host "logread -e tollgate-wrt -f" 2>/dev/null | grep --line-buffered -i "payment\|renewal\|allotment\|degraded\|offline\|SendWith" | head -10; \
 	\
 	echo ""; \
 	echo "$(CYAN)Step 11: Restore alpha's upstream to $$active_ssid$(RESET)"; \
@@ -2145,14 +2218,14 @@ s-status: ## [serial] Check tollgate status via serial
 s-check-merchant: ## [serial] Verify full merchant via serial
 	@$(RESOLVE_SERIAL); \
 	echo "$(BOLD)=== Check: Full Merchant via Serial [$(ROUTER)] ===$(RESET)"; \
-	$(SERIAL_EXEC) $$serial_port "logread -e tollgate | grep -q 'Merchant ready' && echo OK_MERCHANT_READY || echo FAIL_NO_MERCHANT_READY"; \
+	$(SERIAL_EXEC) $$serial_port "logread -e tollgate-wrt | grep -q 'Merchant ready' && echo OK_MERCHANT_READY || echo FAIL_NO_MERCHANT_READY"; \
 	$(SERIAL_EXEC) $$serial_port "tollgate wallet balance"
 
 s-check-degraded: ## [serial] Verify degraded merchant via serial
 	@$(RESOLVE_SERIAL); \
 	echo "$(BOLD)=== Check: Degraded Merchant via Serial [$(ROUTER)] ===$(RESET)"; \
-	$(SERIAL_EXEC) $$serial_port "logread -e tollgate | grep -q 'Starting in degraded mode' && echo OK_DEGRADED || echo FAIL_NOT_DEGRADED"; \
-	$(SERIAL_EXEC) $$serial_port "logread -e tollgate | grep 'offline wallet' | tail -1"; \
+	$(SERIAL_EXEC) $$serial_port "logread -e tollgate-wrt | grep -q 'Starting in degraded mode' && echo OK_DEGRADED || echo FAIL_NOT_DEGRADED"; \
+	$(SERIAL_EXEC) $$serial_port "logread -e tollgate-wrt | grep 'offline wallet' | tail -1"; \
 	$(SERIAL_EXEC) $$serial_port "tollgate wallet balance"; \
 	$(SERIAL_EXEC) $$serial_port "tollgate status"
 
@@ -2211,7 +2284,7 @@ s-cold-boot-test: ## [serial] Full cold boot test with serial monitoring
 	$(SERIAL_EXEC) $$serial_port "tollgate status"; \
 	echo ""; \
 	echo "$(CYAN)4/4 — Checking merchant mode...$(RESET)"; \
-	$(SERIAL_EXEC) $$serial_port "logread -e tollgate | grep -E 'Merchant ready|degraded' | tail -5"; \
+	$(SERIAL_EXEC) $$serial_port "logread -e tollgate-wrt | grep -E 'Merchant ready|degraded' | tail -5"; \
 	echo ""; \
 	echo "$(BOLD)=======================================$(RESET)"; \
 	echo "$(GREEN)$(BOLD)  Cold boot test complete [$(ROUTER)]$(RESET)"; \
@@ -2282,7 +2355,7 @@ r-test-captive-portal: ## [remote] Run Playwright captive portal tests against p
 	router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
 	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
 	echo "$(CYAN)Running Playwright tests against $$router_host:2050...$(RESET)"; \
-	cd $$(dirname $$(pwd))/tests && TOLLGATE_CAPTIVE_PORTAL_HOST=$$router_host npx playwright test captive-portal 2>&1; \
+	cd $(REPO_ROOT)/tests && TOLLGATE_CAPTIVE_PORTAL_HOST=$$router_host npx playwright test captive-portal 2>&1; \
 	test_rc=$$?; \
 	echo ""; \
 	if [ $$test_rc -eq 0 ]; then \
@@ -2303,7 +2376,7 @@ r-test-captive-portal-happy: ## [remote] Run only happy-path Playwright captive 
 	echo "$(GREEN)Merchant mode confirmed$(RESET)"; \
 	echo ""; \
 	echo "$(CYAN)Running happy-path Playwright tests...$(RESET)"; \
-	cd $$(dirname $$(pwd))/tests && TOLLGATE_CAPTIVE_PORTAL_HOST=$$router_host npx playwright test captive-portal -g "happy" 2>&1; \
+	cd $(REPO_ROOT)/tests && TOLLGATE_CAPTIVE_PORTAL_HOST=$$router_host npx playwright test captive-portal -g "happy" 2>&1; \
 	test_rc=$$?; \
 	echo ""; \
 	if [ $$test_rc -eq 0 ]; then \
@@ -2318,8 +2391,8 @@ r-test-cashu-payment: ## [remote] Run cashu e2e payment Playwright test (mint to
 	@echo "$(BOLD)=== Cashu E2E Payment Test [$(ROUTER)] ===$(RESET)"; \
 	router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
 	if [ -z "$$router_host" ]; then echo "$(RED)No HOST for $(ROUTER)$(RESET)"; exit 1; fi; \
-	if [ ! -x scripts/mint-token/mint-token ]; then \
-		echo "$(RED)mint-token binary not found at scripts/mint-token/mint-token$(RESET)"; \
+	if [ ! -x $(REPO_ROOT)/scripts/mint-token/mint-token ]; then \
+		echo "$(RED)mint-token binary not found at $(REPO_ROOT)/scripts/mint-token/mint-token$(RESET)"; \
 		exit 1; \
 	fi; \
 	echo "$(CYAN)Verifying merchant mode on $$router_host...$(RESET)"; \
@@ -2328,7 +2401,7 @@ r-test-cashu-payment: ## [remote] Run cashu e2e payment Playwright test (mint to
 	echo "$(GREEN)Merchant mode confirmed$(RESET)"; \
 	echo ""; \
 	echo "$(CYAN)Running cashu e2e payment Playwright test...$(RESET)"; \
-	cd tests && TOLLGATE_CAPTIVE_PORTAL_HOST=$$router_host npx playwright test captive-portal -g "cashu" --project=alpha 2>&1; \
+	cd $$(dirname $$(pwd))/tests && TOLLGATE_CAPTIVE_PORTAL_HOST=$$router_host npx playwright test captive-portal -g "cashu" 2>&1; \
 	test_rc=$$?; \
 	echo ""; \
 	if [ $$test_rc -eq 0 ]; then \

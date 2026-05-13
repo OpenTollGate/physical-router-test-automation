@@ -30,6 +30,8 @@ SSID   ?=
 PASS   ?=
 ROUTER ?= alpha
 
+-include routers.env
+
 BOLD   := \033[1m
 GREEN  := \033[32m
 RED    := \033[31m
@@ -78,7 +80,7 @@ status: ## [local] Phase 1: Verify service is running and CLI works
 	@echo "$(BOLD)=== Phase 1: Service Startup ===$(RESET)"
 	@echo ""
 	@echo "$(YELLOW)Checking tollgate service logs...$(RESET)"
-	@logread -e tollgate | tail -20
+	@logread -e tollgate-wrt | tail -20
 	@echo ""
 	@echo "$(YELLOW)Checking CLI binary...$(RESET)"
 	@which tollgate && echo "$(GREEN)CLI binary found$(RESET)" || echo "$(RED)CLI binary NOT found$(RESET)"
@@ -87,7 +89,7 @@ status: ## [local] Phase 1: Verify service is running and CLI works
 	@tollgate version || echo "$(RED)Version command failed$(RESET)"
 	@echo ""
 	@echo "$(YELLOW)Checking for upstream manager startup...$(RESET)"
-	@logread -e tollgate | grep -q "Upstream WiFi manager initialized" && \
+	@logread -e tollgate-wrt | grep -q "Upstream WiFi manager initialized" && \
 		echo "$(GREEN)Upstream manager initialized$(RESET)" || \
 		echo "$(RED)Upstream manager NOT initialized$(RESET)"
 
@@ -98,7 +100,7 @@ scan: ## [local] Phase 2: Scan for available upstream WiFi networks
 	@tollgate upstream scan
 	@echo ""
 	@echo "$(YELLOW)Checking for scan errors in logs...$(RESET)"
-	@logread -e tollgate | grep -i "scan" | tail -5
+	@logread -e tollgate-wrt | grep -i "scan" | tail -5
 
 connect: ## [local] Phase 3: Connect to upstream WiFi (requires SSID, optional PASS)
 	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID is required. Usage: make -f Makefile.test connect SSID=MyNet PASS=secret$(RESET)"; exit 1; fi
@@ -143,7 +145,7 @@ wait-daemon: ## [local] Phase 5: Watch daemon logs for one scan cycle (up to 6 m
 	@echo "$(YELLOW)Watching for daemon scan cycle (timeout 360s)...$(RESET)"
 	@echo "$(YELLOW)Press Ctrl+C once you see a scan cycle.$(RESET)"
 	@echo ""
-	@timeout 360 logread -e tollgate -f 2>/dev/null | grep --line-buffered -i "upstream\|scan cycle\|Best candidate\|switch" | head -20
+	@timeout 360 logread -e tollgate-wrt -f 2>/dev/null | grep --line-buffered -i "upstream\|scan cycle\|Best candidate\|switch" | head -20
 
 simulate-connectivity-loss: ## [local] Phase 5.3: Simulate connectivity loss
 	@echo "$(BOLD)=== Phase 5.3: Connectivity Loss Simulation ===$(RESET)"
@@ -160,7 +162,7 @@ simulate-connectivity-loss: ## [local] Phase 5.3: Simulate connectivity loss
 	echo "$(YELLOW)Blocking traffic on $$ifname for 90 seconds...$(RESET)"; \
 	iptables -A OUTPUT -o $$ifname -j DROP; \
 	echo "$(GREEN)Blocked. Watching logs...$(RESET)"; \
-	timeout 90 logread -e tollgate -f 2>/dev/null | grep --line-buffered -i "lost\|emergency\|scan cycle" | head -10; \
+	timeout 90 logread -e tollgate-wrt -f 2>/dev/null | grep --line-buffered -i "lost\|emergency\|scan cycle" | head -10; \
 	iptables -D OUTPUT -o $$ifname -j DROP; \
 	echo "$(GREEN)Unblocked $$ifname$(RESET)"
 
@@ -198,7 +200,7 @@ test-reseller-guard: ## [local] Phase 7: Test that daemon respects reseller mode
 	@echo "$(YELLOW)Enabling reseller mode...$(RESET)"
 	@uci set tollgate.config.reseller_mode=1 && uci commit tollgate
 	@echo "$(GREEN)Reseller mode ON. Watching logs for 35s (daemon should be silent)...$(RESET)"
-	@timeout 35 logread -e tollgate -f 2>/dev/null | grep --line-buffered "Running upstream scan cycle" | head -1 && \
+	@timeout 35 logread -e tollgate-wrt -f 2>/dev/null | grep --line-buffered "Running upstream scan cycle" | head -1 && \
 		echo "$(RED)FAIL: Daemon ran a scan cycle while in reseller mode!$(RESET)" || \
 		echo "$(GREEN)OK: No scan cycles during reseller mode$(RESET)"
 	@echo ""
@@ -236,7 +238,7 @@ smoke: ## [local] Run the 5-minute smoke test (requires SSID, optional PASS)
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo ""
 	@echo "$(CYAN)1/6 — Verifying service is up...$(RESET)"
-	@logread -e tollgate | grep -q "Upstream WiFi manager initialized" && \
+	@logread -e tollgate-wrt | grep -q "Upstream WiFi manager initialized" && \
 		echo "$(GREEN)  OK: Upstream manager initialized$(RESET)" || \
 		(echo "$(RED)  FAIL: Upstream manager not initialized$(RESET)" && exit 1)
 	@echo ""
@@ -333,12 +335,12 @@ r-status: ## [remote] Phase 1 via SSH
 	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
 	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
 	echo "$(BOLD)=== Phase 1: Service Startup [$(ROUTER) @ $$router_host] ===$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host sh -c "'logread -e tollgate | tail -20 && echo --- && which tollgate && tollgate version && logread -e tollgate | grep -q \"Upstream WiFi manager initialized\" && echo UPSTREAM_OK || echo UPSTREAM_FAIL'"
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host sh -c "'logread -e tollgate-wrt | tail -20 && echo --- && which tollgate && tollgate version && logread -e tollgate-wrt | grep -q \"Upstream WiFi manager initialized\" && echo UPSTREAM_OK || echo UPSTREAM_FAIL'"
 
 r-logs: ## [remote] Tail upstream logs on router (Ctrl+C to stop)
 	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
 	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "logread -e tollgate -f" | grep --line-buffered -i "upstream\|scan\|connect\|switch\|candidate"
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "logread -e tollgate-wrt -f" | grep --line-buffered -i "upstream\|scan\|connect\|switch\|candidate"
 
 r-scan: ## [remote] Phase 2 via SSH
 	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
@@ -384,7 +386,7 @@ r-wait-daemon: ## [remote] Phase 5 via SSH (watch daemon logs, up to 6 min)
 	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
 	echo "$(BOLD)=== Phase 5: Daemon Watch [$(ROUTER)] ===$(RESET)"; \
 	echo "$(YELLOW)Watching for scan cycle (timeout 360s)...$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "timeout 360 logread -e tollgate -f" 2>/dev/null | grep --line-buffered -i "upstream\|scan cycle\|Best candidate\|switch" | head -20
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "timeout 360 logread -e tollgate-wrt -f" 2>/dev/null | grep --line-buffered -i "upstream\|scan cycle\|Best candidate\|switch" | head -20
 
 r-test-edge-cases: ## [remote] Phase 8 via SSH
 	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
@@ -396,7 +398,7 @@ r-test-reseller-guard: ## [remote] Phase 7 via SSH
 	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
 	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
 	echo "$(BOLD)=== Phase 7: Reseller Guard [$(ROUTER)] ===$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host sh -c "'uci set tollgate.config.reseller_mode=1 && uci commit tollgate && echo Reseller ON && timeout 35 logread -e tollgate -f 2>/dev/null | grep --line-buffered \"Running upstream scan cycle\" | head -1 && echo FAIL || echo OK_NO_SCAN && tollgate upstream list && uci set tollgate.config.reseller_mode=0 && uci commit tollgate && echo Reseller OFF'"
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host sh -c "'uci set tollgate.config.reseller_mode=1 && uci commit tollgate && echo Reseller ON && timeout 35 logread -e tollgate-wrt -f 2>/dev/null | grep --line-buffered \"Running upstream scan cycle\" | head -1 && echo FAIL || echo OK_NO_SCAN && tollgate upstream list && uci set tollgate.config.reseller_mode=0 && uci commit tollgate && echo Reseller OFF'"
 
 r-test-cleanup: ## [remote] Phase 9 via SSH
 	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
@@ -413,7 +415,7 @@ r-smoke: ## [remote] Run smoke test via SSH (requires SSID, optional PASS, ROUTE
 	echo "$(BOLD)=======================================$(RESET)"; \
 	echo ""; \
 	echo "$(CYAN)1/6 — Service check...$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "logread -e tollgate | grep -q 'Upstream WiFi manager initialized' && echo OK_UPSTREAM || echo FAIL_UPSTREAM"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "logread -e tollgate-wrt | grep -q 'Upstream WiFi manager initialized' && echo OK_UPSTREAM || echo FAIL_UPSTREAM"; \
 	echo ""; \
 	echo "$(CYAN)2/6 — Scanning...$(RESET)"; \
 	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate upstream scan"; \
@@ -528,7 +530,7 @@ s-login: ## [serial] Send login credentials if at login prompt
 s-status: ## [serial] Check tollgate status via serial
 	@$(RESOLVE_SERIAL); \
 	echo "$(BOLD)=== Status via Serial [$(ROUTER)] ===$(RESET)"; \
-	$(SERIAL_EXEC) $$serial_port "logread -e tollgate | tail -20"; \
+	$(SERIAL_EXEC) $$serial_port "logread -e tollgate-wrt | tail -20"; \
 	$(SERIAL_EXEC) $$serial_port "tollgate version"; \
 	$(SERIAL_EXEC) $$serial_port "tollgate status"
 
@@ -584,7 +586,7 @@ s-cold-boot-test: ## [serial] Full cold boot test with serial monitoring
 	$(SERIAL_EXEC) $$serial_port "tollgate status"; \
 	echo ""; \
 	echo "$(CYAN)4/4 — Checking upstream manager...$(RESET)"; \
-	$(SERIAL_EXEC) $$serial_port "logread -e tollgate | grep -E 'Upstream WiFi manager|tollgate' | tail -5"; \
+	$(SERIAL_EXEC) $$serial_port "logread -e tollgate-wrt | grep -E 'Upstream WiFi manager|tollgate' | tail -5"; \
 	echo ""; \
 	echo "$(BOLD)=======================================$(RESET)"; \
 	echo "$(GREEN)$(BOLD)  Cold boot test complete [$(ROUTER)]$(RESET)"; \
