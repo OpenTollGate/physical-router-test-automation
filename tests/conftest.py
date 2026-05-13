@@ -299,16 +299,26 @@ def attach_results(request, results_dir):
     request.node._results_dir = results_dir
 
 
+def _get_pay_via_marker(item):
+    """Extract pay_via value from @pytest.mark.pay_via(X) marker."""
+    for marker in item.iter_markers("pay_via"):
+        if marker.args:
+            return marker.args[0]
+    return "portal"  # default: open portal
+
+
 @pytest.fixture
 def connected_wifi(router, wifi, adb, request):
     quick = request.config.getoption("--quick-phone", default=False)
+    pay_via = _get_pay_via_marker(request.node)
+    skip_portal = pay_via == "skip"
     router.resolve_phone_client(adb)
     router.reset_state(adb=adb)
     if quick:
         if not wifi.is_connected():
-            assert wifi.reconnect(), "WiFi reconnect failed — portal did not render"
+            assert wifi.reconnect(skip_portal=skip_portal), "WiFi reconnect failed — portal did not render"
     else:
-        assert wifi.reconnect(), "WiFi reconnect failed — portal did not render"
+        assert wifi.reconnect(skip_portal=skip_portal), "WiFi reconnect failed — portal did not render"
     router.resolve_phone_client(adb)
     yield
 

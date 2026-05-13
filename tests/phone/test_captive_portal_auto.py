@@ -9,20 +9,12 @@ pytestmark = [
     pytest.mark.slow,
     pytest.mark.timeout(120),
     pytest.mark.extended,
+    pytest.mark.pay_via("skip"),
 ]
 
 
-def test_android_detects_captive_portal(router, adb, wifi, screenshot_portal):
+def test_android_detects_captive_portal(router, adb, wifi, connected_wifi, screenshot_portal):
     log = logging.getLogger("tollgate.test_captive_portal_auto")
-
-    # Step 1: Manually set up WiFi without opening portal
-    # This replicates what connected_wifi fixture does, but skips portal opening
-    log.info("Resolving phone client...")
-    router.resolve_phone_client(adb)
-    router.reset_state(adb=adb)
-    log.info("Connecting to WiFi without opening portal...")
-    assert wifi.reconnect(skip_portal=True), "WiFi connection failed"
-    router.resolve_phone_client(adb)
 
     log.info("Waiting for Android to detect captive portal (up to 30s)...")
     start = time.time()

@@ -24,6 +24,12 @@ credentials/
 .tmp/
 findings/
 
+# Agent orchestration artifacts
+.sisyphus/
+
+# Playwright MCP session logs
+.playwright-mcp/
+
 # Screenshots and test artifacts — never commit or publish these
 *.png
 *.jpg

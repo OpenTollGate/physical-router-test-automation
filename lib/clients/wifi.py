@@ -59,36 +59,6 @@ class WiFi:
         self.adb.tap((x1 + x2) // 2, (y1 + y2) // 2)
         return True
 
-    def _tap_ssid_captive_entry(self) -> bool:
-        xml = self.adb.ui_xml()
-        sign_in_match = re.search(r'text="Sign in to the network[^"]*"', xml)
-        if not sign_in_match:
-            return False
-        parent_match = re.search(
-            r'<node[^>]*clickable="true"[^>]*>[^<]*'
-            r'(?:<node[^>]*>[^<]*)*'
-            + re.escape(sign_in_match.group(0)),
-            xml,
-        )
-        if not parent_match:
-            parent_match = re.search(
-                r'<node[^>]*bounds="\[([^]]*)\]\[([^]]*)\]"[^>]*clickable="true"[^>]*>[^<]*(?:<node[^>]*>[^<]*)*'
-                + re.escape(sign_in_match.group(0)),
-                xml,
-            )
-        if not parent_match:
-            return False
-        bounds_match = re.search(r'bounds="\[([^]]*)\]\[([^]]*)\]"', parent_match.group(0))
-        if not bounds_match:
-            return False
-        nums1 = re.findall(r"\d+", bounds_match.group(1))
-        nums2 = re.findall(r"\d+", bounds_match.group(2))
-        x1, y1 = int(nums1[0]), int(nums1[1])
-        x2, y2 = int(nums2[0]), int(nums2[1])
-        self.adb.tap((x1 + x2) // 2, (y1 + y2) // 2)
-        time.sleep(4)
-        return True
-
     def open_wifi_settings(self):
         if _is_desktop_client(self.adb):
             return
@@ -120,37 +90,6 @@ class WiFi:
                 if bounds:
                     self.adb.tap_bounds(f"[{bounds.group(1)}][{bounds.group(2)}]")
                     time.sleep(3)
-
-    def _tap_sign_in(self) -> bool:
-        if _is_desktop_client(self.adb):
-            return False
-        xml = self.adb.ui_xml()
-        log.info("Looking for sign-in button or portal URL")
-
-        domain_pattern = re.escape(self.router.domain) if self.router.domain else ""
-        for pattern in [
-            f"https?://{domain_pattern}[:/]" if domain_pattern else None,
-            "https?://tollgate",
-        ]:
-            if pattern:
-                m = re.search(f'text="({pattern}[^"]*)"', xml)
-                if m:
-                    text = m.group(1)
-                    node = re.search(f'text="{re.escape(text)}"[^>]*bounds="\\[([^\\]]*)\\]\\[([^\\]]*)\\]"', xml)
-                    if node:
-                        self.adb.tap_bounds(f"[{node.group(1)}][{node.group(2)}]")
-                        time.sleep(4)
-                        return True
-
-        for label in ["Sign in to network", "Sign in", "Network sign-in",
-                       "Log in", "Connect to network", "Open"]:
-            m = re.search(f'text="{label}"[^>]*bounds="\\[([^\\]]*)\\]\\[([^\\]]*)\\]"', xml)
-            if m:
-                self.adb.tap_bounds(f"[{m.group(1)}][{m.group(2)}]")
-                time.sleep(4)
-                return True
-
-        return False
 
     def _connect_to_wifi(self) -> bool:
         if _is_desktop_client(self.adb):
