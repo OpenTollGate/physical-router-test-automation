@@ -274,7 +274,7 @@ All 19 scripts in `scripts/`:
 
 ## Test Directories
 
-### `tests/api/` (30 tests, API-only, no phone needed)
+### `tests/api/` (31 tests, API-only, no phone needed)
 
 SSH directly to the router. No physical device required. Covers:
 
@@ -289,9 +289,10 @@ SSH directly to the router. No physical device required. Covers:
 - Mint 502 handling, mint health, mint payout, mint URL normalization, wrong mint
 - Netbird firewall
 - NUT-24, profit share validation
+- Post-payment redirect (NDS redirecturl config, runtime override, setup script)
 - CLI version, CLI wallet
 
-### `tests/phone/` (15 tests, requires Android device via ADB)
+### `tests/phone/` (17 tests, requires Android device via ADB)
 
 End-to-end through the captive portal on a real Android phone. Covers:
 
@@ -300,6 +301,7 @@ End-to-end through the captive portal on a real Android phone. Covers:
 - Camera captive portal
 - Data metering, time metering
 - Expiry kick, extend session, short session
+- Post-payment redirect (browser opens after payment)
 - Session persistence
 - Token formats
 
