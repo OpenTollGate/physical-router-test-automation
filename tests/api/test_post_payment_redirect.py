@@ -1,16 +1,23 @@
 """Tests for post-payment redirect (feat/post-payment-redirect).
 
-API-tier tests: pure SSH/config checks verifying NDS redirect plumbing.
-No phone required.
+API-tier tests: pure SSH/config checks verifying the welcome page
+redirect mechanism. No phone required.
 
-Key behaviors under test:
-- NDS redirecturl is set after first boot to the default
-- redirecturl points to the expected default URL
-- redirecturl can be overridden at runtime via UCI
-- The config.json redirect_url field is present in the schema (omitempty)
-- Setup script contains the redirecturl configuration
+The redirect works via the captive portal site, not NDS redirecturl
+(NDS redirecturl only fires through the authdir HTTP endpoint, which
+TollGate never hits since it uses ndsctl auth externally).
 
-Tests use feature detection: they check if NDS has redirecturl configured
+Flow: payment → React app success → redirect to /balance.html →
+      redirect to /welcome.html (3 approaches).
+
+Tests verify:
+- welcome.html exists in the captive portal site
+- welcome.html contains the target redirect URL
+- welcome.html contains all 3 approaches (auto-redirect, tap link, PWA)
+- balance.html redirects to welcome.html
+- Setup script does NOT set redirecturl (removed as non-functional)
+
+Tests use feature detection: they check if welcome.html exists
 and skip cleanly when the feature is absent.
 """
 
@@ -21,129 +28,95 @@ log = __import__("logging").getLogger("tollgate.post_payment_redirect")
 pytestmark = [pytest.mark.api, pytest.mark.extended]
 
 DEFAULT_REDIRECT_URL = "https://wallet.cashu.me/welcome"
+CAPTIVE_PORTAL_DIR = "/etc/tollgate/tollgate-captive-portal-site"
 
 
-def _skip_if_no_redirect_support(router):
-    """Skip if the router does not have post-payment redirect configured."""
-    redirect = router.ssh(
-        "uci -q get nodogsplash.@nodogsplash[0].redirecturl 2>/dev/null"
-    ).strip()
-    if not redirect:
-        pytest.skip("Post-payment redirect not configured (no redirecturl in NDS)")
+def _skip_if_no_welcome_page(router):
+    exists = router.ssh(f"test -f {CAPTIVE_PORTAL_DIR}/welcome.html && echo YES || echo NO").strip()
+    if exists != "YES":
+        pytest.skip("Post-payment redirect not configured (no welcome.html)")
 
 
-# --- NDS config checks ---
+# --- Welcome page checks ---
 
 
-def test_nds_redirecturl_set(router):
-    """Verify NDS redirecturl is set after first boot."""
-    redirect = router.ssh(
-        "uci -q get nodogsplash.@nodogsplash[0].redirecturl 2>/dev/null"
-    ).strip()
-    assert redirect, "NDS redirecturl should be set after first boot"
+def test_welcome_html_exists(router):
+    _skip_if_no_welcome_page(router)
 
 
-def test_nds_redirecturl_default_value(router):
-    """Verify NDS redirecturl points to the expected default."""
-    _skip_if_no_redirect_support(router)
-    redirect = router.ssh(
-        "uci -q get nodogsplash.@nodogsplash[0].redirecturl 2>/dev/null"
-    ).strip()
-    assert redirect == DEFAULT_REDIRECT_URL, \
-        f"Expected default redirect '{DEFAULT_REDIRECT_URL}', got '{redirect}'"
+def test_welcome_html_contains_target_url(router):
+    _skip_if_no_welcome_page(router)
+    content = router.ssh(f"cat {CAPTIVE_PORTAL_DIR}/welcome.html 2>/dev/null")
+    assert DEFAULT_REDIRECT_URL in content, \
+        f"welcome.html should contain target URL '{DEFAULT_REDIRECT_URL}'"
 
 
-# --- Runtime override ---
+def test_welcome_html_has_auto_redirect(router):
+    _skip_if_no_welcome_page(router)
+    content = router.ssh(f"cat {CAPTIVE_PORTAL_DIR}/welcome.html 2>/dev/null")
+    assert "window.location" in content, \
+        "welcome.html should have auto-redirect via window.location"
+    assert "countdown" in content.lower(), \
+        "welcome.html should have a countdown for auto-redirect"
 
 
-def test_nds_redirecturl_can_be_overridden(router):
-    """Verify redirecturl can be changed at runtime via UCI."""
-    _skip_if_no_redirect_support(router)
-
-    original = router.ssh(
-        "uci -q get nodogsplash.@nodogsplash[0].redirecturl 2>/dev/null"
-    ).strip()
-
-    try:
-        router.ssh("uci set nodogsplash.@nodogsplash[0].redirecturl='https://example.com/test'")
-        new_value = router.ssh(
-            "uci -q get nodogsplash.@nodogsplash[0].redirecturl 2>/dev/null"
-        ).strip()
-        assert new_value == "https://example.com/test", \
-            f"Override failed: expected 'https://example.com/test', got '{new_value}'"
-    finally:
-        if original:
-            router.ssh(
-                f"uci set nodogsplash.@nodogsplash[0].redirecturl='{original}'"
-            )
-        else:
-            router.ssh("uci -q delete nodogsplash.@nodogsplash[0].redirecturl")
+def test_welcome_html_has_intent_url(router):
+    _skip_if_no_welcome_page(router)
+    content = router.ssh(f"cat {CAPTIVE_PORTAL_DIR}/welcome.html 2>/dev/null")
+    assert "intent://" in content, \
+        "welcome.html should have intent URL for Android Chrome escape"
 
 
-def test_nds_redirecturl_can_be_cleared(router):
-    """Verify redirecturl can be removed (disabling the redirect)."""
-    _skip_if_no_redirect_support(router)
-
-    original = router.ssh(
-        "uci -q get nodogsplash.@nodogsplash[0].redirecturl 2>/dev/null"
-    ).strip()
-
-    try:
-        router.ssh("uci delete nodogsplash.@nodogsplash[0].redirecturl")
-        value = router.ssh(
-            "uci -q get nodogsplash.@nodogsplash[0].redirecturl 2>/dev/null"
-        ).strip()
-        assert not value, "redirecturl should be empty after deletion"
-    finally:
-        if original:
-            router.ssh(
-                f"uci set nodogsplash.@nodogsplash[0].redirecturl='{original}'"
-            )
+def test_welcome_html_has_clickable_link(router):
+    _skip_if_no_welcome_page(router)
+    content = router.ssh(f"cat {CAPTIVE_PORTAL_DIR}/welcome.html 2>/dev/null")
+    assert 'href="https://wallet.cashu.me/welcome"' in content, \
+        "welcome.html should have clickable link to target URL"
 
 
-# --- Setup script checks ---
+def test_welcome_html_has_pwa_section(router):
+    _skip_if_no_welcome_page(router)
+    content = router.ssh(f"cat {CAPTIVE_PORTAL_DIR}/welcome.html 2>/dev/null")
+    assert "PWA" in content, \
+        "welcome.html should have PWA install section"
 
 
-def test_setup_script_contains_redirecturl(router):
-    """Verify the uci-defaults setup script configures redirecturl."""
-    _skip_if_no_redirect_support(router)
+# --- Balance page redirect ---
+
+
+def test_balance_html_redirects_to_welcome(router):
+    _skip_if_no_welcome_page(router)
+    content = router.ssh(f"cat {CAPTIVE_PORTAL_DIR}/balance.html 2>/dev/null")
+    assert "welcome.html" in content, \
+        "balance.html should redirect to welcome.html"
+
+
+# --- Setup script should NOT have redirecturl ---
+
+
+def test_setup_script_no_redirecturl(router):
     setup = router.ssh(
         "cat /etc/uci-defaults/99-tollgate-setup 2>/dev/null || echo MISSING"
     )
     if setup == "MISSING":
-        pytest.skip("uci-defaults script already consumed (first boot completed)")
-    assert "redirecturl" in setup, \
-        "Setup script should configure redirecturl in NDS"
-    assert DEFAULT_REDIRECT_URL in setup, \
-        f"Setup script should contain default redirect URL '{DEFAULT_REDIRECT_URL}'"
+        pytest.skip("uci-defaults script already consumed")
+    assert "redirecturl" not in setup, \
+        "Setup script should NOT set redirecturl (non-functional with ndsctl auth)"
 
 
-def test_config_schema_has_redirect_url(router):
-    """Verify config.json schema includes redirect_url field (omitempty).
-
-    The Go Config struct adds RedirectURL with omitempty, so it may not
-    appear in the default config. We check that the backend is aware of
-    the field by looking at the config version or the binary.
-    """
-    _skip_if_no_redirect_support(router)
-    config = router.ssh("cat /etc/tollgate/config.json 2>/dev/null")
-    if "redirect_url" in config:
-        import json
-        data = json.loads(config)
-        assert isinstance(data.get("redirect_url", ""), str), \
-            "redirect_url should be a string if present"
+# --- NDS webroot symlink ---
 
 
-# --- NDS service integration ---
+def test_nds_webroot_links_to_captive_portal(router):
+    target = router.ssh("readlink /etc/nodogsplash/htdocs 2>/dev/null").strip()
+    assert "tollgate-captive-portal-site" in target, \
+        f"NDS webroot should symlink to captive portal site, got: {target}"
 
 
-def test_nds_running_with_redirecturl(router):
-    """Verify NDS is running and has redirecturl in its active config."""
-    _skip_if_no_redirect_support(router)
-
-    nds_status = router.ssh("ps | grep '[n]odogsplash'").strip()
-    assert nds_status, "NDS (nodogsplash) should be running"
-
-    nds_conf = router.ssh("cat /etc/config/nodogsplash 2>/dev/null")
-    assert "redirecturl" in nds_conf, \
-        "redirecturl should appear in NDS config file"
+def test_welcome_html_served_by_nds(router):
+    _skip_if_no_welcome_page(router)
+    gateway = router.ssh("uci -q get nodogsplash.@nodogsplash[0].gatewayaddress 2>/dev/null || echo 192.168.1.1").strip()
+    port = router.ssh("uci -q get nodogsplash.@nodogsplash[0].gatewayport 2>/dev/null || echo 2050").strip()
+    result = router.ssh(f"curl -s -o /dev/null -w '%{{http_code}}' http://{gateway}:{port}/welcome.html 2>/dev/null").strip()
+    assert result in ("200", "302"), \
+        f"welcome.html should be served by NDS (got HTTP {result})"
