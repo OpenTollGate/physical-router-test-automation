@@ -12,13 +12,14 @@ log = logging.getLogger("tollgate.router")
 
 class Router:
     def __init__(self, host: str, phone_ip: str, phone_mac: str, domain: str,
-                 identity_file: str = None, jump_host: str = None):
+                 identity_file: str = None, jump_host: str = None, port: int = None):
         self.host = host
         self.phone_ip = phone_ip
         self.phone_mac = phone_mac
         self.domain = domain
         self.identity_file = identity_file
         self.jump_host = jump_host
+        self.port = port
         self._ssh_base = [
             "ssh",
             "-o", "ConnectTimeout=5",
@@ -26,6 +27,8 @@ class Router:
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "LogLevel=ERROR",
         ]
+        if port:
+            self._ssh_base.extend(["-p", str(port)])
         if identity_file:
             self._ssh_base.extend(["-i", identity_file])
         if jump_host:
@@ -342,6 +345,8 @@ class Router:
         with open(tmp, "w") as f:
             json.dump(cfg, f, indent=2)
         scp_cmd = ["scp", "-O", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR"]
+        if self.port:
+            scp_cmd += ["-P", str(self.port)]
         if self.identity_file:
             scp_cmd += ["-i", self.identity_file]
         scp_cmd += [tmp, f"root@{self.host}:/etc/tollgate/config.json"]
@@ -384,6 +389,8 @@ class Router:
         with open(tmp, "w") as f:
             json.dump(cfg, f, indent=2)
         scp_cmd = ["scp", "-O", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR"]
+        if self.port:
+            scp_cmd += ["-P", str(self.port)]
         if self.identity_file:
             scp_cmd += ["-i", self.identity_file]
         scp_cmd += [tmp, f"root@{self.host}:/etc/tollgate/config.json"]

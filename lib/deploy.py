@@ -42,6 +42,9 @@ def _scp_to_router(router, local_path, remote_path):
     if router.jump_host:
         cmd += ["-J", router.jump_host]
 
+    if router.port:
+        cmd += ["-P", str(router.port)]
+
     cmd += [str(local_path), f"root@{router.host}:{remote_path}"]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=_ssh_env())
     if r.returncode != 0:

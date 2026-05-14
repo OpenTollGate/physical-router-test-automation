@@ -29,6 +29,7 @@ OPTIONAL_COMMANDS = [
     "podman",
     "dnsmasq",
     "brctl",
+    "sshpass",
 ]
 
 APT_PACKAGES = [
@@ -45,11 +46,110 @@ DEFAULT_OPENWRT_VERSION = "24.10.1"
 DEFAULT_WORKDIR = "~/tollgate-virtual-lab"
 POC_BRIDGE = "tg-poc-br"
 POC_TAP = "tg-poc-tap"
-POC_NETNS = "tg-poc-client"
-POC_VETH_HOST = "tg-poc-vh"
-POC_VETH_CLIENT = "tg-poc-vc"
+POC_NETNS = "tg-poc-client"  # kept for compatibility
+POC_CONTAINER = "tg-poc-client"
+POC_VETH_HOST = "tg-poc-dc0"
+POC_VETH_CLIENT = "tg-poc-dc1"
 POC_GATEWAY = "192.168.1.1"
-POC_CLIENT_IP = "192.168.1.50/24"
+POC_HOST_BRIDGE_IP = "192.168.1.2/24"
+POC_CLIENT_IP = "192.168.1.100/24"
+POC_PASSWORD = "tollgate"
+POC_SUBNET = "192.168.1.0/24"
+
+# Template for the serial-console provisioning script.  Placeholders
+# ``__WORKDIR__`` and ``__PASSWORD__`` are substituted at runtime by
+# ``_generate_provision_script()``.  We use a plain string (not an
+# f-string) so that Python braces inside the generated code do not need
+# to be doubled.
+_PROVISION_TEMPLATE = r"""
+import socket, time, sys, os
+
+SOCK_PATH = os.path.expanduser('__WORKDIR__') + '/run/serial.sock'
+PASSWORD = '__PASSWORD__'
+BOOT_TIMEOUT = 60
+
+def recv_all(s, timeout=5):
+    s.settimeout(timeout)
+    chunks = []
+    try:
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except socket.timeout:
+        pass
+    return b''.join(chunks).decode('utf-8', errors='replace')
+
+def send_and_wait(s, cmd, wait=3):
+    s.sendall((cmd + '\n').encode())
+    time.sleep(wait)
+    return recv_all(s, timeout=2)
+
+# Connect to serial console (retry until socket appears)
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+deadline = time.time() + 30
+connected = False
+while time.time() < deadline:
+    try:
+        s.connect(SOCK_PATH)
+        connected = True
+        break
+    except (ConnectionRefusedError, FileNotFoundError):
+        time.sleep(2)
+if not connected:
+    print('TIMEOUT: could not connect to serial socket at ' + SOCK_PATH)
+    sys.exit(1)
+
+print('Connected to serial console, waiting for VM to boot...')
+
+# Wait for the boot prompt
+deadline = time.time() + BOOT_TIMEOUT
+booted = False
+while time.time() < deadline:
+    data = recv_all(s, timeout=2)
+    if data.strip():
+        sys.stdout.write(data)
+        sys.stdout.flush()
+    if 'Please press Enter' in data:
+        booted = True
+        break
+    time.sleep(2)
+if not booted:
+    print('TIMEOUT: VM did not reach boot prompt within ' + str(BOOT_TIMEOUT) + 's')
+    s.close()
+    sys.exit(1)
+
+print('\nVM booted, activating console...')
+time.sleep(1)
+send_and_wait(s, '', wait=3)
+recv_all(s, timeout=1)
+
+# --- Set root password (BusyBox has no chpasswd) ---
+print('Setting root password...')
+resp = send_and_wait(s, "printf '%s\\n%s\\n' '" + PASSWORD + "' '" + PASSWORD + "' | passwd root", wait=5)
+print(resp.strip())
+
+# --- Enable SSH password authentication ---
+print('Enabling SSH password auth...')
+send_and_wait(s, "uci set dropbear.@dropbear[0].PasswordAuth='on'", wait=2)
+send_and_wait(s, 'uci commit dropbear', wait=2)
+send_and_wait(s, '/etc/init.d/dropbear restart', wait=3)
+
+# --- Add WAN SSH firewall rule ---
+print('Adding WAN SSH firewall rule...')
+send_and_wait(s, 'uci add firewall rule', wait=2)
+send_and_wait(s, "uci set firewall.@rule[-1].name='Allow-SSH-WAN'", wait=2)
+send_and_wait(s, "uci set firewall.@rule[-1].src='wan'", wait=2)
+send_and_wait(s, "uci set firewall.@rule[-1].dest_port='22'", wait=2)
+send_and_wait(s, "uci set firewall.@rule[-1].proto='tcp'", wait=2)
+send_and_wait(s, "uci set firewall.@rule[-1].target='ACCEPT'", wait=2)
+send_and_wait(s, 'uci commit firewall', wait=2)
+send_and_wait(s, 'fw4 restart', wait=5)
+
+print('PROVISIONED OK')
+s.close()
+"""
 
 
 @dataclass(frozen=True)
@@ -72,8 +172,34 @@ def run_local(command: list[str], timeout: int = 30) -> CommandResult:
 
 def run_remote(host: str, script: str, timeout: int = 60) -> CommandResult:
     if host in {"", "local", "localhost", "127.0.0.1"}:
-        return run_local(["bash", "-lc", script.removeprefix("bash -lc ").strip("'")], timeout=timeout)
+        return run_local(
+            ["bash", "-lc", script.removeprefix("bash -lc ").strip("'")],
+            timeout=timeout,
+        )
     return run_local(["ssh", host, script], timeout=timeout)
+
+
+def run_python_on_host(host: str, python_code: str, timeout: int = 120) -> CommandResult:
+    """Execute Python code on the target host (local or remote via SSH)."""
+    if host in {"", "local", "localhost", "127.0.0.1"}:
+        proc = subprocess.run(
+            ["python3"],
+            input=python_code,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    else:
+        proc = subprocess.run(
+            ["ssh", host, "python3"],
+            input=python_code,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    return CommandResult(proc.returncode, proc.stdout.strip(), proc.stderr.strip())
 
 
 def quote_script(script: str) -> str:
@@ -216,18 +342,29 @@ def _print_result(result: CommandResult) -> int:
 
 
 def _poc_paths(workdir: str) -> tuple[str, str, str]:
+    """Return (pidfile, serial_sock, disk) as shell-expanded path expressions."""
     expanded = "$(eval printf '%s' " + shlex.quote(workdir) + ")"
     pidfile = f"{expanded}/run/tollgate.pid"
-    logfile = f"{expanded}/run/tollgate.log"
+    serial_sock = f"{expanded}/run/serial.sock"
     disk = f"{expanded}/overlays/tollgate-poc.qcow2"
-    return pidfile, logfile, disk
+    return pidfile, serial_sock, disk
+
+
+def _generate_provision_script(workdir: str) -> str:
+    """Return a self-contained Python script that provisions the OpenWrt VM
+    over the QEMU serial-console Unix socket."""
+    pwd = POC_PASSWORD.replace("'", "'\\''")
+    wdir = workdir.replace("'", "'\\''")
+    return _PROVISION_TEMPLATE.replace("__WORKDIR__", wdir).replace("__PASSWORD__", pwd)
 
 
 def start_poc(args: argparse.Namespace) -> int:
     host = cast(str, args.host)
     workdir = cast(str, args.workdir)
-    pidfile, logfile, disk = _poc_paths(workdir)
-    script = f'''
+    pidfile, _serial_sock, disk = _poc_paths(workdir)
+
+    # Step 1: bridge, tap, host IP, overlay, QEMU
+    infra_script = f'''
 set -eu
 workdir={shlex.quote(workdir)}
 workdir=$(eval printf '%s' "$workdir")
@@ -235,7 +372,6 @@ mkdir -p "$workdir/run" "$workdir/overlays"
 base="$workdir/images/openwrt-base.qcow2"
 disk={disk}
 pidfile={pidfile}
-logfile={logfile}
 
 if [ ! -f "$base" ]; then
   printf 'OpenWrt base image missing. Run prepare-image first.\n' >&2
@@ -247,37 +383,43 @@ if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
   exit 0
 fi
 
-sudo ip netns del {POC_NETNS} 2>/dev/null || true
+# Clean up old resources
+docker rm -f {POC_CONTAINER} 2>/dev/null || true
 sudo ip link del {POC_VETH_HOST} 2>/dev/null || true
+sudo ip link del tg-poc-vh 2>/dev/null || true
+sudo ip netns del {POC_NETNS} 2>/dev/null || true
 sudo ip link del {POC_TAP} 2>/dev/null || true
 sudo ip link del {POC_BRIDGE} 2>/dev/null || true
 
+# Create bridge and tap
 sudo ip link add name {POC_BRIDGE} type bridge
 sudo ip link set {POC_BRIDGE} up
+sudo ip addr add {POC_HOST_BRIDGE_IP} dev {POC_BRIDGE} 2>/dev/null || true
+
+_subnet=$(ip -4 route show exact {POC_SUBNET} | grep -v "dev {POC_BRIDGE}" | head -1)
+if [ -n "$_subnet" ]; then
+  _dev=$(echo "$_subnet" | sed -n 's/.*dev \\([^ ]*\\).*/\\1/p')
+  echo "Route conflict: moving {POC_SUBNET} from $_dev to {POC_BRIDGE}"
+  sudo ip route del {POC_SUBNET} dev "$_dev" 2>/dev/null || true
+fi
+
 sudo ip tuntap add dev {POC_TAP} mode tap user "$USER"
 sudo ip link set {POC_TAP} master {POC_BRIDGE}
 sudo ip link set {POC_TAP} up
 
-sudo ip netns add {POC_NETNS}
-sudo ip link add {POC_VETH_HOST} type veth peer name {POC_VETH_CLIENT}
-sudo ip link set {POC_VETH_HOST} master {POC_BRIDGE}
-sudo ip link set {POC_VETH_HOST} up
-sudo ip link set {POC_VETH_CLIENT} netns {POC_NETNS}
-sudo ip netns exec {POC_NETNS} ip link set lo up
-sudo ip netns exec {POC_NETNS} ip addr add {POC_CLIENT_IP} dev {POC_VETH_CLIENT}
-sudo ip netns exec {POC_NETNS} ip link set {POC_VETH_CLIENT} up
-sudo ip netns exec {POC_NETNS} ip route add default via {POC_GATEWAY}
-
+# Create overlay if needed
 if [ ! -f "$disk" ]; then
   qemu-img create -f qcow2 -F qcow2 -b "$base" "$disk"
 fi
 
+# Start QEMU with serial/monitor Unix sockets
 nohup qemu-system-x86_64 \
   -enable-kvm \
   -m 256 \
   -smp 1 \
   -nographic \
-  -serial file:"$logfile" \
+  -serial unix:"$workdir/run/serial.sock",server,nowait \
+  -monitor unix:"$workdir/run/monitor.sock",server,nowait \
   -drive file="$disk",if=virtio,format=qcow2 \
   -netdev tap,id=lan,ifname={POC_TAP},script=no,downscript=no \
   -device virtio-net-pci,netdev=lan \
@@ -285,10 +427,79 @@ nohup qemu-system-x86_64 \
 printf '%s\n' "$!" > "$pidfile"
 
 printf 'Started POC OpenWrt VM pid=%s\n' "$(cat "$pidfile")"
-printf 'Linux client namespace: {POC_NETNS} ({POC_CLIENT_IP})\n'
-printf 'OpenWrt gateway expected at: {POC_GATEWAY}\n'
 '''
-    return _print_result(run_remote(host, quote_script(script), timeout=120))
+    rc = _print_result(run_remote(host, quote_script(infra_script), timeout=120))
+    if rc != 0:
+        return rc
+
+    # Step 2: provision VM via serial console
+    print("Provisioning OpenWrt VM via serial console...")
+    provision_script = _generate_provision_script(workdir)
+    result = run_python_on_host(host, provision_script, timeout=120)
+    if result.stdout:
+        print(result.stdout)
+    if result.stderr:
+        print(result.stderr, file=sys.stderr)
+    if result.returncode != 0:
+        print("Serial console provisioning failed.", file=sys.stderr)
+        return result.returncode
+
+    # Step 3: verify SSH login
+    print("Verifying SSH access to OpenWrt VM...")
+    ssh_verify = (
+        f"sshpass -p {POC_PASSWORD} ssh "
+        f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o ConnectTimeout=10 -o LogLevel=ERROR "
+        f"root@{POC_GATEWAY} 'echo SSH_OK'"
+    )
+    rc = _print_result(run_remote(host, quote_script(ssh_verify), timeout=30))
+    if rc != 0:
+        print("SSH verification failed.", file=sys.stderr)
+        return rc
+
+    # Step 4: Debian client container
+    print("Starting Debian client container...")
+    container_script = f'''
+set -eu
+
+# Remove old container/veth if they exist
+docker rm -f {POC_CONTAINER} 2>/dev/null || true
+sudo ip link del {POC_VETH_HOST} 2>/dev/null || true
+
+# Start container with Docker's default bridge (has internet for apt),
+# install packages, then disconnect and wire into tg-poc-br manually.
+docker run -d \
+  --name {POC_CONTAINER} \
+  --cap-add NET_ADMIN \
+  debian:bookworm-slim \
+  sleep infinity
+
+docker exec {POC_CONTAINER} bash -c "apt update -qq && apt install -y -qq curl iputils-ping iproute2"
+
+docker network disconnect bridge {POC_CONTAINER}
+
+PID=$(docker inspect -f '{{{{.State.Pid}}}}' {POC_CONTAINER})
+sudo ip link add {POC_VETH_HOST} type veth peer name {POC_VETH_CLIENT}
+sudo ip link set {POC_VETH_CLIENT} netns $PID
+sudo ip link set {POC_VETH_HOST} master {POC_BRIDGE}
+sudo ip link set {POC_VETH_HOST} up
+
+sudo nsenter -t $PID -n ip link set lo up
+sudo nsenter -t $PID -n ip link set {POC_VETH_CLIENT} up
+sudo nsenter -t $PID -n ip addr add {POC_CLIENT_IP} dev {POC_VETH_CLIENT}
+sudo nsenter -t $PID -n ip route add default via {POC_GATEWAY}
+
+printf 'Container {POC_CONTAINER} ready at {POC_CLIENT_IP}\n'
+'''
+    rc = _print_result(run_remote(host, quote_script(container_script), timeout=300))
+    if rc != 0:
+        return rc
+
+    print(f"\nPOC environment ready:")
+    print(f"  OpenWrt VM: {POC_GATEWAY}")
+    print(f"  Client container: {POC_CONTAINER} at {POC_CLIENT_IP}")
+    print(f"  Host bridge IP: {POC_HOST_BRIDGE_IP}")
+    return 0
 
 
 def stop_poc(args: argparse.Namespace) -> int:
@@ -300,6 +511,15 @@ set +e
 workdir={shlex.quote(workdir)}
 workdir=$(eval printf '%s' "$workdir")
 pidfile={pidfile}
+
+# Stop Docker container
+docker rm -f {POC_CONTAINER} 2>/dev/null || true
+
+# Clean up veth pairs (new and old names)
+sudo ip link del {POC_VETH_HOST} 2>/dev/null || true
+sudo ip link del tg-poc-vh 2>/dev/null || true
+
+# Stop QEMU
 if [ -f "$pidfile" ]; then
   pid=$(cat "$pidfile")
   kill "$pid" 2>/dev/null || true
@@ -307,10 +527,12 @@ if [ -f "$pidfile" ]; then
   kill -9 "$pid" 2>/dev/null || true
   rm -f "$pidfile"
 fi
+
+# Clean up remaining network resources
 sudo ip netns del {POC_NETNS} 2>/dev/null || true
-sudo ip link del {POC_VETH_HOST} 2>/dev/null || true
 sudo ip link del {POC_TAP} 2>/dev/null || true
 sudo ip link del {POC_BRIDGE} 2>/dev/null || true
+
 printf 'Stopped POC virtual lab\n'
 '''
     return _print_result(run_remote(host, quote_script(script), timeout=60))
@@ -319,38 +541,46 @@ printf 'Stopped POC virtual lab\n'
 def status_poc(args: argparse.Namespace) -> int:
     host = cast(str, args.host)
     workdir = cast(str, args.workdir)
-    pidfile, logfile, disk = _poc_paths(workdir)
+    pidfile, _serial_sock, disk = _poc_paths(workdir)
     script = f'''
 set +e
 workdir={shlex.quote(workdir)}
 workdir=$(eval printf '%s' "$workdir")
 pidfile={pidfile}
-logfile={logfile}
 disk={disk}
-printf '== process ==\n'
+
+printf '== QEMU process ==\n'
 if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
   printf 'running pid=%s\n' "$(cat "$pidfile")"
 else
   printf 'not running\n'
 fi
-printf '\n== links ==\n'
+
+printf '\n== network ==\n'
 ip link show {POC_BRIDGE} 2>/dev/null || true
 ip link show {POC_TAP} 2>/dev/null || true
-ip netns list | grep -F {POC_NETNS} || true
-printf '\n== client ==\n'
-sudo ip netns exec {POC_NETNS} ip addr show {POC_VETH_CLIENT} 2>/dev/null || true
-sudo ip netns exec {POC_NETNS} ip route 2>/dev/null || true
+ip link show {POC_VETH_HOST} 2>/dev/null || true
+ip addr show {POC_BRIDGE} 2>/dev/null | grep -F 'inet ' || true
+
+printf '\n== container ==\n'
+docker ps -f name={POC_CONTAINER} --format '{{{{.Names}}}} {{{{.Status}}}}' 2>/dev/null || printf 'not running\n'
+
 printf '\n== disk ==\n'
 if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
   ls -lh "$disk" 2>/dev/null || true
-  printf 'qcow2 is in use by the running VM; skipping qemu-img info to avoid lock warnings\n'
+  printf 'qcow2 is in use by the running VM; skipping qemu-img info\n'
 elif [ -f "$disk" ]; then
   qemu-img info "$disk"
 else
   printf 'missing %s\n' "$disk"
 fi
-printf '\n== recent serial log ==\n'
-if [ -f "$logfile" ]; then tail -40 "$logfile"; fi
+
+printf '\n== serial console ==\n'
+if [ -S "$workdir/run/serial.sock" ]; then
+  printf 'serial socket: $workdir/run/serial.sock (ready)\n'
+else
+  printf 'serial socket not found\n'
+fi
 '''
     return _print_result(run_remote(host, quote_script(script), timeout=60))
 
@@ -362,13 +592,13 @@ def smoke_poc(args: argparse.Namespace) -> int:
 set +e
 deadline=$((SECONDS + {timeout}))
 while [ "$SECONDS" -lt "$deadline" ]; do
-  if sudo ip netns exec {POC_NETNS} ping -c 1 -W 1 {POC_GATEWAY} >/dev/null 2>&1; then
-    printf 'PASS: Linux client namespace {POC_NETNS} reached OpenWrt gateway {POC_GATEWAY}\n'
+  if docker exec {POC_CONTAINER} ping -c 1 -W 2 {POC_GATEWAY} >/dev/null 2>&1; then
+    printf 'PASS: Container {POC_CONTAINER} reached OpenWrt gateway {POC_GATEWAY}\n'
     exit 0
   fi
   sleep 2
 done
-printf 'FAIL: Linux client namespace {POC_NETNS} could not reach OpenWrt gateway {POC_GATEWAY}\n' >&2
+printf 'FAIL: Container {POC_CONTAINER} could not reach OpenWrt gateway {POC_GATEWAY}\n' >&2
 exit 1
 '''
     return _print_result(run_remote(host, quote_script(script), timeout=timeout + 10))
@@ -402,12 +632,12 @@ def build_parser() -> argparse.ArgumentParser:
     _ = image_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
     image_parser.set_defaults(func=prepare_image)
 
-    start_parser = subparsers.add_parser("start-poc", help="Start one OpenWrt VM plus Linux client namespace")
+    start_parser = subparsers.add_parser("start-poc", help="Start one OpenWrt VM plus Debian client container")
     _ = start_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = start_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
     start_parser.set_defaults(func=start_poc)
 
-    stop_parser = subparsers.add_parser("stop-poc", help="Stop the POC VM and client namespace")
+    stop_parser = subparsers.add_parser("stop-poc", help="Stop the POC VM and client container")
     _ = stop_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = stop_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
     stop_parser.set_defaults(func=stop_poc)
@@ -417,7 +647,7 @@ def build_parser() -> argparse.ArgumentParser:
     _ = status_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
     status_parser.set_defaults(func=status_poc)
 
-    smoke_parser = subparsers.add_parser("smoke-poc", help="Verify Linux client reaches OpenWrt gateway")
+    smoke_parser = subparsers.add_parser("smoke-poc", help="Verify client container reaches OpenWrt gateway")
     _ = smoke_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = smoke_parser.add_argument("--timeout", type=int, default=120)
     smoke_parser.set_defaults(func=smoke_poc)

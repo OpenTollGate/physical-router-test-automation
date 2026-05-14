@@ -60,6 +60,7 @@ _INVENTORY_ENV_MAP = {
     "wifiInterface": "TOLLGATE_WIFI_INTERFACE",
     "tollgateSsidPrefix": "TOLLGATE_SSID_PREFIX",
     "jumpHost": "TOLLGATE_SSH_JUMP_HOST",
+    "sshPort": "TOLLGATE_SSH_PORT",
 }
 
 
@@ -177,10 +178,13 @@ def router(request):
 
     assert host, "TOLLGATE_SSH_HOST or ROUTER_IP not set in .env"
 
+    ssh_port = os.environ.get("TOLLGATE_SSH_PORT", "")
+
     return Router(host=host, phone_ip=phone_ip,
                   phone_mac=phone_mac, domain=domain,
                   identity_file=identity_file or None,
-                  jump_host=jump_host or None)
+                  jump_host=jump_host or None,
+                  port=int(ssh_port) if ssh_port else None)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -284,6 +288,7 @@ def all_routers():
             domain="",
             identity_file=identity_file,
             jump_host=entry.get("jumpHost") or None,
+            port=int(entry["sshPort"]) if entry.get("sshPort") else None,
         )
     return routers
 
