@@ -341,7 +341,14 @@ printf '\n== client ==\n'
 sudo ip netns exec {POC_NETNS} ip addr show {POC_VETH_CLIENT} 2>/dev/null || true
 sudo ip netns exec {POC_NETNS} ip route 2>/dev/null || true
 printf '\n== disk ==\n'
-if [ -f "$disk" ]; then qemu-img info "$disk"; else printf 'missing %s\n' "$disk"; fi
+if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+  ls -lh "$disk" 2>/dev/null || true
+  printf 'qcow2 is in use by the running VM; skipping qemu-img info to avoid lock warnings\n'
+elif [ -f "$disk" ]; then
+  qemu-img info "$disk"
+else
+  printf 'missing %s\n' "$disk"
+fi
 printf '\n== recent serial log ==\n'
 if [ -f "$logfile" ]; then tail -40 "$logfile"; fi
 '''
