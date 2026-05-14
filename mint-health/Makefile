@@ -95,6 +95,11 @@ router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_
 if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'. Check routers.env$(RESET)" >&2; exit 1; fi
 endef
 
+define RESOLVE_ROUTER_LAN
+router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_LAN_HOST=" routers.env | cut -d= -f2); \
+if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'. Check routers.env$(RESET)" >&2; exit 1; fi
+endef
+
 SSH = @router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" routers.env | cut -d= -f2); \
 if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'. Check routers.env$(RESET)" >&2; exit 1; fi; \
 ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host
