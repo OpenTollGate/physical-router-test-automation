@@ -19,6 +19,7 @@ from lib.cashu import CashuMint
 from lib.clients.adb import ADBDevice
 from lib.clients.wifi import WiFi
 from lib.clients.desktop import MacWiFiClient, MacAdapter, LinuxWiFiClient, LinuxAdapter
+from lib.clients.container import ContainerClient
 from lib.constants import DEFAULT_STEP_SIZE_MS
 
 logging.basicConfig(
@@ -117,8 +118,8 @@ def pytest_addoption(parser):
     parser.addoption("--results", default=None,
                      help="Custom results directory path")
     parser.addoption("--client", default="adb",
-                     choices=["adb", "mac", "linux"],
-                     help="WiFi client mode: adb (Android phone), mac (macOS), or linux (NetworkManager/nmcli)")
+                     choices=["adb", "mac", "linux", "container"],
+                     help="WiFi client mode: adb (Android phone), mac (macOS), linux (NetworkManager/nmcli), or container (Docker via SSH)")
     parser.addoption("--publish", action="store_true",
                      help="Publish mode: only include screenshots from @pytest.mark.publish_screenshot tests in report")
     parser.addoption("--quick-phone", action="store_true",
@@ -171,6 +172,10 @@ def router(request):
         else:
             phone_mac = phone_mac or LinuxWiFiClient().mac_address
         log.info(f"--client={client}: auto-detected WiFi MAC {phone_mac}")
+    elif client == "container":
+        phone_ip = phone_ip or "192.168.1.100"
+        phone_mac = phone_mac or "02:00:00:00:00:01"
+        log.info(f"--client=container: using container IP {phone_ip}, MAC {phone_mac}")
     else:
         phone_ip = phone_ip or ""
         phone_mac = phone_mac or ""
@@ -255,6 +260,9 @@ def adb(request, router):
     if client == "linux":
         linux = LinuxWiFiClient()
         return LinuxAdapter(linux, router_domain=router.domain)
+    if client == "container":
+        container_host = os.environ.get("TOLLGATE_CONTAINER_HOST", "218")
+        return ContainerClient(host=container_host)
     serial = os.environ.get("PHONE_SERIAL", "")
     pin = os.environ.get("PHONE_PIN", "")
     return ADBDevice(serial=serial or None, pin=pin or None)
@@ -378,7 +386,7 @@ def screenshot_raw(adb, results_dir):
 
 def pytest_runtest_setup(item):
     client_mode = item.config.getoption("--client")
-    if client_mode in ("mac", "linux"):
+    if client_mode in ("mac", "linux", "container"):
         if "android_only" in item.keywords:
             pytest.skip("Android-only test (requires physical device)")
         return

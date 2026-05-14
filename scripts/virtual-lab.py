@@ -147,6 +147,12 @@ send_and_wait(s, "uci set firewall.@rule[-1].target='ACCEPT'", wait=2)
 send_and_wait(s, 'uci commit firewall', wait=2)
 send_and_wait(s, 'fw4 restart', wait=5)
 
+print('Configuring internet access via host bridge...')
+send_and_wait(s, "uci set network.lan.gateway='192.168.1.2'", wait=2)
+send_and_wait(s, "uci set network.lan.dns='8.8.8.8'", wait=2)
+send_and_wait(s, 'uci commit network', wait=2)
+send_and_wait(s, '/etc/init.d/network restart', wait=5)
+
 print('PROVISIONED OK')
 s.close()
 """
@@ -406,6 +412,10 @@ fi
 sudo ip tuntap add dev {POC_TAP} mode tap user "$USER"
 sudo ip link set {POC_TAP} master {POC_BRIDGE}
 sudo ip link set {POC_TAP} up
+
+sudo iptables -C FORWARD -i {POC_BRIDGE} -j ACCEPT 2>/dev/null || sudo iptables -I FORWARD 1 -i {POC_BRIDGE} -j ACCEPT
+sudo iptables -C FORWARD -o {POC_BRIDGE} -j ACCEPT 2>/dev/null || sudo iptables -I FORWARD 2 -o {POC_BRIDGE} -j ACCEPT
+sudo iptables -t nat -C POSTROUTING -s {POC_SUBNET} ! -o {POC_BRIDGE} -j MASQUERADE 2>/dev/null || sudo iptables -t nat -A POSTROUTING -s {POC_SUBNET} ! -o {POC_BRIDGE} -j MASQUERADE
 
 # Create overlay if needed
 if [ ! -f "$disk" ]; then

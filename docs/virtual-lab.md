@@ -1,259 +1,166 @@
 # Virtual Lab on Ubuntu host `218`
 
-This document describes the first target architecture for running TollGate tests
-without physical routers. The initial target is the local Ubuntu machine reachable
-as `218`; cloud providers can come later once the local lab is stable.
+Local QEMU-based TollGate test lab for running API tests, Linux client captive
+portal tests, and multihop router-to-router tests without physical hardware.
 
-## Why local Ubuntu first
-
-Host `218` is suitable for the first implementation:
-
-- Ubuntu 24.04 on x86_64
-- AMD Ryzen 7 5700G, 16 logical CPUs
-- 31 GiB RAM
-- `/dev/kvm` is present, so OpenWrt x86 VMs can run with hardware acceleration
-
-The host is currently memory pressured, so initial VM sizing should be modest:
-256-512 MiB RAM per OpenWrt VM and one vCPU per VM.
-
-## Current proof-of-concept topology
-
-The first implemented proof of concept is intentionally small:
+## Current topology
 
 ```text
-Ubuntu host 218
-├── OpenWrt VM: tollgate-poc
-│   ├── x86_64 OpenWrt 24.10.1 image
-│   ├── LAN interface on bridge tg-poc-br
-│   └── expected gateway IP 192.168.1.1
-└── Linux client network namespace: tg-poc-client
-    ├── veth attached to tg-poc-br
-    ├── static IP 192.168.1.50/24
-    └── default route via 192.168.1.1
+Ubuntu host 218 (192.168.13.218, internet via wlp4s0)
+├── tg-poc-br (Linux bridge, 192.168.1.2/24)
+│   ├── tg-poc-tap → OpenWrt VM eth0 (br-lan, 192.168.1.1)
+│   └── tg-poc-dc0 → tg-poc-client container (192.168.1.100)
+├── OpenWrt VM (KVM, x86_64, 256MB RAM)
+│   ├── Serial console: $workdir/run/serial.sock
+│   ├── QEMU monitor: $workdir/run/monitor.sock
+│   ├── SSH: root@192.168.1.1 (password: tollgate)
+│   ├── Internet via host NAT (gateway 192.168.1.2)
+│   └── nodogsplash + curl + socat + jq + luci installed
+└── tg-poc-client (Docker: debian:bookworm-slim)
+    ├── curl, iputils-ping, iproute2
+    ├── veth wired into tg-poc-br
+    └── default gateway: 192.168.1.1 (OpenWrt VM)
 ```
 
-This proves the fundamental building block: a Linux client can sit behind a
-virtual OpenWrt router and reach its LAN gateway without any physical router.
+The client sits behind the OpenWrt VM's LAN so nodogsplash firewall behavior is
+real. The host NATs traffic from the 192.168.1.0/24 subnet to the internet so the
+VM can `opkg install` packages.
 
-## Full target topology
+## Quick start
 
-```text
-Ubuntu host 218
-├── test runner
-│   └── this repository, pytest, Playwright, gh, cashu tooling
-├── OpenWrt VM: seller
-│   ├── x86_64 OpenWrt image
-│   ├── SSH exposed to host on 127.0.0.1:2201
-│   ├── TollGate backend on 2121
-│   ├── LuCI/uhttpd on 80/8080
-│   └── LAN bridge to reseller WAN
-├── OpenWrt VM: reseller
-│   ├── x86_64 OpenWrt image
-│   ├── SSH exposed to host on 127.0.0.1:2202
-│   ├── TollGate backend on 2121
-│   ├── nodogsplash on client-facing LAN
-│   └── WAN bridge to seller LAN
-└── Linux client namespace/container
-    ├── attached to reseller LAN
-    ├── curl/ping for connectivity checks
-    └── Chromium + Playwright for captive portal browser flow
-```
-
-The important point is that the client is not the host's default network. It
-must sit behind the reseller's LAN so nodogsplash/firewall behavior is real.
-
-## What this can validate
-
-The virtual lab should cover:
-
-- API tests that only need SSH + HTTP
-- LuCI Playwright tests
-- router-to-router / multihop behavior
-- reseller session resume behavior
-- the upstream nil-pointer panic documented in the Amperstrand fork
-- captive portal browser flow from a Linux client
-- token typing/paste behavior in the web portal
-
-## What still requires physical hardware
-
-The virtual lab is not Android-equivalent. Physical phone/router testing remains
-necessary for:
-
-- Android captive portal notification behavior
-- ADB UI automation specifics
-- mobile-data fallback behavior
-- real WiFi association/deauth quirks
-- device-specific OpenWrt target/kernel/package issues
-
-## Existing framework integration points
-
-The current framework is already mostly virtual-lab friendly:
-
-- `lib.router.Router` talks to routers via SSH and HTTP.
-- `lib.deploy` deploys packages via SSH/SCP and `opkg`.
-- `tests/conftest.py` supports router inventory through `TOLLGATE_ROUTER_ID` and
-  `TOLLGATE_ROUTER_INVENTORY`.
-- `--client=linux` exists, but it assumes real NetworkManager WiFi via `nmcli`.
-
-For the virtual client, we should add a new client mode later, likely
-`--client=netns` or `--client=container`, that runs `curl`, `ping`, and browser
-automation inside the client namespace/container instead of using `nmcli`.
-
-## Planned files
-
-- `scripts/virtual-lab.py` — bootstrap and diagnostic entry point for host `218`.
-- `config/routers.virtual.example.json` — inventory template for the virtual
-  seller/reseller routers.
-- Future: `lib/clients/netns.py` — client adapter that executes commands inside
-  the virtual client namespace/container.
-
-## POC commands
-
-Run the POC from this Mac against host `218`:
+From this Mac:
 
 ```bash
+# 1. Check host readiness
 python3 scripts/virtual-lab.py doctor --host 218
+
+# 2. Install QEMU/KVM tools on 218 (first time only)
 python3 scripts/virtual-lab.py install-deps --host 218
+
+# 3. Download OpenWrt x86_64 image (first time only)
 python3 scripts/virtual-lab.py prepare-image --host 218
-python3 scripts/virtual-lab.py poc --host 218
-```
 
-Inspect or clean up:
+# 4. Start the full POC environment (VM + provisioning + container)
+python3 scripts/virtual-lab.py start-poc --host 218
 
-```bash
-python3 scripts/virtual-lab.py status-poc --host 218
+# 5. Verify connectivity
 python3 scripts/virtual-lab.py smoke-poc --host 218
+
+# 6. Check status
+python3 scripts/virtual-lab.py status-poc --host 218
+
+# 7. Clean up
 python3 scripts/virtual-lab.py stop-poc --host 218
 ```
 
-Run the pytest POC directly on `218` after checking out this repository there:
+The `start-poc` command does everything:
+1. Creates bridge + tap + assigns host bridge IP
+2. Handles route conflicts (moves 192.168.1.0/24 from physical iface to bridge)
+3. Sets up iptables NAT/FORWARD for VM internet access
+4. Boots the OpenWrt VM with serial console Unix socket
+5. Provisions the VM via serial console (root password, SSH, firewall rules, gateway/DNS)
+6. Verifies SSH login
+7. Starts Debian container, installs packages, wires into bridge
 
-```bash
-./scripts/setup-python.sh
-source ~/.tollgate-test-venv/bin/activate
-python3 scripts/virtual-lab.py poc --host local
-TOLLGATE_VIRTUAL_LAB=1 pytest tests/api/test_virtual_lab_poc.py -m virtual_lab
+## How it works
+
+### Serial console provisioning
+
+The VM boots with `-serial unix:$workdir/run/serial.sock,server,nowait`. A Python
+script connects to this Unix socket, waits for "Please press Enter to activate this
+console", then sends provisioning commands:
+
+- Set root password via `printf '%s\n%s\n' 'pw' 'pw' | passwd root` (BusyBox has no chpasswd)
+- Enable dropbear password auth
+- Add WAN SSH firewall rule
+- Configure gateway (192.168.1.2) and DNS (8.8.8.8) for internet access
+
+This all happens over the serial socket, no pre-baked images or custom firmware needed.
+
+### Debian client container
+
+The container starts on Docker's default bridge (has internet for `apt install`),
+installs curl/ping/iproute2, then disconnects from Docker's network and gets wired
+into `tg-poc-br` via a veth pair. The container's default gateway points to the
+OpenWrt VM, so nodogsplash can intercept its HTTP traffic.
+
+### Route conflict handling
+
+Host 218's `enp5s0` has `192.168.1.0/24` from a previous physical setup. The
+`start-poc` script detects this conflict and moves the route to `tg-poc-br`.
+
+### VM internet access
+
+The host MASQUERADEs traffic from `192.168.1.0/24` going out any interface except
+`tg-poc-br`. FORWARD rules allow traffic between the bridge and the internet-facing
+interface. The VM uses the host bridge IP (192.168.1.2) as its gateway.
+
+## What this validates
+
+- API tests via SSH + HTTP (all 31 `tests/api/` tests)
+- Linux captive portal detection and interaction
+- nodogsplash firewall behavior
+- TollGate session management
+- Token payment flow via curl
+- Router-to-router / multihop scenarios (future)
+
+## What still requires physical hardware
+
+- Android captive portal notification behavior
+- ADB UI automation
+- Mobile-data fallback behavior
+- Real WiFi association/deauth quirks
+- Device-specific OpenWrt target/kernel/package issues
+
+## Framework integration
+
+The virtual lab integrates with the existing pytest framework:
+
+- `Router` class now accepts `port` parameter for non-standard SSH ports
+- `deploy.py` SCP commands support `-P` port flag
+- `conftest.py` reads `sshPort`/`TOLLGATE_SSH_PORT` from inventory
+- Container client mode (`--client=container`) available for virtual lab tests
+- Virtual lab marker: `@pytest.mark.virtual_lab`
+
+## Target topology (full lab)
+
+```text
+Ubuntu host 218
+├── OpenWrt VM: seller
+│   ├── SSH: 127.0.0.1:2201
+│   ├── TollGate backend on 2121
+│   └── LAN bridge to reseller WAN
+├── OpenWrt VM: reseller
+│   ├── SSH: 127.0.0.1:2202
+│   ├── TollGate backend on 2121
+│   ├── nodogsplash on client-facing LAN
+│   └── WAN bridge to seller LAN
+└── Debian client container
+    ├── attached to reseller LAN
+    ├── curl/ping for connectivity checks
+    └── Chromium for captive portal browser flow
 ```
 
-If you are doing a minimal ad-hoc checkout without the Python test dependencies,
-the pytest-timeout options from `pytest.ini` will fail. Install the repo
-requirements first; for a one-off proof only, you can bypass repo addopts:
+## Files
 
-```bash
-TOLLGATE_VIRTUAL_LAB=1 python3 -m pytest -o addopts='' tests/api/test_virtual_lab_poc.py -m virtual_lab -q
-```
+| File | Purpose |
+|---|---|
+| `scripts/virtual-lab.py` | VM orchestration: doctor, install-deps, prepare-image, start-poc, stop-poc, status-poc, smoke-poc, poc |
+| `config/routers.virtual.example.json` | Inventory template for virtual seller/reseller |
+| `tests/api/test_virtual_lab_poc.py` | POC test: container reaches gateway |
+| `tests/api/test_virtual_lab_integration.py` | Integration tests: captive portal, curl, DNS |
+| `lib/clients/container.py` | Container client adapter for pytest |
+| `docs/virtual-lab.md` | This file |
 
-The pytest POC intentionally does not require TollGate yet. It only proves that
-the Linux client namespace can reach the virtual OpenWrt router. Once this is
-stable, the next step is exposing SSH to the OpenWrt VM and installing TollGate.
+## Constants
 
-## Implementation phases
-
-### Phase 1 — host bootstrap and diagnostics
-
-Verify/install host requirements:
-
-- `qemu-system-x86_64`
-- `qemu-img`
-- `iproute2`
-- `dnsmasq` or equivalent DHCP support for virtual networks
-- `curl`
-- `python3`
-- optional: Docker for the Linux client container
-
-### Phase 2 — OpenWrt image management
-
-Download OpenWrt x86_64 combined ext4 image, convert it to qcow2, and create
-per-router overlay disks:
-
-- base image: OpenWrt x86/64, matching the release under test where practical
-- seller overlay: `.tmp/virtual-lab/seller.qcow2`
-- reseller overlay: `.tmp/virtual-lab/reseller.qcow2`
-
-### Phase 3 — virtual networking
-
-Create Linux bridges or tap-backed namespaces:
-
-- `tg-wan` — upstream/internet-facing test network
-- `tg-backhaul` — seller LAN to reseller WAN
-- `tg-client` — reseller LAN to client namespace/container
-
-Prefer host-only bridges/taps so we can model traffic precisely and avoid
-accidentally changing the host's real uplink.
-
-### Phase 4 — VM boot and provisioning
-
-Boot each OpenWrt VM with QEMU/KVM, expose SSH to localhost ports, and configure:
-
-- root password or SSH key
-- LAN/WAN interfaces
-- `opkg update`
-- test dependencies (`curl`, `socat`, `nodogsplash`, `jq`, `luci`, `px5g-mbedtls`)
-- TollGate package/binary
-
-### Phase 5 — client namespace/container
-
-Create a Debian/Ubuntu client attached to reseller LAN with:
-
-- `curl`, `iputils-ping`, `iproute2`
-- Chromium + Playwright
-- a stable MAC/IP surfaced to the pytest fixtures
-
-This gives us browser-level captive portal coverage without pretending to be an
-Android phone.
-
-### Phase 6 — pytest integration
-
-Generate an inventory similar to:
-
-```json
-{
-  "default": "virtual-reseller",
-  "routers": {
-    "virtual-seller": {
-      "model": "openwrt-x86_64-qemu",
-      "luciUrl": "http://127.0.0.1:8081",
-      "sshHost": "127.0.0.1",
-      "sshUser": "root",
-      "sshPort": 2201,
-      "arch": "x86_64",
-      "tollgateSsidPrefix": "TollGate-",
-      "openwrtVersion": "24.10.1",
-      "openwrtTarget": "x86/64",
-      "openwrtProfile": "generic"
-    },
-    "virtual-reseller": {
-      "model": "openwrt-x86_64-qemu",
-      "luciUrl": "http://127.0.0.1:8082",
-      "sshHost": "127.0.0.1",
-      "sshUser": "root",
-      "sshPort": 2202,
-      "arch": "x86_64",
-      "tollgateSsidPrefix": "TollGate-",
-      "openwrtVersion": "24.10.1",
-      "openwrtTarget": "x86/64",
-      "openwrtProfile": "generic"
-    }
-  }
-}
-```
-
-`Router` does not currently accept a port. That needs a small follow-up change
-before this inventory can be used directly.
-
-## Immediate next step
-
-Run diagnostics on `218`:
-
-```bash
-python3 scripts/virtual-lab.py doctor --host 218
-```
-
-If QEMU tools are missing, install the printed package list on `218`, then rerun
-the doctor command.
-
-Prepare OpenWrt x86 images and seller/reseller qcow2 overlays:
-
-```bash
-python3 scripts/virtual-lab.py prepare-image --host 218
-```
+| Constant | Value |
+|---|---|
+| Bridge | `tg-poc-br` |
+| TAP | `tg-poc-tap` |
+| Container | `tg-poc-client` |
+| Gateway (VM) | `192.168.1.1` |
+| Host bridge IP | `192.168.1.2/24` |
+| Container IP | `192.168.1.100/24` |
+| VM password | `tollgate` |
+| Subnet | `192.168.1.0/24` |
