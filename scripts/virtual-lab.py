@@ -499,7 +499,16 @@ sudo nsenter -t $PID -n ip link set {POC_VETH_CLIENT} up
 sudo nsenter -t $PID -n ip addr add {POC_CLIENT_IP} dev {POC_VETH_CLIENT}
 sudo nsenter -t $PID -n ip route add default via {POC_GATEWAY}
 
-printf 'Container {POC_CONTAINER} ready at {POC_CLIENT_IP}\n'
+# Register the container's MAC in the VM's DHCP leases so TollGate can
+# resolve MAC addresses from client IPs (it reads /tmp/dhcp.leases).
+# The container uses a static IP, so it never gets a real DHCP lease.
+CLIENT_MAC=$(sudo ip -br link show {POC_VETH_HOST} | awk '{{print $3}}')
+LEASE_LINE="$(date +%s) $CLIENT_MAC {POC_CLIENT_IP%%/*} * 01:$(echo $CLIENT_MAC | tr -d :)"
+
+sshpass -p {POC_PASSWORD} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR root@{POC_GATEWAY} \
+  "grep -q '{CLIENT_MAC}' /tmp/dhcp.leases 2>/dev/null || echo '$LEASE_LINE' >> /tmp/dhcp.leases"
+
+printf 'Container {POC_CONTAINER} ready at {POC_CLIENT_IP} (MAC $CLIENT_MAC)\n'
 '''
     rc = _print_result(run_remote(host, quote_script(container_script), timeout=300))
     if rc != 0:

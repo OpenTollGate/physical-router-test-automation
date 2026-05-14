@@ -114,6 +114,32 @@ class Router:
             input=data, capture_output=True, text=True, timeout=timeout,
         )
 
+    def scp_to(self, local_path: str, remote_path: str, timeout: int = 120):
+        ssh_opts = [
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR",
+        ]
+        pw = os.environ.get("TOLLGATE_SSH_PASSWORD") or os.environ.get("TOLLGATE_LUCI_PASSWORD")
+        if self.identity_file:
+            cmd = ["scp", "-O", "-i", self.identity_file] + ssh_opts
+        elif pw:
+            cmd = ["sshpass", "-e", "scp", "-O"] + ssh_opts
+        else:
+            cmd = ["scp", "-O"] + ssh_opts
+        if self.jump_host:
+            cmd += ["-J", self.jump_host]
+        if self.port:
+            cmd += ["-P", str(self.port)]
+        cmd += [str(local_path), f"root@{self.host}:{remote_path}"]
+        env = os.environ.copy()
+        if pw:
+            env["SSHPASS"] = pw
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+        if r.returncode != 0:
+            raise RuntimeError(f"SCP failed ({r.returncode}): {r.stderr.strip()[:300]}")
+
+
     def fix_nodogsplash_dhcp(self):
         """Ensure nodogsplash allows DHCP through its ndsRTR chain.
 
@@ -175,17 +201,30 @@ class Router:
             log.warning(f"Could not disable IPv6 on LAN: {e}")
 
     def api_status(self, path: str) -> int:
+        url = f"http://[::1]:{BACKEND_PORT}{path}"
+        if self.jump_host:
+            try:
+                out = self.ssh(f"curl -s -o /dev/null -w '%{{http_code}}' '{url}'", timeout=15)
+                return int(out.strip()) if out.strip().isdigit() else 0
+            except Exception:
+                return 0
         r = subprocess.run(
             ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-             f"http://{self.host}:2121{path}"],
+             f"http://{self.host}:{BACKEND_PORT}{path}"],
             capture_output=True, text=True, timeout=15,
         )
         code = r.stdout.strip()
         return int(code) if code.isdigit() else 0
 
     def api_body(self, path: str) -> str:
+        url = f"http://[::1]:{BACKEND_PORT}{path}"
+        if self.jump_host:
+            try:
+                return self.ssh(f"curl -s '{url}'", timeout=15)
+            except Exception:
+                return ""
         r = subprocess.run(
-            ["curl", "-s", f"http://{self.host}:2121{path}"],
+            ["curl", "-s", f"http://{self.host}:{BACKEND_PORT}{path}"],
             capture_output=True, text=True, timeout=15,
         )
         return r.stdout.strip()
@@ -344,13 +383,7 @@ class Router:
         tmp = "/tmp/config-testmint.json"
         with open(tmp, "w") as f:
             json.dump(cfg, f, indent=2)
-        scp_cmd = ["scp", "-O", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR"]
-        if self.port:
-            scp_cmd += ["-P", str(self.port)]
-        if self.identity_file:
-            scp_cmd += ["-i", self.identity_file]
-        scp_cmd += [tmp, f"root@{self.host}:/etc/tollgate/config.json"]
-        subprocess.run(scp_cmd, check=True, capture_output=True)
+        self.scp_to(tmp, "/etc/tollgate/config.json")
         os.remove(tmp)
         self.ssh("/etc/init.d/tollgate-wrt restart")
         log.info(f"Added {TEST_MINT_URL} to accepted mints, restarted backend")
@@ -384,20 +417,12 @@ class Router:
         
         cfg["accepted_mints"] = new_mints
         
-        # Write to temp file and upload via SCP
         tmp = "/tmp/config-replace-mints.json"
         with open(tmp, "w") as f:
             json.dump(cfg, f, indent=2)
-        scp_cmd = ["scp", "-O", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR"]
-        if self.port:
-            scp_cmd += ["-P", str(self.port)]
-        if self.identity_file:
-            scp_cmd += ["-i", self.identity_file]
-        scp_cmd += [tmp, f"root@{self.host}:/etc/tollgate/config.json"]
-        subprocess.run(scp_cmd, check=True, capture_output=True)
+        self.scp_to(tmp, "/etc/tollgate/config.json")
         os.remove(tmp)
         
-        # Restart backend
         self.ssh("/etc/init.d/tollgate-wrt restart")
         
         mint_str = ", ".join(mint_urls)
