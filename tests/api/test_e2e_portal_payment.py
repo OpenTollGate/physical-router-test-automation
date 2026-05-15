@@ -44,7 +44,7 @@ def test_e2e_portal_payment(adb, cashu, router, results_dir, request):
 
     adb.start_portal_recording()
 
-    recording_result = [None]
+    recording_result: list[dict[str, Any] | None] = [None]
 
     def run_recording():
         recording_result[0] = adb.finish_portal_recording(output_dir, timeout=120)

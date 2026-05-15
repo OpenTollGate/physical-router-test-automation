@@ -9,6 +9,7 @@ orchestration can be built on a verified host instead of assumptions.
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import subprocess
 import sys
@@ -277,10 +278,17 @@ def run_local(command: list[str], timeout: int = 30) -> CommandResult:
 
 def run_remote(host: str, script: str, timeout: int = 60) -> CommandResult:
     if host in {"", "local", "localhost", "127.0.0.1"}:
-        return run_local(
-            ["bash", "-lc", script.removeprefix("bash -lc ").strip("'")],
+        raw = script
+        if raw.startswith("bash -lc "):
+            raw = shlex.split(raw)[2]
+        proc = subprocess.run(
+            ["bash", "-c", raw],
+            capture_output=True,
+            text=True,
             timeout=timeout,
+            check=False,
         )
+        return CommandResult(proc.returncode, proc.stdout.strip(), proc.stderr.strip())
     return run_local(["ssh", host, script], timeout=timeout)
 
 
@@ -674,6 +682,25 @@ printf 'Started Debian client VM pid=%s\n' "$(cat "$client_pidfile)"
         print("SSH verification to Debian VM failed.", file=sys.stderr)
         return rc
 
+    # Step 7: add static DHCP lease for the VM so the TollGate backend
+    # can resolve the client MAC via /tmp/dhcp.leases (its only lookup method).
+    # The VM uses a static IP so no real DHCP lease exists otherwise.
+    print("Adding static DHCP lease for client VM...")
+    dhcp_lease_script = (
+        f"sshpass -p {POC_PASSWORD} ssh "
+        f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "
+        f"root@{POC_GATEWAY} "
+        f'"uci get dhcp.@host[0].mac 2>/dev/null | grep -q {DEBIAN_MAC} && exit 0; '
+        f"uci add dhcp host; "
+        f"uci set dhcp.@host[-1].mac={DEBIAN_MAC}; "
+        f"uci set dhcp.@host[-1].ip={DEBIAN_CLIENT_IP}; "
+        f"uci set dhcp.@host[-1].name=debian-vm; "
+        f'uci commit dhcp; /etc/init.d/dnsmasq restart; echo DHCP_lease_added"'
+    )
+    rc = _print_result(run_remote(host, quote_script(dhcp_lease_script), timeout=30))
+    if rc != 0:
+        print("Warning: DHCP lease setup failed (non-fatal).", file=sys.stderr)
+
     print(f"\nPOC environment ready:")
     print(f"  OpenWrt VM: {POC_GATEWAY}")
     print(f"  Debian client VM: {DEBIAN_CLIENT_IP} (static, via {DEBIAN_TAP})")
@@ -714,24 +741,22 @@ workdir=$(eval printf '%s' "$workdir")
 pidfile={pidfile}
 client_pidfile={client_pidfile}
 
-if [ -f "$client_pidfile" ]; then
-  cpid=$(cat "$client_pidfile")
-  kill "$cpid" 2>/dev/null || true
-  sleep 1
-  kill -9 "$cpid" 2>/dev/null || true
-  rm -f "$client_pidfile"
-fi
+# Kill via pidfiles
+for pf in "$client_pidfile" "$pidfile"; do
+  if [ -f "$pf" ]; then
+    p=$(cat "$pf")
+    kill "$p" 2>/dev/null || true
+    sleep 1
+    kill -9 "$p" 2>/dev/null || true
+    rm -f "$pf"
+  fi
+done
+
+# Fallback: kill any stray QEMU processes from our workdir
+pkill -f "drive file=.*{shlex.quote(workdir)}" 2>/dev/null || true
+sleep 1
 
 sudo ip link del {DEBIAN_TAP} 2>/dev/null || true
-
-if [ -f "$pidfile" ]; then
-  pid=$(cat "$pidfile")
-  kill "$pid" 2>/dev/null || true
-  sleep 1
-  kill -9 "$pid" 2>/dev/null || true
-  rm -f "$pidfile"
-fi
-
 sudo ip link del {POC_TAP} 2>/dev/null || true
 sudo ip link del {POC_BRIDGE} 2>/dev/null || true
 
@@ -895,6 +920,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    if hasattr(args, "workdir") and args.workdir:
+        args.workdir = os.path.expanduser(args.workdir)
     func = cast(Callable[[argparse.Namespace], int], args.func)
     return func(args)
 

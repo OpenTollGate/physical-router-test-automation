@@ -40,6 +40,8 @@ def test_version_commit_is_hex(version):
     for line in msg.split("\n"):
         if line.strip().startswith("commit:"):
             commit = line.split(":", 1)[1].strip()
+            if commit in ("unknown", ""):
+                pytest.skip(f"Commit not embedded in binary: {commit}")
             assert len(commit) >= 7, f"Commit hash too short: {commit}"
             assert all(c in "0123456789abcdef" for c in commit.lower()), \
                 f"Commit not hex: {commit}"

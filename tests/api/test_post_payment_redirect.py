@@ -117,21 +117,30 @@ def test_nds_webroot_links_to_captive_portal(router):
         f"NDS webroot should symlink to captive portal site, got: {target}"
 
 
-def _client_ssh(*args, timeout=10):
-    """Run a command on the client VM via SSH jump host."""
+def _client_exec(*args, timeout=10):
+    """Run a command on the LAN client (netns in virtual-lab, SSH otherwise)."""
     jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", "")
     password = os.environ.get("TOLLGATE_SSH_PASSWORD",
                               os.environ.get("TOLLGATE_LUCI_PASSWORD", "tollgate"))
     client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "192.168.1.100")
+    virtual_lab = os.environ.get("TOLLGATE_VIRTUAL_LAB", "")
 
-    ssh_cmd = ["sshpass", "-p", password, "ssh",
-               "-o", "StrictHostKeyChecking=no",
-               "-o", "UserKnownHostsFile=/dev/null",
-               "-o", "LogLevel=ERROR"]
-    if jump_host:
-        ssh_cmd += ["-J", jump_host]
-    ssh_cmd.append(f"root@{client_ip}")
-    ssh_cmd.extend(args)
+    if virtual_lab and jump_host:
+        ns_cmd = ["sudo", "ip", "netns", "exec", "tg-poc-client"] + list(args)
+        ssh_cmd = ["sshpass", "-p", password, "ssh",
+                   "-o", "StrictHostKeyChecking=no",
+                   "-o", "UserKnownHostsFile=/dev/null",
+                   "-o", "LogLevel=ERROR",
+                   jump_host] + ns_cmd
+    else:
+        ssh_cmd = ["sshpass", "-p", password, "ssh",
+                   "-o", "StrictHostKeyChecking=no",
+                   "-o", "UserKnownHostsFile=/dev/null",
+                   "-o", "LogLevel=ERROR"]
+        if jump_host:
+            ssh_cmd += ["-J", jump_host]
+        ssh_cmd.append(f"root@{client_ip}")
+        ssh_cmd.extend(args)
 
     return subprocess.run(
         ssh_cmd,
@@ -147,7 +156,7 @@ def test_welcome_html_served_by_nds(router):
 
     # NDS returns 500 for localhost requests; test from a LAN client instead.
     if os.environ.get("TOLLGATE_SSH_JUMP_HOST"):
-        result = _client_ssh("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", url)
+        result = _client_exec("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", url)
         code = result.stdout.strip()
     else:
         code = router.ssh(f"curl -s -o /dev/null -w '%{{http_code}}' {url} 2>/dev/null").strip()
