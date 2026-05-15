@@ -261,8 +261,19 @@ def adb(request, router):
         linux = LinuxWiFiClient()
         return LinuxAdapter(linux, router_domain=router.domain)
     if client == "container":
-        container_host = os.environ.get("TOLLGATE_CONTAINER_HOST", "218")
-        return ContainerClient(host=container_host)
+        container_host = os.environ.get("TOLLGATE_CONTAINER_HOST", "")
+        client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "192.168.1.100")
+        client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
+        jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", container_host or "")
+        password = os.environ.get("TOLLGATE_SSH_PASSWORD",
+                                  os.environ.get("TOLLGATE_LUCI_PASSWORD", "tollgate"))
+        return ContainerClient(
+            host=container_host or None,
+            jump_host=jump_host or None,
+            client_ip=client_ip,
+            client_mac=client_mac or None,
+            password=password,
+        )
     serial = os.environ.get("PHONE_SERIAL", "")
     pin = os.environ.get("PHONE_PIN", "")
     return ADBDevice(serial=serial or None, pin=pin or None)

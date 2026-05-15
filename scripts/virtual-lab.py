@@ -25,7 +25,6 @@ REQUIRED_COMMANDS = [
 ]
 
 OPTIONAL_COMMANDS = [
-    "docker",
     "podman",
     "dnsmasq",
     "brctl",
@@ -46,13 +45,15 @@ DEFAULT_OPENWRT_VERSION = "24.10.1"
 DEFAULT_WORKDIR = "~/tollgate-virtual-lab"
 POC_BRIDGE = "tg-poc-br"
 POC_TAP = "tg-poc-tap"
-POC_NETNS = "tg-poc-client"  # kept for compatibility
-POC_CONTAINER = "tg-poc-client"
-POC_VETH_HOST = "tg-poc-dc0"
-POC_VETH_CLIENT = "tg-poc-dc1"
+DEBIAN_TAP = "tg-poc-tap2"
+DEBIAN_RAM = 1024
+DEBIAN_IMAGE = "debian-12-nocloud-amd64.qcow2"
+DEBIAN_IMAGE_URL = f"https://cloud.debian.org/images/cloud/bookworm/latest/{DEBIAN_IMAGE}"
+DEBIAN_MAC = "de:54:4e:91:49:da"
+POC_OPENWRT_MAC = "52:54:00:12:34:56"
+DEBIAN_CLIENT_IP = "192.168.1.100"
 POC_GATEWAY = "192.168.1.1"
 POC_HOST_BRIDGE_IP = "192.168.1.2/24"
-POC_CLIENT_IP = "192.168.1.100/24"
 POC_PASSWORD = "tollgate"
 POC_SUBNET = "192.168.1.0/24"
 
@@ -157,6 +158,104 @@ print('PROVISIONED OK')
 s.close()
 """
 
+# Template for serial-console provisioning of the Debian nocloud VM.
+# Placeholders ``__WORKDIR__`` and ``__PASSWORD__`` are substituted at runtime
+# by ``_generate_debian_provision_script()``.
+_DEBIAN_PROVISION_TEMPLATE = r"""
+import socket, time, sys, os
+
+SOCK_PATH = os.path.expanduser('__WORKDIR__') + '/run/serial-client.sock'
+PASSWORD = '__PASSWORD__'
+BOOT_TIMEOUT = 120
+
+def recv_all(s, timeout=5):
+    s.settimeout(timeout)
+    chunks = []
+    try:
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except socket.timeout:
+        pass
+    return b''.join(chunks).decode('utf-8', errors='replace')
+
+def send_and_wait(s, cmd, wait=3):
+    s.sendall((cmd + '\n').encode())
+    time.sleep(wait)
+    return recv_all(s, timeout=2)
+
+# Connect to serial console (retry until socket appears)
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+deadline = time.time() + 30
+connected = False
+while time.time() < deadline:
+    try:
+        s.connect(SOCK_PATH)
+        connected = True
+        break
+    except (ConnectionRefusedError, FileNotFoundError):
+        time.sleep(2)
+if not connected:
+    print('TIMEOUT: could not connect to serial socket at ' + SOCK_PATH)
+    sys.exit(1)
+
+print('Connected to Debian serial console, waiting for VM to boot...')
+
+# Wait for the login prompt (nocloud image boots to login:)
+deadline = time.time() + BOOT_TIMEOUT
+booted = False
+while time.time() < deadline:
+    data = recv_all(s, timeout=3)
+    if data.strip():
+        sys.stdout.write(data)
+        sys.stdout.flush()
+    if 'login:' in data:
+        booted = True
+        break
+    time.sleep(2)
+if not booted:
+    print('TIMEOUT: Debian VM did not reach login prompt within ' + str(BOOT_TIMEOUT) + 's')
+    s.close()
+    sys.exit(1)
+
+print('\nLogin prompt detected, logging in as root...')
+
+# Login as root (nocloud has no password)
+send_and_wait(s, 'root', wait=3)
+recv_all(s, timeout=1)
+
+# --- Set root password ---
+print('Setting root password...')
+resp = send_and_wait(s, "echo root:" + PASSWORD + " | chpasswd", wait=5)
+print(resp.strip())
+
+# --- Configure networking (static IP) ---
+print('Configuring networking...')
+send_and_wait(s, 'ip link set ens3 up', wait=2)
+send_and_wait(s, 'ip addr add 192.168.1.100/24 dev ens3', wait=2)
+send_and_wait(s, 'ip route add default via 192.168.1.1', wait=2)
+send_and_wait(s, 'echo "nameserver 192.168.1.1" > /etc/resolv.conf', wait=2)
+
+# --- Resize disk ---
+print('Resizing disk partition...')
+send_and_wait(s, 'apt-get update -qq', wait=30)
+send_and_wait(s, 'apt-get install -y -qq cloud-guest-utils', wait=30)
+send_and_wait(s, 'growpart /dev/vda 1', wait=10)
+send_and_wait(s, 'resize2fs /dev/vda1', wait=10)
+
+# --- Enable SSH with password auth ---
+print('Installing and enabling SSH...')
+send_and_wait(s, "sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config", wait=2)
+send_and_wait(s, "sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config", wait=2)
+send_and_wait(s, 'apt-get install -y -qq openssh-server', wait=30)
+send_and_wait(s, 'systemctl enable --now ssh', wait=5)
+
+print('DEBIAN PROVISIONED OK')
+s.close()
+"""
+
 
 @dataclass(frozen=True)
 class CommandResult:
@@ -235,7 +334,7 @@ if [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then printf 'current u
 if [ -r /sys/module/kvm_amd/parameters/nested ]; then printf 'kvm_amd nested=%s\n' "$(cat /sys/module/kvm_amd/parameters/nested)"; fi
 if [ -r /sys/module/kvm_intel/parameters/nested ]; then printf 'kvm_intel nested=%s\n' "$(cat /sys/module/kvm_intel/parameters/nested)"; fi
 printf '\n== commands ==\n'
-for c in qemu-system-x86_64 qemu-img ip python3 curl docker podman dnsmasq brctl; do
+for c in qemu-system-x86_64 qemu-img ip python3 curl podman dnsmasq brctl sshpass; do
   printf '%s: ' "$c"
   command -v "$c" || true
 done
@@ -347,6 +446,33 @@ def _print_result(result: CommandResult) -> int:
     return result.returncode
 
 
+def prepare_debian(args: argparse.Namespace) -> int:
+    host = cast(str, args.host)
+    workdir = cast(str, args.workdir)
+    _, disk = _client_paths(workdir)
+    script = f'''
+set -eu
+workdir={shlex.quote(workdir)}
+workdir=$(eval printf '%s' "$workdir")
+mkdir -p "$workdir/images" "$workdir/overlays"
+cd "$workdir/images"
+
+if [ ! -f {shlex.quote(DEBIAN_IMAGE)} ]; then
+  curl -fL -o {shlex.quote(DEBIAN_IMAGE)} {shlex.quote(DEBIAN_IMAGE_URL)}
+fi
+
+overlay={disk}
+if [ ! -f "$overlay" ]; then
+  qemu-img create -f qcow2 -F qcow2 -b "$workdir/images/{DEBIAN_IMAGE}" "$overlay"
+fi
+qemu-img resize "$overlay" 10G
+
+printf 'Prepared Debian nocloud client image\n'
+qemu-img info "$overlay"
+'''
+    return _print_result(run_remote(host, quote_script(script), timeout=600))
+
+
 def _poc_paths(workdir: str) -> tuple[str, str, str]:
     """Return (pidfile, serial_sock, disk) as shell-expanded path expressions."""
     expanded = "$(eval printf '%s' " + shlex.quote(workdir) + ")"
@@ -356,12 +482,28 @@ def _poc_paths(workdir: str) -> tuple[str, str, str]:
     return pidfile, serial_sock, disk
 
 
+def _client_paths(workdir: str) -> tuple[str, str]:
+    """Return (pidfile, disk) for the Debian client VM."""
+    expanded = "$(eval printf '%s' " + shlex.quote(workdir) + ")"
+    pidfile = f"{expanded}/run/debian-client.pid"
+    disk = f"{expanded}/overlays/debian-client.qcow2"
+    return pidfile, disk
+
+
 def _generate_provision_script(workdir: str) -> str:
     """Return a self-contained Python script that provisions the OpenWrt VM
     over the QEMU serial-console Unix socket."""
     pwd = POC_PASSWORD.replace("'", "'\\''")
     wdir = workdir.replace("'", "'\\''")
     return _PROVISION_TEMPLATE.replace("__WORKDIR__", wdir).replace("__PASSWORD__", pwd)
+
+
+def _generate_debian_provision_script(workdir: str) -> str:
+    """Return a self-contained Python script that provisions the Debian nocloud
+    VM over the QEMU serial-console Unix socket."""
+    pwd = POC_PASSWORD.replace("'", "'\\''")
+    wdir = workdir.replace("'", "'\\''")
+    return _DEBIAN_PROVISION_TEMPLATE.replace("__WORKDIR__", wdir).replace("__PASSWORD__", pwd)
 
 
 def start_poc(args: argparse.Namespace) -> int:
@@ -390,10 +532,7 @@ if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
 fi
 
 # Clean up old resources
-docker rm -f {POC_CONTAINER} 2>/dev/null || true
-sudo ip link del {POC_VETH_HOST} 2>/dev/null || true
-sudo ip link del tg-poc-vh 2>/dev/null || true
-sudo ip netns del {POC_NETNS} 2>/dev/null || true
+sudo ip link del {DEBIAN_TAP} 2>/dev/null || true
 sudo ip link del {POC_TAP} 2>/dev/null || true
 sudo ip link del {POC_BRIDGE} 2>/dev/null || true
 
@@ -432,7 +571,7 @@ nohup qemu-system-x86_64 \
   -monitor unix:"$workdir/run/monitor.sock",server,nowait \
   -drive file="$disk",if=virtio,format=qcow2 \
   -netdev tap,id=lan,ifname={POC_TAP},script=no,downscript=no \
-  -device virtio-net-pci,netdev=lan \
+  -device virtio-net-pci,netdev=lan,mac={POC_OPENWRT_MAC} \
   >"$workdir/run/qemu.stdout" 2>"$workdir/run/qemu.stderr" &
 printf '%s\n' "$!" > "$pidfile"
 
@@ -467,78 +606,124 @@ printf 'Started POC OpenWrt VM pid=%s\n' "$(cat "$pidfile")"
         print("SSH verification failed.", file=sys.stderr)
         return rc
 
-    # Step 4: Debian client container
-    print("Starting Debian client container...")
-    container_script = f'''
+    # Step 4: Debian client VM
+    print("Starting Debian client VM...")
+    client_pidfile, client_disk = _client_paths(workdir)
+    client_script = f'''
 set -eu
+workdir={shlex.quote(workdir)}
+workdir=$(eval printf '%s' "$workdir")
+client_pidfile={client_pidfile}
+client_disk={client_disk}
 
-# Remove old container/veth if they exist
-docker rm -f {POC_CONTAINER} 2>/dev/null || true
-sudo ip link del {POC_VETH_HOST} 2>/dev/null || true
+if [ -f "$client_pidfile" ] && kill -0 "$(cat "$client_pidfile")" 2>/dev/null; then
+  printf 'Debian client VM already running with pid %s\n' "$(cat "$client_pidfile")"
+  exit 0
+fi
 
-# Start container with Docker's default bridge (has internet for apt),
-# install packages, then disconnect and wire into tg-poc-br manually.
-docker run -d \
-  --name {POC_CONTAINER} \
-  --cap-add NET_ADMIN \
-  debian:bookworm-slim \
-  sleep infinity
+if [ ! -f "$client_disk" ]; then
+  printf 'Debian client image missing. Run prepare-debian first.\n' >&2
+  exit 1
+fi
 
-docker exec {POC_CONTAINER} bash -c "apt update -qq && apt install -y -qq curl iputils-ping iproute2"
+sudo ip tuntap add dev {DEBIAN_TAP} mode tap user "$USER"
+sudo ip link set {DEBIAN_TAP} master {POC_BRIDGE}
+sudo ip link set {DEBIAN_TAP} up
 
-docker network disconnect bridge {POC_CONTAINER}
+nohup qemu-system-x86_64 \
+  -enable-kvm \
+  -m {DEBIAN_RAM} \
+  -smp 2 \
+  -nographic \
+  -drive file="$client_disk",if=virtio \
+  -netdev tap,id=client,ifname={DEBIAN_TAP},script=no,downscript=no \
+  -device virtio-net-pci,netdev=client,mac={DEBIAN_MAC} \
+  -serial unix:"$workdir/run/serial-client.sock",server,nowait \
+  -monitor unix:"$workdir/run/monitor-client.sock",server,nowait \
+  >"$workdir/run/qemu-client.stdout" 2>"$workdir/run/qemu-client.stderr" &
+printf '%s\n' "$!" > "$client_pidfile"
 
-PID=$(docker inspect -f '{{{{.State.Pid}}}}' {POC_CONTAINER})
-sudo ip link add {POC_VETH_HOST} type veth peer name {POC_VETH_CLIENT}
-sudo ip link set {POC_VETH_CLIENT} netns $PID
-sudo ip link set {POC_VETH_HOST} master {POC_BRIDGE}
-sudo ip link set {POC_VETH_HOST} up
-
-sudo nsenter -t $PID -n ip link set lo up
-sudo nsenter -t $PID -n ip link set {POC_VETH_CLIENT} up
-sudo nsenter -t $PID -n ip addr add {POC_CLIENT_IP} dev {POC_VETH_CLIENT}
-sudo nsenter -t $PID -n ip route add default via {POC_GATEWAY}
-
-# Register the container's MAC in the VM's DHCP leases so TollGate can
-# resolve MAC addresses from client IPs (it reads /tmp/dhcp.leases).
-# The container uses a static IP, so it never gets a real DHCP lease.
-CLIENT_MAC=$(sudo ip -br link show {POC_VETH_HOST} | awk '{{print $3}}')
-LEASE_LINE="$(date +%s) $CLIENT_MAC {POC_CLIENT_IP%%/*} * 01:$(echo $CLIENT_MAC | tr -d :)"
-
-sshpass -p {POC_PASSWORD} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR root@{POC_GATEWAY} \
-  "grep -q '{CLIENT_MAC}' /tmp/dhcp.leases 2>/dev/null || echo '$LEASE_LINE' >> /tmp/dhcp.leases"
-
-printf 'Container {POC_CONTAINER} ready at {POC_CLIENT_IP} (MAC $CLIENT_MAC)\n'
+printf 'Started Debian client VM pid=%s\n' "$(cat "$client_pidfile)"
 '''
-    rc = _print_result(run_remote(host, quote_script(container_script), timeout=300))
+    rc = _print_result(run_remote(host, quote_script(client_script), timeout=120))
     if rc != 0:
+        return rc
+
+    # Step 5: provision Debian VM via serial console
+    print("Provisioning Debian VM via serial console...")
+    debian_provision_script = _generate_debian_provision_script(workdir)
+    result = run_python_on_host(host, debian_provision_script, timeout=300)
+    if result.stdout:
+        print(result.stdout)
+    if result.stderr:
+        print(result.stderr, file=sys.stderr)
+    if result.returncode != 0:
+        print("Debian serial console provisioning failed.", file=sys.stderr)
+        return result.returncode
+
+    # Step 6: verify SSH to Debian VM
+    print("Verifying SSH access to Debian VM...")
+    ssh_verify_debian = (
+        f"sshpass -p {POC_PASSWORD} ssh "
+        f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o ConnectTimeout=10 -o LogLevel=ERROR "
+        f"root@{DEBIAN_CLIENT_IP} 'echo SSH_OK'"
+    )
+    rc = _print_result(run_remote(host, quote_script(ssh_verify_debian), timeout=30))
+    if rc != 0:
+        print("SSH verification to Debian VM failed.", file=sys.stderr)
         return rc
 
     print(f"\nPOC environment ready:")
     print(f"  OpenWrt VM: {POC_GATEWAY}")
-    print(f"  Client container: {POC_CONTAINER} at {POC_CLIENT_IP}")
+    print(f"  Debian client VM: {DEBIAN_CLIENT_IP} (static, via {DEBIAN_TAP})")
     print(f"  Host bridge IP: {POC_HOST_BRIDGE_IP}")
     return 0
+
+
+def provision_debian(args: argparse.Namespace) -> int:
+    host = cast(str, args.host)
+    client_ip = DEBIAN_CLIENT_IP
+
+    print(f"Provisioning Debian client at {client_ip}...")
+    ssh_opts = (
+        "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        "-o LogLevel=ERROR"
+    )
+    install_script = f'''
+set +e
+sshpass -p {POC_PASSWORD} ssh {ssh_opts} root@{client_ip} '
+  apt update -qq && apt install -y -qq curl iputils-ping iproute2 chromium python3-pip
+  pip3 install playwright && playwright install chromium --with-deps
+  chromium --version
+  python3 -c "from playwright.sync_api import sync_playwright; print(\\"ok\\")"
+'
+'''
+    return _print_result(run_remote(host, quote_script(install_script), timeout=600))
 
 
 def stop_poc(args: argparse.Namespace) -> int:
     host = cast(str, args.host)
     workdir = cast(str, args.workdir)
     pidfile, _, _ = _poc_paths(workdir)
+    client_pidfile, _ = _client_paths(workdir)
     script = f'''
 set +e
 workdir={shlex.quote(workdir)}
 workdir=$(eval printf '%s' "$workdir")
 pidfile={pidfile}
+client_pidfile={client_pidfile}
 
-# Stop Docker container
-docker rm -f {POC_CONTAINER} 2>/dev/null || true
+if [ -f "$client_pidfile" ]; then
+  cpid=$(cat "$client_pidfile")
+  kill "$cpid" 2>/dev/null || true
+  sleep 1
+  kill -9 "$cpid" 2>/dev/null || true
+  rm -f "$client_pidfile"
+fi
 
-# Clean up veth pairs (new and old names)
-sudo ip link del {POC_VETH_HOST} 2>/dev/null || true
-sudo ip link del tg-poc-vh 2>/dev/null || true
+sudo ip link del {DEBIAN_TAP} 2>/dev/null || true
 
-# Stop QEMU
 if [ -f "$pidfile" ]; then
   pid=$(cat "$pidfile")
   kill "$pid" 2>/dev/null || true
@@ -547,8 +732,6 @@ if [ -f "$pidfile" ]; then
   rm -f "$pidfile"
 fi
 
-# Clean up remaining network resources
-sudo ip netns del {POC_NETNS} 2>/dev/null || true
 sudo ip link del {POC_TAP} 2>/dev/null || true
 sudo ip link del {POC_BRIDGE} 2>/dev/null || true
 
@@ -561,16 +744,26 @@ def status_poc(args: argparse.Namespace) -> int:
     host = cast(str, args.host)
     workdir = cast(str, args.workdir)
     pidfile, _serial_sock, disk = _poc_paths(workdir)
+    client_pidfile, client_disk = _client_paths(workdir)
     script = f'''
 set +e
 workdir={shlex.quote(workdir)}
 workdir=$(eval printf '%s' "$workdir")
 pidfile={pidfile}
 disk={disk}
+client_pidfile={client_pidfile}
+client_disk={client_disk}
 
-printf '== QEMU process ==\n'
+printf '== OpenWrt QEMU ==\n'
 if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
   printf 'running pid=%s\n' "$(cat "$pidfile")"
+else
+  printf 'not running\n'
+fi
+
+printf '\n== Debian client QEMU ==\n'
+if [ -f "$client_pidfile" ] && kill -0 "$(cat "$client_pidfile")" 2>/dev/null; then
+  printf 'running pid=%s\n' "$(cat "$client_pidfile")"
 else
   printf 'not running\n'
 fi
@@ -578,11 +771,19 @@ fi
 printf '\n== network ==\n'
 ip link show {POC_BRIDGE} 2>/dev/null || true
 ip link show {POC_TAP} 2>/dev/null || true
-ip link show {POC_VETH_HOST} 2>/dev/null || true
+ip link show {DEBIAN_TAP} 2>/dev/null || true
 ip addr show {POC_BRIDGE} 2>/dev/null | grep -F 'inet ' || true
 
-printf '\n== container ==\n'
-docker ps -f name={POC_CONTAINER} --format '{{{{.Names}}}} {{{{.Status}}}}' 2>/dev/null || printf 'not running\n'
+printf '\n== DHCP leases (from OpenWrt) ==\n'
+sshpass -p {POC_PASSWORD} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR root@{POC_GATEWAY} "cat /tmp/dhcp.leases" 2>/dev/null || printf 'unavailable\n'
+
+printf '\n== Debian client (static) ==\n'
+printf 'Static IP: {DEBIAN_CLIENT_IP}\n'
+if sshpass -p {POC_PASSWORD} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3 -o LogLevel=ERROR root@{DEBIAN_CLIENT_IP} "echo reachable" 2>/dev/null; then
+  printf 'SSH: reachable\n'
+else
+  printf 'SSH: unreachable\n'
+fi
 
 printf '\n== disk ==\n'
 if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
@@ -611,13 +812,13 @@ def smoke_poc(args: argparse.Namespace) -> int:
 set +e
 deadline=$((SECONDS + {timeout}))
 while [ "$SECONDS" -lt "$deadline" ]; do
-  if docker exec {POC_CONTAINER} ping -c 1 -W 2 {POC_GATEWAY} >/dev/null 2>&1; then
-    printf 'PASS: Container {POC_CONTAINER} reached OpenWrt gateway {POC_GATEWAY}\n'
+  if sshpass -p {POC_PASSWORD} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR root@{DEBIAN_CLIENT_IP} "ping -c 1 -W 2 {POC_GATEWAY}" >/dev/null 2>&1; then
+    printf 'PASS: Debian client {DEBIAN_CLIENT_IP} reached OpenWrt gateway {POC_GATEWAY}\n'
     exit 0
   fi
   sleep 2
 done
-printf 'FAIL: Container {POC_CONTAINER} could not reach OpenWrt gateway {POC_GATEWAY}\n' >&2
+printf 'FAIL: Debian client {DEBIAN_CLIENT_IP} could not reach OpenWrt gateway {POC_GATEWAY}\n' >&2
 exit 1
 '''
     return _print_result(run_remote(host, quote_script(script), timeout=timeout + 10))
@@ -651,27 +852,37 @@ def build_parser() -> argparse.ArgumentParser:
     _ = image_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
     image_parser.set_defaults(func=prepare_image)
 
-    start_parser = subparsers.add_parser("start-poc", help="Start one OpenWrt VM plus Debian client container")
+    start_parser = subparsers.add_parser("start-poc", help="Start OpenWrt VM and Debian client VM")
     _ = start_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = start_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
     start_parser.set_defaults(func=start_poc)
 
-    stop_parser = subparsers.add_parser("stop-poc", help="Stop the POC VM and client container")
+    stop_parser = subparsers.add_parser("stop-poc", help="Stop the POC VMs and clean up")
     _ = stop_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = stop_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
     stop_parser.set_defaults(func=stop_poc)
 
-    status_parser = subparsers.add_parser("status-poc", help="Show POC VM/client status")
+    status_parser = subparsers.add_parser("status-poc", help="Show POC VM status")
     _ = status_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = status_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
     status_parser.set_defaults(func=status_poc)
 
-    smoke_parser = subparsers.add_parser("smoke-poc", help="Verify client container reaches OpenWrt gateway")
+    smoke_parser = subparsers.add_parser("smoke-poc", help="Verify Debian client VM reaches OpenWrt gateway")
     _ = smoke_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = smoke_parser.add_argument("--timeout", type=int, default=120)
     smoke_parser.set_defaults(func=smoke_poc)
 
-    poc_parser = subparsers.add_parser("poc", help="Prepare image, start VM/client, and run smoke proof")
+    prepare_debian_parser = subparsers.add_parser("prepare-debian", help="Download Debian nocloud image and create overlay")
+    _ = prepare_debian_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
+    _ = prepare_debian_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    prepare_debian_parser.set_defaults(func=prepare_debian)
+
+    provision_debian_parser = subparsers.add_parser("provision-debian", help="Install Chromium + Playwright in Debian client VM")
+    _ = provision_debian_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
+    _ = provision_debian_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    provision_debian_parser.set_defaults(func=provision_debian)
+
+    poc_parser = subparsers.add_parser("poc", help="Prepare image, start VMs, and run smoke proof")
     _ = poc_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = poc_parser.add_argument("--openwrt-version", default=DEFAULT_OPENWRT_VERSION)
     _ = poc_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)

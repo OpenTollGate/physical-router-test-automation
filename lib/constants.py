@@ -11,5 +11,8 @@ TOKEN_LONG = 10
 DEFAULT_STEP_SIZE_MS = 5000
 PRODUCTION_STEP_SIZE_MS = 5000
 
+POC_GATEWAY = "192.168.1.1"
+NDS_PORTAL_PORT = 2050
+
 ANDROID_CAPTIVE_PORTAL = "com.android.captiveportallogin"
 ANDROID_CAPTIVE_PORTAL_ACTIVITY = "com.android.captiveportallogin/.CaptivePortalLoginActivity"
