@@ -1,6 +1,7 @@
 import subprocess
 import json
 import os
+import tempfile
 import time
 import re
 import logging
@@ -24,22 +25,23 @@ class Router:
         self.port = port
         self.backend = backend or BackendConfig()
         self._ssh_pw = os.environ.get("TOLLGATE_SSH_PASSWORD") or os.environ.get("TOLLGATE_LUCI_PASSWORD")
+
+        self._control_dir = tempfile.mkdtemp(prefix="tollgate-ssh-")
+        self._control_path = os.path.join(self._control_dir, "control")
+
+        ssh_opts = [
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR",
+            "-o", f"ControlPath={self._control_path}",
+            "-o", "ControlMaster=auto",
+            "-o", "ControlPersist=60",
+        ]
         if not identity_file and self._ssh_pw:
-            self._ssh_base = [
-                "sshpass", "-e", "ssh",
-                "-o", "ConnectTimeout=5",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "LogLevel=ERROR",
-            ]
+            self._ssh_base = ["sshpass", "-e", "ssh"] + ssh_opts
         else:
-            self._ssh_base = [
-                "ssh",
-                "-o", "ConnectTimeout=5",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "LogLevel=ERROR",
-            ]
+            self._ssh_base = ["ssh"] + ssh_opts
         if port:
             self._ssh_base.extend(["-p", str(port)])
         if identity_file:
@@ -47,6 +49,23 @@ class Router:
         if jump_host:
             self._ssh_base.extend(["-J", jump_host])
         self._ssh_base.append(f"root@{host}")
+
+    def close(self):
+        try:
+            subprocess.run(
+                ["ssh", "-o", f"ControlPath={self._control_path}", "-O", "exit", f"root@{self.host}"],
+                capture_output=True, timeout=5,
+            )
+        except Exception:
+            pass
+        try:
+            os.remove(self._control_path)
+        except FileNotFoundError:
+            pass
+        try:
+            os.rmdir(self._control_dir)
+        except OSError:
+            pass
 
     def resolve_phone_client(self, adb) -> tuple:
         mac = adb.wifi_mac()
@@ -280,13 +299,22 @@ class Router:
         except json.JSONDecodeError:
             return {"raw": resp}
 
-    def pay_direct_mac(self, token: str, mac: str = None) -> dict:
+    def pay_direct_mac(self, token: str, mac: str = None, ip: str = None) -> dict:
+        """Pay via backend /pay endpoint with MAC-based client identification.
+
+        The backend resolves the client MAC by looking up the requester IP
+        in /tmp/dhcp.leases (NOT from the ?mac= query parameter).  We must
+        send X-Forwarded-For so the backend uses the real client IP instead
+        of RemoteAddr (which is [::1] when curl runs on the router itself).
+        """
         mac = mac or self.phone_mac
+        ip = ip or self.phone_ip
         escaped = token.replace("'", "'\\''")
         resp = self.ssh(
             f"printf '%s' '{escaped}' > /tmp/tg-pay-token.txt && "
-            f"curl -s -m 20 -X POST '{self.backend_url('/pay?mac=' + mac)}' "
+            f"curl -s -m 20 -X POST '{self.backend_url('/')}' "
             f"-H 'Content-Type: text/plain' "
+            f"-H 'X-Forwarded-For: {ip}' "
             f"-d @/tmp/tg-pay-token.txt; "
             f"rm -f /tmp/tg-pay-token.txt",
             timeout=60,
@@ -341,8 +369,11 @@ class Router:
         while time.time() - start < timeout:
             if self.get_nds_state(mac) == "Authenticated":
                 return True
+            # Fallback: if backend delayed auth didn't fire, trigger manually
+            if time.time() - start > 10:
+                self.ssh(f"ndsctl auth {mac or self.phone_mac} 2>&1", timeout=5)
             time.sleep(1)
-        return False
+        return self.get_nds_state(mac) == "Authenticated"
 
     def get_session(self, ip: str = None) -> dict:
         ip = ip or self.phone_ip

@@ -280,6 +280,7 @@ def deploy_session(request, router, backend):
     finally:
         if not no_deploy:
             router.disable_debug_portal()
+        router.close()
 
 
 @pytest.fixture(scope="session")

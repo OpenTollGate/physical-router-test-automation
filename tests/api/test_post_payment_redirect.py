@@ -16,10 +16,14 @@ Tests verify:
 - welcome.html contains all 3 approaches (auto-redirect, tap link, PWA)
 - balance.html redirects to welcome.html
 - Setup script does NOT set redirecturl (removed as non-functional)
+- welcome.html is served by NDS (HTTP 200 from a LAN client)
 
 Tests use feature detection: they check if welcome.html exists
 and skip cleanly when the feature is absent.
 """
+
+import os
+import subprocess
 
 import pytest
 
@@ -113,10 +117,40 @@ def test_nds_webroot_links_to_captive_portal(router):
         f"NDS webroot should symlink to captive portal site, got: {target}"
 
 
+def _client_ssh(*args, timeout=10):
+    """Run a command on the client VM via SSH jump host."""
+    jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", "")
+    password = os.environ.get("TOLLGATE_SSH_PASSWORD",
+                              os.environ.get("TOLLGATE_LUCI_PASSWORD", "tollgate"))
+    client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "192.168.1.100")
+
+    ssh_cmd = ["sshpass", "-p", password, "ssh",
+               "-o", "StrictHostKeyChecking=no",
+               "-o", "UserKnownHostsFile=/dev/null",
+               "-o", "LogLevel=ERROR"]
+    if jump_host:
+        ssh_cmd += ["-J", jump_host]
+    ssh_cmd.append(f"root@{client_ip}")
+    ssh_cmd.extend(args)
+
+    return subprocess.run(
+        ssh_cmd,
+        capture_output=True, text=True, timeout=timeout, check=False,
+    )
+
+
 def test_welcome_html_served_by_nds(router):
     _skip_if_no_welcome_page(router)
     gateway = router.ssh("uci -q get nodogsplash.@nodogsplash[0].gatewayaddress 2>/dev/null || echo 192.168.1.1").strip()
     port = router.ssh("uci -q get nodogsplash.@nodogsplash[0].gatewayport 2>/dev/null || echo 2050").strip()
-    result = router.ssh(f"curl -s -o /dev/null -w '%{{http_code}}' http://{gateway}:{port}/welcome.html 2>/dev/null").strip()
-    assert result in ("200", "302"), \
-        f"welcome.html should be served by NDS (got HTTP {result})"
+    url = f"http://{gateway}:{port}/welcome.html"
+
+    # NDS returns 500 for localhost requests; test from a LAN client instead.
+    if os.environ.get("TOLLGATE_SSH_JUMP_HOST"):
+        result = _client_ssh("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", url)
+        code = result.stdout.strip()
+    else:
+        code = router.ssh(f"curl -s -o /dev/null -w '%{{http_code}}' {url} 2>/dev/null").strip()
+
+    assert code in ("200", "302"), \
+        f"welcome.html should be served by NDS (got HTTP {code})"
