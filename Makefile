@@ -1,6 +1,7 @@
 .PHONY: smoke critical extended api phone smoke-phone test \
         smoke-mac critical-mac extended-mac api-mac test-mac \
         smoke-linux critical-linux api-linux test-linux \
+        smoke-rust api-rust test-rust critical-rust \
         luci deploy setup sanitize publish clean
 
 # --- Pytest test tiers ---
@@ -50,6 +51,20 @@ api-linux:
 
 test-linux:
 	pytest --client=linux
+
+# --- Rust v1 backend ---
+
+smoke-rust:
+	TOLLGATE_BACKEND=rust pytest -m smoke --backend=rust
+
+api-rust:
+	TOLLGATE_BACKEND=rust pytest -m api --backend=rust
+
+test-rust:
+	TOLLGATE_BACKEND=rust pytest --backend=rust
+
+critical-rust:
+	TOLLGATE_BACKEND=rust pytest -m critical --backend=rust
 
 # --- Playwright LuCI tests ---
 

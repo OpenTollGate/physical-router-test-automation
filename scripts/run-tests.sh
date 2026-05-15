@@ -15,6 +15,7 @@ export TOLLGATE_SSH_HOST="${TOLLGATE_SSH_HOST:-}"
 export TOLLGATE_PUBLISH="${TOLLGATE_PUBLISH:-}"
 export TOLLGATE_BRANCH="${TOLLGATE_BRANCH:-}"
 export TOLLGATE_PR="${TOLLGATE_PR:-}"
+export TOLLGATE_BACKEND="${TOLLGATE_BACKEND:-go}"
 
 # Derive router IP from LUCI URL (strip scheme and port)
 TOLLGATE_ROUTER_IP="${TOLLGATE_ROUTER_IP:-$(echo "$TOLLGATE_LUCI_URL" | sed -E 's#^https?://##;s#:[0-9]+.*##')}"

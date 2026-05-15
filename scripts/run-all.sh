@@ -12,6 +12,11 @@ mkdir -p "$RAW_DIR/api" "$RAW_DIR/phone"
 VENV="${TOLLGATE_PYTHON_VENV:-$HOME/.tollgate-test-venv}"
 source "$VENV/bin/activate"
 
+BACKEND_ARG=""
+if [[ -n "${TOLLGATE_BACKEND:-}" ]]; then
+  BACKEND_ARG="--backend=$TOLLGATE_BACKEND"
+fi
+
 RC=0
 
 echo "=== Running Playwright LuCI tests ==="
@@ -27,6 +32,7 @@ pytest -m api \
     --self-contained-html \
     --junitxml="$RAW_DIR/api/junit.xml" \
     -v --tb=short --timeout=60 --timeout-method=thread \
+    $BACKEND_ARG \
     2>&1 | tee "$RAW_DIR/api/output.log" || {
     echo "WARNING: API tests failed (exit $?)"
     RC=1
@@ -39,6 +45,7 @@ pytest -m phone \
     --self-contained-html \
     --junitxml="$RAW_DIR/phone/junit.xml" \
     -v --tb=short --timeout=300 --timeout-method=thread \
+    $BACKEND_ARG \
     2>&1 | tee "$RAW_DIR/phone/output.log" || {
     echo "WARNING: Phone tests failed (exit $?)"
     RC=1

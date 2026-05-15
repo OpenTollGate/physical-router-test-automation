@@ -12,11 +12,17 @@ RUN_ID="${TIMESTAMP}-${GIT_SHA}"
 RAW_DIR="results/${RUN_ID}/raw"
 mkdir -p "$RAW_DIR"
 
+BACKEND_ARG=""
+if [[ -n "${TOLLGATE_BACKEND:-}" ]]; then
+  BACKEND_ARG="--backend=$TOLLGATE_BACKEND"
+fi
+
 pytest -m api \
     --html="$RAW_DIR/report.html" \
     --self-contained-html \
     --junitxml="$RAW_DIR/junit.xml" \
     -v --tb=short --timeout=60 --timeout-method=thread \
+    $BACKEND_ARG \
     "$@" 2>&1 | tee "$RAW_DIR/output.log"
 
 echo ""

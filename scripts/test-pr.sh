@@ -5,8 +5,8 @@ set -euo pipefail
 # Deploy a PR branch to router, run API tests, generate reports.
 #
 # Usage:
-#   ./scripts/test-pr.sh --pr <N> [--reset] [--test api|all] [--publish] [--router ID]
-#   ./scripts/test-pr.sh --branch <NAME> [--reset] [--test api|all] [--publish] [--router ID]
+#   ./scripts/test-pr.sh --pr <N> [--reset] [--test api|all] [--publish] [--router ID] [--backend go|rust]
+#   ./scripts/test-pr.sh --branch <NAME> [--reset] [--test api|all] [--publish] [--router ID] [--backend go|rust]
 #
 # Required environment variables:
 #   TOLLGATE_LUCI_PASSWORD — Router SSH and LuCI password
@@ -15,6 +15,7 @@ set -euo pipefail
 #   ROUTER_IP, TOLLGATE_SSH_HOST — Router IP for SSH
 #   TOLLGATE_SSH_KEY — SSH key path (default: ~/.ssh/id_ed25519)
 #   TOLLGATE_ROUTER_ID — Router ID (default: from .env)
+#   TOLLGATE_BACKEND — Backend type: go (default) or rust
 # ───────────────────────────────────────────────────────────────────────────
 
 # ── Parse CLI args ───────────────────────────────────────────────────────
@@ -26,6 +27,7 @@ TEST_TYPE="api"
 PUBLISH=false
 ROUTER_ID=""
 ARTIFACT_REPO=""
+BACKEND="${TOLLGATE_BACKEND:-go}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -61,13 +63,23 @@ while [[ $# -gt 0 ]]; do
       ROUTER_ID="$2"
       shift 2
       ;;
+    --backend)
+      BACKEND="$2"
+      if [[ "$BACKEND" != "go" && "$BACKEND" != "rust" ]]; then
+        echo "ERROR: --backend must be 'go' or 'rust'" >&2
+        exit 1
+      fi
+      shift 2
+      ;;
     *)
       echo "ERROR: Unknown option: $1" >&2
-      echo "Usage: $0 --pr <N> | --branch <NAME> [--reset] [--test api|all] [--publish] [--repo REPO] [--router ID]" >&2
+      echo "Usage: $0 --pr <N> | --branch <NAME> [--reset] [--test api|all] [--publish] [--backend go|rust] [--router ID]" >&2
       exit 1
       ;;
   esac
 done
+
+export TOLLGATE_BACKEND="$BACKEND"
 
 # ── Validate required args ───────────────────────────────────────────────
 if [[ -z "$PR_NUM" && -z "$BRANCH" ]]; then
@@ -115,13 +127,23 @@ if [[ -z "$ROUTER_IP" && -n "$ROUTER_ID" ]]; then
   exit 1
 fi
 
+# ── Resolve backend config ──────────────────────────────────────────────
+RUST_REPO="Amperstrand/tollgate-rs-ai-research-and-experiments"
+GO_REPO="OpenTollGate/tollgate-module-basic-go"
+if [[ "$BACKEND" == "rust" ]]; then
+  DEFAULT_REPO="$RUST_REPO"
+else
+  DEFAULT_REPO="$GO_REPO"
+fi
+
 # ── Resolve PR to branch + SHA ───────────────────────────────────────────
 
 if [[ -n "$PR_NUM" ]]; then
+  LOOKUP_REPO="${ARTIFACT_REPO:-$DEFAULT_REPO}"
   echo "==> Resolving PR $PR_NUM..."
-  BRANCH=$(gh pr view "$PR_NUM" --repo OpenTollGate/tollgate-module-basic-go --json headRefName --jq '.headRefName')
-  COMMIT_SHA=$(gh pr view "$PR_NUM" --repo OpenTollGate/tollgate-module-basic-go --json headRefOid --jq '.headRefOid')
-  FORK_REPO=$(gh pr view "$PR_NUM" --repo OpenTollGate/tollgate-module-basic-go --json headRepository --jq '.headRepository.owner.login + "/" + .headRepository.name' 2>/dev/null || echo "")
+  BRANCH=$(gh pr view "$PR_NUM" --repo "$LOOKUP_REPO" --json headRefName --jq '.headRefName')
+  COMMIT_SHA=$(gh pr view "$PR_NUM" --repo "$LOOKUP_REPO" --json headRefOid --jq '.headRefOid')
+  FORK_REPO=$(gh pr view "$PR_NUM" --repo "$LOOKUP_REPO" --json headRepository --jq '.headRepository.owner.login + "/" + .headRepository.name' 2>/dev/null || echo "")
   TOLLGATE_COMMIT="${COMMIT_SHA:0:12}"
   TOLLGATE_PR="$PR_NUM"
   TOLLGATE_BRANCH="$BRANCH"
@@ -130,7 +152,7 @@ if [[ -n "$PR_NUM" ]]; then
   fi
 else
   TOLLGATE_BRANCH="$BRANCH"
-  LOOKUP_REPO="${ARTIFACT_REPO:-OpenTollGate/tollgate-module-basic-go}"
+  LOOKUP_REPO="${ARTIFACT_REPO:-$DEFAULT_REPO}"
   COMMIT_SHA=$(gh api "repos/${LOOKUP_REPO}/commits/${BRANCH}" --jq '.sha' 2>/dev/null || echo "unknown")
   TOLLGATE_COMMIT="${COMMIT_SHA:0:12}"
 fi
@@ -201,11 +223,14 @@ import os, sys, logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message)s', datefmt='%H:%M:%S')
 from lib.router import Router
 from lib.deploy import deploy_branch
+from lib.backend import BackendConfig
+backend = BackendConfig('${BACKEND}')
 r = Router(host='${ROUTER_IP}', phone_ip='', phone_mac='', domain='',
-           identity_file=os.environ.get('TOLLGATE_SSH_KEY') or None)
+           identity_file=os.environ.get('TOLLGATE_SSH_KEY') or None,
+           backend=backend)
 result = deploy_branch(r, '${TOLLGATE_BRANCH}', arch='${TOLLGATE_ROUTER_ARCH:-aarch64_cortex-a53}',
                        run_id=None, force=True, reboot=False,
-                       repo='${ARTIFACT_REPO:-}')
+                       repo='${ARTIFACT_REPO:-}', backend=backend)
 print(f'version={result[\"installed_version\"]} health={result[\"health_code\"]} success={result[\"success\"]}')
 sys.exit(0 if result['success'] else 1)
 "
@@ -217,11 +242,11 @@ echo "==> Running $TEST_TYPE tests..."
 cd "$REPO_DIR/tests"
 
 if [[ "$TEST_TYPE" == "api" ]]; then
-  pytest_output=$(python3 -m pytest api/ -v --tb=short --junitxml="$RUN_DIR/raw/junit.xml" 2>&1)
+  pytest_output=$(python3 -m pytest api/ -v --tb=short --backend="$BACKEND" --junitxml="$RUN_DIR/raw/junit.xml" 2>&1)
   exit_code=$?
   echo "$pytest_output" | tee "$RUN_DIR/raw/output.log"
 else
-  pytest_output=$(python3 -m pytest -v --tb=short --junitxml="$RUN_DIR/raw/junit.xml" 2>&1)
+  pytest_output=$(python3 -m pytest -v --tb=short --backend="$BACKEND" --junitxml="$RUN_DIR/raw/junit.xml" 2>&1)
   exit_code=$?
   echo "$pytest_output" | tee "$RUN_DIR/raw/output.log"
 fi
@@ -348,6 +373,7 @@ echo "====================================================================="
 echo "  TEST SUMMARY"
 echo "====================================================================="
 echo "  Tollgate:   ${TOLLGATE_COMMIT:0:12}"
+echo "  Backend:    $BACKEND"
 echo "  Branch:     ${TOLLGATE_BRANCH:-N/A}"
 echo "  Router:     ${ROUTER_ID:-$ROUTER_IP} ($ROUTER_IP)"
 echo "  Passed:     $PASSED"
