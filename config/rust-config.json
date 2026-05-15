@@ -1,0 +1,22 @@
+{
+  "config_version": "v0.0.7",
+  "log_level": "info",
+  "metric": "milliseconds",
+  "step_size": 5000,
+  "margin": 0.1,
+  "accepted_mints": [
+    {
+      "url": "https://nofee.testnut.cashu.space",
+      "min_balance": 0,
+      "balance_tolerance_percent": 0,
+      "payout_interval_seconds": 60,
+      "min_payout_amount": 0,
+      "price_per_step": 1,
+      "price_unit": "sats",
+      "purchase_min_steps": 0
+    }
+  ],
+  "profit_share": [
+    { "factor": 1.0, "identity": "owner" }
+  ]
+}

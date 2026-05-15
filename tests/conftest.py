@@ -21,6 +21,7 @@ from lib.clients.wifi import WiFi
 from lib.clients.desktop import MacWiFiClient, MacAdapter, LinuxWiFiClient, LinuxAdapter
 from lib.clients.container import ContainerClient
 from lib.constants import DEFAULT_STEP_SIZE_MS
+from lib.backend import BackendConfig
 
 logging.basicConfig(
     level=logging.INFO,
@@ -147,6 +148,8 @@ def pytest_addoption(parser):
                      help="Reboot router after deploy and wait for it to come back")
     parser.addoption("--expected-pr", default=None, type=int,
                      help="PR number being tested. Tests marked @pytest.mark.pr(N) where N != expected_pr are expected to fail/skip.")
+    parser.addoption("--backend", default=None, choices=["go", "rust"],
+                     help="TollGate backend type: 'go' (Go v1) or 'rust' (Rust v1). Default: TOLLGATE_BACKEND env or 'go'")
 
 
 @pytest.fixture(scope="session")
@@ -159,7 +162,13 @@ def results_dir(request):
 
 
 @pytest.fixture(scope="session")
-def router(request):
+def backend(request):
+    opt = request.config.getoption("--backend")
+    return BackendConfig(backend_type=opt)
+
+
+@pytest.fixture(scope="session")
+def router(request, backend):
     host = os.environ.get("TOLLGATE_SSH_HOST") or os.environ.get("ROUTER_IP")
     identity_file = os.environ.get("TOLLGATE_SSH_KEY", "")
     jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", "")
@@ -198,11 +207,12 @@ def router(request):
                   phone_mac=phone_mac, domain=domain,
                   identity_file=identity_file or None,
                   jump_host=jump_host or None,
-                  port=int(ssh_port) if ssh_port else None)
+                  port=int(ssh_port) if ssh_port else None,
+                  backend=backend)
 
 
 @pytest.fixture(scope="session", autouse=True)
-def deploy_session(request, router):
+def deploy_session(request, router, backend):
     from lib import deploy as deploy_lib
 
     binary = request.config.getoption("--binary")
@@ -232,6 +242,7 @@ def deploy_session(request, router):
             run_id=tg_run_id,
             force=tg_force,
             reboot=tg_reboot,
+            backend=backend,
         )
         if not result["success"]:
             pytest.exit(
@@ -294,7 +305,7 @@ def cashu():
 
 
 @pytest.fixture(scope="session")
-def all_routers():
+def all_routers(backend):
     identity_file = os.environ.get("TOLLGATE_SSH_KEY", "") or None
     inventory_path = os.environ.get(
         "TOLLGATE_ROUTER_INVENTORY",
@@ -317,6 +328,7 @@ def all_routers():
             identity_file=identity_file,
             jump_host=entry.get("jumpHost") or None,
             port=int(entry["sshPort"]) if entry.get("sshPort") else None,
+            backend=backend,
         )
     return routers
 
@@ -405,6 +417,14 @@ def screenshot_raw(adb, results_dir):
 
 
 def pytest_runtest_setup(item):
+    backend_type = item.config.getoption("--backend", default=None) or os.environ.get("TOLLGATE_BACKEND", "go")
+
+    if "go_only" in item.keywords and backend_type == "rust":
+        pytest.skip("Go-only test (LuCI, CLI socket, or sessions.json)")
+
+    if "rust_only" in item.keywords and backend_type == "go":
+        pytest.skip("Rust-only test")
+
     client_mode = item.config.getoption("--client")
     if client_mode in ("mac", "linux", "container"):
         if "android_only" in item.keywords:

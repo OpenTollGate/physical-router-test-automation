@@ -140,3 +140,33 @@ def post_payment_event(router, token):
         f"-H 'Content-Type: application/json' "
         f"-d '{{\"kind\":21000,\"tags\":[[\"payment\",\"{token}\"]],\"content\":\"\"}}'"
     )
+
+
+def skip_if_no_cli_socket(router):
+    try:
+        out = router.ssh("ls -S /var/run/tollgate.sock 2>/dev/null", timeout=5)
+        if not out.strip():
+            pytest.skip("No CLI socket at /var/run/tollgate.sock")
+    except Exception:
+        pytest.skip("Cannot check CLI socket")
+
+
+def skip_if_no_luci(router):
+    try:
+        code = router.ssh(
+            "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/ 2>/dev/null",
+            timeout=5,
+        )
+        if not code.strip().startswith("2"):
+            pytest.skip("LuCI admin UI not available on port 8080")
+    except Exception:
+        pytest.skip("Cannot check LuCI availability")
+
+
+def skip_if_no_sessions_json(router):
+    try:
+        out = router.ssh("ls /etc/tollgate/sessions.json 2>/dev/null", timeout=5)
+        if not out.strip():
+            pytest.skip("No /etc/tollgate/sessions.json (backend uses in-memory sessions)")
+    except Exception:
+        pytest.skip("Cannot check sessions.json")

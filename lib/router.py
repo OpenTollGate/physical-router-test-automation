@@ -6,13 +6,15 @@ import re
 import logging
 
 from lib.constants import BACKEND_PORT, CGI_PORT, TEST_MINT_URL
+from lib.backend import BackendConfig
 
 log = logging.getLogger("tollgate.router")
 
 
 class Router:
     def __init__(self, host: str, phone_ip: str, phone_mac: str, domain: str,
-                 identity_file: str = None, jump_host: str = None, port: int = None):
+                 identity_file: str = None, jump_host: str = None, port: int = None,
+                 backend: BackendConfig | None = None):
         self.host = host
         self.phone_ip = phone_ip
         self.phone_mac = phone_mac
@@ -20,6 +22,7 @@ class Router:
         self.identity_file = identity_file
         self.jump_host = jump_host
         self.port = port
+        self.backend = backend or BackendConfig()
         self._ssh_base = [
             "ssh",
             "-o", "ConnectTimeout=5",
@@ -317,7 +320,8 @@ class Router:
         mac = mac or self.phone_mac
         if adb:
             adb.shell("am force-stop com.android.captiveportallogin")
-        self.ssh("echo '{}' > /etc/tollgate/sessions.json")
+        if self.backend.has_sessions_json:
+            self.ssh("echo '{}' > /etc/tollgate/sessions.json")
         self.ssh("service tollgate-wrt restart")
         time.sleep(3)
         self.ssh(f"ndsctl deauth {mac} 2>&1 || true")
@@ -429,6 +433,8 @@ class Router:
         log.info(f"Replaced accepted mints with: {mint_str}, restarted backend")
 
     def cli_command(self, command: str, args: list | None = None, timeout: int = 10) -> dict:
+        if not self.backend.has_cli_socket:
+            raise NotImplementedError("Rust backend has no CLI socket")
         payload = {"command": command}
         if args:
             payload["args"] = args
@@ -459,7 +465,7 @@ class Router:
     def collect_logs(self, results_dir: str, adb=None):
         raw = os.path.join(results_dir, "raw")
         os.makedirs(raw, exist_ok=True)
-        for name, cmd in [
+        log_cmds = [
             ("portal.log", "cat /tmp/tollgate-portal.log"),
             ("backend.log", "logread -l 200 -e tollgate 2>/dev/null"),
             ("ndsctl-status.txt", "timeout 5 ndsctl status 2>/dev/null || true"),
@@ -467,11 +473,13 @@ class Router:
             ("iptables-nds.txt", "iptables -L ndsRTR -n -v 2>/dev/null || true"),
             ("iptables-nds-out.txt", "iptables -L ndsOUT -n -v 2>/dev/null || true"),
             ("tollgate-config.json", "cat /etc/tollgate/config.json 2>/dev/null || true"),
-            ("tollgate-sessions.json", "cat /etc/tollgate/sessions.json 2>/dev/null || echo '{}'"),
             ("process-list.txt", "ps | grep -E 'tollgate|nodog' 2>/dev/null || true"),
             ("dhcp-leases.txt", "cat /tmp/dhcp.leases 2>/dev/null || true"),
             ("ipv6-addrs.txt", "ip -6 addr show br-lan scope global 2>/dev/null || echo 'none'"),
-        ]:
+        ]
+        if self.backend.has_sessions_json:
+            log_cmds.append(("tollgate-sessions.json", "cat /etc/tollgate/sessions.json 2>/dev/null || echo '{}'"))
+        for name, cmd in log_cmds:
             try:
                 with open(os.path.join(raw, name), "w") as f:
                     f.write(self.ssh(cmd, timeout=10))

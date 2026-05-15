@@ -1,6 +1,6 @@
 import pytest
 
-pytestmark = [pytest.mark.api, pytest.mark.smoke]
+pytestmark = [pytest.mark.api, pytest.mark.smoke, pytest.mark.go_only]
 
 
 @pytest.fixture(scope="module")

@@ -91,8 +91,9 @@ def install_test_deps(router):
 
 
 def download_artifact(branch: str, arch: str, run_id: str | None = None,
-                      repo: str | None = None) -> Path:
+                      repo: str | None = None, workflow: str | None = None) -> Path:
     artifact_repo = repo or REPO
+    artifact_workflow = workflow or WORKFLOW
     if BUILD_DIR.exists():
         shutil.rmtree(BUILD_DIR)
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
@@ -106,7 +107,7 @@ def download_artifact(branch: str, arch: str, run_id: str | None = None,
                     "--repo", artifact_repo,
                     "--branch", branch,
                     "--status", status_filter,
-                    "--workflow", WORKFLOW,
+                    "--workflow", artifact_workflow,
                     "--limit", "1",
                     "--json", "databaseId,status",
                     "--jq", ".[0].databaseId",
@@ -119,7 +120,7 @@ def download_artifact(branch: str, arch: str, run_id: str | None = None,
         if not run_id:
             if repo and repo != REPO:
                 log.info("No build found on fork '%s', trying upstream '%s'", repo, REPO)
-                return download_artifact(branch, arch, run_id=run_id, repo=None)
+                return download_artifact(branch, arch, run_id=run_id, repo=None, workflow=workflow)
             raise RuntimeError(f"No builds found for branch '{branch}' on {artifact_repo}")
         log.info("Found run: %s", run_id)
 
@@ -333,7 +334,8 @@ def firstboot_reset(router, expected_mac: str | None = None) -> dict:
 
 def deploy_branch(router, branch: str, arch: str | None = None,
                   run_id: str | None = None, force: bool = False,
-                  reboot: bool = False, repo: str | None = None) -> dict:
+                  reboot: bool = False, repo: str | None = None,
+                  backend=None) -> dict:
     arch = arch or os.environ.get("TOLLGATE_ROUTER_ARCH", "aarch64_cortex-a53")
 
     if not force:
@@ -347,5 +349,8 @@ def deploy_branch(router, branch: str, arch: str | None = None,
                 "skipped": True,
             }
 
-    ipk_path = download_artifact(branch, arch, run_id=run_id, repo=repo)
+    artifact_repo = repo or (backend.repo if backend else None)
+    artifact_workflow = backend.workflow if backend else None
+    ipk_path = download_artifact(branch, arch, run_id=run_id,
+                                 repo=artifact_repo, workflow=artifact_workflow)
     return deploy(router, ipk_path, reboot=reboot)
