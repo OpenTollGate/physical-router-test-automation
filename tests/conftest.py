@@ -108,6 +108,15 @@ def _is_publish_mode(config):
     return config.getoption("--publish", default=False)
 
 
+@pytest.hookimpl(optionalhook=True)
+def pytest_metadata(metadata):
+    """Add virtual lab metadata to pytest-html report."""
+    if os.environ.get("TOLLGATE_SSH_JUMP_HOST"):
+        metadata["Router"] = "QEMU x86_64 (virtual lab)"
+        metadata["Client"] = "Debian 12 QEMU VM"
+        metadata["Jump Host"] = os.environ["TOLLGATE_SSH_JUMP_HOST"]
+
+
 def pytest_addoption(parser):
     parser.addoption("--binary", default=None,
                      help="Install .ipk file on router before tests")
