@@ -127,20 +127,28 @@ cp -r "$RUN_DIR/report" "$TARGET_DIR/report"
 cp "$RUN_DIR/run.json" "$TARGET_DIR/run.json"
 
 # ── Strip screenshots and XML ──────────────────────────────────────────
-# Never publish screenshots, XML, or raw debug files to gh-pages.
+# For container/VM tests: screenshots are safe to publish (QEMU MACs, no PII).
+# For phone tests: never publish screenshots.
 
-# Playwright reports: strip non-whitelisted PNGs from data/
-if [ -f "$TARGET_DIR/report/report.json" ]; then
-	bash "$REPO_DIR/scripts/strip-screenshots.sh" "$TARGET_DIR/report" 2>/dev/null || true
-fi
+CLIENT_TYPE="$(json_string "$RUN_DIR/run.json" client_type || true)"
+if [ "$CLIENT_TYPE" = "container" ]; then
+	echo "==> Container mode: keeping all screenshots"
+else
+	# Phone / unknown mode: strip all screenshots and XML
+	echo "==> Non-container mode: stripping screenshots and XML"
 
-# All reports: remove any stray PNG, XML, TXT asset files
-find "$TARGET_DIR" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.gif' -o -name '*.xml' \) -print -delete 2>/dev/null || true
+	# Playwright reports: strip non-whitelisted PNGs from data/
+	if [ -f "$TARGET_DIR/report/report.json" ]; then
+		bash "$REPO_DIR/scripts/strip-screenshots.sh" "$TARGET_DIR/report" 2>/dev/null || true
+	fi
 
-# Strip image tags and asset references from HTML files (pytest-html embeds them)
-for html_file in "$TARGET_DIR"/*.html "$TARGET_DIR"/report/*.html "$TARGET_DIR"/report/index.html; do
-	[ -f "$html_file" ] || continue
-	python3 -c "
+	# All reports: remove any stray PNG, XML, TXT asset files
+	find "$TARGET_DIR" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.gif' -o -name '*.xml' \) -print -delete 2>/dev/null || true
+
+	# Strip image tags and asset references from HTML files (pytest-html embeds them)
+	for html_file in "$TARGET_DIR"/*.html "$TARGET_DIR"/report/*.html "$TARGET_DIR"/report/index.html; do
+		[ -f "$html_file" ] || continue
+		python3 -c "
 import re, sys
 with open(sys.argv[1], 'r') as f:
     html = f.read()
@@ -153,7 +161,8 @@ html = re.sub(r'assets/[^\"'\''\\s<>]*\.(?:png|txt|xml)', '', html, flags=re.IGN
 with open(sys.argv[1], 'w') as f:
     f.write(html)
 " "$html_file" 2>/dev/null || true
-done
+	done
+fi
 
 find "$TARGET_DIR" -type d -empty -delete 2>/dev/null || true
 

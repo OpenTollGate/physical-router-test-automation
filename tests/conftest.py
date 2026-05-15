@@ -67,6 +67,8 @@ _INVENTORY_ENV_MAP = {
 
 
 def _load_router_inventory():
+    if os.environ.get("TOLLGATE_VIRTUAL_LAB"):
+        return
     router_id = os.environ.get("TOLLGATE_ROUTER_ID")
     if not router_id:
         return
@@ -107,6 +109,10 @@ def _client_mode(request):
 
 def _is_publish_mode(config):
     return config.getoption("--publish", default=False)
+
+
+def _is_container_client(config):
+    return config.getoption("--client", default="adb") == "container"
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -172,6 +178,11 @@ def router(request, backend):
     host = os.environ.get("TOLLGATE_SSH_HOST") or os.environ.get("ROUTER_IP")
     identity_file = os.environ.get("TOLLGATE_SSH_KEY", "")
     jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", "")
+
+    # Virtual lab uses password auth (sshpass) through jump host.
+    # SSH key auth fails without agent forwarding (-A), so clear identity_file.
+    if os.environ.get("TOLLGATE_VIRTUAL_LAB") and jump_host:
+        identity_file = ""
     client = _client_mode(request)
     phone_ip = os.environ.get("TOLLGATE_CLIENT_IP", "")
     phone_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
@@ -385,21 +396,22 @@ def screenshot_portal(adb, results_dir, request):
     report_dir = os.path.join(results_dir, "report")
     publish_mode = _is_publish_mode(request.config)
     can_publish = "publish_screenshot" in request.keywords
+    container_mode = _is_container_client(request.config)
 
     def take(name: str):
         raw_path = os.path.join(results_dir, "raw", name)
         adb.screenshot_portal(raw_path, report_dir=report_dir)
 
-        if publish_mode and not can_publish:
+        if publish_mode and not can_publish and not container_mode:
             return
 
         try:
             with open(raw_path, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode()
             if b64 and html_extras is not None:
-                extra = getattr(request.node, "extra", [])
-                extra.append(html_extras.image(b64, name))
-                request.node.extra = extra
+                extras_list = getattr(request.node, "_screenshot_extras", [])
+                extras_list.append(html_extras.image(b64, name))
+                request.node._screenshot_extras = extras_list
         except Exception as exc:
             log.debug(f"screenshot embed skipped: {exc}")
 
@@ -535,6 +547,13 @@ def _debug_summary(adb, router) -> str:
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
+
+    screenshot_extras = getattr(item, "_screenshot_extras", None)
+    if screenshot_extras and report.when == "call" and html_extras is not None:
+        extras = list(getattr(report, "extras", []))
+        extras.extend(screenshot_extras)
+        report.extras = extras
+
     if report.when == "call" and report.failed:
         results_dir = getattr(item, "_results_dir", None)
         if not results_dir:
@@ -546,20 +565,21 @@ def pytest_runtest_makereport(item, call):
 
         publish_mode = _is_publish_mode(item.config)
         can_publish = "publish_screenshot" in item.keywords
+        container_mode = _is_container_client(item.config)
 
         if adb:
             try:
                 img_path = os.path.join(raw, f"{item.name}-failed.png")
                 adb.screenshot(img_path)
 
-                should_embed = not publish_mode or can_publish
+                should_embed = not publish_mode or can_publish or container_mode
                 if should_embed and os.path.isfile(img_path) and html_extras is not None:
                     with open(img_path, "rb") as f:
                         b64 = base64.b64encode(f.read()).decode()
                     if b64:
-                        extra = getattr(report, "extra", [])
-                        extra.append(html_extras.image(b64, f"{item.name}-failed"))
-                        report.extra = extra
+                        extras = list(getattr(report, "extras", []))
+                        extras.append(html_extras.image(b64, f"{item.name}-failed"))
+                        report.extras = extras
             except Exception:
                 pass
             if hasattr(adb, "ui_xml"):
@@ -574,9 +594,9 @@ def pytest_runtest_makereport(item, call):
                         summary = f"Phone UI texts: {texts[:15]}"
                         if sm:
                             summary += f"\nPortal state: {sm.group(1)}"
-                        extra = getattr(report, "extra", [])
-                        extra.append(html_extras.text(summary, name="phone-ui"))
-                        report.extra = extra
+                        extras = list(getattr(report, "extras", []))
+                        extras.append(html_extras.text(summary, name="phone-ui"))
+                        report.extras = extras
                 except Exception:
                     pass
         if router:

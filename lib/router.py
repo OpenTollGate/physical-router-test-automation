@@ -23,13 +23,23 @@ class Router:
         self.jump_host = jump_host
         self.port = port
         self.backend = backend or BackendConfig()
-        self._ssh_base = [
-            "ssh",
-            "-o", "ConnectTimeout=5",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "LogLevel=ERROR",
-        ]
+        self._ssh_pw = os.environ.get("TOLLGATE_SSH_PASSWORD") or os.environ.get("TOLLGATE_LUCI_PASSWORD")
+        if not identity_file and self._ssh_pw:
+            self._ssh_base = [
+                "sshpass", "-e", "ssh",
+                "-o", "ConnectTimeout=5",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR",
+            ]
+        else:
+            self._ssh_base = [
+                "ssh",
+                "-o", "ConnectTimeout=5",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR",
+            ]
         if port:
             self._ssh_base.extend(["-p", str(port)])
         if identity_file:
@@ -98,10 +108,17 @@ class Router:
         port = self._detect_cgi_port()
         return f"http://127.0.0.1:{port}/cgi-bin/{endpoint}"
 
+    def _ssh_env(self):
+        env = os.environ.copy()
+        if self._ssh_pw:
+            env["SSHPASS"] = self._ssh_pw
+        return env
+
     def ssh(self, cmd: str, timeout: int = 30) -> str:
         r = subprocess.run(
             self._ssh_base + [cmd],
             capture_output=True, text=True, timeout=timeout,
+            env=self._ssh_env(),
         )
         if r.returncode != 0:
             noise = re.compile(r"Warning:.*Permanently added[^\n]*")
@@ -115,6 +132,7 @@ class Router:
         return subprocess.run(
             self._ssh_base + [cmd],
             input=data, capture_output=True, text=True, timeout=timeout,
+            env=self._ssh_env(),
         )
 
     def scp_to(self, local_path: str, remote_path: str, timeout: int = 120):
@@ -262,12 +280,49 @@ class Router:
         except json.JSONDecodeError:
             return {"raw": resp}
 
+    def pay_direct_mac(self, token: str, mac: str = None) -> dict:
+        mac = mac or self.phone_mac
+        escaped = token.replace("'", "'\\''")
+        resp = self.ssh(
+            f"printf '%s' '{escaped}' > /tmp/tg-pay-token.txt && "
+            f"curl -s -m 20 -X POST '{self.backend_url('/pay?mac=' + mac)}' "
+            f"-H 'Content-Type: text/plain' "
+            f"-d @/tmp/tg-pay-token.txt; "
+            f"rm -f /tmp/tg-pay-token.txt",
+            timeout=60,
+        )
+        try:
+            return json.loads(resp)
+        except json.JSONDecodeError:
+            return {"raw": resp}
+
     def pay_via_header(self, token: str, mac: str = None) -> str:
         mac = mac or self.phone_mac
         return self.ssh(
             f"curl -s -H 'X-Cashu: {token}' "
             f"'http://[::1]:{BACKEND_PORT}/pay?mac={mac}'"
         )
+
+    def get_client_ip_from_nds(self, mac: str = None) -> str:
+        """Look up the IP that NDS registered for a client MAC.
+
+        NDS may see a different IP than the static one configured in env vars
+        (e.g., DHCP-assigned .120 vs static .100 on a dual-IP VM). This queries
+        ndsctl clients and returns the IP NDS actually associated with the MAC.
+        """
+        mac = mac or self.phone_mac
+        if not mac:
+            return ""
+        out = self.ssh("ndsctl clients 2>&1", timeout=10)
+        lines = out.split("\n")
+        mac_clean = mac.replace(":", "").upper()
+        for i, line in enumerate(lines):
+            if mac in line or mac_clean in line.replace(":", "").upper():
+                for j in range(i, min(i + 20, len(lines))):
+                    m = re.search(r"ip=(\S+)", lines[j])
+                    if m:
+                        return m.group(1)
+        return ""
 
     def get_nds_state(self, mac: str = None) -> str:
         mac = mac or self.phone_mac

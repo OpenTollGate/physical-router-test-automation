@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import time
 import logging
 
 from lib.constants import POC_GATEWAY, NDS_PORTAL_PORT
@@ -254,3 +255,112 @@ class ContainerClient:
 
     def is_wifi_connected(self, ssid: str) -> bool:
         return True
+
+    def start_portal_recording(self) -> None:
+        """Start a Playwright session recording video of the portal flow.
+
+        The script runs on the VM and blocks until completion. It:
+        1. Loads the captive portal (unpaid state)
+        2. Screenshots the unpaid portal
+        3. Writes /tmp/tg-portal-ready (signals test to proceed with payment)
+        4. Polls for /tmp/tg-paid (test creates this after payment)
+        5. Reloads the portal (now in paid/authenticated state)
+        6. Screenshots the paid portal
+        7. Navigates to http://1.1.1.1 (verifies internet)
+        8. Screenshots internet access
+        9. Closes context (saves video)
+        """
+        portal_url = f"http://{POC_GATEWAY}:{NDS_PORTAL_PORT}/"
+        script = (
+            "from playwright.sync_api import sync_playwright\n"
+            "import time, os\n"
+            "p = sync_playwright().start()\n"
+            "browser = p.chromium.launch(headless=True, args=['--no-sandbox'])\n"
+            "ctx = browser.new_context(record_video_dir='/tmp/tg-video', record_video_size={'width': 1280, 'height': 720})\n"
+            "page = ctx.new_page()\n"
+            "try:\n"
+            f"    page.goto('{portal_url}', timeout=20000)\n"
+            "    page.wait_for_load_state('networkidle', timeout=15000)\n"
+            "    page.screenshot(path='/tmp/tg-e2e/01-portal-unpaid.png')\n"
+            "    open('/tmp/tg-portal-ready', 'w').close()\n"
+            "    for _ in range(120):\n"
+            "        if os.path.exists('/tmp/tg-paid'):\n"
+            "            break\n"
+            "        time.sleep(0.5)\n"
+            "    else:\n"
+            "        raise TimeoutError('timed out waiting for payment signal')\n"
+            "    time.sleep(2)\n"
+            f"    page.reload(timeout=15000)\n"
+            "    page.wait_for_load_state('networkidle', timeout=10000)\n"
+            "    page.screenshot(path='/tmp/tg-e2e/02-portal-paid.png')\n"
+            "    time.sleep(1)\n"
+            "    page.goto('http://1.1.1.1', timeout=15000)\n"
+            "    page.wait_for_load_state('domcontentloaded', timeout=10000)\n"
+            "    page.screenshot(path='/tmp/tg-e2e/03-internet-access.png')\n"
+            "    print('RECORD_OK')\n"
+            "except Exception as e:\n"
+            "    try:\n"
+            "        page.screenshot(path='/tmp/tg-e2e/99-error.png')\n"
+            "    except Exception:\n"
+            "        pass\n"
+            "    print(f'RECORD_ERROR: {e}')\n"
+            "    open('/tmp/tg-portal-ready', 'w').close()\n"
+            "finally:\n"
+            "    video_path = None\n"
+            "    try:\n"
+            "        video_path = page.video.path()\n"
+            "    except Exception:\n"
+            "        pass\n"
+            "    ctx.close()\n"
+            "    browser.close()\n"
+            "    if video_path:\n"
+            "        import shutil\n"
+            "        shutil.copy2(str(video_path), '/tmp/tg-e2e/portal-flow.webm')\n"
+            "    p.stop()\n"
+        )
+        self._exec(
+            "rm -f /tmp/tg-portal-ready /tmp/tg-paid && "
+            "mkdir -p /tmp/tg-e2e /tmp/tg-video && "
+            f"cat > /tmp/tg-record.py << 'PYEOF'\n{script}\nPYEOF",
+            timeout=15,
+        )
+
+    def wait_for_portal_ready(self, timeout: int = 30) -> bool:
+        for _ in range(timeout * 2):
+            try:
+                out = self._exec("test -f /tmp/tg-portal-ready && echo YES || echo NO", timeout=5)
+                if "YES" in out:
+                    return True
+            except Exception:
+                pass
+            time.sleep(0.5)
+        return False
+
+    def signal_paid(self) -> None:
+        self._exec("touch /tmp/tg-paid")
+
+    def finish_portal_recording(self, output_dir: str, timeout: int = 90) -> dict[str, object]:
+        """Wait for the recording script to finish and collect artifacts.
+
+        Returns dict with 'screenshots' (list of local paths) and 'video' (path or None).
+        """
+        os.makedirs(output_dir, exist_ok=True)
+        result = self._exec("python3 /tmp/tg-record.py", timeout=timeout)
+        log.info("portal recording result: %s", result)
+
+        screenshots = []
+        for name in ["01-portal-unpaid", "02-portal-paid", "03-internet-access", "99-error"]:
+            remote = f"/tmp/tg-e2e/{name}.png"
+            local = os.path.join(output_dir, f"{name}.png")
+            self._scp_from(remote, local)
+            if os.path.exists(local):
+                screenshots.append(local)
+
+        video_local = os.path.join(output_dir, "portal-flow.webm")
+        self._scp_from("/tmp/tg-e2e/portal-flow.webm", video_local, timeout=60)
+
+        return {
+            "screenshots": screenshots,
+            "video": video_local if os.path.exists(video_local) else None,
+            "ok": "RECORD_OK" in result,
+        }
