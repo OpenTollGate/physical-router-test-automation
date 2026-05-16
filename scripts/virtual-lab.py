@@ -105,7 +105,7 @@ if not connected:
 
 print('Connected to serial console, waiting for VM to boot...')
 
-# Wait for the boot prompt
+s.sendall(b'\n')
 deadline = time.time() + BOOT_TIMEOUT
 booted = False
 while time.time() < deadline:
@@ -205,6 +205,7 @@ if not connected:
 print('Connected to Debian serial console, waiting for VM to boot...')
 
 # Wait for the login prompt (nocloud image boots to login:)
+s.sendall(b'\n')
 deadline = time.time() + BOOT_TIMEOUT
 booted = False
 while time.time() < deadline:
@@ -223,14 +224,28 @@ if not booted:
 
 print('\nLogin prompt detected, logging in as root...')
 
-# Login as root (nocloud has no password)
-send_and_wait(s, 'root', wait=3)
-recv_all(s, timeout=1)
+time.sleep(2)
+s.sendall(b'root\n')
+time.sleep(3)
+data = recv_all(s, timeout=2)
+sys.stdout.write(data)
+sys.stdout.flush()
 
-# --- Set root password ---
-print('Setting root password...')
-resp = send_and_wait(s, "echo root:" + PASSWORD + " | chpasswd", wait=5)
-print(resp.strip())
+if 'Password:' in data or 'password:' in data:
+    s.sendall((PASSWORD + '\n').encode())
+    time.sleep(3)
+    data = recv_all(s, timeout=2)
+    sys.stdout.write(data)
+    sys.stdout.flush()
+
+s.sendall(b'\n')
+time.sleep(2)
+data = recv_all(s, timeout=2)
+sys.stdout.write(data)
+sys.stdout.flush()
+
+print('Waiting for cloud-init to finish...')
+send_and_wait(s, 'cloud-init status --wait 2>/dev/null || true', wait=30)
 
 # --- Configure networking (static IP) ---
 print('Configuring networking...')
@@ -238,20 +253,20 @@ send_and_wait(s, 'ip link set ens3 up', wait=2)
 send_and_wait(s, 'ip addr add 192.168.1.100/24 dev ens3', wait=2)
 send_and_wait(s, 'ip route add default via 192.168.1.1', wait=2)
 send_and_wait(s, 'echo "nameserver 192.168.1.1" > /etc/resolv.conf', wait=2)
+send_and_wait(s, 'sleep 5 && ping -c 1 -W 5 192.168.1.1', wait=10)
 
-# --- Resize disk ---
+print('Installing openssh-server...')
+send_and_wait(s, 'apt-get update -qq', wait=60)
+send_and_wait(s, 'apt-get install -y -qq openssh-server', wait=60)
+send_and_wait(s, "sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config", wait=2)
+send_and_wait(s, "sed -i 's/^PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config", wait=2)
+send_and_wait(s, "sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config", wait=2)
+send_and_wait(s, 'systemctl enable --now ssh', wait=5)
+
 print('Resizing disk partition...')
-send_and_wait(s, 'apt-get update -qq', wait=30)
-send_and_wait(s, 'apt-get install -y -qq cloud-guest-utils', wait=30)
+send_and_wait(s, 'apt-get install -y -qq cloud-guest-utils', wait=60)
 send_and_wait(s, 'growpart /dev/vda 1', wait=10)
 send_and_wait(s, 'resize2fs /dev/vda1', wait=10)
-
-# --- Enable SSH with password auth ---
-print('Installing and enabling SSH...')
-send_and_wait(s, "sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config", wait=2)
-send_and_wait(s, "sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config", wait=2)
-send_and_wait(s, 'apt-get install -y -qq openssh-server', wait=30)
-send_and_wait(s, 'systemctl enable --now ssh', wait=5)
 
 print('DEBIAN PROVISIONED OK')
 s.close()
@@ -278,31 +293,50 @@ def run_local(command: list[str], timeout: int = 30) -> CommandResult:
 
 def run_remote(host: str, script: str, timeout: int = 60) -> CommandResult:
     if host in {"", "local", "localhost", "127.0.0.1"}:
-        raw = script
-        if raw.startswith("bash -lc "):
-            raw = shlex.split(raw)[2]
-        proc = subprocess.run(
-            ["bash", "-c", raw],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as tf:
+            tf.write(script)
+            tf.flush()
+            tmppath = tf.name
+        try:
+            proc = subprocess.run(
+                ["bash", tmppath],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"TIMEOUT running {tmppath}", file=sys.stderr, flush=True)
+            os.unlink(tmppath)
+            return CommandResult(1, "", "TIMEOUT")
+        stderr_out = proc.stderr
+        if proc.returncode != 0:
+            saved = "/tmp/failed-script.sh"
+            os.rename(tmppath, saved)
+            print(f"Saved failed script to {saved}", file=sys.stderr, flush=True)
+            print(f"rc={proc.returncode} stderr={stderr_out[:300]}", file=sys.stderr, flush=True)
+            return CommandResult(proc.returncode, proc.stdout.strip(), stderr_out)
+        os.unlink(tmppath)
         return CommandResult(proc.returncode, proc.stdout.strip(), proc.stderr.strip())
+    if not script.startswith("bash -lc "):
+        script = quote_script(script)
     return run_local(["ssh", host, script], timeout=timeout)
 
 
 def run_python_on_host(host: str, python_code: str, timeout: int = 120) -> CommandResult:
-    """Execute Python code on the target host (local or remote via SSH)."""
     if host in {"", "local", "localhost", "127.0.0.1"}:
-        proc = subprocess.run(
-            ["python3"],
-            input=python_code,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                ["python3"],
+                input=python_code,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return CommandResult(1, "", "TIMEOUT")
     else:
         proc = subprocess.run(
             ["ssh", host, "python3"],
@@ -435,7 +469,7 @@ for router in seller reseller; do
   fi
 done
 qemu-img info "$workdir/images/openwrt-base.qcow2"
-printf '\nPrepared overlays:\n'
+printf '\\nPrepared overlays:\\n'
 ls -lh "$workdir/overlays"
 '''
     result = run_remote(host, quote_script(script), timeout=900)
@@ -475,7 +509,7 @@ if [ ! -f "$overlay" ]; then
 fi
 qemu-img resize "$overlay" 10G
 
-printf 'Prepared Debian nocloud client image\n'
+printf 'Prepared Debian nocloud client image\\n'
 qemu-img info "$overlay"
 '''
     return _print_result(run_remote(host, quote_script(script), timeout=600))
@@ -499,11 +533,56 @@ def _client_paths(workdir: str) -> tuple[str, str]:
 
 
 def _generate_provision_script(workdir: str) -> str:
-    """Return a self-contained Python script that provisions the OpenWrt VM
-    over the QEMU serial-console Unix socket."""
     pwd = POC_PASSWORD.replace("'", "'\\''")
     wdir = workdir.replace("'", "'\\''")
     return _PROVISION_TEMPLATE.replace("__WORKDIR__", wdir).replace("__PASSWORD__", pwd)
+
+
+def _generate_ssh_key_inject_script(workdir: str) -> str:
+    import base64
+    wdir = workdir.replace("'", "'\\''")
+    pubkey_path = os.path.expanduser('~/.ssh/id_ed25519.pub')
+    if not os.path.exists(pubkey_path):
+        pubkey_path = os.path.expanduser('~/.ssh/id_rsa.pub')
+    pubkey = ''
+    if os.path.exists(pubkey_path):
+        with open(pubkey_path) as f:
+            pubkey = f.read().strip()
+    setup_script = f'mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo "{pubkey}" > /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && echo KEY_OK'
+    b64 = base64.b64encode(setup_script.encode()).decode()
+    return f'''
+import socket, time, sys, os
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock_path = os.path.expanduser('{wdir}') + '/run/serial-client.sock'
+deadline = time.time() + 10
+connected = False
+while time.time() < deadline:
+    try:
+        s.connect(sock_path)
+        connected = True
+        break
+    except (ConnectionRefusedError, FileNotFoundError):
+        time.sleep(1)
+if not connected:
+    print('Cannot connect to serial socket')
+    sys.exit(1)
+s.settimeout(2)
+try:
+    while True:
+        d = s.recv(4096)
+        if not d: break
+except: pass
+s.sendall(('echo {b64} | base64 -d | bash' + chr(10)).encode())
+time.sleep(3)
+s.settimeout(2)
+try:
+    while True:
+        d = s.recv(4096)
+        if not d: break
+        sys.stdout.write(d.decode('utf-8', errors='replace'))
+except: pass
+s.close()
+'''
 
 
 def _generate_debian_provision_script(workdir: str) -> str:
@@ -530,12 +609,12 @@ disk={disk}
 pidfile={pidfile}
 
 if [ ! -f "$base" ]; then
-  printf 'OpenWrt base image missing. Run prepare-image first.\n' >&2
+  printf 'OpenWrt base image missing. Run prepare-image first.\\n' >&2
   exit 1
 fi
 
 if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
-  printf 'POC VM already running with pid %s\n' "$(cat "$pidfile")"
+  printf 'POC VM already running with pid %s\\n' "$(cat "$pidfile")"
   exit 0
 fi
 
@@ -581,9 +660,9 @@ nohup qemu-system-x86_64 \
   -netdev tap,id=lan,ifname={POC_TAP},script=no,downscript=no \
   -device virtio-net-pci,netdev=lan,mac={POC_OPENWRT_MAC} \
   >"$workdir/run/qemu.stdout" 2>"$workdir/run/qemu.stderr" &
-printf '%s\n' "$!" > "$pidfile"
+printf '%s\\n' "$!" > "$pidfile"
 
-printf 'Started POC OpenWrt VM pid=%s\n' "$(cat "$pidfile")"
+printf 'Started POC OpenWrt VM pid=%s\\n' "$(cat "$pidfile")"
 '''
     rc = _print_result(run_remote(host, quote_script(infra_script), timeout=120))
     if rc != 0:
@@ -614,8 +693,7 @@ printf 'Started POC OpenWrt VM pid=%s\n' "$(cat "$pidfile")"
         print("SSH verification failed.", file=sys.stderr)
         return rc
 
-    # Step 4: Debian client VM
-    print("Starting Debian client VM...")
+    print("Starting Debian client VM...", flush=True)
     client_pidfile, client_disk = _client_paths(workdir)
     client_script = f'''
 set -eu
@@ -625,12 +703,12 @@ client_pidfile={client_pidfile}
 client_disk={client_disk}
 
 if [ -f "$client_pidfile" ] && kill -0 "$(cat "$client_pidfile")" 2>/dev/null; then
-  printf 'Debian client VM already running with pid %s\n' "$(cat "$client_pidfile")"
+  printf 'Debian client VM already running with pid %s\\n' "$(cat "$client_pidfile")"
   exit 0
 fi
 
 if [ ! -f "$client_disk" ]; then
-  printf 'Debian client image missing. Run prepare-debian first.\n' >&2
+  printf 'Debian client image missing. Run prepare-debian first.\\n' >&2
   exit 1
 fi
 
@@ -638,29 +716,38 @@ sudo ip tuntap add dev {DEBIAN_TAP} mode tap user "$USER"
 sudo ip link set {DEBIAN_TAP} master {POC_BRIDGE}
 sudo ip link set {DEBIAN_TAP} up
 
+seed_iso="$workdir/images/seed.iso"
+cdrom_opts=""
+if [ -f "$seed_iso" ]; then
+  cdrom_opts="-cdrom $seed_iso"
+fi
 nohup qemu-system-x86_64 \
   -enable-kvm \
   -m {DEBIAN_RAM} \
   -smp 2 \
   -nographic \
   -drive file="$client_disk",if=virtio \
+  $cdrom_opts \
   -netdev tap,id=client,ifname={DEBIAN_TAP},script=no,downscript=no \
   -device virtio-net-pci,netdev=client,mac={DEBIAN_MAC} \
   -serial unix:"$workdir/run/serial-client.sock",server,nowait \
   -monitor unix:"$workdir/run/monitor-client.sock",server,nowait \
   >"$workdir/run/qemu-client.stdout" 2>"$workdir/run/qemu-client.stderr" &
-printf '%s\n' "$!" > "$client_pidfile"
+printf '%s\\n' "$!" > "$client_pidfile"
 
-printf 'Started Debian client VM pid=%s\n' "$(cat "$client_pidfile)"
+printf 'Started Debian client VM pid=%s\\n' "$(cat "$client_pidfile")"
 '''
-    rc = _print_result(run_remote(host, quote_script(client_script), timeout=120))
+    try:
+        rc = _print_result(run_remote(host, client_script, timeout=120))
+    except Exception as e:
+        print(f"Step 4 FAILED: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        return 1
     if rc != 0:
         return rc
 
-    # Step 5: provision Debian VM via serial console
-    print("Provisioning Debian VM via serial console...")
+    print("Step 5: provision Debian VM via serial console...", flush=True)
     debian_provision_script = _generate_debian_provision_script(workdir)
-    result = run_python_on_host(host, debian_provision_script, timeout=300)
+    result = run_python_on_host(host, debian_provision_script, timeout=600)
     if result.stdout:
         print(result.stdout)
     if result.stderr:
@@ -669,8 +756,27 @@ printf 'Started Debian client VM pid=%s\n' "$(cat "$client_pidfile)"
         print("Debian serial console provisioning failed.", file=sys.stderr)
         return result.returncode
 
-    # Step 6: verify SSH to Debian VM
-    print("Verifying SSH access to Debian VM...")
+    # Step 5b: inject SSH key and set root password.
+    # chpasswd over the serial console gets corrupted by terminal escape
+    # sequences, so we inject the host SSH key via base64, then set the
+    # password through SSH (which avoids the serial console entirely).
+    print("Injecting SSH key into Debian VM...", flush=True)
+    ssh_key_script = _generate_ssh_key_inject_script(workdir)
+    key_result = run_python_on_host(host, ssh_key_script, timeout=60)
+    if key_result.returncode != 0:
+        print(f"SSH key injection failed: {key_result.stderr}", file=sys.stderr)
+
+    print("Setting root password via SSH...", flush=True)
+    pw_script = (
+        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o ConnectTimeout=10 -o LogLevel=ERROR "
+        f"root@{DEBIAN_CLIENT_IP} 'echo root:{POC_PASSWORD} | chpasswd'"
+    )
+    rc = _print_result(run_remote(host, quote_script(pw_script), timeout=30))
+    if rc != 0:
+        print("Warning: SSH password setup failed, continuing with key auth only.", file=sys.stderr)
+
+    print("Step 6: verify SSH to Debian VM...", flush=True)
     ssh_verify_debian = (
         f"sshpass -p {POC_PASSWORD} ssh "
         f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
@@ -741,7 +847,6 @@ workdir=$(eval printf '%s' "$workdir")
 pidfile={pidfile}
 client_pidfile={client_pidfile}
 
-# Kill via pidfiles
 for pf in "$client_pidfile" "$pidfile"; do
   if [ -f "$pf" ]; then
     p=$(cat "$pf")
@@ -752,15 +857,14 @@ for pf in "$client_pidfile" "$pidfile"; do
   fi
 done
 
-# Fallback: kill any stray QEMU processes from our workdir
-pkill -f "drive file=.*{shlex.quote(workdir)}" 2>/dev/null || true
+ps aux | grep 'qemu-system.*drive file=' | grep -v grep | awk '{{print $2}}' | xargs kill 2>/dev/null || true
 sleep 1
 
 sudo ip link del {DEBIAN_TAP} 2>/dev/null || true
 sudo ip link del {POC_TAP} 2>/dev/null || true
 sudo ip link del {POC_BRIDGE} 2>/dev/null || true
 
-printf 'Stopped POC virtual lab\n'
+printf 'Stopped POC virtual lab\\n'
 '''
     return _print_result(run_remote(host, quote_script(script), timeout=60))
 
@@ -779,52 +883,52 @@ disk={disk}
 client_pidfile={client_pidfile}
 client_disk={client_disk}
 
-printf '== OpenWrt QEMU ==\n'
+printf '== OpenWrt QEMU ==\\n'
 if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
-  printf 'running pid=%s\n' "$(cat "$pidfile")"
+  printf 'running pid=%s\\n' "$(cat "$pidfile")"
 else
-  printf 'not running\n'
+  printf 'not running\\n'
 fi
 
-printf '\n== Debian client QEMU ==\n'
+printf '\\n== Debian client QEMU ==\\n'
 if [ -f "$client_pidfile" ] && kill -0 "$(cat "$client_pidfile")" 2>/dev/null; then
-  printf 'running pid=%s\n' "$(cat "$client_pidfile")"
+  printf 'running pid=%s\\n' "$(cat "$client_pidfile")"
 else
-  printf 'not running\n'
+  printf 'not running\\n'
 fi
 
-printf '\n== network ==\n'
+printf '\\n== network ==\\n'
 ip link show {POC_BRIDGE} 2>/dev/null || true
 ip link show {POC_TAP} 2>/dev/null || true
 ip link show {DEBIAN_TAP} 2>/dev/null || true
 ip addr show {POC_BRIDGE} 2>/dev/null | grep -F 'inet ' || true
 
-printf '\n== DHCP leases (from OpenWrt) ==\n'
+printf '\\n== DHCP leases (from OpenWrt) ==\\n'
 sshpass -p {POC_PASSWORD} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR root@{POC_GATEWAY} "cat /tmp/dhcp.leases" 2>/dev/null || printf 'unavailable\n'
 
-printf '\n== Debian client (static) ==\n'
-printf 'Static IP: {DEBIAN_CLIENT_IP}\n'
+printf '\\n== Debian client (static) ==\\n'
+printf 'Static IP: {DEBIAN_CLIENT_IP}\\n'
 if sshpass -p {POC_PASSWORD} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=3 -o LogLevel=ERROR root@{DEBIAN_CLIENT_IP} "echo reachable" 2>/dev/null; then
-  printf 'SSH: reachable\n'
+  printf 'SSH: reachable\\n'
 else
-  printf 'SSH: unreachable\n'
+  printf 'SSH: unreachable\\n'
 fi
 
-printf '\n== disk ==\n'
+printf '\\n== disk ==\\n'
 if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
   ls -lh "$disk" 2>/dev/null || true
-  printf 'qcow2 is in use by the running VM; skipping qemu-img info\n'
+  printf 'qcow2 is in use by the running VM; skipping qemu-img info\\n'
 elif [ -f "$disk" ]; then
   qemu-img info "$disk"
 else
-  printf 'missing %s\n' "$disk"
+  printf 'missing %s\\n' "$disk"
 fi
 
-printf '\n== serial console ==\n'
+printf '\\n== serial console ==\\n'
 if [ -S "$workdir/run/serial.sock" ]; then
-  printf 'serial socket: $workdir/run/serial.sock (ready)\n'
+  printf 'serial socket: $workdir/run/serial.sock (ready)\\n'
 else
-  printf 'serial socket not found\n'
+  printf 'serial socket not found\\n'
 fi
 '''
     return _print_result(run_remote(host, quote_script(script), timeout=60))
@@ -838,12 +942,12 @@ set +e
 deadline=$((SECONDS + {timeout}))
 while [ "$SECONDS" -lt "$deadline" ]; do
   if sshpass -p {POC_PASSWORD} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR root@{DEBIAN_CLIENT_IP} "ping -c 1 -W 2 {POC_GATEWAY}" >/dev/null 2>&1; then
-    printf 'PASS: Debian client {DEBIAN_CLIENT_IP} reached OpenWrt gateway {POC_GATEWAY}\n'
+    printf 'PASS: Debian client {DEBIAN_CLIENT_IP} reached OpenWrt gateway {POC_GATEWAY}\\n'
     exit 0
   fi
   sleep 2
 done
-printf 'FAIL: Debian client {DEBIAN_CLIENT_IP} could not reach OpenWrt gateway {POC_GATEWAY}\n' >&2
+printf 'FAIL: Debian client {DEBIAN_CLIENT_IP} could not reach OpenWrt gateway {POC_GATEWAY}\\n' >&2
 exit 1
 '''
     return _print_result(run_remote(host, quote_script(script), timeout=timeout + 10))
