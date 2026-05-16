@@ -1,0 +1,13 @@
+name: api
+description: Full API test suite — no phone required
+deploy: false
+reset: false
+exclusive_router: false
+runners:
+  - name: api
+    command: ./scripts/run-api.sh --no-render
+    framework: pytest
+    markers: [api]
+    timeout: 60
+required_capabilities:
+  - router

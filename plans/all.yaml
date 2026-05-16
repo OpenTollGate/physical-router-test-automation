@@ -1,0 +1,24 @@
+name: all
+description: Run all test tiers — Playwright LuCI + pytest API + pytest phone
+deploy: false
+reset: false
+exclusive_router: true
+runners:
+  - name: playwright
+    command: ./scripts/run-tests.sh --no-render
+    framework: playwright
+    timeout: 120
+  - name: api
+    command: ./scripts/run-api.sh --no-render
+    framework: pytest
+    markers: [api]
+    timeout: 60
+  - name: phone
+    command: ./scripts/run-phone.sh --no-render
+    framework: pytest
+    markers: [phone]
+    timeout: 300
+required_capabilities:
+  - router
+  - luci_access
+  - adb_device

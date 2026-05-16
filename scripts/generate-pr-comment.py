@@ -18,6 +18,7 @@ PR_FILE_MAP = {
     "test_session_expiry_and_scan": 106,
 }
 
+
 def parse_pr_marker(nodeid, pr_markers):
     match = re.search(r'\[pr(\d+)\]', nodeid, re.IGNORECASE)
     if match:
@@ -36,11 +37,12 @@ def parse_pr_marker(nodeid, pr_markers):
 
     return None
 
-def group_tests_by_pr(results_json, run_json):
-    pr_markers = run_json.get('pr_markers', {})
+
+def group_tests_by_pr(summary_data, run_data):
+    pr_markers = run_data.get('pr_markers', {})
 
     test_map = {}
-    for test in results_json.get('tests', []):
+    for test in summary_data.get('tests', []):
         nodeid = test.get('nodeid', '')
         outcome = test.get('outcome', 'unknown')
         if nodeid:
@@ -67,29 +69,170 @@ def group_tests_by_pr(results_json, run_json):
 
     return {pr_num: tests for pr_num, tests in pr_test_map.items() if tests}
 
+
 def format_status(outcome):
-    if outcome == 'passed':
-        return '✅ PASS'
-    elif outcome == 'failed':
-        return '❌ FAIL'
-    elif outcome == 'skipped':
-        return '⏭️ SKIP'
+    if outcome in ('passed', '✅'):
+        return '✅'
+    elif outcome in ('failed', '❌'):
+        return '❌'
+    elif outcome in ('skipped', '⏭️'):
+        return '⏭️'
     return outcome
+
+
+def format_duration(ms):
+    if ms is None:
+        return "—"
+    seconds = ms / 1000
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{minutes}m{secs}s"
+
 
 def generate_comment(results_dir, gh_pages_url):
     results_dir = Path(results_dir)
 
     run_json_path = results_dir / 'run.json'
-    results_json_path = results_dir / 'report' / 'results.json'
+    summary_json_path = results_dir / 'summary.json'
 
     if not run_json_path.exists():
         raise FileNotFoundError(f'run.json not found in {results_dir}')
 
-    if not results_json_path.exists():
-        raise FileNotFoundError(f'report/results.json not found in {results_dir}')
-
     with open(run_json_path) as f:
         run_data = json.load(f)
+
+    schema_version = run_data.get('schema_version', 0)
+    if schema_version >= 1:
+        return _generate_comment_canonical(run_data, results_dir, summary_json_path, gh_pages_url)
+    else:
+        return _generate_comment_legacy(run_data, results_dir, gh_pages_url)
+
+
+def _generate_comment_canonical(run_data, results_dir, summary_json_path, gh_pages_url):
+    sut = run_data.get('sut', {})
+    lab = run_data.get('lab', {})
+    counts = run_data.get('counts', {})
+    runners = run_data.get('runners', [])
+
+    commit_short = sut.get('commit_short', 'unknown')
+    branch = sut.get('branch', 'unknown')
+    pr_num = sut.get('pr')
+    backend = sut.get('backend', 'unknown')
+    repo = sut.get('repo', 'OpenTollGate/tollgate-module-basic-go')
+
+    router_model = lab.get('router_model', 'unknown')
+    router_arch = lab.get('router_arch', 'unknown')
+    client_type = lab.get('client_type', 'unknown')
+
+    passed = counts.get('passed', 0)
+    failed = counts.get('failed', 0)
+    skipped = counts.get('skipped', 0)
+    errors = counts.get('errors', 0)
+    total = counts.get('total', 0)
+
+    run_status = run_data.get('status', 'unknown')
+    if run_status == 'passed':
+        status_badge = '✅ PASSED'
+    elif run_status == 'failed':
+        status_badge = '❌ FAILED'
+    elif run_status == 'error':
+        status_badge = '⚠️ ERROR'
+    else:
+        status_badge = f'❓ {run_status.upper()}'
+
+    commit_url = f'https://github.com/{repo}/commit/{commit_short}' if commit_short != 'unknown' else None
+
+    summary_data = {}
+    if summary_json_path.exists():
+        with open(summary_json_path) as f:
+            summary_data = json.load(f)
+    else:
+        pass
+
+    lines = []
+    lines.append(f'## Physical Router Test Results: {status_badge}')
+    lines.append('')
+
+    commit_link = f'[`{commit_short}`]({commit_url})' if commit_url else f'`{commit_short}`'
+    pr_info = f' | **PR**: #{pr_num}' if pr_num else ''
+    lines.append(f'**Commit**: {commit_link} | **Branch**: {branch} | **Backend**: {backend}{pr_info}')
+    lines.append(f'**Router**: {router_model} ({router_arch}) | **Client**: {client_type}')
+    lines.append('')
+
+    if runners:
+        lines.append('### Runners')
+        lines.append('| Runner | Status | Passed | Failed | Skipped | Duration |')
+        lines.append('|--------|--------|--------|--------|---------|----------|')
+        for runner in runners:
+            rname = runner.get('name', 'unknown')
+            rstatus = format_status(runner.get('status', 'unknown'))
+            rcounts = runner.get('counts', {})
+            rp = rcounts.get('passed', 0)
+            rf = rcounts.get('failed', 0)
+            rs = rcounts.get('skipped', 0)
+            rd = format_duration(runner.get('duration_ms'))
+            lines.append(f'| {rname} | {rstatus} | {rp} | {rf} | {rs} | {rd} |')
+        lines.append('')
+
+    failed_tests = summary_data.get('failed_tests', [])
+    if failed_tests:
+        lines.append('### Failed Tests')
+        lines.append('| Runner | Test | Message |')
+        lines.append('|--------|------|---------|')
+        for ft in failed_tests:
+            runner_name = ft.get('runner', '—')
+            test_name = ft.get('name', ft.get('nodeid', 'unknown'))
+            message = ft.get('message', ft.get('failure_message', ''))
+            message = message.replace('|', '\\|').replace('\n', ' ')[:200]
+            lines.append(f'| {runner_name} | `{test_name}` | {message} |')
+        lines.append('')
+    else:
+        lines.append('### Failed Tests')
+        lines.append('None')
+        lines.append('')
+
+    skipped_tests = [t for t in summary_data.get('tests', []) if t.get('outcome') == 'skipped']
+    if skipped_tests:
+        lines.append(f'### Skipped Tests ({len(skipped_tests)})')
+        lines.append('<details>')
+        lines.append('<summary>Click to expand</summary>')
+        lines.append('')
+        lines.append('| Runner | Test | Reason |')
+        lines.append('|--------|------|--------|')
+        for st in skipped_tests:
+            runner_name = st.get('runner', '—')
+            test_name = st.get('name', st.get('nodeid', 'unknown'))
+            reason = st.get('reason', st.get('skip_reason', ''))
+            reason = reason.replace('|', '\\|').replace('\n', ' ')[:200]
+            lines.append(f'| {runner_name} | `{test_name}` | {reason} |')
+        lines.append('')
+        lines.append('</details>')
+        lines.append('')
+
+    run_id = run_data.get('run_id', results_dir.name)
+    report_url = f'{gh_pages_url}/reports/{run_id}/'
+    lines.append(f'📊 **Full report**: [View on gh-pages]({report_url})')
+    lines.append('')
+    lines.append('---')
+    lines.append('*Tests ran on physical hardware by [physical-router-test-automation](https://github.com/OpenTollGate/physical-router-test-automation).*')
+
+    markdown = '\n'.join(lines)
+    print(markdown)
+
+    output_path = results_dir / 'pr-comment.md'
+    with open(output_path, 'w') as f:
+        f.write(markdown)
+
+    return markdown
+
+
+def _generate_comment_legacy(run_data, results_dir, gh_pages_url):
+    results_json_path = results_dir / 'report' / 'results.json'
+
+    if not results_json_path.exists():
+        raise FileNotFoundError(f'report/results.json not found in {results_dir}')
 
     with open(results_json_path) as f:
         results_data = json.load(f)
@@ -108,15 +251,12 @@ def generate_comment(results_dir, gh_pages_url):
     skipped = summary.get('skipped', 0)
     total = summary.get('total', 0)
 
-    router_state = run_data.get('router_state', 'unknown')
-    mint_status = run_data.get('mint_status', {})
-
     pr_tests = group_tests_by_pr(results_data, run_data)
 
     repo = run_data.get('repo', 'OpenTollGate/tollgate-module-basic-go')
     pr_url = run_data.get('pr_url') or f'https://github.com/{repo}/pull/{pr_num}'
     commit_url = run_data.get('commit_url') or f'https://github.com/{repo}/commit/{commit}'
-    compare_url = run_data.get('compare_url')
+
     lines = []
     lines.append('## 🧪 Physical Router Test Results')
 
@@ -134,7 +274,7 @@ def generate_comment(results_dir, gh_pages_url):
         try:
             dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
             lines.append(f'**Date**: {dt.strftime("%Y-%m-%dT%H:%M:%SZ")}')
-        except:
+        except Exception:
             lines.append(f'**Date**: {timestamp}')
 
     lines.append('')
@@ -151,9 +291,9 @@ def generate_comment(results_dir, gh_pages_url):
         lines.append('### PR-Specific Tests')
 
         pr_list = sorted(pr_tests.keys())
-        for pr_num in pr_list:
-            pr_tests_data = pr_tests[pr_num]
-            pr_name = f'PR #{pr_num}'
+        for pr_num_key in pr_list:
+            pr_tests_data = pr_tests[pr_num_key]
+            pr_name = f'PR #{pr_num_key}'
             lines.append('')
             lines.append(f'#### {pr_name}')
             lines.append('')
@@ -173,20 +313,6 @@ def generate_comment(results_dir, gh_pages_url):
         lines.append('All tests were run. PR-specific grouping could not be determined.')
 
     lines.append('')
-    lines.append('### Router State')
-    lines.append(f'- **Installed version**: {installed_version}')
-    build_time_val = run_data.get('build_time', 'unknown')
-    lines.append(f'- **Build time**: {build_time_val}')
-
-    if router_state:
-        lines.append(f'- **Router state**: {router_state}')
-
-    if mint_status:
-        mint_list = '\n'.join([f'- {k}: {v}' for k, v in mint_status.items()])
-        lines.append(f'- **Mint status**:')
-        lines.append(mint_list)
-
-    lines.append('')
     lines.append(f'📊 **Full report**: [View on gh-pages]({gh_pages_url}/reports/{results_dir.name}/)')
 
     lines.append('')
@@ -194,21 +320,24 @@ def generate_comment(results_dir, gh_pages_url):
     lines.append('*Tests ran on physical hardware by [physical-router-test-automation](https://github.com/OpenTollGate/physical-router-test-automation).*')
 
     markdown = '\n'.join(lines)
-
     print(markdown)
 
     output_path = results_dir / 'pr-comment.md'
     with open(output_path, 'w') as f:
         f.write(markdown)
 
+    return markdown
+
+
 def main():
     parser = argparse.ArgumentParser(description='Generate PR comment from test results')
-    parser.add_argument('--results-dir', required=True, help='Path to results directory containing run.json and report/results.json')
+    parser.add_argument('--results-dir', required=True, help='Path to canonical run directory containing run.json')
     parser.add_argument('--gh-pages-url', default='https://OpenTollGate.github.io/physical-router-test-automation', help='Base URL for gh-pages')
 
     args = parser.parse_args()
 
     generate_comment(args.results_dir, args.gh_pages_url)
+
 
 if __name__ == '__main__':
     main()

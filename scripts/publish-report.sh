@@ -2,19 +2,22 @@
 set -euo pipefail
 
 # ── publish-report.sh ────────────────────────────────────────────────
-# Publish a Playwright test report to gh-pages, preserving existing
-# reports and generating a self-contained HTML dashboard.
+# Publish a test report to gh-pages, preserving existing reports and
+# generating a self-contained HTML dashboard.
 #
-# Usage: ./scripts/publish-report.sh <run-dir> [tollgate-commit]
+# Usage: ./scripts/publish-report.sh <run-dir>
 #
-# <run-dir> must contain:
-#   report/     — Playwright HTML report
-#   run.json    — metadata for this run
+# <run-dir> is a canonical run directory like results/20260516T172600Z-abc1234
+# and must contain:
+#   run.json          — canonical run metadata (new or old schema)
+#   summary.json      — test summary
+#   report/index.html — HTML test report
 #
-# If tollgate-commit is not provided, it is read from run.json.
+# ALL JSON parsing uses inline Python. No grep/sed JSON hacks.
+# Standalone script — does NOT import from lib/.
 # ─────────────────────────────────────────────────────────────────────
 
-RUN_DIR="${1:?Usage: $0 <run-dir> [tollgate-commit]}"
+RUN_DIR="${1:?Usage: $0 <run-dir>}"
 RUN_DIR="$(cd "$(dirname "$RUN_DIR")" && pwd)/$(basename "$RUN_DIR")"
 
 if [ ! -d "$RUN_DIR" ]; then
@@ -22,81 +25,91 @@ if [ ! -d "$RUN_DIR" ]; then
   exit 1
 fi
 
-if [ ! -f "$RUN_DIR/run.json" ]; then
-  echo "ERROR: run.json not found in $RUN_DIR" >&2
-  exit 1
-fi
+for required in run.json summary.json report/index.html; do
+  if [ ! -f "$RUN_DIR/$required" ]; then
+    echo "ERROR: $required not found in $RUN_DIR" >&2
+    exit 1
+  fi
+done
 
-if [ ! -d "$RUN_DIR/report" ]; then
-  echo "ERROR: report/ directory not found in $RUN_DIR" >&2
-  exit 1
-fi
+# ── Helper: read a field from run.json using Python ──────────────────
+# Supports dot notation for nested keys (e.g., sut.commit, counts.passed).
+# Returns empty string for missing/null, 'true'/'false' for booleans.
 
-# ── JSON helpers (no jq) ────────────────────────────────────────────
-
-json_string() {
-  # Extract a string value from JSON by key name.
-  # Handles "key": "value" with optional whitespace.
-  local file="$1" key="$2"
-  grep -o "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$file" \
-    | head -1 \
-    | sed "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\(.*\)\"/\1/"
+read_run_json() {
+  python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    d = json.load(f)
+keys = sys.argv[2].split('.')
+v = d
+for k in keys:
+    if isinstance(v, dict):
+        v = v.get(k)
+    else:
+        v = None
+        break
+if v is None:
+    print('')
+elif isinstance(v, bool):
+    print('true' if v else 'false')
+else:
+    print(v)
+" "$RUN_DIR/run.json" "$1"
 }
 
-json_number() {
-  # Extract a numeric value from JSON by key name.
-  local file="$1" key="$2"
-  grep -o "\"${key}\"[[:space:]]*:[[:space:]]*[0-9]*" "$file" \
-    | head -1 \
-    | sed "s/.*\"${key}\"[[:space:]]*:[[:space:]]*//"
+# ── Helper: backward-compatible field reader ─────────────────────────
+# Try new nested path first, fall back to old flat key, then default.
+
+read_field() {
+  local new_path="$1" old_key="${2:-}" default="${3:-}"
+  local val
+  val="$(read_run_json "$new_path")"
+  if [[ -z "$val" && -n "$old_key" ]]; then
+    val="$(read_run_json "$old_key")"
+  fi
+  echo "${val:-$default}"
+}
+
+# ── Helper: format ISO timestamp to human-readable ───────────────────
+
+format_timestamp() {
+  local ts="$1"
+  python3 -c "
+import sys
+from datetime import datetime
+ts = sys.argv[1]
+for fmt in ('%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H-%M-%S', '%Y-%m-%dT%H-%M-%SZ'):
+    try:
+        dt = datetime.strptime(ts, fmt)
+        months = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+        print('%s %d, %d %02d:%02d UTC' % (months[dt.month], dt.day, dt.year, dt.hour, dt.minute))
+        sys.exit(0)
+    except ValueError:
+        continue
+print(ts)
+" "$ts" 2>/dev/null
 }
 
 # ── Read metadata from run.json ──────────────────────────────────────
+# Uses read_field for backward compat: new schema (sut.commit) → old (tollgate_commit)
 
-COMMIT="${2:-}"
-if [ -z "$COMMIT" ]; then
-  COMMIT="$(json_string "$RUN_DIR/run.json" tollgate_commit)"
-  if [ -z "$COMMIT" ]; then
-    echo "ERROR: tollgate_commit not found in run.json and not provided as argument" >&2
-    exit 1
-  fi
-fi
+COMMIT="$(read_field sut.commit tollgate_commit unknown)"
+COMMIT_SHORT="$(read_field sut.commit_short "" "${COMMIT:0:7}")"
+BRANCH="$(read_field sut.branch tollgate_branch "")"
+PR="$(read_field sut.pr tollgate_pr "")"
+BACKEND="$(read_field sut.backend "" "")"
+ROUTER_ID="$(read_field lab.router_id router_id unknown)"
+CLIENT_TYPE="$(read_field lab.client_type client_type "")"
+VIEWPORT="$(read_field lab.viewport viewport desktop)"
+TEST_PLAN="$(read_field test_plan test_type e2e)"
+STATUS="$(read_field status "" "")"
+STARTED_AT="$(read_field started_at timestamp "")"
+DURATION_MS="$(read_field duration_ms duration_ms 0)"
 
-TOLLGATE_BRANCH="$(json_string "$RUN_DIR/run.json" tollgate_branch || true)"
-TOLLGATE_PR="$(json_number "$RUN_DIR/run.json" tollgate_pr || true)"
-TEST_TYPE="$(json_string "$RUN_DIR/run.json" test_type || true)"
-ROUTER_ID="$(json_string "$RUN_DIR/run.json" router_id || true)"
-ROUTER_IP="$(json_string "$RUN_DIR/run.json" router_ip || true)"
-VIEWPORT="$(json_string "$RUN_DIR/run.json" viewport || true)"
-RUN_TIMESTAMP="$(json_string "$RUN_DIR/run.json" timestamp || true)"
-PASSED="$(json_number "$RUN_DIR/run.json" passed || true)"
-FAILED="$(json_number "$RUN_DIR/run.json" failed || true)"
-SKIPPED="$(json_number "$RUN_DIR/run.json" skipped || true)"
-FLAKY="$(json_number "$RUN_DIR/run.json" flaky || true)"
-DURATION_MS="$(json_number "$RUN_DIR/run.json" duration_ms || true)"
-
-# Defaults for missing values
-TEST_TYPE="${TEST_TYPE:-e2e}"
-ROUTER_ID="${ROUTER_ID:-unknown}"
-VIEWPORT="${VIEWPORT:-desktop}"
-PASSED="${PASSED:-0}"
-FAILED="${FAILED:-0}"
-SKIPPED="${SKIPPED:-0}"
-FLAKY="${FLAKY:-0}"
-DURATION_MS="${DURATION_MS:-0}"
-
-# Use run.json timestamp if available, otherwise generate one
-if [ -z "$RUN_TIMESTAMP" ]; then
-  RUN_TIMESTAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-fi
-
-# Generate a filesystem-safe timestamp (no colons)
-DIR_TIMESTAMP="$(echo "$RUN_TIMESTAMP" | sed 's/[: ]/-/g' | sed 's/[^0-9T.Z-]//g')"
-
-SHORT="${COMMIT:0:12}"
 KEEP="${TOLLGATE_GH_PAGES_KEEP:-50}"
 
-echo "==> Publishing report for commit ${SHORT}..."
+echo "==> Publishing report for commit ${COMMIT_SHORT}..."
 
 # ── Clone or create gh-pages ─────────────────────────────────────────
 
@@ -118,43 +131,48 @@ fi
 
 cd "$WORK/gh-pages"
 
-# ── Add the new run ──────────────────────────────────────────────────
+# ── Copy run to gh-pages ─────────────────────────────────────────────
 
-TARGET_DIR="reports/${COMMIT}/${DIR_TIMESTAMP}"
+DIR_TIMESTAMP="$(basename "$RUN_DIR")"
+TARGET_DIR="reports/${COMMIT_SHORT}/${DIR_TIMESTAMP}"
 mkdir -p "$TARGET_DIR"
 
 cp -r "$RUN_DIR/report" "$TARGET_DIR/report"
 cp "$RUN_DIR/run.json" "$TARGET_DIR/run.json"
 
-# ── Strip screenshots and XML ──────────────────────────────────────────
+# Copy raw artifacts if present
+if [[ -d "$RUN_DIR/raw" ]]; then
+  cp -r "$RUN_DIR/raw" "$TARGET_DIR/raw"
+fi
+
+# ── Sanitization ─────────────────────────────────────────────────────
 # Container (VM) mode: skip ALL sanitization. VM test reports contain no PII
 #   (random QEMU MACs, local IPs, test tokens, hardcoded "tollgate" password).
 #   The report is copied AS-IS — no HTML modification, no img tag stripping,
 #   no asset removal. This preserves base64-embedded images (screenshots)
 #   that would otherwise be destroyed by the sanitizer, causing about:blank
 #   img src bugs in the published report.
-# Phone mode: strip all screenshots, image tags, and asset references to
-#   prevent leaking PII from real device test reports.
+# Phone / unknown mode: strip all screenshots, image tags, and asset references
+#   to prevent leaking PII from real device test reports.
 
-CLIENT_TYPE="$(json_string "$RUN_DIR/run.json" client_type || true)"
 if [ "$CLIENT_TYPE" = "container" ]; then
-	echo "==> Container mode: skipping ALL sanitization, preserving report as-is (no PII in VM tests)"
+  echo "==> Container mode: skipping ALL sanitization, preserving report as-is (no PII in VM tests)"
 else
-	# Phone / unknown mode: strip all screenshots and XML
-	echo "==> Non-container mode: stripping screenshots and XML"
+  # Phone / unknown mode: strip all screenshots and XML
+  echo "==> Non-container mode: stripping screenshots and XML"
 
-	# Playwright reports: strip non-whitelisted PNGs from data/
-	if [ -f "$TARGET_DIR/report/report.json" ]; then
-		bash "$REPO_DIR/scripts/strip-screenshots.sh" "$TARGET_DIR/report" 2>/dev/null || true
-	fi
+  # Playwright reports: strip non-whitelisted PNGs from data/
+  if [ -f "$TARGET_DIR/report/report.json" ]; then
+    bash "$REPO_DIR/scripts/strip-screenshots.sh" "$TARGET_DIR/report" 2>/dev/null || true
+  fi
 
-	# All reports: remove any stray PNG, XML, TXT asset files
-	find "$TARGET_DIR" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.gif' -o -name '*.xml' \) -print -delete 2>/dev/null || true
+  # All reports: remove any stray PNG, XML, TXT asset files
+  find "$TARGET_DIR" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.gif' -o -name '*.xml' \) -print -delete 2>/dev/null || true
 
-	# Strip image tags and asset references from HTML files (pytest-html embeds them)
-	for html_file in "$TARGET_DIR"/*.html "$TARGET_DIR"/report/*.html "$TARGET_DIR"/report/index.html; do
-		[ -f "$html_file" ] || continue
-		python3 -c "
+  # Strip image tags and asset references from HTML files (pytest-html embeds them)
+  for html_file in "$TARGET_DIR"/*.html "$TARGET_DIR"/report/*.html "$TARGET_DIR"/report/index.html; do
+    [ -f "$html_file" ] || continue
+    python3 -c "
 import re, sys
 with open(sys.argv[1], 'r') as f:
     html = f.read()
@@ -167,7 +185,18 @@ html = re.sub(r'assets/[^\"'\''\\s<>]*\.(?:png|txt|xml)', '', html, flags=re.IGN
 with open(sys.argv[1], 'w') as f:
     f.write(html)
 " "$html_file" 2>/dev/null || true
-	done
+  done
+
+  # Call sanitize-results.sh on the target dir if it exists (redacts IPs, passwords, tokens, MACs)
+  if [[ -f "$REPO_DIR/scripts/sanitize-results.sh" ]]; then
+    SANITIZE_OUT="$(mktemp -d /tmp/tollgate-sanitize-XXXXXX)"
+    if bash "$REPO_DIR/scripts/sanitize-results.sh" "$TARGET_DIR" "$SANITIZE_OUT" 2>/dev/null; then
+      rm -rf "$TARGET_DIR"
+      mv "$SANITIZE_OUT" "$TARGET_DIR"
+    else
+      rm -rf "$SANITIZE_OUT"
+    fi
+  fi
 fi
 
 find "$TARGET_DIR" -type d -empty -delete 2>/dev/null || true
@@ -182,7 +211,7 @@ purge_old_runs() {
 
   [ ! -d "$reports_dir" ] && return 0
 
-  # Collect tollgate-hash directories with their newest timestamp
+  # Collect commit directories with their newest timestamp
   local -a dirs=()
   local -a times=()
 
@@ -215,10 +244,8 @@ purge_old_runs() {
   fi
 
   # Sort directories by their newest timestamp (ascending = oldest first)
-  # Build sortable list, sort, then delete the oldest ones
   local to_delete=$((count - keep))
 
-  # Create temp file for sorting
   local sort_file
   sort_file="$(mktemp)"
 
@@ -244,96 +271,192 @@ purge_old_runs() {
 purge_old_runs "$WORK/gh-pages/reports" "$KEEP"
 
 # ── Generate dashboard index.html ────────────────────────────────────
+# Entirely in Python — no grep/sed JSON parsing.
 
 echo "==> Generating dashboard..."
 
-generate_dashboard() {
-  local reports_dir="$WORK/gh-pages/reports"
-  local dash_file="$WORK/gh-pages/index.html"
+python3 - "$WORK/gh-pages/reports" "$WORK/gh-pages/index.html" <<'PYEOF'
+import json
+import os
+import sys
+from collections import OrderedDict
+from datetime import datetime
 
-  # ── Collect all run data ───────────────────────────────────────────
 
-  # We'll build data structures using temp files.
-  # Format: <timestamp_sort>|<hash>|<run_dir_relative>|<field1>|...
+reports_dir = sys.argv[1]
+output_file = sys.argv[2]
 
-  local runs_file
-  runs_file="$(mktemp)"
 
-  [ -d "$reports_dir" ] || true
+def get(d, path, default=''):
+    """Get nested dict value with dot notation."""
+    keys = path.split('.')
+    v = d
+    for k in keys:
+        if isinstance(v, dict):
+            v = v.get(k)
+        else:
+            return default
+    if v is None:
+        return default
+    return v
 
-  for hash_dir in "$reports_dir"/*/; do
-    [ ! -d "$hash_dir" ] && continue
-    local hash_name
-    hash_name="$(basename "$hash_dir")"
 
-    for ts_dir in "$hash_dir"*/; do
-      [ ! -d "$ts_dir" ] && continue
-      local ts_name
-      ts_name="$(basename "$ts_dir")"
-      local run_json="$ts_dir/run.json"
+def read_run(path):
+    """Read run.json, supporting both new (schema_version>=1) and old (flat) schemas."""
+    with open(path) as f:
+        d = json.load(f)
 
-      [ ! -f "$run_json" ] && continue
+    sv = d.get('schema_version', 0)
 
-      local r_branch r_pr r_testtype r_router r_viewport r_timestamp
-      local r_passed r_failed r_skipped r_flaky r_duration
-      r_branch="$(json_string "$run_json" tollgate_branch || true)"
-      r_pr="$(json_number "$run_json" tollgate_pr || true)"
-      r_testtype="$(json_string "$run_json" test_type || true)"
-      r_router="$(json_string "$run_json" router_id || true)"
-      r_viewport="$(json_string "$run_json" viewport || true)"
-      r_timestamp="$(json_string "$run_json" timestamp || true)"
-      r_passed="$(json_number "$run_json" passed || true)"
-      r_failed="$(json_number "$run_json" failed || true)"
-      r_skipped="$(json_number "$run_json" skipped || true)"
-      r_flaky="$(json_number "$run_json" flaky || true)"
-      r_duration="$(json_number "$run_json" duration_ms || true)"
+    if sv >= 1:
+        commit = get(d, 'sut.commit', 'unknown')
+        commit_short = get(d, 'sut.commit_short', commit[:7])
+        branch = get(d, 'sut.branch', '')
+        pr = get(d, 'sut.pr', '')
+        backend = get(d, 'sut.backend', '')
+        repo = get(d, 'sut.repo', '')
+        router_id = get(d, 'lab.router_id', 'unknown')
+        client_type = get(d, 'lab.client_type', '')
+        viewport = get(d, 'lab.viewport', '')
+        test_plan = get(d, 'test_plan', '')
+        status = get(d, 'status', '')
+        started_at = get(d, 'started_at', '')
+        duration_ms = get(d, 'duration_ms', 0)
+        counts = get(d, 'counts', {})
+        runners = get(d, 'runners', [])
+    else:
+        # Old schema — flat fields
+        commit = d.get('tollgate_commit', 'unknown')
+        commit_short = commit[:7]
+        branch = d.get('tollgate_branch', '')
+        pr = d.get('tollgate_pr', '')
+        backend = ''
+        repo = d.get('sut_repo', 'OpenTollGate/tollgate-module-basic-go')
+        router_id = d.get('router_id', 'unknown')
+        client_type = d.get('client_type', '')
+        viewport = d.get('viewport', '')
+        test_plan = d.get('test_type', 'e2e')
+        status = ''
+        started_at = d.get('timestamp', '')
+        duration_ms = d.get('duration_ms', 0)
+        counts = {
+            'total': d.get('total', 0),
+            'passed': d.get('passed', 0),
+            'failed': d.get('failed', 0),
+            'errors': 0,
+            'skipped': d.get('skipped', 0),
+            'flaky': d.get('flaky', 0),
+        }
+        runners = []
 
-      # Defaults
-      r_testtype="${r_testtype:-e2e}"
-      r_router="${r_router:-unknown}"
-      r_viewport="${r_viewport:-desktop}"
-      r_passed="${r_passed:-0}"
-      r_failed="${r_failed:-0}"
-      r_skipped="${r_skipped:-0}"
-      r_flaky="${r_flaky:-0}"
-      r_duration="${r_duration:-0}"
+    return {
+        'commit': commit,
+        'commit_short': commit_short,
+        'branch': branch,
+        'pr': pr,
+        'backend': backend,
+        'repo': repo,
+        'router_id': router_id,
+        'client_type': client_type,
+        'viewport': viewport,
+        'test_plan': test_plan,
+        'status': status,
+        'started_at': started_at,
+        'duration_ms': int(duration_ms) if duration_ms else 0,
+        'counts': counts,
+        'runners': runners,
+    }
 
-      # Use the directory timestamp if JSON timestamp is missing
-      local sort_ts="${r_timestamp:-$ts_name}"
-      # Normalize for sorting: strip non-sortable chars
-      sort_ts="$(echo "$sort_ts" | tr -d ':Z' | sed 's/T/ /')"
 
-      # Store as pipe-delimited record
-      echo "${sort_ts}|${hash_name}|${ts_name}|${r_branch}|${r_pr}|${r_testtype}|${r_router}|${r_viewport}|${r_timestamp}|${r_passed}|${r_failed}|${r_skipped}|${r_flaky}|${r_duration}" >> "$runs_file"
-    done
-  done
+def format_ts(ts):
+    """Format ISO timestamp to human-readable."""
+    if not ts:
+        return 'N/A'
+    for fmt in (
+        '%Y-%m-%dT%H:%M:%SZ',
+        '%Y-%m-%dT%H:%M:%S',
+        '%Y-%m-%dT%H-%M-%S',
+        '%Y-%m-%dT%H-%M-%SZ',
+    ):
+        try:
+            dt = datetime.strptime(ts, fmt)
+            months = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+            return '%s %d, %d %02d:%02d UTC' % (
+                months[dt.month], dt.day, dt.year, dt.hour, dt.minute)
+        except ValueError:
+            continue
+    return ts
 
-  # ── Compute summary stats ──────────────────────────────────────────
 
-  local total_runs=0 total_commits=0 last_updated=""
+def format_duration(ms):
+    """Format duration in ms to human-readable."""
+    if not ms or ms <= 0:
+        return '-'
+    seconds = ms / 1000
+    if seconds < 60:
+        return '%ds' % int(seconds)
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return '%dm%02ds' % (minutes, secs)
 
-  if [ -f "$runs_file" ] && [ -s "$runs_file" ]; then
-    total_runs="$(wc -l < "$runs_file" | tr -d ' ')"
-    total_commits="$(cut -d'|' -f2 "$runs_file" | sort -u | wc -l | tr -d ' ')"
-    # Last updated = newest timestamp
-    last_updated="$(sort -r "$runs_file" | head -1 | cut -d'|' -f9)"
-  fi
 
-  total_runs="${total_runs:-0}"
-  total_commits="${total_commits:-0}"
-  last_updated="${last_updated:-N/A}"
+def esc(s):
+    """HTML-escape a string."""
+    return (str(s)
+            .replace('&', '&amp;')
+            .replace('<', '&lt;')
+            .replace('>', '&gt;')
+            .replace('"', '&quot;'))
 
-  # Format the last_updated for display
-  local last_updated_display
-  if [ "$last_updated" != "N/A" ] && [ -n "$last_updated" ]; then
-    last_updated_display="$(format_timestamp "$last_updated")"
-  else
-    last_updated_display="N/A"
-  fi
 
-  # ── Begin HTML output ──────────────────────────────────────────────
+# ── Collect all runs ─────────────────────────────────────────────────
 
-  cat > "$dash_file" <<'DASHHEAD'
+runs = []
+if os.path.isdir(reports_dir):
+    for hash_dir_name in os.listdir(reports_dir):
+        hash_path = os.path.join(reports_dir, hash_dir_name)
+        if not os.path.isdir(hash_path):
+            continue
+        for ts_dir_name in os.listdir(hash_path):
+            ts_path = os.path.join(hash_path, ts_dir_name)
+            if not os.path.isdir(ts_path):
+                continue
+            rj = os.path.join(ts_path, 'run.json')
+            if not os.path.isfile(rj):
+                continue
+            try:
+                run = read_run(rj)
+                run['hash_dir'] = hash_dir_name
+                run['ts_dir'] = ts_dir_name
+                run['report_path'] = (
+                    'reports/%s/%s/report/index.html'
+                    % (hash_dir_name, ts_dir_name))
+                runs.append(run)
+            except Exception:
+                continue
+
+# Sort by started_at descending
+runs.sort(key=lambda r: r.get('started_at', '') or '', reverse=True)
+
+# Group by commit (preserving insertion order = newest commit first)
+commit_groups = OrderedDict()
+for run in runs:
+    c = run.get('commit', 'unknown')
+    if c not in commit_groups:
+        commit_groups[c] = []
+    commit_groups[c].append(run)
+
+total_runs = len(runs)
+total_commits = len(commit_groups)
+last_updated = format_ts(runs[0]['started_at']) if runs else 'N/A'
+
+
+# ── Build HTML ───────────────────────────────────────────────────────
+
+out = []
+
+out.append('''\
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -346,7 +469,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
 .header{background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);color:#fff;padding:1.5rem 2rem;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.2)}
 .header h1{font-size:1.5rem;font-weight:600;letter-spacing:.5px}
 .header .updated{font-size:.85rem;opacity:.8}
-.container{max-width:1100px;margin:2rem auto;padding:0 1rem}
+.container{max-width:1200px;margin:2rem auto;padding:0 1rem}
 .summary{display:flex;gap:1rem;margin-bottom:2rem;flex-wrap:wrap}
 .summary-card{background:#fff;border-radius:8px;padding:1rem 1.5rem;flex:1;min-width:160px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
 .summary-card .label{font-size:.8rem;text-transform:uppercase;letter-spacing:.5px;color:#666;margin-bottom:.25rem}
@@ -361,164 +484,221 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
 .badge-branch:hover{background:#d2e3fc}
 .badge-pr{background:#e6f4ea;color:#137333;text-decoration:none}
 .badge-pr:hover{background:#ceead6}
+.badge-passed{background:#e6f4ea;color:#137333}
+.badge-failed{background:#fce8e8;color:#d93025}
+.badge-errored{background:#fce8e8;color:#d93025}
+.badge-partial{background:#fce8b2;color:#b06000}
 .runs{padding:.5rem 0}
-.run-row{display:grid;grid-template-columns:180px 70px 120px 80px 90px 90px 90px 90px 1fr;align-items:center;padding:.65rem 1.5rem;border-bottom:1px solid #f5f5f5;font-size:.875rem;gap:.5rem}
+.run-row{display:grid;grid-template-columns:170px 75px 75px 60px 85px 75px 1fr 55px 65px;align-items:center;padding:.65rem 1.5rem;border-bottom:1px solid #f5f5f5;font-size:.875rem;gap:.4rem}
 .run-row:last-child{border-bottom:none}
 .run-row:hover{background:#fafbfc}
 .run-time{color:#555;font-variant-numeric:tabular-nums}
-.run-type{font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.3px}
-.run-type.e2e{background:#fce8b2;color:#b06000;padding:2px 6px;border-radius:4px}
-.run-router,.run-viewport{color:#444;font-family:"SF Mono",SFMono-Regular,Consolas,monospace;font-size:.8rem}
-.count{font-weight:600;text-align:center}
-.count-pass{color:#137333}.count-fail{color:#d93025}.count-skip{color:#80868b}.count-flaky{color:#b06000}
+.run-plan{font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.3px;background:#fce8b2;color:#b06000;padding:2px 6px;border-radius:4px;text-align:center}
+.run-router,.run-client{color:#444;font-family:"SF Mono",SFMono-Regular,Consolas,monospace;font-size:.8rem}
+.runner-summary{font-size:.8rem;color:#555}
+.runner-summary .rname{font-weight:600;color:#333}
+.runner-summary .rcount{font-variant-numeric:tabular-nums}
+.runner-summary .rp{color:#137333}
+.runner-summary .rf{color:#d93025}
+.runner-summary .rs{color:#80868b}
+.run-dur{font-variant-numeric:tabular-nums;color:#555;font-size:.8rem}
 .run-link a{color:#1a73e8;text-decoration:none;font-weight:500;font-size:.8rem}
 .run-link a:hover{text-decoration:underline}
-.run-header{display:grid;grid-template-columns:180px 70px 120px 80px 90px 90px 90px 90px 1fr;padding:.5rem 1.5rem;background:#fafbfc;font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#666;border-bottom:1px solid #eee;gap:.5rem}
+.run-header{display:grid;grid-template-columns:170px 75px 75px 60px 85px 75px 1fr 55px 65px;padding:.5rem 1.5rem;background:#fafbfc;font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#666;border-bottom:1px solid #eee;gap:.4rem}
 .empty{padding:3rem;text-align:center;color:#888;font-size:1rem}
 </style>
 </head>
 <body>
 <div class="header">
 <h1>TollGate Test Reports</h1>
-<div class="updated">Last updated: PLACEHOLDER_LAST_UPDATED</div>
+<div class="updated">Last updated: %(last_updated)s</div>
 </div>
 <div class="container">
 <div class="summary">
-<div class="summary-card"><div class="label">Total Runs</div><div class="value">PLACEHOLDER_TOTAL_RUNS</div></div>
-<div class="summary-card"><div class="label">Commits Tested</div><div class="value">PLACEHOLDER_TOTAL_COMMITS</div></div>
+<div class="summary-card"><div class="label">Total Runs</div><div class="value">%(total_runs)d</div></div>
+<div class="summary-card"><div class="label">Commits Tested</div><div class="value">%(total_commits)d</div></div>
 </div>
-DASHHEAD
+''' % {
+    'last_updated': esc(last_updated),
+    'total_runs': total_runs,
+    'total_commits': total_commits,
+})
 
-  # ── Emit commit groups ─────────────────────────────────────────────
+if not runs:
+    out.append('<div class="empty">No test reports found.</div>')
+else:
+    for commit, commit_runs in commit_groups.items():
+        # Metadata from the most recent run for this commit
+        meta = commit_runs[0]
+        short = meta['commit_short']
+        branch = meta.get('branch', '')
+        pr = meta.get('pr', '')
+        repo = (meta.get('repo', '')
+                or 'OpenTollGate/tollgate-module-basic-go')
 
-  if [ -f "$runs_file" ] && [ -s "$runs_file" ]; then
-    # Get unique commit hashes sorted by newest run first
-    local commits_file
-    commits_file="$(mktemp)"
-    # For each hash, find its newest sort timestamp, then sort hashes by that descending
-    cut -d'|' -f1,2 "$runs_file" | awk -F'|' '{print $2 "|" $1}' | sort -t'|' -k2 -r | awk -F'|' '{if(!seen[$1]++){print $1}}' > "$commits_file"
+        # Build commit URL
+        if repo and '/' in repo:
+            commit_url = 'https://github.com/%s/commit/%s' % (repo, commit)
+        else:
+            commit_url = (
+                'https://github.com/OpenTollGate/'
+                'tollgate-module-basic-go/commit/%s' % commit)
 
-    while IFS= read -r hash_name; do
-      [ -z "$hash_name" ] && continue
-      local short_hash="${hash_name:0:12}"
-      local commit_url="https://github.com/OpenTollGate/tollgate-module-basic-go/commit/${hash_name}"
+        out.append('<div class="commit-group">')
+        out.append('<div class="commit-header">')
+        out.append(
+            '<span class="hash">'
+            '<a href="%s">%s</a></span>'
+            % (esc(commit_url), esc(short)))
 
-      # Get metadata from the most recent run for this commit (for branch/pr display)
-      local meta_run
-      meta_run="$(grep "|${hash_name}|" "$runs_file" | sort -t'|' -k1 -r | head -1)"
-      local branch="" pr=""
-      if [ -n "$meta_run" ]; then
-        branch="$(echo "$meta_run" | cut -d'|' -f4)"
-        pr="$(echo "$meta_run" | cut -d'|' -f5)"
-      fi
+        if branch:
+            if repo and '/' in repo:
+                branch_url = (
+                    'https://github.com/%s/tree/%s' % (repo, branch))
+            else:
+                branch_url = (
+                    'https://github.com/OpenTollGate/'
+                    'tollgate-module-basic-go/tree/%s' % branch)
+            out.append(
+                '<a class="badge badge-branch" href="%s">%s</a>'
+                % (esc(branch_url), esc(branch)))
 
-      # Commit group header
-      echo '<div class="commit-group">' >> "$dash_file"
-      echo '<div class="commit-header">' >> "$dash_file"
-      echo "<span class=\"hash\"><a href=\"${commit_url}\">${short_hash}</a></span>" >> "$dash_file"
+        if pr and str(pr) not in ('0', ''):
+            if repo and '/' in repo:
+                pr_url = 'https://github.com/%s/pull/%s' % (repo, pr)
+            else:
+                pr_url = (
+                    'https://github.com/OpenTollGate/'
+                    'tollgate-module-basic-go/pull/%s' % pr)
+            out.append(
+                '<a class="badge badge-pr" href="%s">#%s</a>'
+                % (esc(pr_url), esc(pr)))
 
-      if [ -n "$branch" ]; then
-        local branch_url="https://github.com/OpenTollGate/tollgate-module-basic-go/tree/${branch}"
-        echo "<a class=\"badge badge-branch\" href=\"${branch_url}\">${branch}</a>" >> "$dash_file"
-      fi
+        out.append('</div>')
 
-      if [ -n "$pr" ] && [ "$pr" != "0" ]; then
-        local pr_url="https://github.com/OpenTollGate/tollgate-module-basic-go/pull/${pr}"
-        echo "<a class=\"badge badge-pr\" href=\"${pr_url}\">#${pr}</a>" >> "$dash_file"
-      fi
+        # Table header
+        out.append(
+            '<div class="run-header">'
+            '<span>Timestamp</span>'
+            '<span>Plan</span>'
+            '<span>Status</span>'
+            '<span>Backend</span>'
+            '<span>Router</span>'
+            '<span>Client</span>'
+            '<span>Runners</span>'
+            '<span>Dur.</span>'
+            '<span>Report</span>'
+            '</div>')
+        out.append('<div class="runs">')
 
-      echo '</div>' >> "$dash_file"
+        for run in commit_runs:
+            display_time = (
+                format_ts(run.get('started_at', ''))
+                or run.get('ts_dir', ''))
+            test_plan = run.get('test_plan', '') or 'e2e'
+            status = run.get('status', '')
+            backend = run.get('backend', '')
+            router_id = run.get('router_id', 'unknown')
+            client_type = run.get('client_type', '')
+            report_path = run.get('report_path', '')
+            duration = format_duration(run.get('duration_ms', 0))
 
-      # Table header for runs
-      echo '<div class="run-header"><span>Timestamp</span><span>Type</span><span>Router</span><span>View</span><span>Pass</span><span>Fail</span><span>Skip</span><span>Flaky</span><span>Report</span></div>' >> "$dash_file"
-      echo '<div class="runs">' >> "$dash_file"
+            # ── Runner summary: per-runner pass/fail/skip ─────────
+            runners = run.get('runners', [])
+            if runners:
+                runner_parts = []
+                for r in runners:
+                    rname = r.get('name', '?')
+                    rc = r.get('counts', {})
+                    rp = rc.get('passed', 0)
+                    rf = rc.get('failed', 0) + rc.get('errors', 0)
+                    rs = rc.get('skipped', 0)
+                    runner_parts.append(
+                        '<span class="rname">%s</span> '
+                        '<span class="rcount">'
+                        '<span class="rp">%d\u2713</span>'
+                        '<span class="rf">%d\u2717</span>'
+                        '<span class="rs">%d\u25cb</span>'
+                        '</span>'
+                        % (esc(rname), rp, rf, rs))
+                runner_html = ' &nbsp;/ '.join(runner_parts)
+            else:
+                # Old schema: show flat counts
+                c = run.get('counts', {})
+                runner_html = (
+                    '<span class="rcount">'
+                    '<span class="rp">%d\u2713</span> '
+                    '<span class="rf">%d\u2717</span> '
+                    '<span class="rs">%d\u25cb</span>'
+                    '</span>'
+                    % (c.get('passed', 0),
+                       c.get('failed', 0),
+                       c.get('skipped', 0)))
 
-      # Get runs for this commit, sorted newest first
-      grep "|${hash_name}|" "$runs_file" | sort -t'|' -k1 -r | while IFS='|' read -r _ _ ts_name r_branch _ r_testtype r_router r_viewport r_timestamp r_passed r_failed r_skipped r_flaky r_duration; do
-        local display_time
-        if [ -n "$r_timestamp" ]; then
-          display_time="$(format_timestamp "$r_timestamp")"
-        else
-          display_time="$ts_name"
-        fi
+            # ── Status badge ──────────────────────────────────────
+            if status:
+                status_html = (
+                    '<span class="badge badge-%s">%s</span>'
+                    % (esc(status), esc(status)))
+            else:
+                # Infer from counts (old schema)
+                c = run.get('counts', {})
+                if c.get('failed', 0) > 0 or c.get('errors', 0) > 0:
+                    status_html = (
+                        '<span class="badge badge-failed">failed</span>')
+                else:
+                    status_html = (
+                        '<span class="badge badge-passed">passed</span>')
 
-        local report_path="reports/${hash_name}/${ts_name}/report/index.html"
+            out.append('<div class="run-row">')
+            out.append(
+                '<span class="run-time">%s</span>'
+                % esc(display_time))
+            out.append(
+                '<span class="run-plan">%s</span>'
+                % esc(test_plan))
+            out.append('<span>%s</span>' % status_html)
+            out.append(
+                '<span class="run-client">%s</span>'
+                % esc(backend))
+            out.append(
+                '<span class="run-router">%s</span>'
+                % esc(router_id))
+            out.append(
+                '<span class="run-client">%s</span>'
+                % esc(client_type))
+            out.append(
+                '<span class="runner-summary">%s</span>'
+                % runner_html)
+            out.append(
+                '<span class="run-dur">%s</span>'
+                % esc(duration))
+            out.append(
+                '<span class="run-link">'
+                '<a href="%s">View</a></span>'
+                % esc(report_path))
+            out.append('</div>')
 
-        # Determine test type class
-        local type_class="${r_testtype}"
-        [ -z "$type_class" ] && type_class="e2e"
+        out.append('</div>')  # .runs
+        out.append('</div>')  # .commit-group
 
-        echo "<div class=\"run-row\">" >> "$dash_file"
-        echo "<span class=\"run-time\">${display_time}</span>" >> "$dash_file"
-        echo "<span class=\"run-type ${type_class}\">${type_class}</span>" >> "$dash_file"
-        echo "<span class=\"run-router\">${r_router}</span>" >> "$dash_file"
-        echo "<span class=\"run-viewport\">${r_viewport}</span>" >> "$dash_file"
-        echo "<span class=\"count count-pass\">${r_passed:-0}</span>" >> "$dash_file"
-        echo "<span class=\"count count-fail\">${r_failed:-0}</span>" >> "$dash_file"
-        echo "<span class=\"count count-skip\">${r_skipped:-0}</span>" >> "$dash_file"
-        echo "<span class=\"count count-flaky\">${r_flaky:-0}</span>" >> "$dash_file"
-        echo "<span class=\"run-link\"><a href=\"${report_path}\">View Report</a></span>" >> "$dash_file"
-        echo "</div>" >> "$dash_file"
-      done
-
-      echo '</div>' >> "$dash_file"
-      echo '</div>' >> "$dash_file"
-    done < "$commits_file"
-
-    rm -f "$commits_file"
-  else
-    echo '<div class="empty">No test reports found.</div>' >> "$dash_file"
-  fi
-
-  # ── Close HTML ─────────────────────────────────────────────────────
-
-  cat >> "$dash_file" <<'DASHFOOT'
+out.append('''\
 </div>
 </body>
 </html>
-DASHFOOT
+''')
 
-  # ── Replace placeholders ───────────────────────────────────────────
+with open(output_file, 'w') as f:
+    f.write('\n'.join(out))
 
-  sed -i.bak "s|PLACEHOLDER_LAST_UPDATED|${last_updated_display}|g" "$dash_file"
-  sed -i.bak "s|PLACEHOLDER_TOTAL_RUNS|${total_runs}|g" "$dash_file"
-  sed -i.bak "s|PLACEHOLDER_TOTAL_COMMITS|${total_commits}|g" "$dash_file"
-  rm -f "${dash_file}.bak"
-
-  rm -f "$runs_file"
-}
-
-# Format ISO timestamp to human-readable
-format_timestamp() {
-  local ts="$1"
-  # Try python3 for reliable formatting
-  if command -v python3 &>/dev/null; then
-    python3 -c "
-import sys
-from datetime import datetime
-ts = '${ts}'
-for fmt in ('%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H-%M-%S', '%Y-%m-%dT%H-%M-%SZ'):
-    try:
-        dt = datetime.strptime(ts, fmt)
-        months = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-        print('%s %d, %d %02d:%02d UTC' % (months[dt.month], dt.day, dt.year, dt.hour, dt.minute))
-        sys.exit(0)
-    except ValueError:
-        continue
-print(ts)
-" 2>/dev/null && return 0
-  fi
-
-  # Fallback: just strip the T and Z
-  echo "$ts" | sed 's/T/ /;s/Z/ UTC/'
-}
-
-generate_dashboard
+print('==> Dashboard written to %s (%d runs, %d commits)'
+      % (output_file, total_runs, total_commits))
+PYEOF
 
 # ── Commit and push ──────────────────────────────────────────────────
 
 git add -A
-git commit -m "report: ${SHORT} ${DIR_TIMESTAMP}" || true
+git commit -m "report: ${COMMIT_SHORT} ${DIR_TIMESTAMP}" || true
 
 echo "==> Pushing to gh-pages..."
 git push -f origin gh-pages 2>&1
@@ -533,5 +713,5 @@ GITHUB_PAGES_BASE="https://${ORG_NAME}.github.io/${REPO_NAME}"
 
 echo ""
 echo "==> Report published to gh-pages"
-echo "==> Report: ${GITHUB_PAGES_BASE}/reports/${COMMIT}/${DIR_TIMESTAMP}/report/index.html"
+echo "==> Report: ${GITHUB_PAGES_BASE}/reports/${COMMIT_SHORT}/${DIR_TIMESTAMP}/report/index.html"
 echo "==> Dashboard: ${GITHUB_PAGES_BASE}/"

@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+"""Collect test results from JUnit XML and Playwright JSON into canonical run.json + summary.json."""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+
+
+def parse_junit(xml_path, runner_name):
+    """Parse a JUnit XML file and return a runner dict + list of test dicts."""
+    tests = []
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    # Handle <testsuites> wrapper or direct <testsuite>
+    ts = root if root.tag == "testsuite" else root.find("testsuite")
+    if ts is None:
+        ts = root
+
+    ts_time = float(ts.get("time", "0"))
+    total = int(ts.get("tests", "0"))
+    failures = int(ts.get("failures", "0"))
+    errors = int(ts.get("errors", "0"))
+    skipped = int(ts.get("skipped", "0"))
+    passed = max(0, total - failures - errors - skipped)
+
+    for tc in ts.iter("testcase"):
+        name = tc.get("name", "unknown")
+        classname = tc.get("classname", "")
+        file_path = classname.replace(".", os.sep) if classname else ""
+        duration = round(float(tc.get("time", "0")) * 1000)
+
+        failure_el = tc.find("failure")
+        error_el = tc.find("error")
+        skip_el = tc.find("skipped")
+
+        if failure_el is not None:
+            outcome = "failed"
+            failure_message = failure_el.get("message") or (failure_el.text or "").strip()
+        elif error_el is not None:
+            outcome = "error"
+            failure_message = error_el.get("message") or (error_el.text or "").strip()
+        elif skip_el is not None:
+            outcome = "skipped"
+            failure_message = skip_el.get("message") or (skip_el.text or "").strip()
+        else:
+            outcome = "passed"
+            failure_message = None
+
+        tests.append({
+            "runner": runner_name,
+            "framework": "pytest",
+            "name": name,
+            "file": file_path,
+            "outcome": outcome,
+            "duration_ms": duration,
+            "failure_message": failure_message,
+            "markers": [],
+        })
+
+    runner_status = "passed"
+    if errors > 0:
+        runner_status = "errored"
+    if failures > 0:
+        runner_status = "failed"
+
+    runner = {
+        "name": runner_name,
+        "framework": "pytest",
+        "status": runner_status,
+        "duration_ms": round(ts_time * 1000),
+        "counts": {
+            "total": total,
+            "passed": passed,
+            "failed": failures,
+            "errors": errors,
+            "skipped": skipped,
+            "flaky": 0,
+        },
+    }
+    return runner, tests
+
+
+def _collect_playwright_specs(suites, runner_name):
+    """Recursively collect specs from Playwright suite hierarchy."""
+    tests = []
+    for suite in suites:
+        child_suites = suite.get("suites", [])
+        tests.extend(_collect_playwright_specs(child_suites, runner_name))
+
+        for spec in suite.get("specs", []):
+            title = spec.get("title", "unknown")
+            file_path = spec.get("file", "")
+
+            for test_entry in spec.get("tests", []):
+                results = test_entry.get("results", [])
+                if not results:
+                    continue
+
+                pw_status = test_entry.get("status", "skipped")
+                first_result = results[0]
+
+                status_map = {
+                    "expected": "passed",
+                    "unexpected": "failed",
+                    "flaky": "flaky",
+                    "skipped": "skipped",
+                }
+                outcome = status_map.get(pw_status, "passed")
+
+                duration = round(first_result.get("duration", 0))
+
+                failure_message = None
+                if outcome in ("failed", "flaky"):
+                    err = first_result.get("error")
+                    if err and isinstance(err, dict):
+                        failure_message = err.get("message")
+
+                tests.append({
+                    "runner": runner_name,
+                    "framework": "playwright",
+                    "name": title,
+                    "file": file_path,
+                    "outcome": outcome,
+                    "duration_ms": duration,
+                    "failure_message": failure_message,
+                    "markers": [],
+                })
+    return tests
+
+
+def parse_playwright(json_path, runner_name):
+    """Parse a Playwright JSON results file and return a runner dict + list of test dicts."""
+    with open(json_path) as f:
+        data = json.load(f)
+
+    stats = data.get("stats", {})
+    passed = int(stats.get("expected", 0))
+    failed = int(stats.get("unexpected", 0))
+    flaky = int(stats.get("flaky", 0))
+    skipped = int(stats.get("skipped", 0))
+    total = passed + failed + flaky + skipped
+    duration_ms = round(stats.get("duration", 0))
+
+    runner_status = "passed"
+    if failed > 0:
+        runner_status = "failed"
+    elif flaky > 0:
+        runner_status = "passed"
+
+    runner = {
+        "name": runner_name,
+        "framework": "playwright",
+        "status": runner_status,
+        "duration_ms": duration_ms,
+        "counts": {
+            "total": total,
+            "passed": passed,
+            "failed": failed,
+            "errors": 0,
+            "skipped": skipped,
+            "flaky": flaky,
+        },
+    }
+
+    tests = _collect_playwright_specs(data.get("suites", []), runner_name)
+    return runner, tests
+
+
+def determine_overall_status(runners):
+    """Determine overall status from a list of runner dicts."""
+    if not runners:
+        return "errored"
+
+    all_passed = all(r["status"] == "passed" for r in runners)
+    if all_passed:
+        return "passed"
+
+    has_failures = any(
+        r["counts"]["failed"] > 0 or r["counts"]["errors"] > 0
+        for r in runners
+    )
+    if has_failures:
+        return "failed"
+
+    return "partial"
+
+
+def merge_counts(runners):
+    """Merge counts from all runners."""
+    merged = {"total": 0, "passed": 0, "failed": 0, "errors": 0, "skipped": 0, "flaky": 0}
+    for r in runners:
+        for key in merged:
+            merged[key] += r["counts"].get(key, 0)
+    return merged
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Collect test results into canonical JSON")
+    parser.add_argument("--run-dir", required=True, help="Root directory for this test run")
+    parser.add_argument("--pytest", action="append", default=[], metavar="NAME=PATH",
+                        help="JUnit XML source: runner_name=path/to/junit.xml")
+    parser.add_argument("--playwright", action="append", default=[], metavar="NAME=PATH",
+                        help="Playwright JSON source: runner_name=path/to/results.json")
+    parser.add_argument("--run-id", default=None)
+    parser.add_argument("--test-plan", default=None)
+    parser.add_argument("--sut-repo", default=None)
+    parser.add_argument("--sut-commit", default=None)
+    parser.add_argument("--sut-branch", default=None)
+    parser.add_argument("--sut-pr", type=int, default=None)
+    parser.add_argument("--sut-backend", default=None)
+    parser.add_argument("--sut-version", default="unknown")
+    parser.add_argument("--suite-commit", default=None)
+    parser.add_argument("--router-id", default=None)
+    parser.add_argument("--router-model", default=None)
+    parser.add_argument("--router-arch", default=None)
+    parser.add_argument("--router-ip", default=None)
+    parser.add_argument("--client-type", default=None)
+    parser.add_argument("--viewport", default=None)
+    parser.add_argument("--virtual-lab", action="store_true", default=False)
+    parser.add_argument("--allow-failures", action="store_true", default=False)
+    parser.add_argument("--started-at", default=None)
+    parser.add_argument("--finished-at", default=None)
+    args = parser.parse_args()
+
+    run_dir = os.path.abspath(args.run_dir)
+    os.makedirs(run_dir, exist_ok=True)
+
+    run_id = args.run_id
+    if not run_id:
+        now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        try:
+            sha = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                stderr=subprocess.DEVNULL,
+            ).decode().strip()
+        except Exception:
+            sha = "unknown"
+        run_id = f"{now}-{sha}"
+
+    suite_commit = args.suite_commit
+    if not suite_commit:
+        try:
+            suite_commit = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                stderr=subprocess.DEVNULL,
+            ).decode().strip()
+        except Exception:
+            suite_commit = "unknown"
+
+    runners = []
+    all_tests = []
+    parse_errors = []
+
+    for entry in args.pytest:
+        if "=" not in entry:
+            print(f"ERROR: --pytest requires NAME=PATH format, got: {entry}", file=sys.stderr)
+            sys.exit(2)
+        name, rel_path = entry.split("=", 1)
+        full_path = os.path.join(run_dir, rel_path)
+        if not os.path.isfile(full_path):
+            parse_errors.append(f"Missing JUnit XML: {full_path}")
+            continue
+        try:
+            runner, tests = parse_junit(full_path, name)
+            base_dir = os.path.dirname(rel_path)
+            runner["artifacts"] = {
+                "junit": rel_path,
+                "html": os.path.join(base_dir, "report.html") if base_dir else "report.html",
+                "log": os.path.join(base_dir, "output.log") if base_dir else "output.log",
+            }
+            runners.append(runner)
+            all_tests.extend(tests)
+        except Exception as e:
+            parse_errors.append(f"Error parsing JUnit {name}: {e}")
+
+    for entry in args.playwright:
+        if "=" not in entry:
+            print(f"ERROR: --playwright requires NAME=PATH format, got: {entry}", file=sys.stderr)
+            sys.exit(2)
+        name, rel_path = entry.split("=", 1)
+        full_path = os.path.join(run_dir, rel_path)
+        if not os.path.isfile(full_path):
+            parse_errors.append(f"Missing Playwright JSON: {full_path}")
+            continue
+        try:
+            runner, tests = parse_playwright(full_path, name)
+            base_dir = os.path.dirname(rel_path)
+            runner["artifacts"] = {
+                "json": rel_path,
+                "html": os.path.join(base_dir, "report.html") if base_dir else "report.html",
+            }
+            runners.append(runner)
+            all_tests.extend(tests)
+        except Exception as e:
+            parse_errors.append(f"Error parsing Playwright {name}: {e}")
+
+    for err in parse_errors:
+        print(f"WARNING: {err}", file=sys.stderr)
+
+    overall_status = determine_overall_status(runners)
+    counts = merge_counts(runners)
+    duration_ms = sum(r["duration_ms"] for r in runners)
+
+    sut_commit = args.sut_commit or "unknown"
+    sut = {
+        "repo": args.sut_repo or "unknown",
+        "commit": sut_commit,
+        "commit_short": sut_commit[:7],
+        "branch": args.sut_branch or "unknown",
+        "pr": args.sut_pr,
+        "backend": args.sut_backend or "unknown",
+        "installed_version": args.sut_version or "unknown",
+    }
+
+    test_suite = {
+        "repo": "OpenTollGate/physical-router-test-automation",
+        "commit": suite_commit,
+    }
+
+    lab = {
+        "router_id": args.router_id or "unknown",
+        "router_model": args.router_model or "unknown",
+        "router_arch": args.router_arch or "unknown",
+        "router_ip": args.router_ip if args.router_ip else "<REDACTED>",
+        "client_type": args.client_type or "unknown",
+        "viewport": args.viewport or "unknown",
+        "virtual_lab": args.virtual_lab,
+    }
+
+    run_json = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "status": overall_status,
+        "started_at": args.started_at,
+        "finished_at": args.finished_at,
+        "duration_ms": duration_ms,
+        "test_plan": args.test_plan,
+        "sut": sut,
+        "test_suite": test_suite,
+        "lab": lab,
+        "counts": counts,
+        "runners": runners,
+    }
+
+    failed_tests = [t for t in all_tests if t["outcome"] in ("failed", "error")]
+    skipped_tests = [t for t in all_tests if t["outcome"] == "skipped"]
+
+    summary_json = {
+        "run_id": run_id,
+        "status": overall_status,
+        "counts": counts,
+        "runners": [
+            {"name": r["name"], "status": r["status"], "counts": r["counts"]}
+            for r in runners
+        ],
+        "tests": all_tests,
+        "failed_tests": failed_tests,
+        "skipped_tests": skipped_tests,
+    }
+
+    run_json_path = os.path.join(run_dir, "run.json")
+    with open(run_json_path, "w") as f:
+        json.dump(run_json, f, indent=2)
+        f.write("\n")
+
+    summary_json_path = os.path.join(run_dir, "summary.json")
+    with open(summary_json_path, "w") as f:
+        json.dump(summary_json, f, indent=2)
+        f.write("\n")
+
+    runner_count = len(runners)
+    print(
+        f"==> Collected {runner_count} runners: {overall_status.upper()} "
+        f"({counts['passed']} passed, {counts['failed']} failed, {counts['skipped']} skipped)",
+        file=sys.stderr,
+    )
+
+    if not runners:
+        sys.exit(2)
+
+    if overall_status == "failed" and not args.allow_failures:
+        sys.exit(1)
+
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

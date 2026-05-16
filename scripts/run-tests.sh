@@ -1,10 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ── Arguments ───────────────────────────────────────────────────────────
-TOLLGATE_COMMIT="${1:-}"
-VIEWPORT="${2:-desktop}"
-ROUTER_ID="${3:-${TOLLGATE_ROUTER_ID:-$(hostname -s 2>/dev/null || echo unknown)}}"
+# ── Parse flags and positional args ──────────────────────────────────────
+NO_RENDER=false
+RUN_DIR_ARG=""
+POSITIONAL=()
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --no-render) NO_RENDER=true; shift ;;
+    --run-dir)   RUN_DIR_ARG="$2"; shift 2 ;;
+    -h|--help)
+      echo "Usage: ./scripts/run-tests.sh [--no-render] [--run-dir DIR] [tollgate-commit] [desktop|mobile] [router-id]"
+      exit 0
+      ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+
+TOLLGATE_COMMIT="${POSITIONAL[0]:-}"
+VIEWPORT="${POSITIONAL[1]:-desktop}"
+ROUTER_ID="${POSITIONAL[2]:-${TOLLGATE_ROUTER_ID:-$(hostname -s 2>/dev/null || echo unknown)}}"
 
 # ── Environment defaults ────────────────────────────────────────────────
 export TOLLGATE_LUCI_URL="${TOLLGATE_LUCI_URL:-http://192.168.13.112:8080}"
@@ -54,15 +70,33 @@ if [ -z "$TOLLGATE_COMMIT" ]; then
   fi
 fi
 
-# ── Run directory ───────────────────────────────────────────────────────
-TIMESTAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
-RUN_DIR="$REPO_DIR/test-run-${TIMESTAMP}"
-mkdir -p "$RUN_DIR"
+# ── Run ID and results directory ────────────────────────────────────────
+if [[ -n "$RUN_DIR_ARG" ]]; then
+  RESULTS_DIR="$(cd "$(dirname "$RUN_DIR_ARG")" && pwd)/$(basename "$RUN_DIR_ARG")"
+  RUN_ID="$(basename "$RESULTS_DIR")"
+elif [[ -n "${TOLLGATE_RESULTS_DIR:-}" ]]; then
+  RESULTS_DIR="$TOLLGATE_RESULTS_DIR"
+  RUN_ID="${TOLLGATE_RUN_ID:-$(basename "$RESULTS_DIR")}"
+else
+  TIMESTAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
+  GIT_SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+  RUN_ID="${TOLLGATE_RUN_ID:-${TIMESTAMP}-${GIT_SHA}}"
+  RESULTS_DIR="$REPO_DIR/results/$RUN_ID"
+fi
 
-echo "==> Run directory: $RUN_DIR"
-echo "==> Tollgate commit: ${TOLLGATE_COMMIT:0:12}"
-echo "==> Viewport: $VIEWPORT"
-echo "==> Router: $ROUTER_ID ($TOLLGATE_ROUTER_IP)"
+export TOLLGATE_RUN_ID="$RUN_ID"
+export TOLLGATE_RESULTS_DIR="$RESULTS_DIR"
+
+# ── Directory structure ─────────────────────────────────────────────────
+mkdir -p "$RESULTS_DIR/raw/playwright" "$RESULTS_DIR/report" "$RESULTS_DIR/artifacts"
+
+STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+echo "==> Run ID:      $RUN_ID"
+echo "==> Results dir: $RESULTS_DIR"
+echo "==> Tollgate:    ${TOLLGATE_COMMIT:0:12}"
+echo "==> Viewport:    $VIEWPORT"
+echo "==> Router:      $ROUTER_ID ($TOLLGATE_ROUTER_IP)"
 
 # ── Install dependencies if needed ──────────────────────────────────────
 if [ ! -d "$REPO_DIR/node_modules" ]; then
@@ -75,93 +109,90 @@ cd "$TESTS_DIR"
 
 echo ""
 echo "==> Running Playwright tests..."
-PLAYWRIGHT_JSON_OUTPUT_NAME="$RUN_DIR/results.json" \
-  npx playwright test --config=playwright.config.mjs --reporter=html,json \
-  || PW_EXIT=$?
-PW_EXIT="${PW_EXIT:-0}"
+PW_EXIT=0
+PLAYWRIGHT_JSON_OUTPUT_NAME="$RESULTS_DIR/raw/playwright/results.json" \
+  npx playwright test --config=playwright.config.mjs \
+    --reporter=html,json \
+    --output="$RESULTS_DIR/raw/playwright" \
+    2>&1 | tee "$RESULTS_DIR/raw/playwright/output.log" || PW_EXIT=$?
 
 echo ""
 echo "==> Playwright finished (exit code: $PW_EXIT)"
 
+FINISHED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
 # ── Move HTML report into run directory ─────────────────────────────────
 # --reporter=html,json overrides config, discarding outputFolder.
 # Playwright may output to tests/ or the repo root depending on resolution.
-for report_src in "$TESTS_DIR/report" "$TESTS_DIR/playwright-report" "$REPO_DIR/playwright-report" "$REPO_DIR/report"; do
-  if [ -d "$report_src" ]; then
-    mv "$report_src" "$RUN_DIR/report"
+for report_src in \
+  "$TESTS_DIR/report" \
+  "$TESTS_DIR/playwright-report" \
+  "$REPO_DIR/playwright-report" \
+  "$REPO_DIR/report" \
+  "$RESULTS_DIR/raw/playwright/report"; do
+  if [ -d "$report_src" ] && [ "$report_src" != "$RESULTS_DIR/raw/playwright/report" ]; then
+    mv "$report_src" "$RESULTS_DIR/raw/playwright/report"
     echo "==> HTML report moved from ${report_src##"$REPO_DIR"/}"
     break
   fi
 done
-if [ ! -d "$RUN_DIR/report" ]; then
+if [ ! -d "$RESULTS_DIR/raw/playwright/report" ]; then
   echo "WARNING: no HTML report directory found" >&2
 fi
 
-# ── Extract stats from JSON report ──────────────────────────────────────
-PASSED=0
-FAILED=0
-FLAKY=0
-SKIPPED=0
-DURATION_MS=0
+# ── Collect and render ──────────────────────────────────────────────────
+if [[ "$NO_RENDER" == "false" ]]; then
+  echo "==> Collecting results..."
+  python3 "$SCRIPT_DIR/collect-results.py" \
+    --run-dir "$RESULTS_DIR" \
+    --playwright "playwright=raw/playwright/results.json" \
+    --run-id "$RUN_ID" \
+    --sut-commit "$TOLLGATE_COMMIT" \
+    --sut-branch "${TOLLGATE_BRANCH:-}" \
+    --sut-pr "${TOLLGATE_PR:-}" \
+    --sut-backend "${TOLLGATE_BACKEND:-go}" \
+    --router-id "$ROUTER_ID" \
+    --router-model "${TOLLGATE_ROUTER_MODEL:-}" \
+    --router-arch "${TOLLGATE_ROUTER_ARCH:-}" \
+    --client-type "${TOLLGATE_CLIENT_TYPE:-}" \
+    --viewport "$VIEWPORT" \
+    --test-plan "${TOLLGATE_TEST_PLAN:-playwright-luci}" \
+    --started-at "$STARTED_AT" \
+    --finished-at "$FINISHED_AT" \
+    --allow-failures
 
-if [ -f "$RUN_DIR/results.json" ]; then
-  read -r PASSED FAILED FLAKY SKIPPED DURATION_MS <<< "$(python3 - "$RUN_DIR/results.json" <<'PYEOF'
-import json, sys
-d = json.load(open(sys.argv[1]))
-s = d.get('stats', {})
-print(f"{s.get('expected',0)} {s.get('unexpected',0)} {s.get('flaky',0)} {s.get('skipped',0)} {s.get('duration',0)}")
-PYEOF
-)"
-  echo "==> Results: $PASSED passed, $FAILED failed, $FLAKY flaky, $SKIPPED skipped (${DURATION_MS}ms)"
-else
-  echo "WARNING: results.json not found — counts will be zero" >&2
+  echo "==> Rendering report..."
+  python3 "$SCRIPT_DIR/render-report.py" --run-dir "$RESULTS_DIR"
 fi
-
-# ── Write run.json ─────────────────────────────────────────────────────
-TEST_SUITE_COMMIT="$(git -C "$REPO_DIR" rev-parse HEAD)"
-ISO_TIMESTAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-
-python3 - "$TOLLGATE_COMMIT" "${TOLLGATE_BRANCH:-}" "${TOLLGATE_PR:-}" \
-  "$TEST_SUITE_COMMIT" "$ROUTER_ID" "$TOLLGATE_ROUTER_IP" "$VIEWPORT" \
-  "$ISO_TIMESTAMP" "$PASSED" "$FAILED" "$SKIPPED" "$FLAKY" "$DURATION_MS" \
-  "$RUN_DIR/run.json" <<'PYEOF'
-import json, sys
-a = sys.argv[1:]
-run = {
-    'tollgate_commit': a[0],
-    'tollgate_branch': a[1] if a[1] else None,
-    'tollgate_pr': int(a[2]) if a[2] else None,
-    'test_suite_commit': a[3],
-    'test_type': 'e2e',
-    'router_id': a[4],
-    'router_ip': a[5],
-    'viewport': a[6],
-    'timestamp': a[7],
-    'passed': int(a[8]),
-    'failed': int(a[9]),
-    'skipped': int(a[10]),
-    'flaky': int(a[11]),
-    'duration_ms': float(a[12]) if '.' in a[12] else int(a[12]),
-}
-with open(a[13], 'w') as f:
-    json.dump(run, f, indent=2)
-    f.write('\n')
-PYEOF
-
-echo "==> Wrote $RUN_DIR/run.json"
 
 # ── Publish (if enabled) ────────────────────────────────────────────────
 if [ "$TOLLGATE_PUBLISH" = "1" ] || [ "$TOLLGATE_PUBLISH" = "true" ]; then
   echo ""
   echo "==> Publishing report..."
-  "$SCRIPT_DIR/publish-report.sh" "$RUN_DIR" || true
+  "$SCRIPT_DIR/publish-report.sh" "$RESULTS_DIR" || true
 fi
 
 # ── Summary ─────────────────────────────────────────────────────────────
+# Read counts from summary.json if available, else show raw Playwright exit
+if [[ -f "$RESULTS_DIR/summary.json" ]]; then
+  read -r PASSED FAILED SKIPPED FLAKY DURATION_MS <<< "$(python3 - "$RESULTS_DIR/summary.json" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    d = json.load(f)
+c = d.get("counts", {})
+dur = sum(r.get("duration_ms", 0) for r in d.get("runners", [{}]))
+print(f"{c.get('passed',0)} {c.get('failed',0)} {c.get('skipped',0)} {c.get('flaky',0)} {dur}")
+PYEOF
+)"
+else
+  PASSED="?" FAILED="?" SKIPPED="?" FLAKY="?" DURATION_MS="0"
+fi
+
 echo ""
 echo "====================================================================="
 echo "  TEST SUMMARY"
 echo "====================================================================="
+echo "  Run ID:     $RUN_ID"
 echo "  Tollgate:   ${TOLLGATE_COMMIT:0:12}"
 echo "  Router:     $ROUTER_ID ($TOLLGATE_ROUTER_IP)"
 echo "  Viewport:   $VIEWPORT"
@@ -169,9 +200,11 @@ echo "  Passed:     $PASSED"
 echo "  Failed:     $FAILED"
 echo "  Flaky:      $FLAKY"
 echo "  Skipped:    $SKIPPED"
-DURATION_SEC="$(python3 -c "print(int(float('$DURATION_MS') / 1000))")"
-echo "  Duration:   ${DURATION_SEC}s"
-echo "  Run dir:    $RUN_DIR"
+if [[ "$DURATION_MS" != "?" && "$DURATION_MS" != "0" ]]; then
+  DURATION_SEC="$(python3 -c "print(int(float('$DURATION_MS') / 1000))")"
+  echo "  Duration:   ${DURATION_SEC}s"
+fi
+echo "  Results:    $RESULTS_DIR"
 echo "====================================================================="
 
 exit $PW_EXIT

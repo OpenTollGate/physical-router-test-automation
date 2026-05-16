@@ -1,0 +1,13 @@
+name: playwright-luci
+description: Playwright LuCI UI tests against router admin interface
+deploy: false
+reset: false
+exclusive_router: true
+runners:
+  - name: playwright
+    command: ./scripts/run-tests.sh --no-render
+    framework: playwright
+    timeout: 120
+required_capabilities:
+  - router
+  - luci_access

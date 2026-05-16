@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # sanitize-results.sh — Redact sensitive data from test results for public publication.
 #
-# Usage: sanitize-results.sh <raw-dir> <output-dir>
+# Usage: sanitize-results.sh <run-dir> [output-dir]
 #
-# Reads sensitive values from .env or environment variables and replaces them
-# with placeholder tokens in all text files. Screenshots are copied as-is
-# (EXIF stripped where possible; visual content not auto-redacted).
+# Accepts either a raw results directory OR a canonical run directory:
+#   - If <run-dir> contains run.json, it is treated as a canonical run dir
+#     and the script sanitizes raw/ and report/ subdirectories.
+#   - If no output-dir is given, sanitizes in-place (writes redaction-report.json
+#     in the run dir).
+#   - Otherwise, copies and sanitizes into output-dir.
+#
+# Reads sensitive values from .env, environment variables, and run.json (if present).
 #
 # Sanitizes:
 #   - Router IP address and subnet
@@ -18,12 +23,40 @@
 #
 set -euo pipefail
 
-RAW_DIR="${1:?Usage: $0 <raw-dir> <output-dir>}"
-OUT_DIR="${2:?Usage: $0 <raw-dir> <output-dir>}"
+IN_DIR="${1:?Usage: $0 <run-dir> [output-dir]}"
+OUT_DIR="${2:-}"
 
-if [ ! -d "$RAW_DIR" ]; then
-    echo "ERROR: raw directory not found: $RAW_DIR" >&2
+if [ ! -d "$IN_DIR" ]; then
+    echo "ERROR: directory not found: $IN_DIR" >&2
     exit 1
+fi
+
+# --- Detect canonical vs raw directory ---
+CANONICAL=false
+RUN_JSON=""
+if [ -f "$IN_DIR/run.json" ]; then
+    CANONICAL=true
+    RUN_JSON="$IN_DIR/run.json"
+fi
+
+# --- Determine output dir ---
+if [ -z "$OUT_DIR" ]; then
+    # In-place: we work on the input dir directly
+    OUT_DIR="$IN_DIR"
+    INPLACE=true
+else
+    INPLACE=false
+fi
+
+# Determine the actual directory tree to scan for files
+if [ "$CANONICAL" = true ]; then
+    # For canonical dirs, we sanitize raw/ and report/ subdirs
+    SCAN_DIRS=()
+    [ -d "$IN_DIR/raw" ] && SCAN_DIRS+=("$IN_DIR/raw")
+    [ -d "$IN_DIR/report" ] && SCAN_DIRS+=("$IN_DIR/report")
+else
+    # For raw dirs, scan everything
+    SCAN_DIRS=("$IN_DIR")
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -37,11 +70,38 @@ if [ -f "$REPO_DIR/.env" ]; then
     set +a
 fi
 
-# --- Gather sensitive values ---
+# --- Gather sensitive values from .env / environment ---
 ROUTER_IP="${TOLLGATE_SSH_HOST:-${ROUTER_IP:-}}"
 ROUTER_PASSWORD="${TOLLGATE_LUCI_PASSWORD:-${ROUTER_PASSWORD:-}}"
 PHONE_SERIAL="${PHONE_SERIAL:-}"
 SSID="${TOLLGATE_SSID:-TollGate}"
+
+# --- Read additional values from run.json if present ---
+CONTAINER_MODE=false
+if [ "$CANONICAL" = true ] && command -v python3 &>/dev/null; then
+    # Extract router_ip from run.json lab section
+    RUN_IP=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$RUN_JSON'))
+    lab = d.get('lab', {})
+    print(lab.get('router_ip', ''))
+except: print('')
+" 2>/dev/null || true)
+    if [ -n "$RUN_IP" ] && [ -z "$ROUTER_IP" ]; then
+        ROUTER_IP="$RUN_IP"
+    fi
+
+    # Check container/virtual_lab mode
+    CONTAINER_MODE=$(python3 -c "
+import json
+d = json.load(open('$RUN_JSON'))
+lab = d.get('lab', {})
+ct = lab.get('client_type', '')
+vl = lab.get('virtual_lab', False)
+print('true' if ct == 'container' or vl else 'false')
+" 2>/dev/null || echo "false")
+fi
 
 # --- Build sed expressions (all extended regex via -E) ---
 # Escape a string for use in sed replacement (handle / & |)
@@ -104,54 +164,121 @@ strip_exif() {
     fi
 }
 
-# --- Process all files ---
+# --- Process files ---
 mkdir -p "$OUT_DIR"
 
 FILE_COUNT=0
-while IFS= read -r -d '' file; do
-    rel="${file#"$RAW_DIR"/}"
-    mkdir -p "$OUT_DIR/$(dirname "$rel")"
+SCREENSHOTS_STRIPPED=0
 
-    case "$file" in
-        *.html|*.htm|*.xml|*.log|*.txt|*.json)
-            sanitize_text "$file" "$OUT_DIR/$rel"
-            ;;
-        *.png|*.jpg|*.jpeg|*.gif|*.webp)
-            # Screenshots: strip EXIF metadata. Visual content is NOT auto-redacted.
-            strip_exif "$file" "$OUT_DIR/$rel"
-            ;;
-        *)
-            cp "$file" "$OUT_DIR/$rel"
-            ;;
-    esac
-    FILE_COUNT=$((FILE_COUNT + 1))
-done < <(find "$RAW_DIR" -type f -print0)
+for SCAN_DIR in "${SCAN_DIRS[@]}"; do
+    # Determine the relative prefix from IN_DIR
+    while IFS= read -r -d '' file; do
+        rel="${file#"$SCAN_DIR"/}"
+
+        if [ "$INPLACE" = true ]; then
+            dest="$SCAN_DIR/$rel"
+        else
+            # Map to output preserving structure
+            # e.g. IN_DIR/raw/api/output.log -> OUT_DIR/raw/api/output.log
+            subdir="${SCAN_DIR#"$IN_DIR"}"
+            dest="$OUT_DIR${subdir}/$rel"
+        fi
+
+        mkdir -p "$(dirname "$dest")"
+
+        case "$file" in
+            *.html|*.htm|*.xml|*.log|*.txt|*.json)
+                sanitize_text "$file" "$dest"
+                ;;
+            *.png|*.jpg|*.jpeg|*.gif|*.webp)
+                if [ "$CONTAINER_MODE" = true ]; then
+                    # Container/virtual_lab: preserve screenshots with EXIF stripped
+                    strip_exif "$file" "$dest"
+                else
+                    # Phone/non-container: strip screenshots entirely
+                    SCREENSHOTS_STRIPPED=$((SCREENSHOTS_STRIPPED + 1))
+                fi
+                ;;
+            *)
+                cp "$file" "$dest"
+                ;;
+        esac
+        FILE_COUNT=$((FILE_COUNT + 1))
+    done < <(find "$SCAN_DIR" -type f -print0)
+done
+
+# --- Remove image files from artifacts/ unless container/virtual_lab ---
+if [ "$CANONICAL" = true ] && [ -d "$IN_DIR/artifacts" ]; then
+    ARTIFACTS_OUT="${OUT_DIR}/artifacts"
+    if [ "$CONTAINER_MODE" = true ]; then
+        # Preserve all artifacts, strip EXIF on images
+        mkdir -p "$ARTIFACTS_OUT"
+        while IFS= read -r -d '' afile; do
+            arel="${afile#"$IN_DIR/artifacts"/}"
+            mkdir -p "$ARTIFACTS_OUT/$(dirname "$arel")"
+            case "$afile" in
+                *.png|*.jpg|*.jpeg|*.gif|*.webp)
+                    strip_exif "$afile" "$ARTIFACTS_OUT/$arel"
+                    ;;
+                *)
+                    cp "$afile" "$ARTIFACTS_OUT/$arel"
+                    ;;
+            esac
+            FILE_COUNT=$((FILE_COUNT + 1))
+        done < <(find "$IN_DIR/artifacts" -type f -print0)
+    else
+        # Copy non-image artifacts only
+        mkdir -p "$ARTIFACTS_OUT"
+        while IFS= read -r -d '' afile; do
+            arel="${afile#"$IN_DIR/artifacts"/}"
+            case "$afile" in
+                *.png|*.jpg|*.jpeg|*.gif|*.webp)
+                    SCREENSHOTS_STRIPPED=$((SCREENSHOTS_STRIPPED + 1))
+                    continue
+                    ;;
+            esac
+            mkdir -p "$ARTIFACTS_OUT/$(dirname "$arel")"
+            cp "$afile" "$ARTIFACTS_OUT/$arel"
+            FILE_COUNT=$((FILE_COUNT + 1))
+        done < <(find "$IN_DIR/artifacts" -type f -print0)
+    fi
+fi
+
+# --- Also strip phone serials from XML dumps in non-container mode ---
+if [ "$CONTAINER_MODE" = false ] && [ -n "$PHONE_SERIAL" ]; then
+    # Already handled by sed above for all text files
+    :
+fi
 
 # --- Generate redaction report ---
 cat > "$OUT_DIR/redaction-report.json" << EOF
 {
   "timestamp": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "input_dir": "$(cd "$IN_DIR" && pwd)",
+  "output_dir": "$(cd "$OUT_DIR" && pwd)",
   "files_processed": $FILE_COUNT,
   "redactions": {
     "router_ip": $([ -n "$ROUTER_IP" ] && echo "true" || echo "false"),
     "password": $([ -n "$ROUTER_PASSWORD" ] && echo "true" || echo "false"),
     "phone_serial": $([ -n "$PHONE_SERIAL" ] && echo "true" || echo "false"),
-    "ssid": true,
     "mac_addresses": true,
     "cashu_tokens": true,
-    "local_paths": true
+    "local_paths": true,
+    "screenshots_stripped": $SCREENSHOTS_STRIPPED
   },
+  "container_mode": $CONTAINER_MODE,
   "notes": [
+    "Sanitized for public publication",
     "Screenshots: EXIF stripped. Visual content (SSIDs, IPs in UI) NOT auto-redacted.",
     "Review sanitized output before publishing."
   ]
 }
 EOF
 
-echo "==> Sanitized ${FILE_COUNT} files"
+echo "==> Sanitized ${FILE_COUNT} files (${SCREENSHOTS_STRIPPED} screenshots stripped)"
 echo "==> Output: ${OUT_DIR}/"
 echo ""
 echo "==> Review before publishing:"
-echo "    open ${OUT_DIR}/report.html 2>/dev/null || xdg-open ${OUT_DIR}/report.html"
+echo "    open ${OUT_DIR}/report/index.html 2>/dev/null || xdg-open ${OUT_DIR}/report/index.html 2>/dev/null || true"
 echo ""
-echo "==> To publish: ./scripts/publish-report.sh <commit-hash> ${OUT_DIR}"
+echo "==> To publish: ./scripts/publish-report.sh $OUT_DIR"
