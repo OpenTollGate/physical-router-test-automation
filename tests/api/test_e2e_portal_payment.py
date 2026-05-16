@@ -36,7 +36,7 @@ def test_e2e_portal_payment(adb, cashu, router, results_dir, request):
     if client != "container":
         pytest.skip("e2e visual flow requires --client=container")
 
-    gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "192.168.1.1")
+    gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "10.99.99.1")
     assert adb.ping(gateway, count=1, timeout=3), "client must reach gateway"
 
     output_dir = os.path.join(results_dir, "raw", "e2e")

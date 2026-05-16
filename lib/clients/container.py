@@ -23,7 +23,7 @@ class ContainerClient:
     is_container = True
 
     def __init__(self, host: str | None = None, jump_host: str | None = None,
-                 client_ip: str = "192.168.1.100", client_mac: str | None = None,
+                 client_ip: str = "10.99.99.100", client_mac: str | None = None,
                  password: str = "tollgate"):
         self._host = host
         if jump_host and jump_host in {"localhost", "127.0.0.1", "::1"}:
@@ -147,21 +147,14 @@ class ContainerClient:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             remote_png = "/tmp/tg-screenshot.png"
             remote_html = "/tmp/tg-page.html"
-            portal_url = f"http://{POC_GATEWAY}:{NDS_PORTAL_PORT}/"
-            script = (
-                "from playwright.sync_api import sync_playwright\n"
-                "with sync_playwright() as p:\n"
-                f"    browser = p.chromium.launch(headless=True, args=['--no-sandbox'])\n"
-                "    page = browser.new_page(viewport={'width': 1280, 'height': 720})\n"
-                f"    page.goto('{portal_url}', timeout=15000)\n"
-                "    page.wait_for_load_state('networkidle', timeout=10000)\n"
-                f"    page.screenshot(path='{remote_png}')\n"
-                f"    with open('{remote_html}', 'w') as f:\n"
-                "        f.write(page.content())\n"
-                "    browser.close()\n"
+            ok = self._run_playwright_screenshot(
+                url=f"http://{POC_GATEWAY}:{NDS_PORTAL_PORT}/",
+                png_path=remote_png,
+                html_path=remote_html,
             )
-            self._exec(f"cat > /tmp/tg-screenshot.py << 'PYEOF'\n{script}\nPYEOF")
-            self._exec("python3 /tmp/tg-screenshot.py", timeout=30)
+            if not ok:
+                log.warning("playwright screenshot script failed on VM")
+                return False
             self._scp_from(remote_png, path)
 
             html_path = path.replace(".png", ".html")
@@ -174,6 +167,7 @@ class ContainerClient:
             portal_keywords = [
                 "tollgate", "captive.*portal", "portal_ready", "token_typing",
                 "countdown", "data-sm=", "usage.*dashboard", "authed",
+                "<!doctype", "<html",
             ]
             pattern = "|".join(portal_keywords)
             if re.search(pattern, html, re.IGNORECASE):
@@ -182,11 +176,42 @@ class ContainerClient:
                     report_path = os.path.join(report_dir, os.path.basename(path))
                     with open(path, "rb") as src, open(report_path, "wb") as dst:
                         dst.write(src.read())
-                    return True
+                return True
             return False
         except Exception as exc:
             log.warning("screenshot_portal failed: %s", exc)
             return False
+
+    def _run_playwright_screenshot(self, url: str, png_path: str = "/tmp/tg-screenshot.png",
+                                    html_path: str | None = None,
+                                    extra_js: str = "") -> bool:
+        """Run a Playwright screenshot on the Debian VM.
+
+        Uses domcontentloaded (not networkidle) to avoid crashes when
+        the page has pending long-lived connections (SSE, etc).
+        Returns True if the script printed SCREENSHOT_OK.
+        """
+        save_html = ""
+        if html_path:
+            save_html = f"    with open('{html_path}', 'w') as f:\n        f.write(page.content())\n"
+        script = (
+            "from playwright.sync_api import sync_playwright\n"
+            "import time\n"
+            "with sync_playwright() as p:\n"
+            "    browser = p.chromium.launch(headless=True, args=['--no-sandbox'])\n"
+            "    page = browser.new_page(viewport={'width': 1280, 'height': 720})\n"
+            f"    page.goto('{url}', timeout=15000, wait_until='domcontentloaded')\n"
+            "    time.sleep(2)\n"
+            + extra_js +
+            f"    page.screenshot(path='{png_path}')\n"
+            + save_html +
+            "    browser.close()\n"
+            "    print('SCREENSHOT_OK')\n"
+        )
+        self._exec(f"cat > /tmp/tg-screenshot.py << 'PYEOF'\n{script}\nPYEOF")
+        result = self._exec("python3 /tmp/tg-screenshot.py", timeout=30)
+        log.debug("playwright screenshot result: %s", result[:200])
+        return "SCREENSHOT_OK" in result
 
     def ui_xml(self) -> str:
         try:
@@ -281,8 +306,8 @@ class ContainerClient:
             "ctx = browser.new_context(record_video_dir='/tmp/tg-video', record_video_size={'width': 1280, 'height': 720})\n"
             "page = ctx.new_page()\n"
             "try:\n"
-            f"    page.goto('{portal_url}', timeout=20000)\n"
-            "    page.wait_for_load_state('networkidle', timeout=15000)\n"
+            f"    page.goto('{portal_url}', timeout=20000, wait_until='domcontentloaded')\n"
+            "    time.sleep(2)\n"
             "    page.screenshot(path='/tmp/tg-e2e/01-portal-unpaid.png')\n"
             "    open('/tmp/tg-portal-ready', 'w').close()\n"
             "    for _ in range(120):\n"
@@ -292,12 +317,12 @@ class ContainerClient:
             "    else:\n"
             "        raise TimeoutError('timed out waiting for payment signal')\n"
             "    time.sleep(2)\n"
-            f"    page.reload(timeout=15000)\n"
-            "    page.wait_for_load_state('networkidle', timeout=10000)\n"
+            f"    page.reload(timeout=15000, wait_until='domcontentloaded')\n"
+            "    time.sleep(1)\n"
             "    page.screenshot(path='/tmp/tg-e2e/02-portal-paid.png')\n"
             "    time.sleep(1)\n"
-            "    page.goto('http://1.1.1.1', timeout=15000)\n"
-            "    page.wait_for_load_state('domcontentloaded', timeout=10000)\n"
+            "    page.goto('http://1.1.1.1', timeout=15000, wait_until='domcontentloaded')\n"
+            "    time.sleep(1)\n"
             "    page.screenshot(path='/tmp/tg-e2e/03-internet-access.png')\n"
             "    print('RECORD_OK')\n"
             "except Exception as e:\n"

@@ -20,7 +20,7 @@ def test_portal_screenshot(screenshot_portal, adb, request):
     if client != "container":
         pytest.skip("portal screenshot visual test requires --client=container")
 
-    gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "192.168.1.1")
+    gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "10.99.99.1")
     assert adb.ping(gateway, count=1, timeout=3), "client must reach gateway before screenshot"
 
     screenshot_portal("portal-home.png")

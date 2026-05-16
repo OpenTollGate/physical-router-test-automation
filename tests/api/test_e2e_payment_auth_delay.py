@@ -148,8 +148,8 @@ def test_payment_auth_delay_with_redirect(router, cashu):
     _skip_unless_virtual_lab()
     _skip_if_no_welcome_page(router)
 
-    client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "192.168.1.100")
-    gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "192.168.1.1")
+    client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
+    gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "10.99.99.1")
 
     _netns_exec("curl", "-s", "-o", "/dev/null", "--connect-timeout", "5",
                 f"http://{gateway}:2050/", timeout=10)
@@ -222,8 +222,8 @@ def test_payment_without_redirect_no_auth_delay(router, cashu):
     """
     _skip_unless_virtual_lab()
 
-    client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "192.168.1.100")
-    gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "192.168.1.1")
+    client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
+    gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "10.99.99.1")
 
     _netns_exec("curl", "-s", "-o", "/dev/null", "--connect-timeout", "5",
                 f"http://{gateway}:2050/", timeout=10)

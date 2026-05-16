@@ -1,6 +1,6 @@
 const { defineConfig } = require('@playwright/test');
 
-const NDS_URL = process.env.TOLLGATE_NDS_URL ?? 'http://192.168.1.1:2050';
+const NDS_URL = process.env.TOLLGATE_NDS_URL ?? 'http://10.99.99.1:2050';
 
 module.exports = defineConfig({
 	testDir: './tests/browser',

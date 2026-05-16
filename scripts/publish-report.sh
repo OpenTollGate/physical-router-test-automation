@@ -127,12 +127,18 @@ cp -r "$RUN_DIR/report" "$TARGET_DIR/report"
 cp "$RUN_DIR/run.json" "$TARGET_DIR/run.json"
 
 # ── Strip screenshots and XML ──────────────────────────────────────────
-# For container/VM tests: screenshots are safe to publish (QEMU MACs, no PII).
-# For phone tests: never publish screenshots.
+# Container (VM) mode: skip ALL sanitization. VM test reports contain no PII
+#   (random QEMU MACs, local IPs, test tokens, hardcoded "tollgate" password).
+#   The report is copied AS-IS — no HTML modification, no img tag stripping,
+#   no asset removal. This preserves base64-embedded images (screenshots)
+#   that would otherwise be destroyed by the sanitizer, causing about:blank
+#   img src bugs in the published report.
+# Phone mode: strip all screenshots, image tags, and asset references to
+#   prevent leaking PII from real device test reports.
 
 CLIENT_TYPE="$(json_string "$RUN_DIR/run.json" client_type || true)"
 if [ "$CLIENT_TYPE" = "container" ]; then
-	echo "==> Container mode: keeping all screenshots"
+	echo "==> Container mode: skipping ALL sanitization, preserving report as-is (no PII in VM tests)"
 else
 	# Phone / unknown mode: strip all screenshots and XML
 	echo "==> Non-container mode: stripping screenshots and XML"

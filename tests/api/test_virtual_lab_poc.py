@@ -32,7 +32,7 @@ def test_container_reaches_openwrt_gateway():
     if not (os.environ.get("TOLLGATE_SSH_JUMP_HOST") or os.environ.get("TOLLGATE_VIRTUAL_HOST") or os.environ.get("TOLLGATE_VIRTUAL_LAB")):
         pytest.skip("set TOLLGATE_VIRTUAL_LAB=1 and run scripts/virtual-lab.py start-poc")
 
-    gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "192.168.1.1")
+    gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "10.99.99.1")
     result = _netns_exec("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
                          f"http://{gateway}:2050/", timeout=15)
     code = result.stdout.strip()

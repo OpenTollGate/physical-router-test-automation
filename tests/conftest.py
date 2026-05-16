@@ -202,7 +202,7 @@ def router(request, backend):
             phone_mac = phone_mac or LinuxWiFiClient().mac_address
         log.info(f"--client={client}: auto-detected WiFi MAC {phone_mac}")
     elif client == "container":
-        phone_ip = phone_ip or "192.168.1.100"
+        phone_ip = phone_ip or "10.99.99.100"
         phone_mac = phone_mac or "02:00:00:00:00:01"
         log.info(f"--client=container: using container IP {phone_ip}, MAC {phone_mac}")
     else:
@@ -294,7 +294,7 @@ def adb(request, router):
         return LinuxAdapter(linux, router_domain=router.domain)
     if client == "container":
         container_host = os.environ.get("TOLLGATE_CONTAINER_HOST", "")
-        client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "192.168.1.100")
+        client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
         client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
         jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", container_host or "")
         password = os.environ.get("TOLLGATE_SSH_PASSWORD",

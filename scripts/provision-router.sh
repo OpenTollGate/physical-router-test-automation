@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROUTER_HOST=${ROUTER_HOST:-192.168.1.1}
+ROUTER_HOST=${ROUTER_HOST:-10.99.99.1}
 ROUTER_PASSWORD=${ROUTER_PASSWORD:-tollgate}
 TOLLGATE_BINARY=${TOLLGATE_BINARY:-/tmp/tollgate-wrt}
 TOLLGATE_PACKAGING=${TOLLGATE_PACKAGING:-/tmp/tollgate-packaging.tar.gz}

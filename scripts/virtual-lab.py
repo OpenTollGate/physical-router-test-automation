@@ -52,11 +52,11 @@ DEBIAN_IMAGE = "debian-12-nocloud-amd64.qcow2"
 DEBIAN_IMAGE_URL = f"https://cloud.debian.org/images/cloud/bookworm/latest/{DEBIAN_IMAGE}"
 DEBIAN_MAC = "de:54:4e:91:49:da"
 POC_OPENWRT_MAC = "52:54:00:12:34:56"
-DEBIAN_CLIENT_IP = "192.168.1.100"
-POC_GATEWAY = "192.168.1.1"
-POC_HOST_BRIDGE_IP = "192.168.1.2/24"
+DEBIAN_CLIENT_IP = "10.99.99.100"
+POC_GATEWAY = "10.99.99.1"
+POC_HOST_BRIDGE_IP = "10.99.99.2/24"
 POC_PASSWORD = "tollgate"
-POC_SUBNET = "192.168.1.0/24"
+POC_SUBNET = "10.99.99.0/24"
 
 # Template for the serial-console provisioning script.  Placeholders
 # ``__WORKDIR__`` and ``__PASSWORD__`` are substituted at runtime by
@@ -150,7 +150,7 @@ send_and_wait(s, 'uci commit firewall', wait=2)
 send_and_wait(s, 'fw4 restart', wait=5)
 
 print('Configuring internet access via host bridge...')
-send_and_wait(s, "uci set network.lan.gateway='192.168.1.2'", wait=2)
+send_and_wait(s, "uci set network.lan.gateway='10.99.99.2'", wait=2)
 send_and_wait(s, "uci set network.lan.dns='8.8.8.8'", wait=2)
 send_and_wait(s, 'uci commit network', wait=2)
 send_and_wait(s, '/etc/init.d/network restart', wait=5)
@@ -250,10 +250,10 @@ send_and_wait(s, 'cloud-init status --wait 2>/dev/null || true', wait=30)
 # --- Configure networking (static IP) ---
 print('Configuring networking...')
 send_and_wait(s, 'ip link set ens3 up', wait=2)
-send_and_wait(s, 'ip addr add 192.168.1.100/24 dev ens3', wait=2)
-send_and_wait(s, 'ip route add default via 192.168.1.1', wait=2)
-send_and_wait(s, 'echo "nameserver 192.168.1.1" > /etc/resolv.conf', wait=2)
-send_and_wait(s, 'sleep 5 && ping -c 1 -W 5 192.168.1.1', wait=10)
+send_and_wait(s, 'ip addr add 10.99.99.100/24 dev ens3', wait=2)
+send_and_wait(s, 'ip route add default via 10.99.99.1', wait=2)
+send_and_wait(s, 'echo "nameserver 10.99.99.1" > /etc/resolv.conf', wait=2)
+send_and_wait(s, 'sleep 5 && ping -c 1 -W 5 10.99.99.1', wait=10)
 
 print('Installing openssh-server...')
 send_and_wait(s, 'apt-get update -qq', wait=60)

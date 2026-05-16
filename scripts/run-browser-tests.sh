@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RESULTS_DIR="$REPO_DIR/results/browser"
 
-export TOLLGATE_NDS_URL="${TOLLGATE_NDS_URL:-http://192.168.1.1:2050}"
+export TOLLGATE_NDS_URL="${TOLLGATE_NDS_URL:-http://10.99.99.1:2050}"
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/home/ubuntu/.cache/ms-playwright}"
 
 if [ "$(hostname -s 2>/dev/null || echo local)" = "$HOST" ] || [ "$(hostname -I 2>/dev/null | awk '{print $1}')" = "$HOST" ]; then

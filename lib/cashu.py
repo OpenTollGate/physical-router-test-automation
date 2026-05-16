@@ -29,7 +29,7 @@ class CashuMint:
         mint_url = url or self.mint_url
         r = subprocess.run(
             [self._cashu, "-h", mint_url, "-t", "invoices"],
-            capture_output=True, text=True, timeout=15, env=self._env(),
+            capture_output=True, text=True, timeout=30, env=self._env(),
         )
         entries = self._parse_invoices(r.stdout)
         if not entries:
@@ -56,7 +56,7 @@ class CashuMint:
     def _count_invoices(self):
         r = subprocess.run(
             [self._cashu, "-h", self.mint_url, "-t", "invoices"],
-            capture_output=True, text=True, timeout=15, env=self._env(),
+            capture_output=True, text=True, timeout=30, env=self._env(),
         )
         return r.stdout.count("Mint quote")
 
@@ -67,7 +67,7 @@ class CashuMint:
                 r = subprocess.run(
                     [self._cashu, "-h", self.mint_url, "-t",
                      "invoice", str(amount), "--id", quote_id],
-                    capture_output=True, text=True, timeout=15, env=self._env(),
+                    capture_output=True, text=True, timeout=30, env=self._env(),
                 )
                 if "Invoice paid" in r.stdout:
                     return True
@@ -78,7 +78,7 @@ class CashuMint:
     def _ensure_balance(self, amount):
         r = subprocess.run(
             [self._cashu, "-h", self.mint_url, "-t", "balance"],
-            capture_output=True, text=True, timeout=10, env=self._env(),
+            capture_output=True, text=True, timeout=30, env=self._env(),
         )
         match = re.search(r"Balance:\s*(\d+)", r.stdout)
         if match and int(match.group(1)) >= amount:
@@ -119,7 +119,7 @@ class CashuMint:
         if legacy:
             cmd.append("--legacy")
 
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
         token = r.stdout.strip().split("\n")[0]
         if not token.startswith(("cashuA", "cashuB")):
             raise RuntimeError(f"Send failed: {r.stdout[-200:]}")

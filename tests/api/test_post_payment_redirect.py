@@ -122,7 +122,7 @@ def _client_exec(*args, timeout=10):
     jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", "")
     password = os.environ.get("TOLLGATE_SSH_PASSWORD",
                               os.environ.get("TOLLGATE_LUCI_PASSWORD", "tollgate"))
-    client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "192.168.1.100")
+    client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
     virtual_lab = os.environ.get("TOLLGATE_VIRTUAL_LAB", "")
 
     if jump_host and jump_host in {"localhost", "127.0.0.1", "::1"}:
@@ -153,7 +153,7 @@ def _client_exec(*args, timeout=10):
 
 def test_welcome_html_served_by_nds(router):
     _skip_if_no_welcome_page(router)
-    gateway = router.ssh("uci -q get nodogsplash.@nodogsplash[0].gatewayaddress 2>/dev/null || echo 192.168.1.1").strip()
+    gateway = router.ssh("uci -q get nodogsplash.@nodogsplash[0].gatewayaddress 2>/dev/null || echo 10.99.99.1").strip()
     port = router.ssh("uci -q get nodogsplash.@nodogsplash[0].gatewayport 2>/dev/null || echo 2050").strip()
     url = f"http://{gateway}:{port}/welcome.html"
 

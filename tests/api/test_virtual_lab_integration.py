@@ -1,14 +1,14 @@
-"""Virtual lab integration tests: full-stack validation from container through OpenWrt VM.
+"""Virtual lab integration tests: full-stack validation from network namespace through OpenWrt VM.
 
-These tests run commands inside the tg-poc-client Docker container on the virtual lab
+These tests run commands inside the tg-poc-client network namespace on the virtual lab
 host (SSH alias "218" by default). They validate the complete path:
 
-    Container (192.168.1.100) -> tg-poc-br bridge -> OpenWrt VM (192.168.1.1)
+    Namespace (tg-poc-client) -> tg-poc-br bridge -> OpenWrt VM (POC_GATEWAY)
 
 Requires:
   - TOLLGATE_VIRTUAL_LAB=1 set in the environment
-  - Host 218 reachable via SSH with Docker access
-  - tg-poc-client container running with curl, ping, iproute2
+  - Host 218 reachable via SSH with sudo access
+  - tg-poc-client network namespace configured with curl, ping, iproute2
   - OpenWrt VM with nodogsplash (captive portal)
 """
 
@@ -17,17 +17,19 @@ import subprocess
 
 import pytest
 
+from lib.constants import POC_GATEWAY
+
 pytestmark = [pytest.mark.api, pytest.mark.virtual_lab]
 
-GATEWAY = "192.168.1.1"
+GATEWAY = POC_GATEWAY
 CONTAINER = "tg-poc-client"
 LAB_HOST = os.environ.get("TOLLGATE_VIRTUAL_LAB_HOST", "218")
 
 
 def _run_in_container(*args, timeout=15, check=False):
-    """Execute a command inside the virtual lab container via SSH to the lab host."""
+    """Execute a command inside the virtual lab namespace via SSH to the lab host."""
     return subprocess.run(
-        ["ssh", LAB_HOST, "docker", "exec", CONTAINER, *args],
+        ["ssh", LAB_HOST, "sudo", "ip", "netns", "exec", CONTAINER, *args],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -41,18 +43,18 @@ def _skip_if_no_virtual_lab():
         pytest.skip("set TOLLGATE_VIRTUAL_LAB=1 and start the virtual lab first")
 
     result = subprocess.run(
-        ["ssh", LAB_HOST, "docker", "inspect", "-f", "{{.State.Running}}", CONTAINER],
+        ["ssh", LAB_HOST, "sudo", "ip", "netns", "identify", CONTAINER],
         capture_output=True,
         text=True,
         timeout=5,
         check=False,
     )
-    if result.returncode != 0 or "true" not in result.stdout:
-        pytest.skip("Virtual lab not running (tg-poc-client container not found)")
+    if result.returncode != 0:
+        pytest.skip("Virtual lab not running (tg-poc-client namespace not found)")
 
 
 def test_container_reaches_gateway():
-    """Container can ping the OpenWrt VM gateway at 192.168.1.1."""
+    """Container can ping the OpenWrt VM gateway at 10.99.99.1."""
     _skip_if_no_virtual_lab()
 
     result = _run_in_container("ping", "-c", "1", "-W", "2", GATEWAY)
@@ -140,22 +142,22 @@ def test_captive_portal_detection():
 
 
 def test_container_network_config():
-    """Container has an IP in 192.168.1.0/24 and default route via the gateway."""
+    """Container has an IP in 10.99.99.0/24 and default route via the gateway."""
     _skip_if_no_virtual_lab()
 
-    ip_result = _run_in_container("ip", "-4", "addr", "show", "eth0")
+    ip_result = _run_in_container("ip", "-4", "addr", "show", "tg-poc-vc")
     assert ip_result.returncode == 0, (
-        f"Could not query container IP on eth0\n"
+        f"Could not query namespace IP on tg-poc-vc\n"
         f"stdout:\n{ip_result.stdout}\nstderr:\n{ip_result.stderr}"
     )
-    assert "192.168.1." in ip_result.stdout, (
-        f"Container eth0 has no IP in 192.168.1.0/24\n"
+    assert "10.99.99." in ip_result.stdout, (
+        f"Namespace tg-poc-vc has no IP in 10.99.99.0/24\n"
         f"stdout:\n{ip_result.stdout}"
     )
 
     route_result = _run_in_container("ip", "route", "show", "default")
     assert route_result.returncode == 0, (
-        f"Could not query container default route\n"
+        f"Could not query namespace default route\n"
         f"stdout:\n{route_result.stdout}\nstderr:\n{route_result.stderr}"
     )
     assert f"via {GATEWAY}" in route_result.stdout, (
