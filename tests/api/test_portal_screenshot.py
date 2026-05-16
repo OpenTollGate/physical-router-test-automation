@@ -6,8 +6,11 @@ pytestmark = [pytest.mark.api, pytest.mark.smoke, pytest.mark.virtual_lab]
 
 
 def _skip_unless_virtual_lab():
-    if os.environ.get("TOLLGATE_SSH_JUMP_HOST", "") == "" and os.environ.get("TOLLGATE_VIRTUAL_HOST", "") == "":
-        pytest.skip("set TOLLGATE_SSH_JUMP_HOST=218 (or TOLLGATE_VIRTUAL_HOST) and run scripts/virtual-lab.py start-poc")
+    has_jump = os.environ.get("TOLLGATE_SSH_JUMP_HOST", "") != ""
+    has_vhost = os.environ.get("TOLLGATE_VIRTUAL_HOST", "") != ""
+    has_vlab = os.environ.get("TOLLGATE_VIRTUAL_LAB", "") != ""
+    if not (has_jump or has_vhost or has_vlab):
+        pytest.skip("set TOLLGATE_VIRTUAL_LAB=1 and run scripts/virtual-lab.py start-poc")
 
 
 def test_portal_screenshot(screenshot_portal, adb, request):

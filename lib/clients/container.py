@@ -26,6 +26,8 @@ class ContainerClient:
                  client_ip: str = "192.168.1.100", client_mac: str | None = None,
                  password: str = "tollgate"):
         self._host = host
+        if jump_host and jump_host in {"localhost", "127.0.0.1", "::1"}:
+            jump_host = None
         self._jump_host = jump_host
         self._client_ip = client_ip
         self._client_mac = client_mac

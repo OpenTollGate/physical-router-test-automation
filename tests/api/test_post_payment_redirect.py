@@ -125,6 +125,9 @@ def _client_exec(*args, timeout=10):
     client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "192.168.1.100")
     virtual_lab = os.environ.get("TOLLGATE_VIRTUAL_LAB", "")
 
+    if jump_host and jump_host in {"localhost", "127.0.0.1", "::1"}:
+        jump_host = ""
+
     if virtual_lab and jump_host:
         ns_cmd = ["sudo", "ip", "netns", "exec", "tg-poc-client"] + list(args)
         ssh_cmd = ["sshpass", "-p", password, "ssh",

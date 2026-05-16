@@ -18,8 +18,8 @@ except ImportError:
 
 
 def _skip_unless_virtual_lab():
-    if os.environ.get("TOLLGATE_SSH_JUMP_HOST", "") == "" and os.environ.get("TOLLGATE_VIRTUAL_HOST", "") == "":
-        pytest.skip("set TOLLGATE_SSH_JUMP_HOST and run scripts/virtual-lab.py start-poc")
+    if not (os.environ.get("TOLLGATE_SSH_JUMP_HOST") or os.environ.get("TOLLGATE_VIRTUAL_HOST") or os.environ.get("TOLLGATE_VIRTUAL_LAB")):
+        pytest.skip("set TOLLGATE_VIRTUAL_LAB=1 and run scripts/virtual-lab.py start-poc")
 
 
 def test_e2e_portal_payment(adb, cashu, router, results_dir, request):

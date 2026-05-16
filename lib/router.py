@@ -21,6 +21,9 @@ class Router:
         self.phone_mac = phone_mac
         self.domain = domain
         self.identity_file = identity_file
+        # Normalize: localhost jump hosts are meaningless (same machine).
+        if jump_host and jump_host in {"localhost", "127.0.0.1", "::1"}:
+            jump_host = None
         self.jump_host = jump_host
         self.port = port
         self.backend = backend or BackendConfig()
