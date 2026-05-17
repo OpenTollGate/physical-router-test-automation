@@ -3,11 +3,19 @@ import subprocess
 
 import pytest
 
+from lib.constants import POC_GATEWAY, NDS_PORTAL_PORT
+
 pytestmark = [pytest.mark.api, pytest.mark.smoke, pytest.mark.virtual_lab]
 
 
+def _skip_unless_virtual_lab():
+    if not (os.environ.get("TOLLGATE_SSH_JUMP_HOST")
+            or os.environ.get("TOLLGATE_VIRTUAL_HOST")
+            or os.environ.get("TOLLGATE_VIRTUAL_LAB")):
+        pytest.skip("set TOLLGATE_VIRTUAL_LAB=1 and start the virtual lab")
+
+
 def _netns_exec(*args, timeout=10):
-    """Run a command in the tg-poc-client network namespace via jump host."""
     jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", "")
     password = os.environ.get("TOLLGATE_SSH_PASSWORD",
                               os.environ.get("TOLLGATE_LUCI_PASSWORD", "tollgate"))
@@ -28,16 +36,22 @@ def _netns_exec(*args, timeout=10):
     )
 
 
-def test_container_reaches_openwrt_gateway():
-    if not (os.environ.get("TOLLGATE_SSH_JUMP_HOST") or os.environ.get("TOLLGATE_VIRTUAL_HOST") or os.environ.get("TOLLGATE_VIRTUAL_LAB")):
-        pytest.skip("set TOLLGATE_VIRTUAL_LAB=1 and run scripts/virtual-lab.py start-poc")
+def test_container_reaches_openwrt_gateway(adb, request):
+    _skip_unless_virtual_lab()
 
-    gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "10.99.99.1")
-    result = _netns_exec("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-                         f"http://{gateway}:2050/", timeout=15)
-    code = result.stdout.strip()
+    client = request.config.getoption("--client", default="adb")
+    gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", POC_GATEWAY)
+    portal_url = f"http://{gateway}:{NDS_PORTAL_PORT}/"
 
-    assert code.startswith("2") or code == "404", (
-        f"Client namespace could not reach NDS portal at {gateway}:2050 "
-        f"(HTTP {code})\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    )
+    if client == "container":
+        code = adb.curl(portal_url, o="/dev/null", w="%{http_code}", s=True)
+        code = code.strip()
+    else:
+        if not os.environ.get("TOLLGATE_SSH_JUMP_HOST"):
+            pytest.skip("requires TOLLGATE_SSH_JUMP_HOST for network namespace access")
+        result = _netns_exec("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                             portal_url, timeout=15)
+        code = result.stdout.strip()
+
+    assert code.startswith("2") or code == "404", \
+        f"Client could not reach NDS portal at {portal_url} (HTTP {code})"

@@ -182,6 +182,55 @@ class ContainerClient:
             log.warning("screenshot_portal failed: %s", exc)
             return False
 
+    def record_portal_video(self, output_path: str, timeout: int = 20) -> bool:
+        try:
+            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+            remote_dir = "/tmp/tg-auto-video"
+            remote_video = "/tmp/tg-portal-video.webm"
+            portal_url = f"http://{POC_GATEWAY}:{NDS_PORTAL_PORT}/"
+            script = (
+                "from pathlib import Path\n"
+                "from playwright.sync_api import sync_playwright\n"
+                "import shutil\n"
+                "import time\n"
+                f"remote_dir = Path('{remote_dir}')\n"
+                "remote_dir.mkdir(parents=True, exist_ok=True)\n"
+                "for video_file in remote_dir.glob('*.webm'):\n"
+                "    video_file.unlink()\n"
+                "video = None\n"
+                "with sync_playwright() as p:\n"
+                "    browser = p.chromium.launch(headless=True, args=['--no-sandbox'])\n"
+                "    ctx = browser.new_context(\n"
+                "        viewport={'width': 1280, 'height': 720},\n"
+                f"        record_video_dir='{remote_dir}',\n"
+                "        record_video_size={'width': 1280, 'height': 720},\n"
+                "    )\n"
+                "    page = ctx.new_page()\n"
+                f"    page.goto('{portal_url}', timeout=15000, wait_until='domcontentloaded')\n"
+                "    time.sleep(2)\n"
+                "    video = page.video\n"
+                "    ctx.close()\n"
+                "    browser.close()\n"
+                "if video is not None:\n"
+                f"    shutil.copy2(video.path(), '{remote_video}')\n"
+                "    print('VIDEO_OK')\n"
+                "else:\n"
+                "    print('VIDEO_ERROR')\n"
+            )
+            self._exec(
+                f"rm -rf {remote_dir} {remote_video} && mkdir -p {remote_dir} && "
+                f"cat > /tmp/tg-auto-video.py << 'PYEOF'\n{script}\nPYEOF",
+                timeout=10,
+            )
+            result = self._exec("python3 /tmp/tg-auto-video.py", timeout=timeout)
+            if "VIDEO_OK" not in result:
+                return False
+            self._scp_from(remote_video, output_path, timeout=timeout + 10)
+            return os.path.exists(output_path)
+        except Exception as exc:
+            log.warning("record_portal_video failed: %s", exc)
+            return False
+
     def _run_playwright_screenshot(self, url: str, png_path: str = "/tmp/tg-screenshot.png",
                                     html_path: str | None = None,
                                     extra_js: str = "") -> bool:

@@ -16,9 +16,8 @@ import time
 
 import pytest
 
+from lib.constants import LOCAL_502_MINT_URL
 from lib.helpers import parse_json_or_fail
-
-LOCAL_502_MINT = "http://10.99.99.1:8086"
 CONFIG_BACKUP = "/etc/tollgate/config.json.local-502-test-backup"
 
 pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.timeout(300)]
@@ -68,7 +67,7 @@ def _restart_and_wait(router, timeout: int = 30):
 
 @pytest.fixture(scope="module", autouse=True)
 def local_502_config(router):
-    _write_single_mint_config(router, LOCAL_502_MINT)
+    _write_single_mint_config(router, LOCAL_502_MINT_URL)
     _restart_and_wait(router)
     yield
     _restore_config(router)
@@ -78,7 +77,7 @@ def local_502_config(router):
 def test_local_502_mint_returns_502(router):
     code = router.ssh(
         "curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 "
-        f"{LOCAL_502_MINT}/v1/keysets"
+        f"{LOCAL_502_MINT_URL}/v1/keysets"
     ).strip()
     assert code == "502", f"Expected 502 from local 502 mint, got {code}"
 

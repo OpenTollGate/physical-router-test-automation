@@ -32,6 +32,7 @@ logging.basicConfig(
 log = logging.getLogger("tollgate.conftest")
 
 SCRIPT_DIR = os.path.join(os.path.dirname(__file__), "..")
+MAX_EMBED_SIZE = 20 * 1024 * 1024
 
 
 def load_env():
@@ -281,6 +282,22 @@ def deploy_session(request, router, backend):
         router.ensure_test_mint()
         router.replace_mints()
 
+    if _is_container_client(request.config) and os.environ.get("TOLLGATE_VIRTUAL_LAB"):
+        container_host = os.environ.get("TOLLGATE_CONTAINER_HOST", "")
+        client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
+        client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
+        jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", container_host or "")
+        password = os.environ.get("TOLLGATE_SSH_PASSWORD",
+                                  os.environ.get("TOLLGATE_LUCI_PASSWORD", "tollgate"))
+        request.session._tollgate_adb = ContainerClient(
+            host=container_host or None,
+            jump_host=jump_host or None,
+            client_ip=client_ip,
+            client_mac=client_mac or None,
+            password=password,
+        )
+        log.info("Pre-created ContainerClient for auto-screenshots")
+
     yield
 
     try:
@@ -308,13 +325,15 @@ def adb(request, router):
         jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", container_host or "")
         password = os.environ.get("TOLLGATE_SSH_PASSWORD",
                                   os.environ.get("TOLLGATE_LUCI_PASSWORD", "tollgate"))
-        return ContainerClient(
+        client = ContainerClient(
             host=container_host or None,
             jump_host=jump_host or None,
             client_ip=client_ip,
             client_mac=client_mac or None,
             password=password,
         )
+        request.session._tollgate_adb = client
+        return client
     serial = os.environ.get("PHONE_SERIAL", "")
     pin = os.environ.get("PHONE_PIN", "")
     return ADBDevice(serial=serial, pin=pin)
@@ -571,6 +590,93 @@ def _debug_summary(adb, router) -> str:
     return "\n".join(lines)
 
 
+def _auto_portal_screenshot(item, report, results_dir, adb):
+    if not _is_container_client(item.config):
+        return
+    if not os.environ.get("TOLLGATE_VIRTUAL_LAB"):
+        return
+    if not results_dir or not adb:
+        return
+    if getattr(item, "_screenshot_extras", None):
+        return
+
+    raw = os.path.join(results_dir, "raw")
+    os.makedirs(raw, exist_ok=True)
+
+    status = "failed" if report.failed else "passed"
+    safe_name = re.sub(r'[^\w\-.]', '_', item.name)
+    img_path = os.path.join(raw, f"{safe_name}-{status}.png")
+
+    try:
+        adb.screenshot(img_path)
+    except Exception as exc:
+        log.debug("auto portal screenshot capture failed: %s", exc)
+        return
+
+    if not os.path.isfile(img_path):
+        return
+
+    if html_extras is not None:
+        try:
+            with open(img_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            if b64:
+                extras = list(getattr(report, "extras", []))
+                extras.append(html_extras.image(b64, f"{safe_name}-{status}"))
+                report.extras = extras
+        except Exception as exc:
+            log.debug("auto portal screenshot embed failed: %s", exc)
+
+
+def _auto_portal_video(item, report, results_dir, adb):
+    if not _is_container_client(item.config):
+        return
+    if not os.environ.get("TOLLGATE_VIRTUAL_LAB"):
+        return
+    if not results_dir or not adb or not hasattr(adb, "record_portal_video"):
+        return
+    if not report.failed and not (report.passed and os.environ.get("TOLLGATE_RECORD_ALL") == "1"):
+        return
+
+    raw = os.path.join(results_dir, "raw")
+    os.makedirs(raw, exist_ok=True)
+
+    status = "failed" if report.failed else "passed"
+    safe_name = re.sub(r'[^\w\-.]', '_', item.name)
+    video_path = os.path.join(raw, f"{safe_name}-{status}.webm")
+
+    try:
+        ok = adb.record_portal_video(video_path)
+    except Exception as exc:
+        log.debug("auto portal video capture failed: %s", exc)
+        return
+
+    if not ok or not os.path.isfile(video_path):
+        return
+
+    if html_extras is None:
+        return
+
+    try:
+        if os.path.getsize(video_path) > MAX_EMBED_SIZE:
+            return
+        with open(video_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        if b64:
+            extras = list(getattr(report, "extras", []))
+            extras.append(
+                html_extras.video(
+                    b64,
+                    name=f"{safe_name}-{status}",
+                    mime_type="video/webm",
+                    extension="webm",
+                )
+            )
+            report.extras = extras
+    except Exception as exc:
+        log.debug("auto portal video embed failed: %s", exc)
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
@@ -582,54 +688,57 @@ def pytest_runtest_makereport(item, call):
         extras.extend(screenshot_extras)
         report.extras = extras
 
-    if report.when == "call" and report.failed:
+    if report.when == "call":
         results_dir = getattr(item, "_results_dir", None)
-        if not results_dir:
-            return
         adb = item.funcargs.get("adb")
         router = item.funcargs.get("router")
-        raw = os.path.join(results_dir, "raw")
-        os.makedirs(raw, exist_ok=True)
 
-        publish_mode = _is_publish_mode(item.config)
-        can_publish = "publish_screenshot" in item.keywords
-        container_mode = _is_container_client(item.config)
+        if not adb:
+            adb = getattr(item.session, "_tollgate_adb", None)
 
-        if adb:
-            try:
-                img_path = os.path.join(raw, f"{item.name}-failed.png")
-                adb.screenshot(img_path)
+        _auto_portal_screenshot(item, report, results_dir, adb)
+        _auto_portal_video(item, report, results_dir, adb)
 
-                should_embed = not publish_mode or can_publish or container_mode
-                if should_embed and os.path.isfile(img_path) and html_extras is not None:
-                    with open(img_path, "rb") as f:
-                        b64 = base64.b64encode(f.read()).decode()
-                    if b64:
-                        extras = list(getattr(report, "extras", []))
-                        extras.append(html_extras.image(b64, f"{item.name}-failed"))
-                        report.extras = extras
-            except Exception:
-                pass
-            if hasattr(adb, "ui_xml"):
+        if report.failed:
+            raw = os.path.join(results_dir, "raw") if results_dir else None
+            safe_name = re.sub(r'[^\w\-.]', '_', item.name)
+            if raw:
+                os.makedirs(raw, exist_ok=True)
+
+            if adb and raw:
                 try:
-                    xml_path = os.path.join(raw, f"{item.name}-ui.xml")
-                    xml = adb.ui_xml()
-                    with open(xml_path, "w") as f:
-                        f.write(xml)
-                    if html_extras is not None:
-                        texts = re.findall(r'text="([^"]{3,})"', xml)
-                        sm = re.search(r'data-sm="([^"]*)"', xml)
-                        summary = f"Phone UI texts: {texts[:15]}"
-                        if sm:
-                            summary += f"\nPortal state: {sm.group(1)}"
-                        extras = list(getattr(report, "extras", []))
-                        extras.append(html_extras.text(summary, name="phone-ui"))
-                        report.extras = extras
+                    img_path = os.path.join(raw, f"{safe_name}-failed-full.png")
+                    adb.screenshot(img_path)
+
+                    if os.path.isfile(img_path) and html_extras is not None:
+                        with open(img_path, "rb") as f:
+                            b64 = base64.b64encode(f.read()).decode()
+                        if b64:
+                            extras = list(getattr(report, "extras", []))
+                            extras.append(html_extras.image(b64, f"{safe_name}-failed-full"))
+                            report.extras = extras
                 except Exception:
                     pass
-        if router:
-            try:
-                router.collect_logs(results_dir, adb=adb)
-            except Exception:
-                pass
-            report.longrepr = str(report.longrepr) + _debug_summary(adb, router)
+                if hasattr(adb, "ui_xml") and raw:
+                    try:
+                        xml_path = os.path.join(raw, f"{safe_name}-ui.xml")
+                        xml = adb.ui_xml()
+                        with open(xml_path, "w") as f:
+                            f.write(xml)
+                        if html_extras is not None:
+                            texts = re.findall(r'text="([^"]{3,})"', xml)
+                            sm = re.search(r'data-sm="([^"]*)"', xml)
+                            summary = f"Phone UI texts: {texts[:15]}"
+                            if sm:
+                                summary += f"\nPortal state: {sm.group(1)}"
+                            extras = list(getattr(report, "extras", []))
+                            extras.append(html_extras.text(summary, name="phone-ui"))
+                            report.extras = extras
+                    except Exception:
+                        pass
+            if router:
+                try:
+                    router.collect_logs(results_dir, adb=adb)
+                except Exception:
+                    pass
+                report.longrepr = str(report.longrepr) + _debug_summary(adb, router)

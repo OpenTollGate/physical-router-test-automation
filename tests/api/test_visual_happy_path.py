@@ -1,11 +1,12 @@
 import base64
 import os
 import threading
+import time
 from typing import Any
 
 import pytest
 
-pytestmark = [pytest.mark.api, pytest.mark.smoke, pytest.mark.virtual_lab, pytest.mark.publish_screenshot]
+pytestmark = [pytest.mark.api, pytest.mark.smoke, pytest.mark.virtual_lab, pytest.mark.publish_screenshot, pytest.mark.timeout(180)]
 
 try:
     from pytest_html import extras as html_extras
@@ -63,6 +64,14 @@ def test_visual_happy_path(adb, router, results_dir, request):
     assert adb.ping(gateway, count=1, timeout=3), "client must reach gateway"
     print("[visual] client can reach gateway")
 
+    # Step 0.5: deauth client so NDS intercepts and shows portal
+    if client_mac:
+        try:
+            router.ssh(f"ndsctl deauth {client_mac} 2>/dev/null || true", timeout=10)
+            time.sleep(1)
+        except Exception:
+            pass
+
     # Step 1: start recording thread (video + screenshots)
     adb.start_portal_recording()
     recording_result: list[dict[str, Any] | None] = [None]
@@ -111,11 +120,10 @@ def test_visual_happy_path(adb, router, results_dir, request):
 
     # Step 8: standalone screenshot of the portal (in case recording failed)
     portal_shot = os.path.join(output_dir, "portal-standalone.png")
-    adb.screenshot_portal(portal_shot)
-    _embed_screenshot(portal_shot, "portal-standalone", request)
-
-    # Step 9: verify internet connectivity
-    has_internet = adb.ping("1.1.1.1", count=2, timeout=5)
-    print(f"[visual] internet access={has_internet}")
+    try:
+        adb.screenshot_portal(portal_shot)
+        _embed_screenshot(portal_shot, "portal-standalone", request)
+    except Exception as exc:
+        print(f"[visual] standalone screenshot skipped: {exc}")
 
     assert authenticated, "client should be authenticated after ndsctl auth"

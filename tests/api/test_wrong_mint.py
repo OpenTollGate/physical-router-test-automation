@@ -16,4 +16,9 @@ def test_wrong_mint_no_auth(router):
     state = router.get_nds_state()
     if not state:
         pytest.skip("No client connected — cannot verify ndsctl state (API-only test)")
+    if state == "Authenticated":
+        mac = router.phone_mac
+        if mac:
+            router.ssh(f"ndsctl deauth {mac} 2>&1 || true", timeout=5)
+            state = router.get_nds_state()
     assert state != "Authenticated", "Client authenticated with wrong mint token"

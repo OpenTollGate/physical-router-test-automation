@@ -28,6 +28,18 @@ The OpenWrt ASU (Attended Sysupgrade) server at `sysupgrade.openwrt.org` returns
 
 When testing router access from a machine that also has SSH access to the upstream/main router, be extremely careful with IP addresses. Commands like `passwd` or `chpasswd` run without confirmation. Always verify which host you're SSH'd into before running destructive commands.
 
+### Go wallet (gonuts) vs CDK Keyset ID V1/V2 incompatibility
+
+The TollGate Go backend uses `gonuts` which only supports Keyset ID V1 (`00`-prefix, 8 bytes, e.g. `0016f5fb5e5278f2`). CDK 0.16.0+ generates Keyset ID V2 (`01`-prefix, 33 bytes, e.g. `01df97b6fb8a572a718d7df7fcbf4387e2d455134ea8004c9c8c51e1b3391f909e`).
+
+Configuring the Go backend with a CDK mint causes a FATAL crash on startup: `"error adding new mint: Got invalid keyset. Derived id: '0016f5fb5e5278f2' but got '01df97b6...' from mint"`. The router's `/etc/tollgate/config.json` must use `testnut.cashu.exchange` (V1 keysets), NOT the local CDK mint.
+
+The local CDK mint (port 8085) works fine with the Python `cashu` CLI. It just can't be the Go backend's configured mint. This is tracked as GitHub issue #18.
+
+V2 spec (NUT-02 PR #182, merged Jan 2026): `01` + SHA256(`amount:pubkey_hex` pairs sorted, comma-separated, `|unit:sat`). V1: `00` + first 14 hex chars of SHA256(concat of raw pubkeys).
+
+**Fix path**: `Amperstrand/gonuts-tollgate` fork at `feature/v2-keyset-ids` branch adds `DeriveKeysetIdV2()` and `IsKeysetIdV2()` following NUT-02. The fix updates `wallet/keyset.go:GetKeysetKeys()` to use V2 derivation when the keyset ID starts with `01`. To apply: update `src/tollwallet/go.mod` in `tollgate-module-basic-go` to pin `github.com/Amperstrand/gonuts-tollgate` at the V2 branch, then rebuild the `.ipk`.
+
 ### Offline router deployment (no internet, no opkg update)
 
 When a router has no internet (e.g., downstream/reseller behind a jump host), `opkg update` and `opkg install` will fail. You must manually SCP all packages and their dependencies.

@@ -62,6 +62,7 @@ pytest -m api \
   --html="$RESULTS_DIR/raw/api/report.html" \
   --self-contained-html \
   --junitxml="$RESULTS_DIR/raw/api/junit.xml" \
+  --results="$RESULTS_DIR" \
   -v --tb=short --timeout=60 --timeout-method=thread \
   $BACKEND_ARG \
   "${PYTEST_EXTRA[@]+"${PYTEST_EXTRA[@]}"}" \

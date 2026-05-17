@@ -6,8 +6,10 @@ pytestmark = [pytest.mark.api, pytest.mark.critical]
 
 
 def test_pay_rejects_empty_body(router):
+    url = router.backend_url("/").replace("[::1]", "127.0.0.1")
     resp_text = router.ssh(
-        f"curl -s -o /dev/null -w '%{{http_code}}' -X POST '{router.backend_url('/')}'"
+        f"curl -s -o /dev/null -w '%{{http_code}}' -X POST '{url}' "
+        "-H 'Content-Length: 0'"
     )
     code = int(resp_text.strip().strip("'")) if resp_text.strip().strip("'").isdigit() else 0
     assert code in (400, 402, 500), \

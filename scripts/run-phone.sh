@@ -63,6 +63,7 @@ pytest -m phone \
   --html="$RESULTS_DIR/raw/phone/report.html" \
   --self-contained-html \
   --junitxml="$RESULTS_DIR/raw/phone/junit.xml" \
+  --results="$RESULTS_DIR" \
   -v --tb=short --timeout=300 --timeout-method=thread \
   $BACKEND_ARG \
   "${PYTEST_EXTRA[@]+"${PYTEST_EXTRA[@]}"}" \
