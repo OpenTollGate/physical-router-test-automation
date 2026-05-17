@@ -90,6 +90,8 @@ Takes a branch name, tag, or commit hash. Defaults to router at `192.168.13.112`
 
 ### Individual test tiers
 
+Every runner produces a canonical run directory under `results/`:
+
 ```bash
 # Playwright LuCI UI tests
 TOLLGATE_LUCI_PASSWORD=<password> ./scripts/run-tests.sh [tollgate-commit] [desktop|mobile] [router-id]
@@ -104,7 +106,40 @@ TOLLGATE_LUCI_PASSWORD=<password> ./scripts/run-tests.sh [tollgate-commit] [desk
 ./scripts/run-all.sh
 ```
 
-The Playwright `run-tests.sh` commit hash is optional. If omitted, it falls back to `TOLLGATE_BRANCH` then `HEAD`. The script verifies SSH connectivity before running. Defaults to `desktop` viewport. Writes `test-run-*/run.json` plus an HTML report.
+The Playwright `run-tests.sh` commit hash is optional. If omitted, it falls back to `TOLLGATE_BRANCH` then `HEAD`. The script verifies SSH connectivity before running. Defaults to `desktop` viewport.
+
+Each runner accepts `--no-render` (skip report generation) and `--run-dir` (reuse an existing run directory).
+
+### Run directory layout
+
+Every run produces this structure:
+
+```
+results/<run_id>/                # e.g. 20260516T172600Z-abc1234
+  run.json                       # Canonical metadata (schema_version 1)
+  summary.json                   # Per-test outcomes for rendering
+  report/
+    index.html                   # Unified static HTML report
+  raw/
+    api/
+      junit.xml                  # pytest JUnit output
+      report.html                # pytest-html output
+      output.log                 # Captured stdout/stderr
+    phone/
+      junit.xml
+      report.html
+      output.log
+    playwright/
+      results.json               # Playwright JSON report
+      report/                    # Playwright HTML report
+      output.log
+  artifacts/
+    logs/
+    screenshots/
+    traces/
+```
+
+Runner subdirectories that weren't run are simply absent. The unified `report/index.html` links to native framework reports.
 
 ### Makefile targets
 
@@ -117,6 +152,12 @@ The Playwright `run-tests.sh` commit hash is optional. If omitted, it falls back
 | `make phone` | All phone-marked tests |
 | `make test` | All pytest tests |
 | `make luci` | Playwright LuCI UI tests |
+| `make run-api` | Run API tier with canonical run dir |
+| `make run-phone` | Run phone tier with canonical run dir |
+| `make run-luci` | Run Playwright tests with canonical run dir |
+| `make run-all` | Run all tiers into one run directory |
+| `make collect` | Collect results from latest run dir |
+| `make render-report` | Render report from latest run dir |
 | `make smoke-mac` / `make api-mac` / `make test-mac` | Same as above, using macOS WiFi client instead of ADB |
 | `make smoke-linux` / `make api-linux` / `make test-linux` | Same, using Linux NetworkManager client |
 | `make deploy` | Run `scripts/deploy.sh` |
@@ -213,11 +254,15 @@ physical-router-test-automation/
       adb.py                    # ADB device control
       desktop.py                # macOS/Linux WiFi clients
       wifi.py                   # WiFi connection management
-  scripts/                      # 19 scripts (see below)
+  plans/                        # YAML test plans
+    *.yaml                      # Test plan definitions
+  scripts/                      # 25 scripts (see below)
   tests/
     conftest.py                 # Shared pytest fixtures (router, adb, cashu, wifi, deploy)
-    api/                        # 30 pytest API test files
-    phone/                      # 15 pytest phone test files
+    api/                        # 38 pytest API test files
+    phone/                      # 20 pytest phone test files
+    unit/                       # Unit tests for framework scripts
+      test_collect_results.py   # Tests for collect-results.py
     web/                        # Playwright LuCI UI tests
     destructive/                # Playwright destructive tests (reboot, firmware)
     protocol/                   # Playwright protocol tests (payment, data allotment)
@@ -227,7 +272,7 @@ physical-router-test-automation/
 
 ## Scripts
 
-All 19 scripts in `scripts/`:
+All 25 scripts in `scripts/`:
 
 ### Test execution
 
@@ -238,6 +283,7 @@ All 19 scripts in `scripts/`:
 | `run-api.sh` | Run pytest API tier (no phone needed). Writes JUnit XML + HTML report |
 | `run-phone.sh` | Run pytest phone tier (requires ADB device). Longer timeout (300s per test) |
 | `run-all.sh` | Run everything: Playwright LuCI + pytest API + pytest phone |
+| `run-browser-tests.sh` | Run Playwright tests on a remote browser host (TOLLGATE_BROWSER_HOST). Syncs tests via rsync, runs via SSH |
 
 ### Deployment
 
@@ -246,6 +292,9 @@ All 19 scripts in `scripts/`:
 | `deploy-ci.sh` | Download CI-built `.ipk` from GitHub Actions and deploy to router (recommended) |
 | `deploy.sh` | Build `.ipk` from source and deploy to router |
 | `download-ci-artifact.sh` | Download CI artifact only (no deploy step) |
+| `deploy-rust-ci.sh` | Download Rust v1 CI-built `.ipk` from GitHub Actions and deploy to router |
+| `download-rust-ci-artifact.sh` | Download Rust v1 CI artifact only (no deploy step) |
+| `provision-router.sh` | Bootstrap/provision a fresh router with required dependencies and configuration |
 
 ### Firmware and recovery
 
@@ -264,6 +313,8 @@ All 19 scripts in `scripts/`:
 | `strip-screenshots.sh` | Strip non-whitelisted screenshots from Playwright HTML reports (keeps only `publish_screenshot` annotated) |
 | `sanitize-results.sh` | Redact sensitive data (IPs, passwords, tokens, MACs, phone serials) from test results for public publication |
 | `publish-report.sh` | Publish test report to gh-pages with dashboard index. Purges old runs beyond `TOLLGATE_GH_PAGES_KEEP` |
+| `collect-results.py` | Canonical result parser — reads JUnit XML + Playwright JSON, writes `run.json` + `summary.json` into run directory |
+| `render-report.py` | Self-contained HTML report generator from canonical `run.json`/`summary.json`. No external dependencies |
 
 ### Setup
 
@@ -272,9 +323,15 @@ All 19 scripts in `scripts/`:
 | `setup-cashu.sh` | Install and patch cashu CLI for testnet token minting |
 | `setup-python.sh` | Create Python venv at `~/.tollgate-test-venv` with pytest and dependencies |
 
+### Lab management
+
+| Script | Purpose |
+|---|---|
+| `virtual-lab.py` | Manage local TollGate virtual lab — diagnostics, bootstrap, and lifecycle commands for Ubuntu VM test environments |
+
 ## Test Directories
 
-### `tests/api/` (31 tests, API-only, no phone needed)
+### `tests/api/` (38 test files, API-only, no phone needed)
 
 SSH directly to the router. No physical device required. Covers:
 
@@ -292,7 +349,7 @@ SSH directly to the router. No physical device required. Covers:
 - Post-payment redirect (NDS redirecturl config, runtime override, setup script)
 - CLI version, CLI wallet
 
-### `tests/phone/` (17 tests, requires Android device via ADB)
+### `tests/phone/` (20 test files, requires Android device via ADB)
 
 End-to-end through the captive portal on a real Android phone. Covers:
 
@@ -374,6 +431,8 @@ Session-scoped fixtures: `router` (SSH), `adb` (phone or desktop client), `cashu
 | `TOLLGATE_ROUTER_INVENTORY` | No | `config/routers.json` | Path to router inventory file |
 | `TOLLGATE_ROUTER_MODEL` | No | `unknown` | Router model identifier |
 | `TOLLGATE_ROUTER_ARCH` | No | `aarch64_cortex-a53` | Router architecture for ipk builds |
+| `TOLLGATE_BACKEND` | No | `go` | Backend type: `go` (Go v1) or `rust` (Rust v1) |
+| `TOLLGATE_CLIENT_TYPE` | No | `adb` | Client type for metadata: `adb`, `mac`, `linux`, or `container` |
 | `TOLLGATE_VIEWPORT` | No | `desktop` | Viewport: `desktop` or `mobile` |
 | `TOLLGATE_SSID` | No | `TollGate` | TollGate WiFi SSID |
 | `TOLLGATE_SSID_PREFIX` | No | `TollGate-` | Prefix for TollGate WiFi SSIDs |
