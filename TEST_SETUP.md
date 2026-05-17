@@ -64,9 +64,19 @@ Note: `scp -O` is required because OpenWrt's ash doesn't have sftp-server.
 
 ## Test Automation
 
-### Makefile
+### Top-level Makefile
 
-All test targets are in [`mint-health/Makefile`](mint-health/Makefile). Run from that directory:
+All test targets are available via the top-level **Makefile**. Run `make help` for the full list.
+
+```bash
+make smoke-degraded ROUTER=alpha           # single-router degraded lifecycle (~3 min)
+make smoke-upstream                        # two-router payment test (~5 min)
+make test-captive-portal ROUTER=alpha      # Playwright captive portal tests
+make test-cashu-payment ROUTER=alpha       # e2e cashu payment test
+make full-all ROUTER=alpha                 # everything combined
+```
+
+Sub-Makefiles are still available for direct use:
 
 ```sh
 cd ~/physical-router-test-automation/mint-health
@@ -81,18 +91,18 @@ Copy `routers.env.example` to `routers.env` and fill in credentials. This file i
 
 | Target | What it tests | Duration |
 |--------|--------------|----------|
-| `r-smoke-degraded` | Degraded lifecycle: block mint → degraded boot → unblock → recover | ~3 min |
-| `r-smoke-degraded-upstream` | Alpha connects to beta's AP, pays for upstream, degraded payment | ~5 min |
-| `r-test-startup-hygiene` | Boot with dead STA + good STA enabled, verify auto-switch | ~2 min |
-| `r-test-startup-hygiene-dead-only` | Boot with ONLY dead STA, disconnect other router, verify emergency scan recovery | ~3 min |
-| `r-full` | Full test suite (degraded + upstream + edge cases) | ~20 min |
-| `r-deploy` | Cross-compile and deploy binaries | ~1 min |
-| `r-shell` | Interactive SSH session to router | — |
-| `r-rescue-router` | Rescue offline router via the other router | ~3 min |
+| `make smoke-degraded ROUTER=alpha` | Degraded lifecycle: block mint → degraded boot → unblock → recover | ~3 min |
+| `make smoke-upstream` | Alpha connects to beta's AP, pays for upstream, degraded payment | ~5 min |
+| `make test-startup-hygiene ROUTER=alpha` | Boot with dead STA + good STA enabled, verify auto-switch | ~2 min |
+| `make test-startup-hygiene-dead-only ROUTER=alpha` | Boot with ONLY dead STA, disconnect other router, verify emergency scan recovery | ~3 min |
+| `make full-all ROUTER=alpha` | Full test suite (degraded + upstream + edge cases) | ~20 min |
+| `make deploy ROUTER=alpha` | Cross-compile and deploy binaries | ~1 min |
+| `make shell ROUTER=alpha` | Interactive SSH session to router | — |
+| `make rescue-router ROUTER=beta VIA=alpha` | Rescue offline router via the other router | ~3 min |
 
 ### Router mutex
 
-All `r-*` targets acquire a lock file (`routers.lock`) to prevent concurrent test execution. Use `make -f Makefile r-lock PHASE="description"` and `make -f Makefile r-unlock`.
+All test targets acquire a lock file (`routers.lock`) to prevent concurrent test execution. Use `make lock PHASE="description"` and `make unlock`.
 
 ## WiFi STA Architecture
 

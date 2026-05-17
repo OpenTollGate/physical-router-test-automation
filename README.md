@@ -74,45 +74,51 @@ The test suite uses [cashu](https://github.com/cashubtc/cashu) to mint testnet t
 
 ## Manual Hardware Test Suites
 
-In addition to the Playwright tests, this repo contains Makefile-based test suites for manual hardware testing against physical routers via SSH.
+A top-level **Makefile** provides convenient targets that wrap all test suites. Run `make help` for the full list.
+
+### Quick Start
+
+```bash
+# 1. Install dependencies
+make setup
+
+# 2. Configure routers
+cp mint-health/routers.env.example mint-health/routers.env     # edit with real IPs/passwords
+cp upstream-wifi/routers.env.example upstream-wifi/routers.env
+
+# 3. Run tests
+make smoke-degraded ROUTER=alpha           # single-router degraded lifecycle (~3 min)
+make smoke-upstream                        # two-router payment test (~5 min)
+make test-captive-portal ROUTER=alpha      # Playwright captive portal tests
+make test-cashu-payment ROUTER=alpha       # e2e cashu payment test
+make full-all ROUTER=alpha                 # everything combined
+```
 
 ### Directory Structure
 
 ```
-upstream-wifi/       # Upstream WiFi daemon tests (scan, connect, switch, reseller mode)
-  Makefile           # make -f upstream-wifi/Makefile r-smoke ROUTER=alpha SSID=MyNet PASS=secret
-  routers.env.example
-  docs/              # Incident notes, device test reports
-
-mint-health/         # Mint health tracking tests (degraded mode, offline payment, recovery)
-  Makefile           # make -f mint-health/Makefile r-smoke-degraded ROUTER=alpha
-  routers.env.example
-  docs/              # Router test plan, mutex protocol
-```
-
-### Setup for Manual Tests
-
-```bash
-# Copy the env template for the test suite you want and fill in real values
-cp upstream-wifi/routers.env.example upstream-wifi/routers.env   # edit with real IPs/passwords
-cp mint-health/routers.env.example mint-health/routers.env       # edit with real IPs/passwords
-
-# Deploy the latest binary
-scripts/local-compile-to-router.sh <ROUTER_IP>
+Makefile              # Top-level runner — make <target> ROUTER=alpha
+upstream-wifi/        # Upstream WiFi daemon tests (scan, connect, switch, reseller mode)
+  Makefile            # Direct: make -f upstream-wifi/Makefile r-smoke ROUTER=alpha SSID=x PASS=y
+mint-health/          # Mint health tests (degraded mode, offline payment, recovery)
+  Makefile            # Direct: make -f mint-health/Makefile r-smoke-degraded ROUTER=alpha
 ```
 
 ### Mint Health Test Quick Reference
 
 ```bash
-# Single-router degraded mode lifecycle (~5 min)
-make -f mint-health/Makefile r-smoke-degraded ROUTER=alpha
+# Single-router degraded mode lifecycle (~3 min)
+make smoke-degraded ROUTER=alpha
 
-# Two-router combined test (~20 min)
-make -f mint-health/Makefile r-smoke-degraded-upstream     # Scenario A: connect online, then degrade
-make -f mint-health/Makefile r-smoke-degraded-connect       # Scenario B: connect while degraded
+# Two-router combined test (~5 min)
+make smoke-upstream                          # Scenario A: connect online, then degrade
+make smoke-degraded-connect                  # Scenario B: connect while degraded (RISKY)
+
+# Dynamic rebuild test (~10 min)
+make smoke-dynamic-rebuild ROUTER=alpha
 
 # STA health check
-make -f mint-health/Makefile r-check-sta-health ROUTER=alpha
+make check-sta-health ROUTER=alpha
 ```
 
 See `mint-health/docs/router-test-plan.md` for the full test plan.
@@ -121,13 +127,13 @@ See `mint-health/docs/router-test-plan.md` for the full test plan.
 
 ```bash
 # Smoke test (~5 min)
-make -f upstream-wifi/Makefile r-smoke ROUTER=alpha SSID=MyNet PASS=secret
+make smoke-upstream-full ROUTER=alpha SSID=MyNet PASS=secret
 
 # Full test suite (~30 min)
-make -f upstream-wifi/Makefile r-full ROUTER=alpha SSID=MyNet PASS=secret
+make full-upstream ROUTER=alpha SSID=MyNet PASS=secret
 
 # STA health check
-make -f upstream-wifi/Makefile r-check-sta-health ROUTER=alpha
+make check-sta-health ROUTER=alpha
 ```
 
 See `upstream-wifi/docs/upstream-wifi-test-report.md` for test results and `docs/router-b-incident-2026-04-30.md` for incident notes.
@@ -160,15 +166,15 @@ See `docs/serial-integration-plan.md` for the full hardware setup guide (USB-TTL
 
 ```bash
 # Interactive serial console
-make -f mint-health/Makefile s-shell ROUTER=alpha
+make serial-shell ROUTER=alpha
 
 # Watch full boot output (reboot or power-cycle the router)
-make -f mint-health/Makefile s-cold-boot-test ROUTER=alpha
+make serial-cold-boot ROUTER=alpha
 
 # Emergency recovery on a stranded router
-make -f mint-health/Makefile s-recovery ROUTER=alpha CMD="sed -i '/nofee.testnut/d' /etc/hosts && /etc/init.d/tollgate-wrt restart"
+make serial-recovery ROUTER=alpha CMD="sed -i '/nofee.testnut/d' /etc/hosts && /etc/init.d/tollgate-wrt restart"
 
 # Hybrid: SSH first, serial fallback
-make -f mint-health/Makefile h-status ROUTER=alpha
-make -f mint-health/Makefile h-cleanup ROUTER=alpha
+make hybrid-status ROUTER=alpha
+make hybrid-cleanup ROUTER=alpha
 ```
