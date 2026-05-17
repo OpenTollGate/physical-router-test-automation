@@ -77,12 +77,14 @@ if [[ "$NO_RENDER" == "false" ]]; then
     --pytest "api=raw/api/junit.xml" \
     --run-id "$RUN_ID" \
     --sut-backend "${TOLLGATE_BACKEND:-go}" \
+    ${TOLLGATE_SUT_COMMIT:+--sut-commit "$TOLLGATE_SUT_COMMIT"} \
     --sut-branch "${TOLLGATE_BRANCH:-}" \
     ${TOLLGATE_PR:+--sut-pr "$TOLLGATE_PR"} \
     --router-id "${TOLLGATE_ROUTER_ID:-}" \
     --router-model "${TOLLGATE_ROUTER_MODEL:-}" \
     --router-arch "${TOLLGATE_ROUTER_ARCH:-}" \
     --client-type "${TOLLGATE_CLIENT_TYPE:-}" \
+    ${TOLLGATE_VIRTUAL_LAB:+--virtual-lab} \
     --viewport "${TOLLGATE_VIEWPORT:-desktop}" \
     --test-plan "${TOLLGATE_TEST_PLAN:-api}" \
     --started-at "$STARTED_AT" \
