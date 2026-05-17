@@ -5,6 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_DIR"
 
+# --- Load .env if present (exports all variables) ---
+if [[ -f "$REPO_DIR/.env" ]]; then
+  set -a
+  source "$REPO_DIR/.env"
+  set +a
+fi
+
 # --- Parse args ---
 NO_RENDER=false
 RUN_DIR_ARG=""
@@ -50,6 +57,12 @@ if [[ -n "${TOLLGATE_BACKEND:-}" ]]; then
   BACKEND_ARG="--backend=$TOLLGATE_BACKEND"
 fi
 
+# --- Client mode ---
+CLIENT_ARG=""
+if [[ -n "${TOLLGATE_CLIENT_TYPE:-}" ]]; then
+  CLIENT_ARG="--client=$TOLLGATE_CLIENT_TYPE"
+fi
+
 # --- Directory structure ---
 mkdir -p "$RESULTS_DIR/raw/api" "$RESULTS_DIR/report" "$RESULTS_DIR/artifacts"
 
@@ -65,6 +78,7 @@ pytest -m api \
   --results="$RESULTS_DIR" \
   -v --tb=short --timeout=60 --timeout-method=thread \
   $BACKEND_ARG \
+  $CLIENT_ARG \
   "${PYTEST_EXTRA[@]+"${PYTEST_EXTRA[@]}"}" \
   2>&1 | tee "$RESULTS_DIR/raw/api/output.log" || PYTEST_EXIT=$?
 
