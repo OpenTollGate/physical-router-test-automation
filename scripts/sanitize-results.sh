@@ -167,6 +167,12 @@ strip_exif() {
 # --- Process files ---
 mkdir -p "$OUT_DIR"
 
+for metafile in run.json summary.json; do
+    if [ -f "$IN_DIR/$metafile" ]; then
+        cp "$IN_DIR/$metafile" "$OUT_DIR/$metafile"
+    fi
+done
+
 FILE_COUNT=0
 SCREENSHOTS_STRIPPED=0
 
