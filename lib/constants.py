@@ -3,7 +3,7 @@ import os
 BACKEND_PORT = 2121
 CGI_PORT = 8080
 PING_HOST = "1.1.1.1"
-TEST_MINT_URL = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
+TEST_MINT_URL = os.environ.get("TOLLGATE_TEST_MINT_URL", "http://10.99.99.1:8085")
 TOKEN_MIN = 1
 TOKEN_SMALL = 3
 TOKEN_DEFAULT = 4

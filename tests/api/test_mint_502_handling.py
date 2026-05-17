@@ -1,6 +1,6 @@
 """Tests for handling unreachable/degraded mints on startup.
 
-Configures mint.coinos.io (currently returning 502) as the sole accepted
+Configures the local 502 mint (http://10.99.99.1:8086) as the sole accepted
 mint, then restarts the service to observe how the binary handles a mint
 that is reachable but returning errors.
 
@@ -18,8 +18,8 @@ import pytest
 
 from lib.helpers import parse_json_or_fail
 
-COINOS_MINT = "https://mint.coinos.io"
-CONFIG_BACKUP = "/etc/tollgate/config.json.coinos-test-backup"
+LOCAL_502_MINT = "http://10.99.99.1:8086"
+CONFIG_BACKUP = "/etc/tollgate/config.json.local-502-test-backup"
 
 pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.timeout(300)]
 
@@ -67,20 +67,20 @@ def _restart_and_wait(router, timeout: int = 30):
 
 
 @pytest.fixture(scope="module", autouse=True)
-def coinos_only_config(router):
-    _write_single_mint_config(router, COINOS_MINT)
+def local_502_config(router):
+    _write_single_mint_config(router, LOCAL_502_MINT)
     _restart_and_wait(router)
     yield
     _restore_config(router)
     _restart_and_wait(router)
 
 
-def test_mint_coinos_returns_502(router):
+def test_local_502_mint_returns_502(router):
     code = router.ssh(
         "curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 "
-        f"{COINOS_MINT}/v1/keysets"
+        f"{LOCAL_502_MINT}/v1/keysets"
     ).strip()
-    assert code == "502", f"Expected 502 from coinos, got {code}"
+    assert code == "502", f"Expected 502 from local 502 mint, got {code}"
 
 
 def test_service_stays_up_with_502_mint(router):

@@ -167,6 +167,100 @@ $SSH '/etc/init.d/tollgate-wrt enable 2>/dev/null; /etc/init.d/tollgate-wrt rest
 
 # --------------------------------------------------------------------------------
 
+step "Setting up CDK fakewallet mint (port 8085)"
+
+CDK_MINTD_BINARY=${CDK_MINTD_BINARY:-/tmp/cdk-mintd}
+if [ -f "$CDK_MINTD_BINARY" ]; then
+  scp -O "$CDK_MINTD_BINARY" root@$ROUTER_HOST:/usr/bin/cdk-mintd 2>/dev/null || \
+    warn "Failed to copy cdk-mintd binary"
+
+  $SSH 'chmod +x /usr/bin/cdk-mintd && mkdir -p /etc/cdk-mintd'
+
+  $SSH "cat > /etc/cdk-mintd/config.toml <<'CDKCONFIG'
+[info]
+url = \"http://tollgate.lan:8085\"
+name = \"TollGate Test Mint\"
+description = \"Local FakeWallet mint for testing\"
+listen_host = \"0.0.0.0\"
+listen_port = 8085
+mnemonic = \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\"
+
+[ln]
+ln_backend = \"fakewallet\"
+
+[fake_wallet]
+supported_units = [\"sat\"]
+fee_percent = 0.0
+reserve_fee_min = 0
+min_delay_time = 0
+max_delay_time = 1
+
+[database]
+engine = \"sqlite\"
+CDKCONFIG"
+
+  $SSH 'cat > /etc/init.d/cdk-mintd << "INIT"
+#!/bin/sh /etc/rc.common
+START=99
+STOP=15
+USE_PROCD=1
+start_service() {
+    procd_open_instance
+    procd_set_param command /usr/bin/cdk-mintd --config /etc/cdk-mintd/config.toml
+    procd_set_param respawn
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}
+INIT
+chmod +x /etc/init.d/cdk-mintd
+/etc/init.d/cdk-mintd enable
+/etc/init.d/cdk-mintd start' || warn "cdk-mintd setup failed"
+
+  echo "CDK mint configured on port 8085"
+else
+  warn "cdk-mintd binary not found at $CDK_MINTD_BINARY, skipping mint setup"
+fi
+
+# --------------------------------------------------------------------------------
+
+step "Setting up 502 test mint (port 8086)"
+
+$SSH 'cat > /usr/bin/mint-502-responder << "SCRIPT"
+#!/bin/sh
+read -t 5 LINE
+echo "HTTP/1.1 502 Bad Gateway"
+echo "Content-Type: application/json"
+echo "Connection: close"
+echo ""
+echo "{\"error\":\"Bad Gateway\",\"code\":502}"
+SCRIPT
+chmod +x /usr/bin/mint-502-responder
+
+cat > /etc/init.d/mint-502 << "INIT"
+#!/bin/sh /etc/rc.common
+START=98
+STOP=14
+USE_PROCD=1
+start_service() {
+    procd_open_instance
+    procd_set_param command socat TCP-LISTEN:8086,reuseaddr,fork EXEC:/usr/bin/mint-502-responder
+    procd_set_param respawn
+    procd_close_instance
+}
+INIT
+chmod +x /etc/init.d/mint-502
+/etc/init.d/mint-502 enable
+/etc/init.d/mint-502 start' || warn "502 mint setup failed"
+
+# --------------------------------------------------------------------------------
+
+step "Opening firewall for mint ports"
+$SSH 'iptables -C INPUT -p tcp --dport 8085 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 8085 -j ACCEPT'
+$SSH 'iptables -C INPUT -p tcp --dport 8086 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 8086 -j ACCEPT'
+
+# --------------------------------------------------------------------------------
+
 step "Waiting for services to bind (up to 20s)"
 OK=true
 for attempt in 1 2 3 4 5 6 7 8 9 10; do
