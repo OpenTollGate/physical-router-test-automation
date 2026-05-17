@@ -104,7 +104,6 @@ set +a
 # ── Set defaults ────────────────────────────────────────────────────────
 ROUTER_IP="${ROUTER_IP:-${TOLLGATE_SSH_HOST:-}}"
 ROUTER_ID="${ROUTER_ID:-${TOLLGATE_ROUTER_ID:-}}"
-ROUTER_SSH_KEY="${TOLLGATE_SSH_KEY:-~/.ssh/id_ed25519}"
 
 # Auto-resolve arch from router inventory if not set
 if [[ -z "${TOLLGATE_ROUTER_ARCH:-}" && -n "$ROUTER_ID" && -f "$REPO_DIR/config/routers.json" ]]; then

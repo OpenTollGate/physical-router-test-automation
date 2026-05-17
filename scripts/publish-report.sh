@@ -96,15 +96,24 @@ print(ts)
 
 COMMIT="$(read_field sut.commit tollgate_commit unknown)"
 COMMIT_SHORT="$(read_field sut.commit_short "" "${COMMIT:0:7}")"
+# shellcheck disable=SC2034
 BRANCH="$(read_field sut.branch tollgate_branch "")"
+# shellcheck disable=SC2034
 PR="$(read_field sut.pr tollgate_pr "")"
+# shellcheck disable=SC2034
 BACKEND="$(read_field sut.backend "" "")"
+# shellcheck disable=SC2034
 ROUTER_ID="$(read_field lab.router_id router_id unknown)"
 CLIENT_TYPE="$(read_field lab.client_type client_type "")"
+# shellcheck disable=SC2034
 VIEWPORT="$(read_field lab.viewport viewport desktop)"
+# shellcheck disable=SC2034
 TEST_PLAN="$(read_field test_plan test_type e2e)"
+# shellcheck disable=SC2034
 STATUS="$(read_field status "" "")"
+# shellcheck disable=SC2034
 STARTED_AT="$(read_field started_at timestamp "")"
+# shellcheck disable=SC2034
 DURATION_MS="$(read_field duration_ms duration_ms 0)"
 
 KEEP="${TOLLGATE_GH_PAGES_KEEP:-50}"
@@ -261,7 +270,7 @@ purge_old_runs() {
       break
     fi
     echo "==> Purging old report: $hash_name"
-    rm -rf "$reports_dir/$hash_name"
+    rm -rf "${reports_dir:?}/$hash_name"
     deleted=$((deleted + 1))
   done < <(sort "$sort_file")
 
