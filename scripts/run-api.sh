@@ -78,7 +78,7 @@ if [[ "$NO_RENDER" == "false" ]]; then
     --run-id "$RUN_ID" \
     --sut-backend "${TOLLGATE_BACKEND:-go}" \
     --sut-branch "${TOLLGATE_BRANCH:-}" \
-    --sut-pr "${TOLLGATE_PR:-}" \
+    ${TOLLGATE_PR:+--sut-pr "$TOLLGATE_PR"} \
     --router-id "${TOLLGATE_ROUTER_ID:-}" \
     --router-model "${TOLLGATE_ROUTER_MODEL:-}" \
     --router-arch "${TOLLGATE_ROUTER_ARCH:-}" \

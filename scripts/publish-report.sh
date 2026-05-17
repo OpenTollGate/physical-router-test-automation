@@ -489,6 +489,10 @@ PY
 
 inject_pytest_media_ui "$TARGET_DIR/report/index.html"
 
+for raw_report in "$TARGET_DIR"/raw/*/report.html; do
+  [ -f "$raw_report" ] && inject_pytest_media_ui "$raw_report"
+done
+
 # ── Purge old runs ───────────────────────────────────────────────────
 
 purge_old_runs() {
