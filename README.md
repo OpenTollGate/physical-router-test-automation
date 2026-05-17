@@ -31,6 +31,9 @@ source ~/.tollgate-test-venv/bin/activate
 # 4. Install Playwright
 npm install
 npx playwright install
+
+# 5. Install git hooks (shellcheck pre-commit)
+./scripts/setup-hooks.sh
 ```
 
 ## Quick Start: Test a PR
@@ -256,7 +259,7 @@ physical-router-test-automation/
       wifi.py                   # WiFi connection management
   plans/                        # YAML test plans
     *.yaml                      # Test plan definitions
-  scripts/                      # 25 scripts (see below)
+  scripts/                      # 26 scripts (see below)
   tests/
     conftest.py                 # Shared pytest fixtures (router, adb, cashu, wifi, deploy)
     api/                        # 38 pytest API test files
@@ -272,7 +275,7 @@ physical-router-test-automation/
 
 ## Scripts
 
-All 25 scripts in `scripts/`:
+All 26 scripts in `scripts/`:
 
 ### Test execution
 
@@ -322,6 +325,7 @@ All 25 scripts in `scripts/`:
 |---|---|
 | `setup-cashu.sh` | Install and patch cashu CLI for testnet token minting |
 | `setup-python.sh` | Create Python venv at `~/.tollgate-test-venv` with pytest and dependencies |
+| `setup-hooks.sh` | Install shared git hooks from `.githooks/` (shellcheck pre-commit). Run once after cloning |
 
 ### Lab management
 
