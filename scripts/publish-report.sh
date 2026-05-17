@@ -144,6 +144,7 @@ cd "$WORK/gh-pages"
 
 DIR_TIMESTAMP="$(basename "$RUN_DIR")"
 TARGET_DIR="reports/${COMMIT_SHORT}/${DIR_TIMESTAMP}"
+rm -rf "$TARGET_DIR"
 mkdir -p "$TARGET_DIR"
 
 cp -r "$RUN_DIR/report" "$TARGET_DIR/report"
@@ -1004,7 +1005,7 @@ CUSTOM_DOMAIN="${TOLLGATE_GH_PAGES_CNAME:-}"
 if [ -z "$CUSTOM_DOMAIN" ] && [ -f "$WORK/gh-pages/CNAME" ]; then
   CUSTOM_DOMAIN="$(tr -d '\r\n' < "$WORK/gh-pages/CNAME")"
 fi
-if [ -n "$TOLLGATE_GH_PAGES_CNAME" ]; then
+if [ -n "${TOLLGATE_GH_PAGES_CNAME:-}" ]; then
   printf '%s\n' "$TOLLGATE_GH_PAGES_CNAME" > "$WORK/gh-pages/CNAME"
   CUSTOM_DOMAIN="$TOLLGATE_GH_PAGES_CNAME"
 fi

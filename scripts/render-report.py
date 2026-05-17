@@ -267,7 +267,7 @@ def render_runner_card(runner):
     for key, label in artifact_labels.items():
         path = artifacts.get(key)
         if path:
-            art_links.append(f'<a href="{esc(path)}">{esc(label)}</a>')
+            art_links.append(f'<a href="../{esc(path)}">{esc(label)}</a>')
 
     art_html = ""
     if art_links:
@@ -365,13 +365,13 @@ def render_native_links(run):
         artifacts = r.get("artifacts", {})
         name = r.get("name", "unknown")
         if "html" in artifacts:
-            links.append(f'<li><a href="{esc(artifacts["html"])}">{esc(name)} HTML Report</a></li>')
+            links.append(f'<li><a href="../{esc(artifacts["html"])}">{esc(name)} HTML Report</a></li>')
         if "junit" in artifacts:
-            links.append(f'<li><a href="{esc(artifacts["junit"])}">{esc(name)} JUnit XML</a></li>')
+            links.append(f'<li><a href="../{esc(artifacts["junit"])}">{esc(name)} JUnit XML</a></li>')
         if "json" in artifacts:
-            links.append(f'<li><a href="{esc(artifacts["json"])}">{esc(name)} Playwright JSON</a></li>')
+            links.append(f'<li><a href="../{esc(artifacts["json"])}">{esc(name)} Playwright JSON</a></li>')
         if "log" in artifacts:
-            links.append(f'<li><a href="{esc(artifacts["log"])}">{esc(name)} Output Log</a></li>')
+            links.append(f'<li><a href="../{esc(artifacts["log"])}">{esc(name)} Output Log</a></li>')
     if not links:
         return ""
     return f"""\
