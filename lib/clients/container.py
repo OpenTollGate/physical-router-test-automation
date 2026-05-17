@@ -287,7 +287,7 @@ class ContainerClient:
         """Start a Playwright session recording video of the portal flow.
 
         The script runs on the VM and blocks until completion. It:
-        1. Loads the captive portal (unpaid state)
+        1. Navigates to http://example.com — NDS intercepts and redirects to portal
         2. Screenshots the unpaid portal
         3. Writes /tmp/tg-portal-ready (signals test to proceed with payment)
         4. Polls for /tmp/tg-paid (test creates this after payment)
@@ -298,6 +298,7 @@ class ContainerClient:
         9. Closes context (saves video)
         """
         portal_url = f"http://{POC_GATEWAY}:{NDS_PORTAL_PORT}/"
+        trigger_url = "http://example.com/"
         script = (
             "from playwright.sync_api import sync_playwright\n"
             "import time, os\n"
@@ -306,7 +307,10 @@ class ContainerClient:
             "ctx = browser.new_context(record_video_dir='/tmp/tg-video', record_video_size={'width': 1280, 'height': 720})\n"
             "page = ctx.new_page()\n"
             "try:\n"
-            f"    page.goto('{portal_url}', timeout=20000, wait_until='domcontentloaded')\n"
+            f"    page.goto('{trigger_url}', timeout=20000)\n"
+            "    time.sleep(1)\n"
+            f"    if '{POC_GATEWAY}:{NDS_PORTAL_PORT}' not in page.url:\n"
+            f"        page.goto('{portal_url}', timeout=20000, wait_until='domcontentloaded')\n"
             "    time.sleep(2)\n"
             "    page.screenshot(path='/tmp/tg-e2e/01-portal-unpaid.png')\n"
             "    open('/tmp/tg-portal-ready', 'w').close()\n"
