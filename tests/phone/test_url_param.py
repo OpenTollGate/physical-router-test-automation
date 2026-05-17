@@ -9,7 +9,7 @@ import pytest
 from lib.helpers import assert_session_active
 from lib.constants import TOKEN_DEFAULT
 
-pytestmark = [pytest.mark.phone, pytest.mark.slow, pytest.mark.timeout(120), pytest.mark.extended]
+pytestmark = [pytest.mark.phone, pytest.mark.slow, pytest.mark.timeout(120), pytest.mark.extended, pytest.mark.requires_wifi]
 
 log = logging.getLogger("tollgate.test_url_param")
 

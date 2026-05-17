@@ -10,12 +10,12 @@ import logging
 import pytest
 
 try:
-    from pytest_html import extras as html_extras
+    from pytest_html import extras as html_extras  # pyright: ignore[reportMissingImports]
 except ImportError:
     html_extras = None
 
 from lib.router import Router
-from lib.cashu import CashuMint
+from lib.cashu import CashuMint, MintUnavailableError
 from lib.clients.adb import ADBDevice
 from lib.clients.wifi import WiFi
 from lib.clients.desktop import MacWiFiClient, MacAdapter, LinuxWiFiClient, LinuxAdapter
@@ -214,12 +214,21 @@ def router(request, backend):
 
     ssh_port = os.environ.get("TOLLGATE_SSH_PORT", "")
 
-    return Router(host=host, phone_ip=phone_ip,
-                  phone_mac=phone_mac, domain=domain,
-                  identity_file=identity_file or None,
-                  jump_host=jump_host or None,
-                  port=int(ssh_port) if ssh_port else None,
-                  backend=backend)
+    router_kwargs = {
+        "host": host,
+        "phone_ip": phone_ip,
+        "phone_mac": phone_mac,
+        "domain": domain,
+        "backend": backend,
+    }
+    if identity_file:
+        router_kwargs["identity_file"] = identity_file
+    if jump_host:
+        router_kwargs["jump_host"] = jump_host
+    if ssh_port:
+        router_kwargs["port"] = int(ssh_port)
+
+    return Router(**router_kwargs)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -308,17 +317,22 @@ def adb(request, router):
         )
     serial = os.environ.get("PHONE_SERIAL", "")
     pin = os.environ.get("PHONE_PIN", "")
-    return ADBDevice(serial=serial or None, pin=pin or None)
+    return ADBDevice(serial=serial, pin=pin)
 
 
 @pytest.fixture(scope="session")
 def cashu():
-    return CashuMint()
+    try:
+        mint = CashuMint()
+        mint.ensure_mint_available()
+        return mint
+    except MintUnavailableError:
+        pytest.skip("cashu mint unavailable")
 
 
 @pytest.fixture(scope="session")
 def all_routers(backend):
-    identity_file = os.environ.get("TOLLGATE_SSH_KEY", "") or None
+    identity_file = os.environ.get("TOLLGATE_SSH_KEY", "")
     inventory_path = os.environ.get(
         "TOLLGATE_ROUTER_INVENTORY",
         os.path.join(SCRIPT_DIR, "config", "routers.json"),
@@ -332,16 +346,20 @@ def all_routers(backend):
         host = entry.get("sshHost")
         if not host:
             continue
-        routers[router_id] = Router(
-            host=host,
-            phone_ip="",
-            phone_mac="",
-            domain="",
-            identity_file=identity_file,
-            jump_host=entry.get("jumpHost") or None,
-            port=int(entry["sshPort"]) if entry.get("sshPort") else None,
-            backend=backend,
-        )
+        router_kwargs = {
+            "host": host,
+            "phone_ip": "",
+            "phone_mac": "",
+            "domain": "",
+            "backend": backend,
+        }
+        if identity_file:
+            router_kwargs["identity_file"] = identity_file
+        if entry.get("jumpHost"):
+            router_kwargs["jump_host"] = entry["jumpHost"]
+        if entry.get("sshPort"):
+            router_kwargs["port"] = int(entry["sshPort"])
+        routers[router_id] = Router(**router_kwargs)
     return routers
 
 
@@ -442,6 +460,8 @@ def pytest_runtest_setup(item):
     if client_mode in ("mac", "linux", "container"):
         if "android_only" in item.keywords:
             pytest.skip("Android-only test (requires physical device)")
+        if "requires_wifi" in item.keywords:
+            pytest.skip("requires WiFi adapter (--client=container has no WiFi)")
         return
 
     if "phone" in item.keywords:
@@ -489,6 +509,13 @@ def _get_pr_marker(item):
 def _pr_label_for_item(item):
     pr_num = _get_pr_marker(item)
     return f" [PR#{pr_num}]" if pr_num else ""
+
+
+def pytest_runtest_call(item):
+    try:
+        item.runtest()
+    except MintUnavailableError as exc:
+        pytest.skip(f"cashu mint unavailable: {exc}")
 
 
 def pytest_runtest_logreport(report):

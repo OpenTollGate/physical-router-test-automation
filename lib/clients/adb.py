@@ -8,7 +8,7 @@ log = logging.getLogger("tollgate.adb")
 
 
 class ADBDevice:
-    def __init__(self, serial: str = None, pin: str = None):
+    def __init__(self, serial: str | None = None, pin: str | None = None):
         self.serial = serial
         self.pin = pin
         self._base = ["adb"]

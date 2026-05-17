@@ -1,15 +1,25 @@
 import json
+import signal
 import subprocess
 import os
 import base64
 import time
 import re
+from urllib import error, request
 
 from lib.constants import TEST_MINT_URL
 
 
+class MintUnavailableError(Exception):
+    pass
+
+
+class _MintTimeoutError(Exception):
+    pass
+
+
 class CashuMint:
-    def __init__(self, venv_path: str = None, mint_url: str = TEST_MINT_URL):
+    def __init__(self, venv_path: str | None = None, mint_url: str = TEST_MINT_URL):
         venv_path = venv_path or os.environ.get("TOLLGATE_CASHU_VENV", "/tmp/cashu-venv")
         self.venv_path = venv_path
         self.mint_url = mint_url
@@ -24,6 +34,17 @@ class CashuMint:
         env["VIRTUAL_ENV"] = self.venv_path
         env["PATH"] = f"{self.venv_path}/bin:{env.get('PATH', '')}"
         return env
+
+    def ensure_mint_available(self, timeout: int = 5):
+        keys_url = f"{self.mint_url.rstrip('/')}/v1/keys"
+        try:
+            with request.urlopen(keys_url, timeout=timeout) as response:
+                if response.status != 200:
+                    raise MintUnavailableError(
+                        f"Mint health check failed with HTTP {response.status}"
+                    )
+        except (error.URLError, TimeoutError) as exc:
+            raise MintUnavailableError("cashu mint unavailable") from exc
 
     def _find_latest_quote_id(self, url=None):
         mint_url = url or self.mint_url
@@ -71,6 +92,8 @@ class CashuMint:
                 )
                 if "Invoice paid" in r.stdout:
                     return True
+            except subprocess.TimeoutExpired as exc:
+                raise MintUnavailableError("cashu mint unavailable") from exc
             except Exception:
                 pass
         return False
@@ -107,12 +130,29 @@ class CashuMint:
         if not self._wait_and_claim(quote_id, amount):
             raise RuntimeError(f"Mint claim failed for quote {quote_id}")
 
-    def mint(self, amount: int = 4, legacy: bool = True) -> str:
+    def _timeout_handler(self, signum, frame):
+        raise _MintTimeoutError()
+
+    def mint(self, amount: int = 4, legacy: bool = True, timeout: int = 60) -> str:
         if not self.is_available():
             raise RuntimeError(f"cashu venv not found at {self.venv_path}")
 
+        old_handler = signal.signal(signal.SIGALRM, self._timeout_handler)
+        signal.alarm(timeout)
+        try:
+            return self._mint_inner(amount, legacy)
+        except _MintTimeoutError:
+            raise MintUnavailableError(
+                f"mint() timed out after {timeout}s"
+            )
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+    def _mint_inner(self, amount: int, legacy: bool = True) -> str:
         env = self._env()
 
+        self.ensure_mint_available()
         self._ensure_balance(amount)
 
         cmd = [self._cashu, "-h", self.mint_url, "-t", "-y", "send", str(amount)]

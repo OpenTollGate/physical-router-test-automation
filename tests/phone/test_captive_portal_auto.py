@@ -10,6 +10,7 @@ pytestmark = [
     pytest.mark.timeout(120),
     pytest.mark.extended,
     pytest.mark.pay_via("skip"),
+    pytest.mark.requires_wifi,
 ]
 
 

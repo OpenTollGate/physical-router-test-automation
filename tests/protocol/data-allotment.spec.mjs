@@ -2,6 +2,10 @@ import { test, expect } from '@playwright/test';
 import { runCommand } from '../helpers/command.mjs';
 import { canReachInternet } from '../helpers/payment-protocol.mjs';
 
+// NOTE: This test requires a physical WiFi adapter.
+// In container mode (--client=container), this test is skipped because the QEMU VM has no WiFi.
+// See pytest.ini markers: requires_wifi
+
 test.describe('data allotment enforcement', () => {
 	test('cuts connectivity after traffic consumes the paid allotment', async () => {
 		test.skip(process.env.TOLLGATE_ENABLE_DATA_ALLOTMENT_TESTS !== 'true', 'set TOLLGATE_ENABLE_DATA_ALLOTMENT_TESTS=true after connecting and paying through TollGate');

@@ -14,8 +14,8 @@ log = logging.getLogger("tollgate.router")
 
 class Router:
     def __init__(self, host: str, phone_ip: str, phone_mac: str, domain: str,
-                 identity_file: str = None, jump_host: str = None, port: int = None,
-                 backend: BackendConfig | None = None):
+                 identity_file: str | None = None, jump_host: str | None = None,
+                 port: int | None = None, backend: BackendConfig | None = None):
         self.host = host
         self.phone_ip = phone_ip
         self.phone_mac = phone_mac
@@ -411,7 +411,7 @@ class Router:
             adb.shell("am force-stop com.android.captiveportallogin")
         if self.backend.has_sessions_json:
             self.ssh("echo '{}' > /etc/tollgate/sessions.json")
-        self.ssh("service tollgate-wrt restart")
+        self.restart_backend()
         time.sleep(3)
         self.ssh(f"ndsctl deauth {mac} 2>&1 || true")
         self.ssh("echo '' > /tmp/tollgate-portal.log")
@@ -429,12 +429,12 @@ class Router:
             f"sed -i 's/\"metric\":[[:space:]]*\"[^\"]*\"/\"metric\": \"{metric}\"/' "
             f"/etc/tollgate/config.json"
         )
-        self.ssh("service tollgate-wrt restart")
+        self.restart_backend()
         self._wait_for_backend()
 
     def restore_pricing(self):
         self.ssh("cp /etc/tollgate/config.json.test-backup /etc/tollgate/config.json")
-        self.ssh("service tollgate-wrt restart")
+        self.restart_backend()
         self._wait_for_backend()
 
     def _wait_for_backend(self, timeout: int = 15):
@@ -445,6 +445,32 @@ class Router:
                 return
             time.sleep(1)
         log.warning(f"Backend not healthy after {timeout}s")
+
+    def wait_for_cli_socket(self, timeout: int = 30, interval: int = 1) -> bool:
+        """Poll for CLI socket readiness after backend restart.
+
+        Returns True if /var/run/tollgate.sock exists within timeout seconds.
+        Returns False if timeout expires.
+        """
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                result = self.ssh("test -S /var/run/tollgate.sock && echo READY", timeout=5)
+                if "READY" in result:
+                    return True
+            except Exception:
+                pass
+            time.sleep(interval)
+        return False
+
+    def restart_backend(self, timeout: int = 30):
+        """Restart the backend service and wait for CLI socket to be ready.
+
+        Raises RuntimeError if the socket doesn't come back within timeout seconds.
+        """
+        self.ssh("service tollgate-wrt restart", timeout=15)
+        if not self.wait_for_cli_socket(timeout=timeout):
+            raise RuntimeError("Backend CLI socket did not become ready after restart")
 
     def get_portal_log(self) -> str:
         return self.ssh("cat /tmp/tollgate-portal.log 2>/dev/null")
@@ -478,7 +504,7 @@ class Router:
             json.dump(cfg, f, indent=2)
         self.scp_to(tmp, "/etc/tollgate/config.json")
         os.remove(tmp)
-        self.ssh("/etc/init.d/tollgate-wrt restart")
+        self.restart_backend()
         log.info(f"Added {TEST_MINT_URL} to accepted mints, restarted backend")
 
     def replace_mints(self, mint_urls: list[str] | None = None):
@@ -515,9 +541,9 @@ class Router:
             json.dump(cfg, f, indent=2)
         self.scp_to(tmp, "/etc/tollgate/config.json")
         os.remove(tmp)
-        
-        self.ssh("/etc/init.d/tollgate-wrt restart")
-        
+
+        self.restart_backend()
+
         mint_str = ", ".join(mint_urls)
         log.info(f"Replaced accepted mints with: {mint_str}, restarted backend")
 

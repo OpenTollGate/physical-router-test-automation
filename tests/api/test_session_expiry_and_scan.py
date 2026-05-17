@@ -168,7 +168,7 @@ def test_backend_starts_scan_loop(router):
 
     This test checks logs for scan-related messages shortly after a restart.
     """
-    router.ssh("service tollgate-wrt restart")
+    router.restart_backend()
     time.sleep(5)
 
     logs = router.get_tollgate_logs(filter_expr="scan", lines=50)

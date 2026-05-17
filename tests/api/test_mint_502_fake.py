@@ -67,7 +67,7 @@ def configure_fake_mint(router, fake_mint_502):
     encoded = __import__("base64").b64encode(payload.encode()).decode()
     router.ssh(f"echo '{encoded}' | base64 -d > /etc/tollgate/config.json")
 
-    router.ssh("/etc/init.d/tollgate-wrt restart")
+    router.restart_backend()
     time.sleep(5)
 
     for _ in range(15):
@@ -83,7 +83,7 @@ def configure_fake_mint(router, fake_mint_502):
 
     router.ssh(f"cat {CONFIG_BACKUP} > /etc/tollgate/config.json")
     router.ssh(f"rm -f {CONFIG_BACKUP}")
-    router.ssh("/etc/init.d/tollgate-wrt restart")
+    router.restart_backend()
     time.sleep(5)
 
 

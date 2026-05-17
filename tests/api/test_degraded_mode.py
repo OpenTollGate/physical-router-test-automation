@@ -83,7 +83,7 @@ def _unblock_mints(router, rules):
 
 def _restart_and_wait(router):
     """Restart tollgate service and wait for it to come back."""
-    router.ssh("service tollgate-wrt restart")
+    router.restart_backend()
     time.sleep(SERVICE_RESTART_WAIT)
 
 
@@ -541,7 +541,7 @@ def test_service_survives_restart_in_degraded(router):
         if price_tags:
             pytest.skip("Service not in degraded mode — can't test degraded restart")
 
-    router.ssh("service tollgate-wrt restart")
+    router.restart_backend()
     time.sleep(15)
 
     ps_out = router.ssh("ps | grep tollgate-wrt | grep -v grep")

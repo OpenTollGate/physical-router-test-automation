@@ -6,7 +6,7 @@
   "margin": 0.1,
   "accepted_mints": [
     {
-      "url": "https://nofee.testnut.cashu.space",
+      "url": "https://testnut.cashu.exchange",
       "min_balance": 0,
       "balance_tolerance_percent": 0,
       "payout_interval_seconds": 60,

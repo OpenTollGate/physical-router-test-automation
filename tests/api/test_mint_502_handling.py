@@ -53,7 +53,7 @@ def _restore_config(router):
 
 
 def _restart_and_wait(router, timeout: int = 30):
-    router.ssh("/etc/init.d/tollgate-wrt restart")
+    router.restart_backend()
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:

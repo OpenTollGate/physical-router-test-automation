@@ -23,6 +23,7 @@ pytestmark = [
     pytest.mark.slow,
     pytest.mark.timeout(180),
     pytest.mark.extended,
+    pytest.mark.requires_wifi,
 ]
 
 DEFAULT_REDIRECT_URL = "https://wallet.cashu.me/welcome"

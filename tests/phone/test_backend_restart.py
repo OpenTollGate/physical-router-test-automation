@@ -9,7 +9,7 @@ import pytest
 from lib.helpers import pay_and_wait, assert_internet
 from lib.constants import TOKEN_SMALL
 
-pytestmark = [pytest.mark.phone, pytest.mark.slow, pytest.mark.timeout(120), pytest.mark.extended]
+pytestmark = [pytest.mark.phone, pytest.mark.slow, pytest.mark.timeout(120), pytest.mark.extended, pytest.mark.requires_wifi]
 
 BACKEND_RESTART_TIMEOUT = 45  # MIPS router needs ~20-25s for full backend restart
 
@@ -21,7 +21,7 @@ def test_backend_restart(router, adb, cashu, connected_wifi, screenshot_raw):
 
     assert assert_internet(adb), "No internet before restart"
 
-    router.ssh("service tollgate-wrt restart")
+    router.restart_backend()
 
     # Wait for backend to become healthy (MIPS router needs ~15-20s)
     deadline = time.time() + BACKEND_RESTART_TIMEOUT

@@ -4,6 +4,10 @@ import { findTollGateNetworks, connectToWifi, restoreWifi, currentWifiConnection
 import { mintTestnutTokens } from '../helpers/payment-protocol.mjs';
 import { fetchDiscoveryEvent, pricePerStep, generateCustomerIdentity, signPaymentEvent, sendPaymentEvent, paymentMacAddress, canReachInternet } from '../helpers/payment-protocol.mjs';
 
+// NOTE: This test requires a physical WiFi adapter.
+// In container mode (--client=container), this test is skipped because the QEMU VM has no WiFi.
+// See pytest.ini markers: requires_wifi
+
 test.describe('payment protocol', () => {
 	test('pays a TollGate network and verifies connectivity', async () => {
 		test.skip(process.env.TOLLGATE_ENABLE_WIFI_CLIENT_TESTS !== 'true', 'set TOLLGATE_ENABLE_WIFI_CLIENT_TESTS=true to change host WiFi');

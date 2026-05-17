@@ -121,7 +121,7 @@ def _write_config(router, cfg):
 
 
 def _restart_and_wait(router, timeout=15):
-    router.ssh("service tollgate-wrt restart")
+    router.restart_backend()
     start = time.time()
     while time.time() - start < timeout:
         code = router.api_status("/")
@@ -296,7 +296,7 @@ def test_payment_without_redirect_no_auth_delay(router, cashu):
                 f"mv {CAPTIVE_PORTAL_DIR}/welcome.html.disabled "
                 f"{CAPTIVE_PORTAL_DIR}/welcome.html 2>/dev/null || true"
             )
-            router.ssh("service tollgate-wrt restart")
+            router.restart_backend()
             time.sleep(SERVICE_RESTART_WAIT)
             log.info("Restored original config after no-redirect test")
         except Exception as exc:

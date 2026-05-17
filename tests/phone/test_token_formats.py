@@ -2,7 +2,7 @@ import pytest
 from lib.helpers import pay_and_wait, assert_session_active, is_session_event
 from lib.constants import TOKEN_DEFAULT
 
-pytestmark = [pytest.mark.phone, pytest.mark.slow, pytest.mark.timeout(120), pytest.mark.critical]
+pytestmark = [pytest.mark.phone, pytest.mark.slow, pytest.mark.timeout(120), pytest.mark.critical, pytest.mark.requires_wifi]
 
 
 @pytest.mark.parametrize("legacy,prefix", [

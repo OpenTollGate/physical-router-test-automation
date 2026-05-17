@@ -136,7 +136,7 @@ def test_bad_mint_handled_gracefully(router, config):
 
     try:
         _write_config(router, modified_cfg)
-        router.ssh("service tollgate-wrt restart")
+        router.restart_backend()
         time.sleep(15)
 
         ps_out = router.ssh("ps | grep tollgate-wrt | grep -v grep")
@@ -170,5 +170,5 @@ def test_bad_mint_handled_gracefully(router, config):
             assert code in (200, 503), "Service unhealthy after all mints marked unreachable"
     finally:
         _write_config(router, original_cfg)
-        router.ssh("service tollgate-wrt restart")
+        router.restart_backend()
         time.sleep(15)

@@ -16,7 +16,7 @@ import pytest
 
 from lib.helpers import parse_json_or_fail
 
-pytestmark = [pytest.mark.phone, pytest.mark.slow, pytest.mark.timeout(300)]
+pytestmark = [pytest.mark.phone, pytest.mark.slow, pytest.mark.timeout(300), pytest.mark.requires_wifi]
 
 HEALTH_POLL_INTERVAL = 5
 HEALTH_POLL_TIMEOUT = 120
@@ -85,7 +85,7 @@ def reset_after_block(router):
         router.ssh("iptables -D OUTPUT -j REJECT 2>/dev/null || true")
     code = router.api_status("/")
     if code != 200:
-        router.ssh("service tollgate-wrt restart")
+        router.restart_backend()
         time.sleep(10)
 
 

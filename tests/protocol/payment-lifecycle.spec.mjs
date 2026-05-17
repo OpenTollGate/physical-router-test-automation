@@ -3,6 +3,10 @@ import { getRouter } from '../helpers/inventory.mjs';
 import { findTollGateNetworks, connectToWifi, restoreWifi, currentWifiConnection, gatewayForInterface } from '../helpers/network.mjs';
 import { mintTestnutTokens, fetchDiscoveryEvent, pricePerStep, generateCustomerIdentity, signPaymentEvent, sendPaymentEvent, paymentMacAddress, canReachInternet } from '../helpers/payment-protocol.mjs';
 
+// NOTE: This test requires a physical WiFi adapter.
+// In container mode (--client=container), this test is skipped because the QEMU VM has no WiFi.
+// See pytest.ini markers: requires_wifi
+
 test.describe('payment lifecycle', () => {
 	test('pay → use → disconnect → pay again', async () => {
 		test.skip(process.env.TOLLGATE_ENABLE_WIFI_CLIENT_TESTS !== 'true', 'set TOLLGATE_ENABLE_WIFI_CLIENT_TESTS=true');

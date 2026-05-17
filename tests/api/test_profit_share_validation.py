@@ -40,7 +40,7 @@ def _write_config(router, cfg):
 
 def _restart_service(router):
     """Restart tollgate-wrt and wait for it to come back."""
-    router.ssh("service tollgate-wrt restart")
+    router.restart_backend()
     time.sleep(SERVICE_RESTART_WAIT)
     code = router.api_status("/")
     if code != 200:
@@ -59,7 +59,7 @@ def profit_share_config_guard(router):
     yield
     try:
         router.ssh("cp /etc/tollgate/config.json.ps-backup /etc/tollgate/config.json")
-        router.ssh("service tollgate-wrt restart")
+        router.restart_backend()
         time.sleep(SERVICE_RESTART_WAIT)
     except Exception as exc:
         log.error("Failed to restore config after test: %s", exc)

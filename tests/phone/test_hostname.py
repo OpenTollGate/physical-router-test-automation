@@ -8,7 +8,7 @@ the TollGate hostname.
 import pytest
 
 pytestmark = [pytest.mark.phone, pytest.mark.slow, pytest.mark.timeout(120),
-              pytest.mark.critical, pytest.mark.pr(117)]
+              pytest.mark.critical, pytest.mark.pr(117), pytest.mark.requires_wifi]
 
 
 def _is_pr117_installed(router):
