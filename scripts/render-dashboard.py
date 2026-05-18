@@ -8,7 +8,7 @@ import os
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -198,15 +198,28 @@ def build_commit_groups(runs):
     groups = OrderedDict()
     for run in runs:
         commit = run.get("commit", "unknown")
-        if commit not in groups:
+        branch = run.get("branch", "")
+        pr = run.get("pr", "")
+        group_key = commit
+        if commit == "unknown":
+            fallback = ""
+            if str(pr) not in ("0", "", "None"):
+                fallback = "pr-%s" % pr
+            elif branch and branch != "unknown":
+                fallback = "branch-%s" % branch
+            group_key = "unknown:%s" % (fallback or "metadata")
+        if group_key not in groups:
             meta = run
             repo = meta.get("repo", "") or DEFAULT_REPO
             branch = meta.get("branch", "")
             pr = meta.get("pr", "")
             base_url = repo_base_url(repo)
-            groups[commit] = {
+            short = meta.get("commit_short", commit[:7])
+            if commit == "unknown" and branch and branch != "unknown":
+                short = branch
+            groups[group_key] = {
                 "commit": commit,
-                "short": meta.get("commit_short", commit[:7]),
+                "short": short,
                 "branch": branch,
                 "pr": pr if str(pr) not in ("0", "") else "",
                 "commit_url": "%s/commit/%s" % (base_url, commit),
@@ -218,7 +231,7 @@ def build_commit_groups(runs):
                 "virtual_lab": meta.get("virtual_lab", False),
                 "runs": [],
             }
-        groups[commit]["runs"].append(run)
+        groups[group_key]["runs"].append(run)
     return list(groups.values())
 
 
@@ -236,7 +249,7 @@ def build_environment(templates_dir):
     env.filters["format_ts"] = format_ts
     env.filters["format_duration"] = format_duration
     env.filters["esc"] = esc
-    env.globals["get"] = get
+    cast(dict[str, Any], env.globals)["get"] = get
     return env
 
 

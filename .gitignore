@@ -5,6 +5,7 @@ playwright-report/
 test-run-*
 .DS_Store
 *.ipk
+scripts/mint-token/mint-token
 .env
 
 # Python

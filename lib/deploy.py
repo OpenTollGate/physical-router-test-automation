@@ -1,4 +1,5 @@
 import logging
+import json
 import os
 import shutil
 import subprocess
@@ -163,25 +164,46 @@ def download_artifact(branch: str, arch: str, run_id: str | None = None,
             raise RuntimeError(f"No builds found for branch '{branch}' on {artifact_repo}")
         log.info("Found run: %s", run_id)
 
+    def _download(run: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["gh", "run", "download", run, "--repo", artifact_repo, "--dir", str(BUILD_DIR)],
+            capture_output=True, text=True, timeout=300,
+        )
+
     log.info("Downloading artifacts from run %s", run_id)
-    r = subprocess.run(
-        ["gh", "run", "download", run_id, "--repo", artifact_repo, "--dir", str(BUILD_DIR)],
-        capture_output=True, text=True, timeout=300,
-    )
+    r = _download(run_id)
     if r.returncode != 0:
         err = r.stderr.strip() or r.stdout.strip() or "unknown gh error"
-        hint = (
-            f"Could not download CI artifacts for {artifact_repo}@{branch} "
-            f"(workflow={artifact_workflow!r}, run={run_id}, required_arch={arch!r})."
-        )
-        if "no valid artifacts" in err.lower():
-            hint += (
-                " GitHub reports no valid downloadable artifacts; this usually means "
-                "the run artifacts expired, were deleted, or the release/tag did not upload them. "
-                "For the GCP virtual lab, provide a fresh x86_64 .ipk via a new CI run/release "
-                "or use a branch with current x86_64 artifacts."
+        if "no valid artifacts" in err.lower() and not os.environ.get("TOLLGATE_DISABLE_ARTIFACT_RERUN"):
+            log.warning("No valid artifacts for run %s; trying to rerun x86_64/arch-specific build job", run_id)
+            rerun = _rerun_arch_job(artifact_repo, run_id, arch)
+            if rerun:
+                if BUILD_DIR.exists():
+                    shutil.rmtree(BUILD_DIR)
+                BUILD_DIR.mkdir(parents=True, exist_ok=True)
+                r = _download(run_id)
+                if r.returncode == 0:
+                    log.info("Artifact download succeeded after rerun")
+                    err = ""
+            if r.returncode == 0:
+                pass
+            else:
+                err = r.stderr.strip() or r.stdout.strip() or err
+        if r.returncode == 0:
+            pass
+        else:
+            hint = (
+                f"Could not download CI artifacts for {artifact_repo}@{branch} "
+                f"(workflow={artifact_workflow!r}, run={run_id}, required_arch={arch!r})."
             )
-        raise RuntimeError(f"{hint} gh run download failed: {err}")
+            if "no valid artifacts" in err.lower():
+                hint += (
+                    " GitHub reports no valid downloadable artifacts; this usually means "
+                    "the run artifacts expired, were deleted, or the release/tag did not upload them. "
+                    "For the GCP virtual lab, provide a fresh x86_64 .ipk via a new CI run/release "
+                    "or use a branch with current x86_64 artifacts."
+                )
+            raise RuntimeError(f"{hint} gh run download failed: {err}")
 
     matches = [p for p in BUILD_DIR.rglob(f"*{arch}*.ipk") if p.is_file() and "upx" not in p.name]
     if not matches:
@@ -195,6 +217,56 @@ def download_artifact(branch: str, arch: str, run_id: str | None = None,
 
     log.info("Artifact: %s (%.1f MB)", flat.name, flat.stat().st_size / (1024 * 1024))
     return flat
+
+
+def _rerun_arch_job(repo: str, run_id: str, arch: str) -> bool:
+    needle = "x86_64" if arch == "x86_64" else arch
+    r = subprocess.run(
+        [
+            "gh", "run", "view", run_id,
+            "--repo", repo,
+            "--json", "jobs",
+        ],
+        capture_output=True, text=True, timeout=30,
+    )
+    if r.returncode != 0:
+        log.warning("Could not inspect run jobs for %s: %s", run_id, r.stderr.strip())
+        return False
+    try:
+        jobs = json.loads(r.stdout).get("jobs", [])
+    except json.JSONDecodeError as exc:
+        log.warning("Could not parse run jobs for %s: %s", run_id, exc)
+        return False
+
+    candidates = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        name = str(job.get("name", ""))
+        database_id = job.get("databaseId")
+        if needle in name and database_id:
+            candidates.append((name, str(database_id)))
+    if not candidates:
+        log.warning("No rerunnable job matched arch '%s' in run %s", arch, run_id)
+        return False
+
+    name, job_id = candidates[0]
+    log.info("Rerunning job %s (%s)", job_id, name)
+    rerun = subprocess.run(
+        ["gh", "run", "rerun", "--repo", repo, "--job", job_id],
+        capture_output=True, text=True, timeout=30,
+    )
+    if rerun.returncode != 0:
+        log.warning("Could not rerun job %s: %s", job_id, rerun.stderr.strip())
+        return False
+    watch = subprocess.run(
+        ["gh", "run", "watch", run_id, "--repo", repo, "--exit-status", "--interval", "15"],
+        capture_output=True, text=True, timeout=1800,
+    )
+    if watch.returncode != 0:
+        log.warning("Rerun did not complete successfully for run %s: %s", run_id, watch.stderr.strip())
+        return False
+    return True
 
 
 def deploy(router, ipk_path: Path, reboot: bool = False) -> dict[str, object]:

@@ -276,6 +276,22 @@ def merge_counts(runners):
     return merged
 
 
+def _resolve_commit_from_branch(repo, branch):
+    """Resolve a branch/ref to a commit SHA via gh. Returns None on failure."""
+    if not repo or repo == "unknown" or not branch or branch == "unknown":
+        return None
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repo}/commits/{branch}", "--jq", ".sha"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    return None
+
+
 def _query_router_version(router_ip):
     """SSH to router and query tollgate version socket. Returns dict or None."""
     ssh_user = os.environ.get("TOLLGATE_SSH_USER", "root")
@@ -431,7 +447,9 @@ def main():
                 runner["artifacts"] = artifacts
                 runners.append(runner)
                 all_tests.extend(tests)
-                parse_errors.append(f"Fallback: parsed {name} from output.log ({runner['counts']['total']} tests)")
+                counts = runner.get("counts", {})
+                total = counts.get("total", 0) if isinstance(counts, dict) else 0
+                parse_errors.append(f"Fallback: parsed {name} from output.log ({total} tests)")
             except Exception as e:
                 parse_errors.append(f"Error parsing output.log for {name}: {e}")
         elif not parsed:
@@ -469,7 +487,7 @@ def main():
     counts = merge_counts(runners)
     duration_ms = sum(r["duration_ms"] for r in runners)
 
-    sut_commit = args.sut_commit or "unknown"
+    sut_commit = args.sut_commit or _resolve_commit_from_branch(args.sut_repo, args.sut_branch) or "unknown"
     sut = {
         "repo": args.sut_repo or "unknown",
         "commit": sut_commit,

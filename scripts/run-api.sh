@@ -20,6 +20,9 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --no-render) NO_RENDER=true; shift ;;
     --run-dir)   RUN_DIR_ARG="$2"; shift 2 ;;
+    --sut-commit) TOLLGATE_SUT_COMMIT="$2"; shift 2 ;;
+    --sut-pr) TOLLGATE_PR="$2"; shift 2 ;;
+    --sut-branch) TOLLGATE_BRANCH="$2"; shift 2 ;;
     -h|--help)
       echo "Usage: ./scripts/run-api.sh [--no-render] [--run-dir DIR] [extra pytest args...]"
       exit 0

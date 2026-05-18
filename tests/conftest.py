@@ -554,11 +554,13 @@ def _pr_label_for_item(item):
     return f" [PR#{pr_num}]" if pr_num else ""
 
 
+@pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_call(item):
-    try:
-        item.runtest()
-    except MintUnavailableError as exc:
-        pytest.skip(f"cashu mint unavailable: {exc}")
+    yield
+    if hasattr(item, "_excinfo") and item._excinfo:
+        exc_info = item._excinfo[-1]
+        if exc_info and issubclass(exc_info[0], MintUnavailableError):
+            pytest.skip(f"cashu mint unavailable: {exc_info[1]}")
 
 
 def pytest_runtest_logreport(report):
@@ -769,12 +771,15 @@ def pytest_runtest_makereport(item, call):
                             report.extras = extras
                     except Exception:
                         pass
-            if router:
+            if router and "unit" not in str(item.fspath).replace(os.sep, "/"):
                 try:
                     router.collect_logs(results_dir, adb=adb, bundle=safe_name)
                 except Exception:
                     pass
-                report.longrepr = str(report.longrepr) + _debug_summary(adb, router)
+                try:
+                    report.longrepr = str(report.longrepr) + _debug_summary(adb, router)
+                except Exception:
+                    pass
 
 
 _session_lock: RouterLock | None = None
