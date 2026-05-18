@@ -187,6 +187,22 @@ disconnect: ## Disconnect from board AP
 		echo "Not connected to any TollGate AP"
 	@echo "$(GREEN)Disconnected$(RESET)"
 
+_connect-a-if-needed:
+	@if ! ping -c 1 -W 2 $(BOARD_A_IP) >/dev/null 2>&1; then \
+		echo "$(CYAN)Not connected to Board A — connecting...$(RESET)"; \
+		echo "c03rad0r123" | sudo -S nmcli device wifi connect "$(BOARD_A_SSID)" ifname $(WIFI_IFACE) 2>&1 | grep -v "Password:" || true; \
+		sleep 3; \
+	fi
+	@echo "$(GREEN)Board A reachable at $(BOARD_A_IP)$(RESET)"
+
+_connect-b-if-needed:
+	@if ! ping -c 1 -W 2 $(BOARD_B_IP) >/dev/null 2>&1; then \
+		echo "$(CYAN)Not connected to Board B — connecting...$(RESET)"; \
+		echo "c03rad0r123" | sudo -S nmcli device wifi connect "$(BOARD_B_SSID)" ifname $(WIFI_IFACE) 2>&1 | grep -v "Password:" || true; \
+		sleep 3; \
+	fi
+	@echo "$(GREEN)Board B reachable at $(BOARD_B_IP)$(RESET)"
+
 # ===========================================================================
 #  MULTI-MINT TESTS (requires lock via connect-* dependency)
 # ===========================================================================
@@ -215,10 +231,14 @@ _test-discovery:
 		echo "$(GREEN)Found $$PRICE_COUNT price_per_step tag(s)$(RESET)" || \
 		echo "$(RED)Failed to count price_per_step tags$(RESET)"
 
-test-mints-a: connect-a
+test-mints-a: ## Test /mints endpoint on Board A
+	$(call require_lock)
+	@$(MAKE) _connect-a-if-needed
 	@$(MAKE) _test-mints IP=$(BOARD_A_IP)
 
-test-mints-b: connect-b
+test-mints-b: ## Test /mints endpoint on Board B
+	$(call require_lock)
+	@$(MAKE) _connect-b-if-needed
 	@$(MAKE) _test-mints IP=$(BOARD_B_IP)
 
 _test-mints:
@@ -234,10 +254,14 @@ _test-mints:
 		echo "$(GREEN)$$REACHABLE$(RESET)" || \
 		echo "$(RED)Failed to parse mint status$(RESET)"
 
-test-multi-mint-a: connect-a
+test-multi-mint-a: ## Full multi-mint test suite on Board A
+	$(call require_lock)
+	@$(MAKE) _connect-a-if-needed
 	@$(MAKE) _test-multi-mint IP=$(BOARD_A_IP) BOARD=A
 
-test-multi-mint-b: connect-b
+test-multi-mint-b: ## Full multi-mint test suite on Board B
+	$(call require_lock)
+	@$(MAKE) _connect-b-if-needed
 	@$(MAKE) _test-multi-mint IP=$(BOARD_B_IP) BOARD=B
 
 _test-multi-mint:
@@ -271,11 +295,14 @@ _test-multi-mint:
 	@echo "$(BOLD)=======================================$(RESET)"
 
 test-all-boards: ## Test both boards sequentially
+	$(call require_lock)
 	@echo "$(BOLD)Testing Board A...$(RESET)"
-	@$(MAKE) test-multi-mint-a
+	@$(MAKE) _connect-a-if-needed
+	@$(MAKE) _test-multi-mint IP=$(BOARD_A_IP) BOARD=A
 	@echo ""
 	@echo "$(BOLD)Testing Board B...$(RESET)"
-	@$(MAKE) test-multi-mint-b
+	@$(MAKE) _connect-b-if-needed
+	@$(MAKE) _test-multi-mint IP=$(BOARD_B_IP) BOARD=B
 
 # ===========================================================================
 #  ContextVM (MCP over Nostr) Tests
@@ -302,11 +329,14 @@ cvm-pubkey-b: ## Print Board B's CVM npub (from default nsec)
 		echo "" && \
 		echo "  Search: https://contextvm.org/servers"
 
-# CVM tests need board access — lock via connect-* dependency
-test-cvm-a: connect-a ## CVM announcement integration test on Board A
+test-cvm-a: ## CVM announcement integration test on Board A
+	$(call require_lock)
+	@$(MAKE) _connect-a-if-needed
 	@$(MAKE) _test-cvm NSEC=$(CVM_NSEC_A) IP=$(BOARD_A_IP)
 
-test-cvm-b: connect-b ## CVM announcement integration test on Board B
+test-cvm-b: ## CVM announcement integration test on Board B
+	$(call require_lock)
+	@$(MAKE) _connect-b-if-needed
 	@$(MAKE) _test-cvm NSEC=$(CVM_NSEC_DEFAULT) IP=$(BOARD_B_IP)
 
 _test-cvm:
@@ -354,7 +384,9 @@ _test-cvm:
 	@echo ""
 	@echo "$(BOLD)=======================================$(RESET)"
 
-test-cvm-mcp-a: connect-a ## End-to-end MCP tools/call via CVM on Board A
+test-cvm-mcp-a: ## End-to-end MCP tools/call via CVM on Board A
+	$(call require_lock)
+	@$(MAKE) _connect-a-if-needed
 	@echo ""
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(BOLD)  CVM MCP Request/Reply Test$(RESET)"

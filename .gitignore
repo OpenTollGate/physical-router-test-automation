@@ -7,4 +7,6 @@ playwright-report/
 .env
 **/routers.env
 **/esp32.lock
+hardware.lock
+routers.lock
 scripts/__pycache__/

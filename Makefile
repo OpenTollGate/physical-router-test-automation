@@ -50,6 +50,16 @@ YELLOW := \033[33m
 CYAN   := \033[36m
 RESET  := \033[0m
 
+HARDWARE_LOCK := hardware.lock
+
+define require_hardware_lock
+	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
+		echo "$(RED)$(BOLD)Hardware not locked — run 'make lock PHASE=\"description\"' first$(RESET)"; \
+		echo "$(YELLOW)Other LLM sessions may be using the hardware (ESP32 boards + routers).$(RESET)"; \
+		exit 1; \
+	fi
+endef
+
 # ===========================================================================
 #  HELP
 # ===========================================================================
@@ -91,10 +101,11 @@ help: ## Show this help
 	@echo "  make serial-cold-boot     ROUTER=alpha      # cold boot test with serial"
 	@echo "  make serial-recovery      ROUTER=alpha CMD='wifi reload'  # emergency command"
 	@echo ""
-	@echo "$(CYAN)--- Router mutex ---$(RESET)"
+	@echo "$(CYAN)--- Hardware mutex (ESP32 + routers) ---$(RESET)"
 	@echo "  make lock                 PHASE='testing foo'   # acquire lock"
 	@echo "  make unlock                                      # release lock"
 	@echo "  make lock-status                                 # check lock"
+	@echo "  make force-unlock                                # force-release"
 	@echo ""
 	@echo "$(CYAN)--- Variables ---$(RESET)"
 	@echo "  ROUTER  - router label from routers.env (default: alpha)"
@@ -113,31 +124,40 @@ help: ## Show this help
         smoke-degraded-recovery smoke-degraded-connect
 
 smoke-degraded: ## Single-router degraded mode lifecycle (~3 min)
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-smoke-degraded ROUTER=$(ROUTER) MINT="$(MINT)"
 
 smoke-upstream: ## Two-router degraded upstream payment (~5 min)
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-smoke-degraded-upstream ROUTER=$(ROUTER) MINT="$(MINT)"
 
 smoke-upstream-full: ## Full upstream WiFi smoke test (requires SSID+PASS)
+	$(call require_hardware_lock)
 	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID required. make smoke-upstream-full SSID=MyNet PASS=secret$(RESET)"; exit 1; fi
 	@$(MAKE) -C upstream-wifi r-smoke SSID="$(SSID)" PASS="$(PASS)" ROUTER=$(ROUTER)
 
 smoke-pin-upstream: ## Two-router: verify upstream pin prevents scan-away
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-smoke-pin-upstream ROUTER=$(ROUTER) MINT="$(MINT)"
 
 smoke-dynamic-rebuild: ## Full→degraded→full lifecycle (tests onReachableSetChanged)
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-smoke-dynamic-rebuild ROUTER=$(ROUTER) MINT="$(MINT)"
 
 smoke-offline: ## Block mint + restart + verify degraded (~2 min)
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-smoke-offline ROUTER=$(ROUTER) MINT="$(MINT)"
 
 smoke-recovery: ## Unblock mint + wait for recovery (~15 min)
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-smoke-recovery ROUTER=$(ROUTER) MINT="$(MINT)"
 
 smoke-degraded-recovery: ## Degraded→recovery without restart (tests in-process recovery)
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-smoke-degraded-recovery ROUTER=$(ROUTER) MINT="$(MINT)"
 
 smoke-degraded-connect: ## WARNING: connect to upstream while degraded (may strand router)
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-smoke-degraded-connect ROUTER=$(ROUTER) MINT="$(MINT)"
 
 # ===========================================================================
@@ -147,9 +167,11 @@ smoke-degraded-connect: ## WARNING: connect to upstream while degraded (may stra
 .PHONY: test-startup-hygiene test-startup-hygiene-dead-only
 
 test-startup-hygiene: ## Boot with dead STA, verify auto-switch (~2 min)
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-test-startup-hygiene ROUTER=$(ROUTER)
 
 test-startup-hygiene-dead-only: ## Boot with ONLY dead STA, emergency scan recovery (~3 min)
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-test-startup-hygiene-dead-only ROUTER=$(ROUTER)
 
 # ===========================================================================
@@ -163,12 +185,15 @@ test-playwright: ## Run Playwright LuCI admin UI tests (requires TOLLGATE_LUCI_P
 	@cd tests && npx playwright test --config=playwright.config.mjs
 
 test-captive-portal: ## Run Playwright captive portal tests against router
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-test-captive-portal ROUTER=$(ROUTER)
 
 test-captive-portal-happy: ## Run only happy-path captive portal tests
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-test-captive-portal-happy ROUTER=$(ROUTER)
 
 test-cashu-payment: ## Run cashu e2e payment Playwright test
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-test-cashu-payment ROUTER=$(ROUTER)
 
 # ===========================================================================
@@ -178,13 +203,16 @@ test-cashu-payment: ## Run cashu e2e payment Playwright test
 .PHONY: full-degraded full-upstream full-all
 
 full-degraded: ## Full mint health test suite (~20 min)
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-full ROUTER=$(ROUTER) MINT="$(MINT)"
 
 full-upstream: ## Full upstream WiFi test suite (requires SSID+PASS, ~30 min)
+	$(call require_hardware_lock)
 	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID required. make full-upstream SSID=MyNet PASS=secret$(RESET)"; exit 1; fi
 	@$(MAKE) -C mint-health r-full-upstream SSID="$(SSID)" PASS="$(PASS)" ROUTER=$(ROUTER)
 
 full-all: ## Run all test suites (lint + playwright + degraded + upstream)
+	$(call require_hardware_lock)
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(BOLD)  Full Test Suite [$(ROUTER)]$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
@@ -212,36 +240,45 @@ full-all: ## Run all test suites (lint + playwright + degraded + upstream)
         rescue-router save-upstream restore-upstream
 
 deploy: ## Cross-compile and deploy daemon + CLI to router
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-deploy ROUTER=$(ROUTER)
 
 deploy-cli: ## Cross-compile and deploy CLI only (no service restart)
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-deploy-cli ROUTER=$(ROUTER)
 
 status: ## Check tollgate service status
 	@$(MAKE) -C mint-health r-status ROUTER=$(ROUTER)
 
 shell: ## Interactive SSH session on router
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-shell ROUTER=$(ROUTER)
 
 logs: ## Tail tollgate logs (Ctrl+C to stop)
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-logs ROUTER=$(ROUTER)
 
 check-sta-health: ## Verify no stale/duplicate STA sections
 	@$(MAKE) -C mint-health r-check-sta-health ROUTER=$(ROUTER)
 
 fix-dns: ## Fix NetBird DNS hijack on router
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-fix-dns ROUTER=$(ROUTER)
 
 cleanup: ## Remove mint blocks and restore config
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-cleanup ROUTER=$(ROUTER)
 
 setup-fresh: ## Setup freshly flashed router (deploy + config + restart)
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-setup-fresh ROUTER=$(ROUTER) MINT="$(MINT)"
 
 fund-wallet: ## Fund wallet with 1013 sats from test mint
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-fund-wallet ROUTER=$(ROUTER)
 
 restore-prod: ## Restore production config and restart
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-restore-prod-config ROUTER=$(ROUTER) MINT="$(MINT)"
 
 diagnose-config: ## Verify service reads config from /etc/tollgate
@@ -251,6 +288,7 @@ test-default-mints: ## Verify default mint config
 	@$(MAKE) -C mint-health r-test-default-mints ROUTER=$(ROUTER)
 
 rescue-router: ## Rescue offline router via another router (ROUTER=beta VIA=alpha)
+	$(call require_hardware_lock)
 	@if [ -z "$(VIA)" ]; then echo "$(RED)Error: VIA required. make rescue-router ROUTER=beta VIA=alpha$(RESET)"; exit 1; fi
 	@$(MAKE) -C mint-health r-rescue-router ROUTER=$(ROUTER) VIA=$(VIA)
 
@@ -258,6 +296,7 @@ save-upstream: ## Save current upstream SSID for later restore
 	@$(MAKE) -C mint-health r-save-upstream ROUTER=$(ROUTER)
 
 restore-upstream: ## Restore previously saved upstream SSID
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-restore-upstream ROUTER=$(ROUTER)
 
 # ===========================================================================
@@ -267,12 +306,15 @@ restore-upstream: ## Restore previously saved upstream SSID
 .PHONY: block-mint unblock-mint restart-service check-merchant check-degraded
 
 block-mint: ## Block mint via /etc/hosts override
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-block-mint ROUTER=$(ROUTER) MINT="$(MINT)"
 
 unblock-mint: ## Remove mint /etc/hosts override
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-unblock-mint ROUTER=$(ROUTER) MINT="$(MINT)"
 
 restart-service: ## Restart tollgate service
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-restart-service ROUTER=$(ROUTER)
 
 check-merchant: ## Verify full merchant mode (online)
@@ -289,25 +331,32 @@ check-degraded: ## Verify degraded merchant mode (offline)
         serial-cleanup serial-watch serial-boot-log
 
 serial-shell: ## Interactive serial console (picocom)
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health s-shell ROUTER=$(ROUTER)
 
 serial-status: ## Check tollgate status via serial
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health s-status ROUTER=$(ROUTER)
 
 serial-watch: ## Watch serial output (Ctrl+C to stop)
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health s-watch ROUTER=$(ROUTER)
 
 serial-cold-boot: ## Full cold boot test with serial monitoring
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health s-cold-boot-test ROUTER=$(ROUTER)
 
 serial-boot-log: ## Capture full boot output
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health s-boot-log ROUTER=$(ROUTER)
 
 serial-recovery: ## Emergency recovery via serial (CMD='...')
+	$(call require_hardware_lock)
 	@if [ -z "$(CMD)" ]; then echo "$(RED)Error: CMD required. make serial-recovery ROUTER=alpha CMD='wifi reload'$(RESET)"; exit 1; fi
 	@$(MAKE) -C mint-health s-recovery ROUTER=$(ROUTER) CMD="$(CMD)"
 
 serial-cleanup: ## Cleanup mint blocks via serial
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health s-cleanup ROUTER=$(ROUTER)
 
 # ===========================================================================
@@ -317,31 +366,71 @@ serial-cleanup: ## Cleanup mint blocks via serial
 .PHONY: hybrid-status hybrid-cleanup hybrid-restart-and-watch
 
 hybrid-status: ## Status check — SSH first, serial fallback
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health h-status ROUTER=$(ROUTER)
 
 hybrid-cleanup: ## Cleanup — SSH first, serial fallback
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health h-cleanup ROUTER=$(ROUTER)
 
 hybrid-restart-and-watch: ## Restart service via SSH, verify via serial if SSH drops
+	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health h-restart-and-watch ROUTER=$(ROUTER)
 
 # ===========================================================================
-#  ROUTER MUTEX
+#  HARDWARE MUTEX (unified — protects ESP32 boards + OpenWRT routers)
 # ===========================================================================
 
 .PHONY: lock unlock lock-status force-unlock
 
-lock: ## Acquire router lock (set PHASE='description')
-	@$(MAKE) -C mint-health r-lock PHASE="$(PHASE)"
+lock: ## Acquire hardware lock (ESP32 + routers) — set PHASE='description'
+	@if [ -f "$(HARDWARE_LOCK)" ]; then \
+		echo "$(RED)$(BOLD)Cannot acquire lock — hardware already locked:$(RESET)"; \
+		echo ""; \
+		cat $(HARDWARE_LOCK); \
+		echo ""; \
+		echo "$(YELLOW)Use 'make force-unlock' to override (with caution).$(RESET)"; \
+		exit 1; \
+	fi; \
+	branch=$$(git branch --show-current 2>/dev/null || echo "unknown"); \
+	worktree=$$(pwd); \
+	echo "locked: true" > $(HARDWARE_LOCK); \
+	echo "branch: $$branch" >> $(HARDWARE_LOCK); \
+	echo "worktree: $$worktree" >> $(HARDWARE_LOCK); \
+	echo "session: $$USER@$$HOSTNAME" >> $(HARDWARE_LOCK); \
+	echo "timestamp: $$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $(HARDWARE_LOCK); \
+	echo "phase: $(PHASE)" >> $(HARDWARE_LOCK); \
+	echo "$(GREEN)$(BOLD)Hardware lock acquired (ESP32 boards + routers)$(RESET)"; \
+	cat $(HARDWARE_LOCK)
 
-unlock: ## Release router lock
-	@$(MAKE) -C mint-health r-unlock
+unlock: ## Release hardware lock
+	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
+		echo "$(YELLOW)No lock file found — already unlocked.$(RESET)"; \
+		exit 0; \
+	fi; \
+	echo "$(YELLOW)Releasing hardware lock...$(RESET)"; \
+	rm -f $(HARDWARE_LOCK); \
+	echo "$(GREEN)Hardware lock released.$(RESET)"
 
-lock-status: ## Show current router lock status
-	@$(MAKE) -C mint-health r-status-lock
+lock-status: ## Show current hardware lock status
+	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
+		echo "$(GREEN)Hardware is unlocked — ESP32 boards and routers available.$(RESET)"; \
+	else \
+		echo "$(YELLOW)$(BOLD)Hardware is locked (ESP32 + routers):$(RESET)"; \
+		echo ""; \
+		cat $(HARDWARE_LOCK); \
+	fi
 
-force-unlock: ## Force-release router lock (use with caution)
-	@$(MAKE) -C mint-health force-unlock
+force-unlock: ## Force-release hardware lock (use with caution)
+	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
+		echo "$(YELLOW)No lock file found — already unlocked.$(RESET)"; \
+		exit 0; \
+	fi; \
+	echo "$(RED)$(BOLD)WARNING: Force-releasing hardware lock!$(RESET)"; \
+	echo "$(RED)Previous holder:$(RESET)"; \
+	cat $(HARDWARE_LOCK); \
+	rm -f $(HARDWARE_LOCK); \
+	echo "$(GREEN)Hardware lock force-released.$(RESET)"
 
 # ===========================================================================
 #  SETUP
@@ -394,57 +483,73 @@ setup: ## Install dependencies (npm + playwright + serial)
          esp32-build
 
 esp32-flash-a: ## Flash multi-mint firmware to Board A
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 flash-a
 
 esp32-flash-b: ## Flash multi-mint firmware to Board B
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 flash-b
 
 esp32-monitor-a: ## Serial monitor Board A
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 monitor-a
 
 esp32-monitor-b: ## Serial monitor Board B
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 monitor-b
 
 esp32-connect-a: ## Connect laptop to Board A AP
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 connect-a
 
 esp32-connect-b: ## Connect laptop to Board B AP
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 connect-b
 
 esp32-disconnect: ## Disconnect from board AP
 	@$(MAKE) -C esp32 disconnect
 
 esp32-test-discovery-a: ## Test multi-mint discovery on Board A
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 test-discovery-a
 
 esp32-test-discovery-b: ## Test multi-mint discovery on Board B
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 test-discovery-b
 
 esp32-test-mints-a: ## Test /mints endpoint on Board A
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 test-mints-a
 
 esp32-test-mints-b: ## Test /mints endpoint on Board B
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 test-mints-b
 
 esp32-test-multi-mint-a: ## Full multi-mint test suite on Board A
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 test-multi-mint-a
 
 esp32-test-multi-mint-b: ## Full multi-mint test suite on Board B
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 test-multi-mint-b
 
 esp32-test-all-boards: ## Test both ESP32 boards
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 test-all-boards
 
  esp32-build: ## Build ESP32 multi-mint firmware
 	@$(MAKE) -C esp32 build
 
 esp32-test-cvm-a: ## CVM announcement integration test on Board A
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 test-cvm-a
 
 esp32-test-cvm-b: ## CVM announcement integration test on Board B
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 test-cvm-b
 
 esp32-test-cvm-mcp-a: ## End-to-end MCP tools/call test on Board A
+	$(call require_hardware_lock)
 	@$(MAKE) -C esp32 test-cvm-mcp-a
 
 esp32-cvm-pubkey-a: ## Print Board A's CVM npub
