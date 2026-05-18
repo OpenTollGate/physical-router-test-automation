@@ -330,11 +330,14 @@ def main():
         try:
             runner, tests = parse_junit(full_path, name)
             base_dir = os.path.dirname(rel_path)
-            runner["artifacts"] = {
-                "junit": rel_path,
-                "html": os.path.join(base_dir, "report.html") if base_dir else "report.html",
-                "log": os.path.join(base_dir, "output.log") if base_dir else "output.log",
-            }
+            artifacts = {"junit": rel_path}
+            html_rel = os.path.join(base_dir, "report.html") if base_dir else "report.html"
+            log_rel = os.path.join(base_dir, "output.log") if base_dir else "output.log"
+            if os.path.isfile(os.path.join(run_dir, html_rel)):
+                artifacts["html"] = html_rel
+            if os.path.isfile(os.path.join(run_dir, log_rel)):
+                artifacts["log"] = log_rel
+            runner["artifacts"] = artifacts
             runners.append(runner)
             all_tests.extend(tests)
         except Exception as e:
@@ -352,11 +355,14 @@ def main():
         try:
             runner, tests = parse_playwright(full_path, name)
             base_dir = os.path.dirname(rel_path)
-            runner["artifacts"] = {
-                "json": rel_path,
-                "html": os.path.join(base_dir, "report.html") if base_dir else "report.html",
-                "log": os.path.join(base_dir, "output.log") if base_dir else "output.log",
-            }
+            artifacts = {"json": rel_path}
+            html_rel = os.path.join(base_dir, "report.html") if base_dir else "report.html"
+            log_rel = os.path.join(base_dir, "output.log") if base_dir else "output.log"
+            if os.path.isfile(os.path.join(run_dir, html_rel)):
+                artifacts["html"] = html_rel
+            if os.path.isfile(os.path.join(run_dir, log_rel)):
+                artifacts["log"] = log_rel
+            runner["artifacts"] = artifacts
             runners.append(runner)
             all_tests.extend(tests)
         except Exception as e:
