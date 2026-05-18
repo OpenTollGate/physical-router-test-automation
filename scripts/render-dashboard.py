@@ -53,6 +53,11 @@ def read_run(path):
         duration_ms = get(d, "duration_ms", 0)
         counts = get(d, "counts", {})
         runners = get(d, "runners", [])
+        installed_version = get(d, "sut.installed_version", "")
+        build_time = get(d, "sut.build_time", "")
+        openwrt_version = get(d, "sut.openwrt_version", "")
+        go_version = get(d, "sut.go_version", "")
+        virtual_lab = get(d, "lab.virtual_lab", False)
     else:
         commit = d.get("tollgate_commit", "unknown")
         commit_short = commit[:7]
@@ -76,6 +81,11 @@ def read_run(path):
             "flaky": d.get("flaky", 0),
         }
         runners = []
+        installed_version = ""
+        build_time = ""
+        openwrt_version = ""
+        go_version = ""
+        virtual_lab = False
 
     return {
         "commit": commit,
@@ -93,6 +103,11 @@ def read_run(path):
         "duration_ms": int(duration_ms) if duration_ms else 0,
         "counts": counts,
         "runners": runners,
+        "installed_version": installed_version,
+        "build_time": build_time,
+        "openwrt_version": openwrt_version,
+        "go_version": go_version,
+        "virtual_lab": virtual_lab,
     }
 
 
@@ -197,6 +212,10 @@ def build_commit_groups(runs):
                 "commit_url": "%s/commit/%s" % (base_url, commit),
                 "branch_url": "%s/tree/%s" % (base_url, branch) if branch else "",
                 "pr_url": "%s/pull/%s" % (base_url, pr) if str(pr) not in ("0", "") else "",
+                "version": meta.get("installed_version", ""),
+                "build_time": meta.get("build_time", ""),
+                "openwrt_version": meta.get("openwrt_version", ""),
+                "virtual_lab": meta.get("virtual_lab", False),
                 "runs": [],
             }
         groups[commit]["runs"].append(run)

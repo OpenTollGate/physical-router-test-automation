@@ -29,8 +29,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
 .badge-failed{background:#fce8e8;color:#d93025}
 .badge-errored{background:#fce8e8;color:#d93025}
 .badge-partial{background:#fce8b2;color:#b06000}
+.badge-version{background:#f1f3f4;color:#5f6368}
+.badge-vlab{background:#f3e8fd;color:#6a1b9a}
 .runs{padding:.5rem 0}
-.run-row{display:grid;grid-template-columns:170px 75px 75px 60px 85px 75px 1fr 55px 65px;align-items:center;padding:.65rem 1.5rem;border-bottom:1px solid #f5f5f5;font-size:.875rem;gap:.4rem}
+.run-row{display:grid;grid-template-columns:170px 75px 75px 60px 110px 75px 1fr 55px 65px;align-items:center;padding:.65rem 1.5rem;border-bottom:1px solid #f5f5f5;font-size:.875rem;gap:.4rem}
 .run-row:last-child{border-bottom:none}
 .run-row:hover{background:#fafbfc}
 .run-time{color:#555;font-variant-numeric:tabular-nums}
@@ -47,7 +49,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
 .run-link a{color:#1a73e8;text-decoration:none;font-weight:500;font-size:.8rem}
 /* biome-ignore lint/style/noDescendingSpecificity: extracted dashboard CSS preserved verbatim */
 .run-link a:hover{text-decoration:underline}
-.run-header{display:grid;grid-template-columns:170px 75px 75px 60px 85px 75px 1fr 55px 65px;padding:.5rem 1.5rem;background:#fafbfc;font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#666;border-bottom:1px solid #eee;gap:.4rem}
+.run-header{display:grid;grid-template-columns:170px 75px 75px 60px 110px 75px 1fr 55px 65px;padding:.5rem 1.5rem;background:#fafbfc;font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#666;border-bottom:1px solid #eee;gap:.4rem}
 .empty{padding:3rem;text-align:center;color:#888;font-size:1rem}
 </style>
 </head>
@@ -68,11 +70,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
 <div class="commit-group">
 <div class="commit-header">
 <span class="hash"><a href="[[ group.commit_url ]]">[[ group.short ]]</a></span>
+[% if group.version %]
+<span class="badge badge-version" title="OpenWrt: [[ group.openwrt_version ]] | Built: [[ group.build_time ]]">[[ group.version ]]</span>
+[% endif %]
 [% if group.branch %]
 <a class="badge badge-branch" href="[[ group.branch_url ]]">[[ group.branch ]]</a>
 [% endif %]
 [% if group.pr %]
 <a class="badge badge-pr" href="[[ group.pr_url ]]">#[[ group.pr ]]</a>
+[% endif %]
+[% if group.virtual_lab %]
+<span class="badge badge-vlab" title="Virtual Lab">Virtual Lab</span>
 [% endif %]
 </div>
 <div class="run-header">
@@ -93,7 +101,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
 <span class="run-plan">[[ run.test_plan or 'e2e' ]]</span>
 <span><span class="badge badge-[[ run.badge_status ]]">[[ run.badge_status ]]</span></span>
 <span class="run-client">[[ run.backend ]]</span>
-<span class="run-router">[[ run.router_id ]]</span>
+<span class="run-router" title="[% if run.installed_version %]Version: [[ run.installed_version ]]&#10;OpenWrt: [[ run.openwrt_version ]][% endif %]">[% if run.router_id == 'unknown' and run.installed_version %][[ run.installed_version ]][% else %][[ run.router_id ]][% endif %]</span>
 <span class="run-client">[[ run.client_type ]]</span>
 <span class="runner-summary">[% if run.runners %][% for runner in run.runners %]<span class="rname">[[ runner.name ]]</span> <span class="rcount"><span class="rp">[[ get(runner, 'counts.passed', 0) ]]✓</span><span class="rf">[[ get(runner, 'counts.failed', 0) + get(runner, 'counts.errors', 0) ]]✗</span><span class="rs">[[ get(runner, 'counts.skipped', 0) ]]○</span></span>[% if not loop.last %] &nbsp;/ [% endif %][% endfor %][% else %]<span class="rcount"><span class="rp">[[ get(run, 'counts.passed', 0) ]]✓</span> <span class="rf">[[ get(run, 'counts.failed', 0) ]]✗</span> <span class="rs">[[ get(run, 'counts.skipped', 0) ]]○</span></span>[% endif %]</span>
 <span class="run-dur">[[ run.duration_ms|format_duration ]]</span>
