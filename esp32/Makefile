@@ -1,6 +1,6 @@
 include boards.env
 
-BOARD_LOCK := esp32.lock
+HARDWARE_LOCK := $(dir $(lastword $(MAKEFILE_LIST)))../hardware.lock
 
 .PHONY: help flash-a flash-b monitor-a monitor-b \
         connect-a connect-b disconnect \
@@ -11,11 +11,10 @@ BOARD_LOCK := esp32.lock
         lock unlock force-unlock lock-status \
         build
 
-# --- Mutex: require lock for any target that touches hardware ---
 define require_lock
-	@if [ ! -f "$(BOARD_LOCK)" ]; then \
-		echo "$(RED)$(BOLD)Board not locked — run 'make lock PHASE=\"description\"' first$(RESET)"; \
-		echo "$(YELLOW)Other LLM sessions may be using the boards.$(RESET)"; \
+	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
+		echo "$(RED)$(BOLD)Hardware not locked — run 'make lock PHASE=\"description\"' first$(RESET)"; \
+		echo "$(YELLOW)Other LLM sessions may be using the hardware.$(RESET)"; \
 		exit 1; \
 	fi
 endef
@@ -55,9 +54,9 @@ help: ## Show ESP32 board test targets
 	@echo "  make cvm-pubkey-a       # Print Board A's CVM npub (no lock)"
 	@echo "  make cvm-pubkey-b       # Print Board B's CVM npub (no lock)"
 	@echo ""
-	@echo "$(CYAN)--- Board mutex ---$(RESET)"
-	@echo "  make lock               # Acquire board lock (PHASE='description')"
-	@echo "  make unlock             # Release board lock"
+	@echo "$(CYAN)--- Board mutex ---$(CYAN)"
+	@echo "  make lock               # Acquire hardware lock (PHASE='description')"
+	@echo "  make unlock             # Release hardware lock"
 	@echo "  make lock-status        # Show current lock status (no lock)"
 	@echo "  make force-unlock       # Force-release (caution)"
 	@echo ""
@@ -68,55 +67,57 @@ help: ## Show ESP32 board test targets
 #  BOARD MUTEX
 # ===========================================================================
 
-lock: ## Acquire board lock (set PHASE="description")
-	@if [ -f "$(BOARD_LOCK)" ]; then \
-		echo "$(RED)$(BOLD)Cannot acquire lock — boards already locked:$(RESET)"; \
+lock: ## Acquire hardware lock (set PHASE="description")
+	@if [ -f "$(HARDWARE_LOCK)" ]; then \
+		echo "$(RED)$(BOLD)Cannot acquire lock — hardware already locked:$(RESET)"; \
 		echo ""; \
-		grep "^branch:" $(BOARD_LOCK) | sed 's/^/  /'; \
-		grep "^phase:" $(BOARD_LOCK) | sed 's/^/  /'; \
-		grep "^timestamp:" $(BOARD_LOCK) | sed 's/^/  /'; \
+		grep "^branch:" $(HARDWARE_LOCK) | sed 's/^/  /'; \
+		grep "^phase:" $(HARDWARE_LOCK) | sed 's/^/  /'; \
+		grep "^timestamp:" $(HARDWARE_LOCK) | sed 's/^/  /'; \
 		echo ""; \
 		echo "$(YELLOW)Use 'make force-unlock' to override (with caution).$(RESET)"; \
 		exit 1; \
 	fi; \
 	branch=$$(git branch --show-current 2>/dev/null || echo "unknown"); \
-	echo "locked: true" > $(BOARD_LOCK); \
-	echo "branch: $$branch" >> $(BOARD_LOCK); \
-	echo "session: $$USER@$$HOSTNAME" >> $(BOARD_LOCK); \
-	echo "timestamp: $$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $(BOARD_LOCK); \
-	echo "phase: $(PHASE)" >> $(BOARD_LOCK); \
-	echo "$(GREEN)$(BOLD)Board lock acquired$(RESET)"; \
-	cat $(BOARD_LOCK)
+	worktree=$$(pwd); \
+	echo "locked: true" > $(HARDWARE_LOCK); \
+	echo "branch: $$branch" >> $(HARDWARE_LOCK); \
+	echo "worktree: $$worktree" >> $(HARDWARE_LOCK); \
+	echo "session: $$USER@$$HOSTNAME" >> $(HARDWARE_LOCK); \
+	echo "timestamp: $$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $(HARDWARE_LOCK); \
+	echo "phase: $(PHASE)" >> $(HARDWARE_LOCK); \
+	echo "$(GREEN)$(BOLD)Hardware lock acquired$(RESET)"; \
+	cat $(HARDWARE_LOCK)
 
-unlock: ## Release board lock
-	@if [ ! -f "$(BOARD_LOCK)" ]; then \
+unlock: ## Release hardware lock
+	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
 		echo "$(YELLOW)No lock file found — already unlocked.$(RESET)"; \
 		exit 0; \
 	fi; \
-	echo "$(YELLOW)Releasing board lock...$(RESET)"; \
-	rm -f $(BOARD_LOCK); \
-	echo "$(GREEN)Board lock released.$(RESET)"
+	echo "$(YELLOW)Releasing hardware lock...$(RESET)"; \
+	rm -f $(HARDWARE_LOCK); \
+	echo "$(GREEN)Hardware lock released.$(RESET)"
 
-force-unlock: ## Force-release board lock (use with caution)
-	@if [ ! -f "$(BOARD_LOCK)" ]; then \
+force-unlock: ## Force-release hardware lock (use with caution)
+	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
 		echo "$(YELLOW)No lock file found — already unlocked.$(RESET)"; \
 		exit 0; \
 	fi; \
-	echo "$(RED)$(BOLD)WARNING: Force-releasing board lock!$(RESET)"; \
+	echo "$(RED)$(BOLD)WARNING: Force-releasing hardware lock!$(RESET)"; \
 	echo "$(RED)Previous holder:$(RESET)"; \
-	grep "^branch:" $(BOARD_LOCK) | sed 's/^/  /'; \
-	grep "^phase:" $(BOARD_LOCK) | sed 's/^/  /'; \
-	grep "^timestamp:" $(BOARD_LOCK) | sed 's/^/  /'; \
-	rm -f $(BOARD_LOCK); \
-	echo "$(GREEN)Board lock force-released.$(RESET)"
+	grep "^branch:" $(HARDWARE_LOCK) | sed 's/^/  /'; \
+	grep "^phase:" $(HARDWARE_LOCK) | sed 's/^/  /'; \
+	grep "^timestamp:" $(HARDWARE_LOCK) | sed 's/^/  /'; \
+	rm -f $(HARDWARE_LOCK); \
+	echo "$(GREEN)Hardware lock force-released.$(RESET)"
 
-lock-status: ## Show current board lock status (no lock needed)
-	@if [ ! -f "$(BOARD_LOCK)" ]; then \
-		echo "$(GREEN)Boards are unlocked — available for use.$(RESET)"; \
+lock-status: ## Show current hardware lock status (no lock needed)
+	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
+		echo "$(GREEN)Hardware is unlocked — available for use.$(RESET)"; \
 	else \
-		echo "$(YELLOW)$(BOLD)Boards are locked:$(RESET)"; \
+		echo "$(YELLOW)$(BOLD)Hardware is locked:$(RESET)"; \
 		echo ""; \
-		cat $(BOARD_LOCK); \
+		cat $(HARDWARE_LOCK); \
 	fi
 
 # ===========================================================================
@@ -160,10 +161,12 @@ monitor-b: ## Serial monitor Board B
 #  NETWORK (requires lock — changes host WiFi)
 # ===========================================================================
 
+WIFI_IFACE := $(shell iw dev | awk '/Interface/{print $$2}' | head -1)
+
 connect-a: ## Connect laptop to Board A AP
 	$(call require_lock)
 	@echo "$(CYAN)Connecting to $(BOARD_A_SSID)...$(RESET)"
-	@nmcli device wifi connect "$(BOARD_A_SSID)" ifname wlan0 2>/dev/null || \
+	@nmcli device wifi connect "$(BOARD_A_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
 	nmcli connection up "$(BOARD_A_UUID)" 2>/dev/null || \
 	echo "$(YELLOW)Failed to connect$(RESET)"
 	@sleep 3
@@ -172,7 +175,7 @@ connect-a: ## Connect laptop to Board A AP
 connect-b: ## Connect laptop to Board B AP
 	$(call require_lock)
 	@echo "$(CYAN)Connecting to $(BOARD_B_SSID)...$(RESET)"
-	@nmcli device wifi connect "$(BOARD_B_SSID)" ifname wlan0 2>/dev/null || \
+	@nmcli device wifi connect "$(BOARD_B_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
 	nmcli connection up "$(BOARD_B_UUID)" 2>/dev/null || \
 	echo "$(YELLOW)Failed to connect$(RESET)"
 	@sleep 3
@@ -188,10 +191,14 @@ disconnect: ## Disconnect from board AP
 #  MULTI-MINT TESTS (requires lock via connect-* dependency)
 # ===========================================================================
 
-test-discovery-a: connect-a
+test-discovery-a: ## Test multi-mint discovery on Board A
+	$(call require_lock)
+	@$(MAKE) _connect-a-if-needed
 	@$(MAKE) _test-discovery IP=$(BOARD_A_IP)
 
-test-discovery-b: connect-b
+test-discovery-b: ## Test multi-mint discovery on Board B
+	$(call require_lock)
+	@$(MAKE) _connect-b-if-needed
 	@$(MAKE) _test-discovery IP=$(BOARD_B_IP)
 
 _test-discovery:
