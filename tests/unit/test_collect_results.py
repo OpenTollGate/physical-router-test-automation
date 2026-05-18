@@ -24,6 +24,7 @@ determine_overall_status = _cr.determine_overall_status
 merge_counts = _cr.merge_counts
 parse_junit = _cr.parse_junit
 parse_playwright = _cr.parse_playwright
+parse_pytest_log = _cr.parse_pytest_log
 
 
 JUNIT_XML = """\
@@ -256,11 +257,66 @@ def test_status_errored_no_runners():
     assert determine_overall_status([]) == "errored"
 
 
+def test_parse_pytest_log_basic():
+    log = (
+        "api/test_health.py::test_root_endpoint PASSED                            [ 27%]\n"
+        "api/test_health.py::test_pay_endpoint FAILED                             [ 50%]\n"
+        "api/test_info.py::test_info_endpoint PASSED                              [ 36%]\n"
+        "api/test_edge.py::test_skipped SKIPPED (reason text)                     [ 40%]\n"
+        "api/test_edge.py::test_error ERROR                                       [ 45%]\n"
+    )
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
+        f.write(log)
+        f.flush()
+        runner, tests = parse_pytest_log(f.name, "api")
+    os.unlink(f.name)
+
+    assert runner["counts"]["total"] == 5
+    assert runner["counts"]["passed"] == 2
+    assert runner["counts"]["failed"] == 1
+    assert runner["counts"]["errors"] == 1
+    assert runner["counts"]["skipped"] == 1
+    assert runner["status"] == "failed"  # failed takes priority over errored
+    assert len(tests) == 5
+
+    by_name = {t["name"]: t for t in tests}
+    assert by_name["test_root_endpoint"]["outcome"] == "passed"
+    assert by_name["test_pay_endpoint"]["outcome"] == "failed"
+    assert by_name["test_skipped"]["outcome"] == "skipped"
+    assert by_name["test_error"]["outcome"] == "error"
+
+
 def test_missing_junit_file(tmp_path):
     missing = str(tmp_path / "nonexistent.xml")
     assert not os.path.isfile(missing)
     result = _run_collect(tmp_path, ["--pytest", f"api={missing}"])
     assert result.returncode == 2
+
+
+def test_missing_junit_falls_back_to_output_log(tmp_path):
+    log_content = (
+        "api/test_health.py::test_root_endpoint PASSED                            [ 27%]\n"
+        "api/test_health.py::test_pay_endpoint FAILED                             [ 50%]\n"
+        "api/test_info.py::test_info SKIPPED (reason here)\n"
+    )
+    log_path = tmp_path / "output.log"
+    log_path.write_text(log_content)
+
+    missing = str(tmp_path / "nonexistent.xml")
+    assert not os.path.isfile(missing)
+
+    result = _run_collect(tmp_path, ["--pytest", f"api=nonexistent.xml", "--allow-failures"])
+    assert result.returncode == 0
+
+    run_json = json.loads((tmp_path / "run.json").read_text())
+    assert run_json["counts"]["total"] == 3
+    assert run_json["counts"]["passed"] == 1
+    assert run_json["counts"]["failed"] == 1
+    assert run_json["counts"]["skipped"] == 1
+    assert len(run_json["runners"]) == 1
+    assert run_json["runners"][0]["name"] == "api"
+    assert run_json["runners"][0]["counts"]["total"] == 3
 
 
 def test_missing_playwright_file(tmp_path):

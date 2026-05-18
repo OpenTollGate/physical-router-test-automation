@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -81,6 +82,82 @@ def parse_junit(xml_path, runner_name):
             "skipped": skipped,
             "flaky": 0,
         },
+    }
+    return runner, tests
+
+
+def parse_pytest_log(log_path, runner_name):
+    """Parse pytest verbose output.log as fallback when JUnit XML is missing/incomplete.
+
+    Extracts test results from lines like:
+        path/test_foo.py::test_bar PASSED                            [ 27%]
+        path/test_foo.py::test_baz FAILED                            [ 50%]
+        path/test_foo.py::test_qux SKIPPED (reason here)
+    """
+    with open(log_path) as f:
+        content = f.read()
+
+    # Match: file::name STATUS [percentage]
+    # Status can be PASSED, FAILED, SKIPPED, ERROR, XFAIL, XPASS
+    pattern = re.compile(
+        r'^([\w./_\-]+\.py)::(\S+)\s+'
+        r'(PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)'
+        r'(?:\s|\()',
+        re.MULTILINE,
+    )
+
+    tests = []
+    counts = {"total": 0, "passed": 0, "failed": 0, "errors": 0, "skipped": 0, "flaky": 0}
+
+    for match in pattern.finditer(content):
+        file_path = match.group(1)
+        name = match.group(2)
+        status_raw = match.group(3)
+
+        # Map pytest statuses to our outcome types
+        outcome_map = {
+            "PASSED": "passed",
+            "FAILED": "failed",
+            "ERROR": "error",
+            "SKIPPED": "skipped",
+            "XFAIL": "skipped",
+            "XPASS": "passed",
+        }
+        outcome = outcome_map.get(status_raw, "passed")
+
+        counts["total"] += 1
+        if outcome == "passed":
+            counts["passed"] += 1
+        elif outcome == "failed":
+            counts["failed"] += 1
+        elif outcome == "error":
+            counts["errors"] += 1
+        elif outcome == "skipped":
+            counts["skipped"] += 1
+
+        tests.append({
+            "runner": runner_name,
+            "framework": "pytest",
+            "name": name,
+            "file": file_path,
+            "outcome": outcome,
+            "duration_ms": 0,
+            "failure_message": None,
+            "markers": [],
+        })
+
+    runner_status = "passed"
+    if counts["errors"] > 0:
+        runner_status = "errored"
+    if counts["failed"] > 0:
+        runner_status = "failed"
+
+    runner = {
+        "name": runner_name,
+        "framework": "pytest",
+        "status": runner_status,
+        "duration_ms": 0,
+        "counts": counts,
     }
     return runner, tests
 
@@ -324,24 +401,41 @@ def main():
             sys.exit(2)
         name, rel_path = entry.split("=", 1)
         full_path = os.path.join(run_dir, rel_path)
-        if not os.path.isfile(full_path):
+        base_dir = os.path.dirname(rel_path)
+        log_rel = os.path.join(base_dir, "output.log") if base_dir else "output.log"
+        log_full = os.path.join(run_dir, log_rel)
+
+        parsed = False
+        if os.path.isfile(full_path):
+            try:
+                runner, tests = parse_junit(full_path, name)
+                artifacts = {"junit": rel_path}
+                html_rel = os.path.join(base_dir, "report.html") if base_dir else "report.html"
+                if os.path.isfile(os.path.join(run_dir, html_rel)):
+                    artifacts["html"] = html_rel
+                if os.path.isfile(log_full):
+                    artifacts["log"] = log_rel
+                runner["artifacts"] = artifacts
+                runners.append(runner)
+                all_tests.extend(tests)
+                parsed = True
+            except Exception as e:
+                parse_errors.append(f"Error parsing JUnit {name}: {e}")
+
+        if not parsed and os.path.isfile(log_full):
+            try:
+                runner, tests = parse_pytest_log(log_full, name)
+                artifacts = {}
+                if os.path.isfile(log_full):
+                    artifacts["log"] = log_rel
+                runner["artifacts"] = artifacts
+                runners.append(runner)
+                all_tests.extend(tests)
+                parse_errors.append(f"Fallback: parsed {name} from output.log ({runner['counts']['total']} tests)")
+            except Exception as e:
+                parse_errors.append(f"Error parsing output.log for {name}: {e}")
+        elif not parsed:
             parse_errors.append(f"Missing JUnit XML: {full_path}")
-            continue
-        try:
-            runner, tests = parse_junit(full_path, name)
-            base_dir = os.path.dirname(rel_path)
-            artifacts = {"junit": rel_path}
-            html_rel = os.path.join(base_dir, "report.html") if base_dir else "report.html"
-            log_rel = os.path.join(base_dir, "output.log") if base_dir else "output.log"
-            if os.path.isfile(os.path.join(run_dir, html_rel)):
-                artifacts["html"] = html_rel
-            if os.path.isfile(os.path.join(run_dir, log_rel)):
-                artifacts["log"] = log_rel
-            runner["artifacts"] = artifacts
-            runners.append(runner)
-            all_tests.extend(tests)
-        except Exception as e:
-            parse_errors.append(f"Error parsing JUnit {name}: {e}")
 
     for entry in args.playwright:
         if "=" not in entry:

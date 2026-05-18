@@ -41,6 +41,8 @@ def _skip_if_no_virtual_lab():
     """Skip all tests unless the virtual lab is running and reachable."""
     if os.environ.get("TOLLGATE_VIRTUAL_LAB") != "1":
         pytest.skip("set TOLLGATE_VIRTUAL_LAB=1 and start the virtual lab first")
+    if os.environ.get("TOLLGATE_CLIENT_TYPE") == "container":
+        pytest.skip("network namespace tests require local tg-poc-client, not the GCP Debian VM client")
 
     result = subprocess.run(
         ["ssh", LAB_HOST, "sudo", "ip", "netns", "identify", CONTAINER],

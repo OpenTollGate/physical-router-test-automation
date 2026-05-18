@@ -105,15 +105,6 @@ set +a
 ROUTER_IP="${ROUTER_IP:-${TOLLGATE_SSH_HOST:-}}"
 ROUTER_ID="${ROUTER_ID:-${TOLLGATE_ROUTER_ID:-}}"
 
-# Auto-resolve arch from router inventory if not set
-if [[ -z "${TOLLGATE_ROUTER_ARCH:-}" && -n "$ROUTER_ID" && -f "$REPO_DIR/config/routers.json" ]]; then
-  TOLLGATE_ROUTER_ARCH=$(python3 -c "
-import json, sys
-inv = json.load(open('$REPO_DIR/config/routers.json'))
-print(inv.get('routers', {}).get('$ROUTER_ID', {}).get('arch', ''))
-" 2>/dev/null)
-fi
-
 # Check for password
 if [[ -z "$TOLLGATE_LUCI_PASSWORD" && -z "$TOLLGATE_SSH_PASSWORD" ]]; then
   echo "ERROR: TOLLGATE_LUCI_PASSWORD or TOLLGATE_SSH_PASSWORD is required" >&2
@@ -165,16 +156,17 @@ fi
 # ── Pre-flight connectivity check ───────────────────────────────────────
 echo "==> Checking router connectivity..."
 SSH_CHECK_KEY="${TOLLGATE_SSH_KEY:-}"
-_check_ssh() {
+_ssh_cmd() {
   if [[ -n "$SSH_CHECK_KEY" ]]; then
     ssh -i "$SSH_CHECK_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      -o ConnectTimeout=5 -o LogLevel=ERROR "root@${ROUTER_IP}" 'echo ok' &>/dev/null
+      -o ConnectTimeout=5 -o LogLevel=ERROR "root@${ROUTER_IP}" "$1"
   else
     export SSHPASS="${TOLLGATE_SSH_PASSWORD:-$TOLLGATE_LUCI_PASSWORD}"
     sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      -o ConnectTimeout=5 -o LogLevel=ERROR "root@${ROUTER_IP}" 'echo ok' &>/dev/null
+      -o ConnectTimeout=5 -o LogLevel=ERROR "root@${ROUTER_IP}" "$1"
   fi
 }
+_check_ssh() { _ssh_cmd 'echo ok' &>/dev/null; }
 if _check_ssh; then
   echo "==> Router reachable at ${ROUTER_IP}"
 else
@@ -185,6 +177,18 @@ else
     echo "  - Is the router powered on?" >&2
     echo "  - Is SSH enabled?" >&2
     exit 1
+  fi
+fi
+
+# ── Auto-detect architecture from router ─────────────────────────────────
+if [[ -z "${TOLLGATE_ROUTER_ARCH:-}" ]]; then
+  DETECTED_ARCH=$(_ssh_cmd "opkg print-architecture 2>/dev/null | grep -v 'all\|noarch' | tail -1 | awk '{print \$2}'" 2>/dev/null || true)
+  if [[ -n "$DETECTED_ARCH" ]]; then
+    TOLLGATE_ROUTER_ARCH="$DETECTED_ARCH"
+    echo "==> Detected router arch: $TOLLGATE_ROUTER_ARCH"
+  else
+    TOLLGATE_ROUTER_ARCH="aarch64_cortex-a53"
+    echo "==> WARNING: Could not detect arch, defaulting to $TOLLGATE_ROUTER_ARCH" >&2
   fi
 fi
 
@@ -229,7 +233,7 @@ backend = BackendConfig('${BACKEND}')
 r = Router(host='${ROUTER_IP}', phone_ip='', phone_mac='', domain='',
            identity_file=os.environ.get('TOLLGATE_SSH_KEY') or None,
            backend=backend)
-result = deploy_branch(r, '${TOLLGATE_BRANCH}', arch='${TOLLGATE_ROUTER_ARCH:-aarch64_cortex-a53}',
+result = deploy_branch(r, '${TOLLGATE_BRANCH}', arch='${TOLLGATE_ROUTER_ARCH:-}',
                        run_id=None, force=True, reboot=False,
                        repo='${ARTIFACT_REPO:-}', backend=backend)
 print(f'version={result[\"installed_version\"]} health={result[\"health_code\"]} success={result[\"success\"]}')

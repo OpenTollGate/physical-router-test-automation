@@ -37,14 +37,19 @@ class CashuMint:
 
     def ensure_mint_available(self, timeout: int = 5):
         keys_url = f"{self.mint_url.rstrip('/')}/v1/keys"
+        req = request.Request(keys_url, headers={"User-Agent": "tollgate-test/1.0"})
         try:
-            with request.urlopen(keys_url, timeout=timeout) as response:
+            with request.urlopen(req, timeout=timeout) as response:
                 if response.status != 200:
                     raise MintUnavailableError(
                         f"Mint health check failed with HTTP {response.status}"
                     )
+        except MintUnavailableError:
+            raise
         except (error.URLError, TimeoutError) as exc:
-            raise MintUnavailableError("cashu mint unavailable") from exc
+            raise MintUnavailableError(f"cashu mint unavailable: {exc}") from exc
+        except Exception as exc:
+            raise MintUnavailableError(f"cashu mint unexpected error: {exc}") from exc
 
     def _find_latest_quote_id(self, url=None):
         mint_url = url or self.mint_url

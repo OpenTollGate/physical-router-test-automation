@@ -215,21 +215,16 @@ def router(request, backend):
 
     ssh_port = os.environ.get("TOLLGATE_SSH_PORT", "")
 
-    router_kwargs = {
-        "host": host,
-        "phone_ip": phone_ip,
-        "phone_mac": phone_mac,
-        "domain": domain,
-        "backend": backend,
-    }
-    if identity_file:
-        router_kwargs["identity_file"] = identity_file
-    if jump_host:
-        router_kwargs["jump_host"] = jump_host
-    if ssh_port:
-        router_kwargs["port"] = int(ssh_port)
-
-    return Router(**router_kwargs)
+    return Router(
+        host=host,
+        phone_ip=phone_ip,
+        phone_mac=phone_mac,
+        domain=domain,
+        identity_file=identity_file or None,
+        jump_host=jump_host or None,
+        port=int(ssh_port) if ssh_port else None,
+        backend=backend,
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -281,12 +276,29 @@ def deploy_session(request, router, backend):
         router.enable_debug_portal()
         router.ensure_test_mint()
         router.replace_mints()
+        for _ in range(20):
+            if router.api_status("/") == 200:
+                break
+            time.sleep(1)
+        else:
+            pytest.exit(f"Backend not reachable after test mint setup at {router.host}:2121", returncode=1)
+
+        if _is_container_client(request.config) and os.environ.get("TOLLGATE_CLIENT_MAC"):
+            client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
+            client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
+            router.ssh(
+                f"grep -qi ' {client_mac} {client_ip} ' /tmp/dhcp.leases 2>/dev/null || "
+                f"echo '4102444800 {client_mac} {client_ip} gcp-client 01:{client_mac}' >> /tmp/dhcp.leases",
+                timeout=10,
+            )
 
     if _is_container_client(request.config) and os.environ.get("TOLLGATE_VIRTUAL_LAB"):
         container_host = os.environ.get("TOLLGATE_CONTAINER_HOST", "")
         client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
         client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
         jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", container_host or "")
+        if jump_host == client_ip:
+            jump_host = ""
         password = os.environ.get("TOLLGATE_SSH_PASSWORD",
                                   os.environ.get("TOLLGATE_LUCI_PASSWORD", "tollgate"))
         request.session._tollgate_adb = ContainerClient(
@@ -323,6 +335,8 @@ def adb(request, router):
         client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
         client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
         jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", container_host or "")
+        if jump_host == client_ip:
+            jump_host = ""
         password = os.environ.get("TOLLGATE_SSH_PASSWORD",
                                   os.environ.get("TOLLGATE_LUCI_PASSWORD", "tollgate"))
         client = ContainerClient(
@@ -343,10 +357,10 @@ def adb(request, router):
 def cashu():
     try:
         mint = CashuMint()
-        mint.ensure_mint_available()
+        mint.ensure_mint_available(timeout=10)
         return mint
-    except MintUnavailableError:
-        pytest.skip("cashu mint unavailable")
+    except MintUnavailableError as exc:
+        pytest.skip(f"cashu mint unavailable: {exc}")
 
 
 @pytest.fixture(scope="session")
@@ -365,20 +379,16 @@ def all_routers(backend):
         host = entry.get("sshHost")
         if not host:
             continue
-        router_kwargs = {
-            "host": host,
-            "phone_ip": "",
-            "phone_mac": "",
-            "domain": "",
-            "backend": backend,
-        }
-        if identity_file:
-            router_kwargs["identity_file"] = identity_file
-        if entry.get("jumpHost"):
-            router_kwargs["jump_host"] = entry["jumpHost"]
-        if entry.get("sshPort"):
-            router_kwargs["port"] = int(entry["sshPort"])
-        routers[router_id] = Router(**router_kwargs)
+        routers[router_id] = Router(
+            host=host,
+            phone_ip="",
+            phone_mac="",
+            domain="",
+            identity_file=identity_file or None,
+            jump_host=entry.get("jumpHost") or None,
+            port=int(entry["sshPort"]) if entry.get("sshPort") else None,
+            backend=backend,
+        )
     return routers
 
 
@@ -639,6 +649,8 @@ def _auto_portal_video(item, report, results_dir, adb):
     if not os.environ.get("TOLLGATE_VIRTUAL_LAB"):
         return
     if not results_dir or not adb or not hasattr(adb, "record_portal_video"):
+        return
+    if report.failed and os.environ.get("TOLLGATE_AUTO_VIDEO_ON_FAILURE") != "1":
         return
     if not report.failed and not (report.passed and os.environ.get("TOLLGATE_RECORD_ALL") == "1"):
         return

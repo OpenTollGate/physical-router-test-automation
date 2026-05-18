@@ -1,20 +1,20 @@
-# Multihop payment test: router-b (seller) → WiFi 5GHz → router-a (reseller) → WiFi 2.4GHz → phone
+# Multihop payment test: alpha (seller) → WiFi 5GHz → beta (reseller) → WiFi 2.4GHz → phone
 #
 # Topology:
-#   Internet → Main Router → router-b (seller, WAN 192.168.13.231)
-#                         → WiFi 5GHz STA → router-a (reseller, buys from router-b)
+#   Internet → Main Router → alpha (seller)
+#                         → WiFi 5GHz STA → beta (reseller, buys from alpha)
 #                                          → WiFi 2.4GHz AP → Phone
 #
 # Prerequisites:
-#   - router-b: TollGate running, seller mode, SSID c08r4d0r-1706 on 5GHz
-#   - router-a: TollGate running, reseller_mode=true, WiFi STA to router-b on 5GHz,
-#               client AP c08r4d0r-C830 on 2.4GHz (br-private),
-#               NoDogSplash on br-private, testnut mint accepted,
-#               wallet funded, upstream buying session active
+#   - alpha: TollGate running, seller mode, SSID c08r4d0r-1706 on 5GHz
+#   - beta: TollGate running, reseller_mode=true, WiFi STA to alpha on 5GHz,
+#            client AP c08r4d0r-C830 on 2.4GHz (br-private),
+#            NoDogSplash on br-private, testnut mint accepted,
+#            wallet funded, upstream buying session active
 #   - Phone connected to c08r4d0r-C830 via WiFi AND USB/ADB
 #
 # Run:
-#   PHONE_SERIAL=R5CR508MD9R TOLLGATE_ROUTER_ID=lab-router-a \
+#   PHONE_SERIAL=R5CR508MD9R TOLLGATE_ROUTER_ID=beta \
 #     pytest tests/phone/test_multihop.py -v --no-deploy
 
 import json
@@ -58,12 +58,12 @@ def _load_router(router_id: str) -> Router:
 
 @pytest.fixture(scope="module")
 def router_a():
-    return _load_router("lab-router-a")
+    return _load_router("beta")
 
 
 @pytest.fixture(scope="module")
 def router_b():
-    return _load_router("lab-router-b")
+    return _load_router("alpha")
 
 
 @pytest.fixture(scope="module")

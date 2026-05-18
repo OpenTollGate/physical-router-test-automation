@@ -6,6 +6,8 @@ from typing import Any
 
 import pytest
 
+from lib.constants import NDS_PORTAL_PORT
+
 pytestmark = [pytest.mark.api, pytest.mark.smoke, pytest.mark.virtual_lab, pytest.mark.publish_screenshot, pytest.mark.timeout(180)]
 
 try:
@@ -60,9 +62,15 @@ def test_visual_happy_path(adb, router, results_dir, request):
 
     print(f"[visual] gateway={gateway} client_mac={client_mac}")
 
-    # Step 0: verify client can reach gateway
-    assert adb.ping(gateway, count=1, timeout=3), "client must reach gateway"
-    print("[visual] client can reach gateway")
+    portal_url = f"http://{gateway}:{NDS_PORTAL_PORT}/"
+    code = ""
+    for _ in range(20):
+        code = adb.curl(portal_url, o="/dev/null", w="%{http_code}", s=True).strip()
+        if code.startswith("2") or code in ("404", "500"):
+            break
+        time.sleep(1)
+    assert code.startswith("2") or code in ("404", "500"), f"client must reach portal, got HTTP {code}"
+    print(f"[visual] client can reach portal ({code})")
 
     # Step 0.5: deauth client so NDS intercepts and shows portal
     if client_mac:

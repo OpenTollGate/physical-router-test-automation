@@ -7,7 +7,7 @@ set -euo pipefail
 # Usage: deploy-ci.sh [--backend go|rust] <branch> [run-id] [router-ip]
 #
 # Env: TOLLGATE_SSH_KEY or TOLLGATE_SSH_PASSWORD for auth
-#      TOLLGATE_ROUTER_ARCH (default: aarch64_cortex-a53)
+#      TOLLGATE_ROUTER_ARCH (auto-detected from router if not set)
 #      TOLLGATE_BACKEND (default: go)
 
 BACKEND="${TOLLGATE_BACKEND:-go}"
@@ -19,7 +19,7 @@ fi
 BRANCH="${1:?Usage: $0 [--backend go|rust] <branch> [run-id] [router-ip]}"
 RUN_ID="${2:-}"
 ROUTER_IP="${3:-${TOLLGATE_SSH_HOST:-192.168.13.112}}"
-ARCH="${TOLLGATE_ROUTER_ARCH:-aarch64_cortex-a53}"
+ARCH="${TOLLGATE_ROUTER_ARCH:-}"
 
 exec python3 -c "
 import os, sys, logging

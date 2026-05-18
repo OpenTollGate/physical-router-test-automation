@@ -17,6 +17,46 @@ BUILD_DIR = Path("/tmp/tollgate-build")
 TEST_DEPS = ["curl", "socat", "nodogsplash", "jq", "luci", "px5g-mbedtls"]
 
 
+def detect_arch(router) -> str:
+    """Detect the package architecture from a running OpenWrt router via SSH.
+
+    Uses ``opkg print-architecture`` which lists all supported arches with
+    priority numbers.  The *highest-priority* (largest number) non-trivial
+    arch (i.e. not ``all`` / ``noarch``) is the native one.
+
+    Falls back to parsing ``/etc/openwrt_release`` DISTRIB_ARCH.
+    """
+    try:
+        out = router.ssh("opkg print-architecture 2>/dev/null", timeout=10)
+    except Exception:
+        out = ""
+
+    if out:
+        best_name, best_prio = None, -1
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 3 and parts[0] == "arch":
+                name, prio = parts[1], int(parts[2])
+                if name in ("all", "noarch"):
+                    continue
+                if prio > best_prio:
+                    best_name, best_prio = name, prio
+        if best_name:
+            log.info("Detected router arch via opkg: %s", best_name)
+            return best_name
+
+    # Fallback: /etc/openwrt_release
+    try:
+        out = router.ssh(". /etc/openwrt_release && echo $DISTRIB_ARCH", timeout=10)
+        if out.strip():
+            log.info("Detected router arch via openwrt_release: %s", out.strip())
+            return out.strip()
+    except Exception:
+        pass
+
+    raise RuntimeError("Cannot detect router architecture via SSH")
+
+
 def _ssh_env():
     pw = os.environ.get("TOLLGATE_SSH_PASSWORD") or os.environ.get("TOLLGATE_LUCI_PASSWORD")
     if not pw:
@@ -336,7 +376,13 @@ def deploy_branch(router, branch: str, arch: str | None = None,
                   run_id: str | None = None, force: bool = False,
                   reboot: bool = False, repo: str | None = None,
                   backend=None) -> dict:
-    arch = arch or os.environ.get("TOLLGATE_ROUTER_ARCH", "aarch64_cortex-a53")
+    if not arch:
+        env_arch = os.environ.get("TOLLGATE_ROUTER_ARCH")
+        if env_arch:
+            arch = env_arch
+        else:
+            arch = detect_arch(router)
+            log.info("Auto-detected router arch: %s", arch)
 
     if not force:
         status = check_deployed(router)

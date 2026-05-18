@@ -1,5 +1,6 @@
 import os
 import re
+import shlex
 import subprocess
 import time
 import logging
@@ -27,6 +28,8 @@ class ContainerClient:
                  password: str = "tollgate"):
         self._host = host
         if jump_host and jump_host in {"localhost", "127.0.0.1", "::1"}:
+            jump_host = None
+        if jump_host and jump_host == client_ip:
             jump_host = None
         self._jump_host = jump_host
         self._client_ip = client_ip
@@ -93,7 +96,7 @@ class ContainerClient:
             if len(k) == 1:
                 flags.append(f"-{k}")
                 if v is not True:
-                    flags.append(str(v))
+                    flags.append(shlex.quote(str(v)))
             else:
                 k_dashed = k.replace("_", "-")
                 if v is True:
@@ -101,7 +104,7 @@ class ContainerClient:
                 elif v is False:
                     continue
                 else:
-                    flags.append(f"--{k_dashed}={v}")
+                    flags.append(f"--{k_dashed}={shlex.quote(str(v))}")
         flag_str = " ".join(flags)
         cmd = f"curl --connect-timeout {timeout} --max-time {timeout + 5} {flag_str} '{url}'".strip()
         return self._exec(cmd, timeout=timeout + 10)
@@ -403,6 +406,11 @@ class ContainerClient:
             f"cat > /tmp/tg-record.py << 'PYEOF'\n{script}\nPYEOF",
             timeout=15,
         )
+        self._exec(
+            "rm -f /tmp/tg-record.out /tmp/tg-record.err; "
+            "nohup python3 /tmp/tg-record.py >/tmp/tg-record.out 2>/tmp/tg-record.err &",
+            timeout=5,
+        )
 
     def wait_for_portal_ready(self, timeout: int = 30) -> bool:
         for _ in range(timeout * 2):
@@ -424,7 +432,17 @@ class ContainerClient:
         Returns dict with 'screenshots' (list of local paths) and 'video' (path or None).
         """
         os.makedirs(output_dir, exist_ok=True)
-        result = self._exec("python3 /tmp/tg-record.py", timeout=timeout)
+        for _ in range(max(timeout * 2, 1)):
+            result = self._exec("cat /tmp/tg-record.out 2>/dev/null || true", timeout=5)
+            if "RECORD_OK" in result or "RECORD_ERROR" in result:
+                break
+            time.sleep(0.5)
+        else:
+            result = self._exec(
+                "echo RECORD_TIMEOUT; cat /tmp/tg-record.out 2>/dev/null; "
+                "cat /tmp/tg-record.err 2>/dev/null",
+                timeout=5,
+            )
         log.info("portal recording result: %s", result)
 
         screenshots = []
