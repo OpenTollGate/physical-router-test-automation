@@ -220,7 +220,7 @@ class ContainerClient:
                 "    browser.close()\n"
             )
             self._exec(
-                f"rm -rf {remote_dir} {remote_video} && mkdir -p {remote_dir} && "
+                f"rm -rf {remote_dir} {remote_video} /tmp/tg-e2e && mkdir -p {remote_dir} && "
                 f"cat > /tmp/tg-auto-video.py << 'PYEOF'\n{script}\nPYEOF",
                 timeout=10,
             )
@@ -402,6 +402,7 @@ class ContainerClient:
         )
         self._exec(
             "rm -f /tmp/tg-portal-ready /tmp/tg-paid && "
+            "rm -rf /tmp/tg-e2e /tmp/tg-video && "
             "mkdir -p /tmp/tg-e2e /tmp/tg-video && "
             f"cat > /tmp/tg-record.py << 'PYEOF'\n{script}\nPYEOF",
             timeout=15,

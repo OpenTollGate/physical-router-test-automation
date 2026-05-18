@@ -111,8 +111,10 @@ def test_visual_happy_path(adb, router, results_dir, request):
 
     # Step 6: wait for recording to finish
     recording_thread.join(timeout=120)
+    assert not recording_thread.is_alive(), "portal recording did not finish in time"
     artifacts = recording_result[0]
     print(f"[visual] recording done, artifacts={artifacts}")
+    assert artifacts and artifacts.get("ok"), f"portal recording failed: {artifacts}"
 
     # Step 7: embed screenshots from recording
     if artifacts:

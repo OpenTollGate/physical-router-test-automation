@@ -298,6 +298,15 @@ python3 "$REPO_DIR/scripts/render-dashboard.py" \
   --reports-dir "$WORK/gh-pages/reports" \
   --output "$WORK/gh-pages/index.html"
 
+CUSTOM_DOMAIN="${TOLLGATE_GH_PAGES_CNAME:-}"
+if [ -z "$CUSTOM_DOMAIN" ] && [ -f "$WORK/gh-pages/CNAME" ]; then
+  CUSTOM_DOMAIN="$(tr -d '\r\n' < "$WORK/gh-pages/CNAME")"
+fi
+if [ -n "${TOLLGATE_GH_PAGES_CNAME:-}" ]; then
+  printf '%s\n' "$TOLLGATE_GH_PAGES_CNAME" > "$WORK/gh-pages/CNAME"
+  CUSTOM_DOMAIN="$TOLLGATE_GH_PAGES_CNAME"
+fi
+
 # ── Commit and push ──────────────────────────────────────────────────
 
 git add -A
@@ -312,15 +321,6 @@ HTTPS_URL="${REMOTE_URL/git@github.com:/https://github.com/}"
 HTTPS_URL="${HTTPS_URL%.git}"
 REPO_NAME="$(basename "$HTTPS_URL")"
 ORG_NAME="$(dirname "$HTTPS_URL" | xargs basename)"
-
-CUSTOM_DOMAIN="${TOLLGATE_GH_PAGES_CNAME:-}"
-if [ -z "$CUSTOM_DOMAIN" ] && [ -f "$WORK/gh-pages/CNAME" ]; then
-  CUSTOM_DOMAIN="$(tr -d '\r\n' < "$WORK/gh-pages/CNAME")"
-fi
-if [ -n "${TOLLGATE_GH_PAGES_CNAME:-}" ]; then
-  printf '%s\n' "$TOLLGATE_GH_PAGES_CNAME" > "$WORK/gh-pages/CNAME"
-  CUSTOM_DOMAIN="$TOLLGATE_GH_PAGES_CNAME"
-fi
 
 PAGES_BASE_URL="${TOLLGATE_GH_PAGES_BASE_URL:-}"
 if [ -z "$PAGES_BASE_URL" ]; then

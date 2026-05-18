@@ -1,6 +1,5 @@
 import logging
 import os
-import re
 import shutil
 import subprocess
 import time
@@ -170,7 +169,19 @@ def download_artifact(branch: str, arch: str, run_id: str | None = None,
         capture_output=True, text=True, timeout=300,
     )
     if r.returncode != 0:
-        raise RuntimeError(f"gh run download failed: {r.stderr.strip()}")
+        err = r.stderr.strip() or r.stdout.strip() or "unknown gh error"
+        hint = (
+            f"Could not download CI artifacts for {artifact_repo}@{branch} "
+            f"(workflow={artifact_workflow!r}, run={run_id}, required_arch={arch!r})."
+        )
+        if "no valid artifacts" in err.lower():
+            hint += (
+                " GitHub reports no valid downloadable artifacts; this usually means "
+                "the run artifacts expired, were deleted, or the release/tag did not upload them. "
+                "For the GCP virtual lab, provide a fresh x86_64 .ipk via a new CI run/release "
+                "or use a branch with current x86_64 artifacts."
+            )
+        raise RuntimeError(f"{hint} gh run download failed: {err}")
 
     matches = [p for p in BUILD_DIR.rglob(f"*{arch}*.ipk") if p.is_file() and "upx" not in p.name]
     if not matches:
@@ -186,7 +197,7 @@ def download_artifact(branch: str, arch: str, run_id: str | None = None,
     return flat
 
 
-def deploy(router, ipk_path: Path, reboot: bool = False) -> dict:
+def deploy(router, ipk_path: Path, reboot: bool = False) -> dict[str, object]:
     ipk_path = Path(ipk_path)
     if not ipk_path.exists():
         raise FileNotFoundError(f"IPK not found: {ipk_path}")
@@ -223,7 +234,7 @@ def deploy(router, ipk_path: Path, reboot: bool = False) -> dict:
     }
 
 
-def reboot_router(router, wait: bool = True) -> dict:
+def reboot_router(router, wait: bool = True) -> dict[str, object]:
     log.info("Rebooting router")
     try:
         router.ssh("reboot", timeout=5)
@@ -253,7 +264,7 @@ def reboot_router(router, wait: bool = True) -> dict:
     }
 
 
-def check_deployed(router) -> dict:
+def check_deployed(router) -> dict[str, object]:
     try:
         version_out = router.ssh("opkg list-installed | grep tollgate-wrt", timeout=10)
     except Exception:
@@ -276,7 +287,7 @@ def check_deployed(router) -> dict:
     }
 
 
-def factory_reset(router, reboot: bool = False, expected_mac: str | None = None) -> dict:
+def factory_reset(router, reboot: bool = False, expected_mac: str | None = None) -> dict[str, object]:
     guard_mac = expected_mac or os.environ.get("TOLLGATE_EXPECTED_MAC", "")
     if guard_mac:
         log.info("Verifying router MAC address before factory reset")
@@ -338,7 +349,7 @@ def factory_reset(router, reboot: bool = False, expected_mac: str | None = None)
     return {"success": True, "rebooted": False}
 
 
-def firstboot_reset(router, expected_mac: str | None = None) -> dict:
+def firstboot_reset(router, expected_mac: str | None = None) -> dict[str, object]:
     guard_mac = expected_mac or os.environ.get("TOLLGATE_EXPECTED_MAC", "")
     if guard_mac:
         log.info("Verifying router MAC address before firstboot reset")
@@ -375,7 +386,7 @@ def firstboot_reset(router, expected_mac: str | None = None) -> dict:
 def deploy_branch(router, branch: str, arch: str | None = None,
                   run_id: str | None = None, force: bool = False,
                   reboot: bool = False, repo: str | None = None,
-                  backend=None) -> dict:
+                  backend=None) -> dict[str, object]:
     if not arch:
         env_arch = os.environ.get("TOLLGATE_ROUTER_ARCH")
         if env_arch:

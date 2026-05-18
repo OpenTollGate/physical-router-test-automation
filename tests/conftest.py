@@ -15,6 +15,7 @@ except ImportError:
     html_extras = None
 
 from lib.router import Router
+from lib.router_lock import RouterLock
 from lib.cashu import CashuMint, MintUnavailableError
 from lib.clients.adb import ADBDevice
 from lib.clients.wifi import WiFi
@@ -157,6 +158,9 @@ def pytest_addoption(parser):
                      help="PR number being tested. Tests marked @pytest.mark.pr(N) where N != expected_pr are expected to fail/skip.")
     parser.addoption("--backend", default=None, choices=["go", "rust"],
                      help="TollGate backend type: 'go' (Go v1) or 'rust' (Rust v1). Default: TOLLGATE_BACKEND env or 'go'")
+    parser.addoption("--lock-phase", default=None,
+                     help="Auto-acquire router lock with this phase description. "
+                          "Prevents concurrent sessions on the same router.")
 
 
 @pytest.fixture(scope="session")
@@ -240,6 +244,16 @@ def deploy_session(request, router, backend):
     tg_arch = request.config.getoption("--tollgate-arch")
     tg_reboot = request.config.getoption("--tollgate-reboot")
     no_deploy = request.config.getoption("--no-deploy")
+
+    # Unit tests don't need router connectivity. Skip deployment when running
+    # only tests under tests/unit/ and no explicit deploy source is specified.
+    _no_deploy_source = not binary and not tg_branch and not tg_run_id
+    _args = getattr(request.config, "args", []) or []
+    _unit_only = bool(_args) and all("unit" in str(a).replace(os.sep, "/") for a in _args)
+    if no_deploy or (_no_deploy_source and _unit_only):
+        log.info("Skipping deployment (unit tests only or --no-deploy)")
+        yield
+        return
 
     if binary:
         subprocess.run(
@@ -761,3 +775,29 @@ def pytest_runtest_makereport(item, call):
                 except Exception:
                     pass
                 report.longrepr = str(report.longrepr) + _debug_summary(adb, router)
+
+
+_session_lock: RouterLock | None = None
+
+
+def pytest_sessionstart(session):
+    global _session_lock
+    lock_phase = session.config.getoption("--lock-phase", default=None)
+    if not lock_phase:
+        return
+    from lib.router_lock import RouterLock
+    router_id = os.environ.get("TOLLGATE_ROUTER_ID", "default")
+    branch = os.environ.get("TOLLGATE_BRANCH", "unknown")
+    lock = RouterLock()
+    try:
+        lock.acquire(router_id=router_id, phase=lock_phase, branch=branch)
+    except RuntimeError as exc:
+        pytest.exit(f"Cannot acquire router lock: {exc}", returncode=1)
+    _session_lock = lock
+
+
+def pytest_sessionfinish(session, exitstatus):
+    global _session_lock
+    if _session_lock is not None:
+        _session_lock.release()
+        _session_lock = None
