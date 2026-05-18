@@ -146,6 +146,10 @@ ARGS+=(-e 's|cashuB[a-zA-Z0-9+/=_-]{20,}|<redacted:token>|g')
 ARGS+=(-e 's|/Users/[^/ '"'"'	]+|<local-path>|g')
 ARGS+=(-e 's|/home/[^/ '"'"'	]+|<local-path>|g')
 
+if [[ ${#ARGS[@]} -eq 0 ]]; then
+    echo "WARNING: No redaction patterns configured. Output will not be sanitized." >&2
+fi
+
 # --- Helper functions ---
 sanitize_text() {
     sed -E "${ARGS[@]}" "$1" > "$2"
@@ -167,14 +171,21 @@ strip_exif() {
 # --- Process files ---
 mkdir -p "$OUT_DIR"
 
-for metafile in run.json summary.json; do
-    if [ -f "$IN_DIR/$metafile" ]; then
-        cp "$IN_DIR/$metafile" "$OUT_DIR/$metafile"
-    fi
-done
-
 FILE_COUNT=0
 SCREENSHOTS_STRIPPED=0
+
+for metafile in run.json summary.json; do
+    if [ -f "$IN_DIR/$metafile" ]; then
+        if [ "$INPLACE" = true ]; then
+            tmp="$(mktemp)"
+            sanitize_text "$IN_DIR/$metafile" "$tmp"
+            mv "$tmp" "$OUT_DIR/$metafile"
+        else
+            sanitize_text "$IN_DIR/$metafile" "$OUT_DIR/$metafile"
+        fi
+        FILE_COUNT=$((FILE_COUNT + 1))
+    fi
+done
 
 for SCAN_DIR in "${SCAN_DIRS[@]}"; do
     # Determine the relative prefix from IN_DIR
@@ -204,6 +215,9 @@ for SCAN_DIR in "${SCAN_DIRS[@]}"; do
                     # Phone/non-container: strip screenshots entirely
                     SCREENSHOTS_STRIPPED=$((SCREENSHOTS_STRIPPED + 1))
                 fi
+                ;;
+            *.webm|*.mp4)
+                SCREENSHOTS_STRIPPED=$((SCREENSHOTS_STRIPPED + 1))
                 ;;
             *)
                 cp "$file" "$dest"
@@ -260,8 +274,8 @@ fi
 cat > "$OUT_DIR/redaction-report.json" << EOF
 {
   "timestamp": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
-  "input_dir": "$(cd "$IN_DIR" && pwd)",
-  "output_dir": "$(cd "$OUT_DIR" && pwd)",
+  "input_dir": "$(cd "$IN_DIR" && pwd | sed -E 's|/Users/[^/]+|<local-path>|g; s|/home/[^/]+|<local-path>|g')",
+  "output_dir": "$(cd "$OUT_DIR" && pwd | sed -E 's|/Users/[^/]+|<local-path>|g; s|/home/[^/]+|<local-path>|g')",
   "files_processed": $FILE_COUNT,
   "redactions": {
     "router_ip": $([ -n "$ROUTER_IP" ] && echo "true" || echo "false"),
