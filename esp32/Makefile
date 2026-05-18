@@ -1,22 +1,60 @@
 include boards.env
 
-HARDWARE_LOCK := $(dir $(lastword $(MAKEFILE_LIST)))../hardware.lock
-
-.PHONY: help flash-a flash-b monitor-a monitor-b \
+.PHONY: help flash-a flash-b flash-c monitor-a monitor-b monitor-c \
         connect-a connect-b disconnect \
         test-discovery-a test-discovery-b test-mints-a test-mints-b \
         test-multi-mint-a test-multi-mint-b test-all-boards \
         test-cvm-a test-cvm-b test-cvm-mcp-a \
         cvm-pubkey-a cvm-pubkey-b \
-        lock unlock force-unlock lock-status \
+        lock-a lock-b lock-c unlock-a unlock-b unlock-c \
+        lock-status force-unlock-a force-unlock-b force-unlock-c \
         build
 
-define require_lock
-	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
-		echo "$(RED)$(BOLD)Hardware not locked — run 'make lock PHASE=\"description\"' first$(RESET)"; \
-		echo "$(YELLOW)Other LLM sessions may be using the hardware.$(RESET)"; \
+define require_lock_a
+	@if [ ! -f "$(LOCK_DIR)/board-a.lock" ]; then \
+		echo "$(RED)$(BOLD)Board A not locked — run 'make lock-a PHASE=\"description\"' first$(RESET)"; \
+		echo "$(YELLOW)Another LLM session may be using Board A.$(RESET)"; \
 		exit 1; \
 	fi
+endef
+
+define require_lock_b
+	@if [ ! -f "$(LOCK_DIR)/board-b.lock" ]; then \
+		echo "$(RED)$(BOLD)Board B not locked — run 'make lock-b PHASE=\"description\"' first$(RESET)"; \
+		echo "$(YELLOW)Another LLM session may be using Board B.$(RESET)"; \
+		exit 1; \
+	fi
+endef
+
+define require_lock_c
+	@if [ ! -f "$(LOCK_DIR)/board-c.lock" ]; then \
+		echo "$(RED)$(BOLD)Board C not locked — run 'make lock-c PHASE=\"description\"' first$(RESET)"; \
+		echo "$(YELLOW)Another LLM session may be using Board C.$(RESET)"; \
+		exit 1; \
+	fi
+endef
+
+define acquire_lock
+	@if [ -f "$(LOCK_DIR)/$(1).lock" ]; then \
+		echo "$(RED)$(BOLD)Cannot acquire lock — $(1) already locked:$(RESET)"; \
+		echo ""; \
+		cat $(LOCK_DIR)/$(1).lock | sed 's/^/  /'; \
+		echo ""; \
+		echo "$(YELLOW)Use 'make force-unlock-$(1)' to override.$(RESET)"; \
+		exit 1; \
+	fi; \
+	branch=$$(git branch --show-current 2>/dev/null || echo "unknown"); \
+	worktree=$$(pwd); \
+	echo "locked: true" > $(LOCK_DIR)/$(1).lock; \
+	echo "board: $(1)" >> $(LOCK_DIR)/$(1).lock; \
+	echo "port: $(2)" >> $(LOCK_DIR)/$(1).lock; \
+	echo "branch: $$branch" >> $(LOCK_DIR)/$(1).lock; \
+	echo "worktree: $$worktree" >> $(LOCK_DIR)/$(1).lock; \
+	echo "session: $$USER@$$HOSTNAME" >> $(LOCK_DIR)/$(1).lock; \
+	echo "timestamp: $$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $(LOCK_DIR)/$(1).lock; \
+	echo "phase: $(PHASE)" >> $(LOCK_DIR)/$(1).lock; \
+	echo "$(GREEN)$(BOLD)Board $(1) lock acquired$(RESET)"; \
+	cat $(LOCK_DIR)/$(1).lock
 endef
 
 # ===========================================================================
@@ -27,101 +65,126 @@ help: ## Show ESP32 board test targets
 	@echo "$(BOLD)ESP32 Board Test Targets$(RESET)"
 	@echo "$(BOLD)========================$(RESET)"
 	@echo ""
-	@echo "$(CYAN)--- Flash & Monitor (requires lock) ---$(RESET)"
+	@echo "$(CYAN)--- Per-board locks ---$(RESET)"
+	@echo "  make lock-a             # Acquire Board A lock (PHASE='desc')"
+	@echo "  make lock-b             # Acquire Board B lock"
+	@echo "  make lock-c             # Acquire Board C lock"
+	@echo "  make unlock-a           # Release Board A lock"
+	@echo "  make unlock-b           # Release Board B lock"
+	@echo "  make unlock-c           # Release Board C lock"
+	@echo "  make lock-status        # Show all lock statuses"
+	@echo ""
+	@echo "$(CYAN)--- Flash & Monitor (requires board lock) ---$(RESET)"
 	@echo "  make flash-a            # Flash Board A ($(BOARD_A_PORT))"
 	@echo "  make flash-b            # Flash Board B ($(BOARD_B_PORT))"
+	@echo "  make flash-c            # Flash Board C ($(BOARD_C_PORT))"
 	@echo "  make monitor-a          # Serial monitor Board A"
 	@echo "  make monitor-b          # Serial monitor Board B"
+	@echo "  make monitor-c          # Serial monitor Board C"
 	@echo ""
-	@echo "$(CYAN)--- Network (requires lock) ---$(RESET)"
+	@echo "$(CYAN)--- Network (requires board lock) ---$(RESET)"
 	@echo "  make connect-a          # Connect laptop to Board A AP"
 	@echo "  make connect-b          # Connect laptop to Board B AP"
 	@echo "  make disconnect         # Disconnect from board AP"
 	@echo ""
-	@echo "$(CYAN)--- Tests (requires lock) ---$(RESET)"
+	@echo "$(CYAN)--- Tests (requires board lock) ---$(RESET)"
 	@echo "  make test-discovery-a   # Test multi-mint discovery on Board A"
 	@echo "  make test-discovery-b   # Test multi-mint discovery on Board B"
 	@echo "  make test-mints-a       # Test /mints endpoint on Board A"
 	@echo "  make test-mints-b       # Test /mints endpoint on Board B"
 	@echo "  make test-multi-mint-a  # Full multi-mint test suite on Board A"
 	@echo "  make test-multi-mint-b  # Full multi-mint test suite on Board B"
-	@echo "  make test-all-boards    # Test both boards"
+	@echo "  make test-all-boards    # Test both boards (needs lock-a + lock-b)"
 	@echo ""
-	@echo "$(CYAN)--- ContextVM tests (requires lock) ---$(RESET)"
-	@echo "  make test-cvm-a         # CVM announcement integration test on Board A"
-	@echo "  make test-cvm-b         # CVM announcement integration test on Board B"
-	@echo "  make test-cvm-mcp-a     # End-to-end MCP tools/call test on Board A"
-	@echo "  make cvm-pubkey-a       # Print Board A's CVM npub (no lock)"
-	@echo "  make cvm-pubkey-b       # Print Board B's CVM npub (no lock)"
-	@echo ""
-	@echo "$(CYAN)--- Board mutex ---$(CYAN)"
-	@echo "  make lock               # Acquire hardware lock (PHASE='description')"
-	@echo "  make unlock             # Release hardware lock"
-	@echo "  make lock-status        # Show current lock status (no lock)"
-	@echo "  make force-unlock       # Force-release (caution)"
+	@echo "$(CYAN)--- ContextVM tests (requires board lock) ---$(RESET)"
+	@echo "  make test-cvm-a         # CVM announcement test on Board A"
+	@echo "  make test-cvm-b         # CVM announcement test on Board B"
+	@echo "  make test-cvm-mcp-a     # MCP tools/call test on Board A"
+	@echo "  make cvm-pubkey-a       # Print Board A CVM npub (no lock)"
+	@echo "  make cvm-pubkey-b       # Print Board B CVM npub (no lock)"
 	@echo ""
 	@echo "$(CYAN)--- Build (no lock needed) ---$(RESET)"
 	@echo "  make build              # Build firmware (no lock)"
 
 # ===========================================================================
-#  BOARD MUTEX
+#  PER-BOARD LOCKS
 # ===========================================================================
 
-lock: ## Acquire hardware lock (set PHASE="description")
-	@if [ -f "$(HARDWARE_LOCK)" ]; then \
-		echo "$(RED)$(BOLD)Cannot acquire lock — hardware already locked:$(RESET)"; \
-		echo ""; \
-		grep "^branch:" $(HARDWARE_LOCK) | sed 's/^/  /'; \
-		grep "^phase:" $(HARDWARE_LOCK) | sed 's/^/  /'; \
-		grep "^timestamp:" $(HARDWARE_LOCK) | sed 's/^/  /'; \
-		echo ""; \
-		echo "$(YELLOW)Use 'make force-unlock' to override (with caution).$(RESET)"; \
-		exit 1; \
-	fi; \
-	branch=$$(git branch --show-current 2>/dev/null || echo "unknown"); \
-	worktree=$$(pwd); \
-	echo "locked: true" > $(HARDWARE_LOCK); \
-	echo "branch: $$branch" >> $(HARDWARE_LOCK); \
-	echo "worktree: $$worktree" >> $(HARDWARE_LOCK); \
-	echo "session: $$USER@$$HOSTNAME" >> $(HARDWARE_LOCK); \
-	echo "timestamp: $$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $(HARDWARE_LOCK); \
-	echo "phase: $(PHASE)" >> $(HARDWARE_LOCK); \
-	echo "$(GREEN)$(BOLD)Hardware lock acquired$(RESET)"; \
-	cat $(HARDWARE_LOCK)
+lock-a: ## Acquire Board A lock
+	$(call acquire_lock,board-a,$(BOARD_A_PORT))
 
-unlock: ## Release hardware lock
-	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
-		echo "$(YELLOW)No lock file found — already unlocked.$(RESET)"; \
+lock-b: ## Acquire Board B lock
+	$(call acquire_lock,board-b,$(BOARD_B_PORT))
+
+lock-c: ## Acquire Board C lock
+	$(call acquire_lock,board-c,$(BOARD_C_PORT))
+
+unlock-a: ## Release Board A lock
+	@if [ ! -f "$(LOCK_DIR)/board-a.lock" ]; then \
+		echo "$(YELLOW)Board A not locked — already available.$(RESET)"; \
 		exit 0; \
 	fi; \
-	echo "$(YELLOW)Releasing hardware lock...$(RESET)"; \
-	rm -f $(HARDWARE_LOCK); \
-	echo "$(GREEN)Hardware lock released.$(RESET)"
+	rm -f $(LOCK_DIR)/board-a.lock; \
+	echo "$(GREEN)Board A lock released.$(RESET)"
 
-force-unlock: ## Force-release hardware lock (use with caution)
-	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
-		echo "$(YELLOW)No lock file found — already unlocked.$(RESET)"; \
+unlock-b: ## Release Board B lock
+	@if [ ! -f "$(LOCK_DIR)/board-b.lock" ]; then \
+		echo "$(YELLOW)Board B not locked — already available.$(RESET)"; \
 		exit 0; \
 	fi; \
-	echo "$(RED)$(BOLD)WARNING: Force-releasing hardware lock!$(RESET)"; \
-	echo "$(RED)Previous holder:$(RESET)"; \
-	grep "^branch:" $(HARDWARE_LOCK) | sed 's/^/  /'; \
-	grep "^phase:" $(HARDWARE_LOCK) | sed 's/^/  /'; \
-	grep "^timestamp:" $(HARDWARE_LOCK) | sed 's/^/  /'; \
-	rm -f $(HARDWARE_LOCK); \
-	echo "$(GREEN)Hardware lock force-released.$(RESET)"
+	rm -f $(LOCK_DIR)/board-b.lock; \
+	echo "$(GREEN)Board B lock released.$(RESET)"
 
-lock-status: ## Show current hardware lock status (no lock needed)
-	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
-		echo "$(GREEN)Hardware is unlocked — available for use.$(RESET)"; \
-	else \
-		echo "$(YELLOW)$(BOLD)Hardware is locked:$(RESET)"; \
-		echo ""; \
-		cat $(HARDWARE_LOCK); \
-	fi
+unlock-c: ## Release Board C lock
+	@if [ ! -f "$(LOCK_DIR)/board-c.lock" ]; then \
+		echo "$(YELLOW)Board C not locked — already available.$(RESET)"; \
+		exit 0; \
+	fi; \
+	rm -f $(LOCK_DIR)/board-c.lock; \
+	echo "$(GREEN)Board C lock released.$(RESET)"
+
+force-unlock-a: ## Force-release Board A lock
+	@if [ ! -f "$(LOCK_DIR)/board-a.lock" ]; then \
+		echo "$(YELLOW)Board A not locked.$(RESET)"; exit 0; \
+	fi; \
+	echo "$(RED)$(BOLD)WARNING: Force-releasing Board A lock!$(RESET)"; \
+	cat $(LOCK_DIR)/board-a.lock | sed 's/^/  /'; \
+	rm -f $(LOCK_DIR)/board-a.lock; \
+	echo "$(GREEN)Board A lock force-released.$(RESET)"
+
+force-unlock-b: ## Force-release Board B lock
+	@if [ ! -f "$(LOCK_DIR)/board-b.lock" ]; then \
+		echo "$(YELLOW)Board B not locked.$(RESET)"; exit 0; \
+	fi; \
+	echo "$(RED)$(BOLD)WARNING: Force-releasing Board B lock!$(RESET)"; \
+	cat $(LOCK_DIR)/board-b.lock | sed 's/^/  /'; \
+	rm -f $(LOCK_DIR)/board-b.lock; \
+	echo "$(GREEN)Board B lock force-released.$(RESET)"
+
+force-unlock-c: ## Force-release Board C lock
+	@if [ ! -f "$(LOCK_DIR)/board-c.lock" ]; then \
+		echo "$(YELLOW)Board C not locked.$(RESET)"; exit 0; \
+	fi; \
+	echo "$(RED)$(BOLD)WARNING: Force-releasing Board C lock!$(RESET)"; \
+	cat $(LOCK_DIR)/board-c.lock | sed 's/^/  /'; \
+	rm -f $(LOCK_DIR)/board-c.lock; \
+	echo "$(GREEN)Board C lock force-released.$(RESET)"
+
+lock-status: ## Show all board lock statuses
+	@echo "$(BOLD)Board Lock Status$(RESET)"
+	@echo "$(BOLD)==================$(RESET)"
+	@for board in a b c; do \
+		if [ -f "$(LOCK_DIR)/board-$$board.lock" ]; then \
+			echo ""; \
+			echo "$(YELLOW)Board $$board: LOCKED$(RESET)"; \
+			cat $(LOCK_DIR)/board-$$board.lock | sed 's/^/  /'; \
+		else \
+			echo "Board $$board: $(GREEN)available$(RESET)"; \
+		fi; \
+	done
 
 # ===========================================================================
-#  BUILD (no lock needed — doesn't touch hardware)
+#  BUILD (no lock needed)
 # ===========================================================================
 
 build: ## Build firmware
@@ -130,41 +193,51 @@ build: ## Build firmware
 	@echo "$(GREEN)Build complete$(RESET)"
 
 # ===========================================================================
-#  FLASH (requires lock)
+#  FLASH (requires per-board lock)
 # ===========================================================================
 
 flash-a: ## Flash Board A
-	$(call require_lock)
+	$(call require_lock_a)
 	@echo "$(CYAN)Flashing Board A ($(BOARD_A_PORT))...$(RESET)"
 	@bash -c '$(ESP_IDF_SH) && cd $(FIRMWARE_DIR) && idf.py -p $(BOARD_A_PORT) flash 2>&1 | tail -10'
 	@echo "$(GREEN)Board A flashed$(RESET)"
 
 flash-b: ## Flash Board B
-	$(call require_lock)
+	$(call require_lock_b)
 	@echo "$(CYAN)Flashing Board B ($(BOARD_B_PORT))...$(RESET)"
 	@bash -c '$(ESP_IDF_SH) && cd $(FIRMWARE_DIR) && idf.py -p $(BOARD_B_PORT) flash 2>&1 | tail -10'
 	@echo "$(GREEN)Board B flashed$(RESET)"
 
+flash-c: ## Flash Board C
+	$(call require_lock_c)
+	@echo "$(CYAN)Flashing Board C ($(BOARD_C_PORT))...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && cd $(FIRMWARE_DIR) && idf.py -p $(BOARD_C_PORT) flash 2>&1 | tail -10'
+	@echo "$(GREEN)Board C flashed$(RESET)"
+
 # ===========================================================================
-#  MONITOR (requires lock — occupies serial port)
+#  MONITOR (requires per-board lock)
 # ===========================================================================
 
 monitor-a: ## Serial monitor Board A
-	$(call require_lock)
+	$(call require_lock_a)
 	@bash -c '$(ESP_IDF_SH) && cd $(FIRMWARE_DIR) && idf.py -p $(BOARD_A_PORT) monitor'
 
 monitor-b: ## Serial monitor Board B
-	$(call require_lock)
+	$(call require_lock_b)
 	@bash -c '$(ESP_IDF_SH) && cd $(FIRMWARE_DIR) && idf.py -p $(BOARD_B_PORT) monitor'
 
+monitor-c: ## Serial monitor Board C
+	$(call require_lock_c)
+	@bash -c '$(ESP_IDF_SH) && cd $(FIRMWARE_DIR) && idf.py -p $(BOARD_C_PORT) monitor'
+
 # ===========================================================================
-#  NETWORK (requires lock — changes host WiFi)
+#  NETWORK (requires per-board lock)
 # ===========================================================================
 
 WIFI_IFACE := $(shell iw dev | awk '/Interface/{print $$2}' | head -1)
 
 connect-a: ## Connect laptop to Board A AP
-	$(call require_lock)
+	$(call require_lock_a)
 	@echo "$(CYAN)Connecting to $(BOARD_A_SSID)...$(RESET)"
 	@nmcli device wifi connect "$(BOARD_A_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
 	nmcli connection up "$(BOARD_A_UUID)" 2>/dev/null || \
@@ -173,7 +246,7 @@ connect-a: ## Connect laptop to Board A AP
 	@echo "$(GREEN)Connected — Board A AP IP: $(BOARD_A_IP)$(RESET)"
 
 connect-b: ## Connect laptop to Board B AP
-	$(call require_lock)
+	$(call require_lock_b)
 	@echo "$(CYAN)Connecting to $(BOARD_B_SSID)...$(RESET)"
 	@nmcli device wifi connect "$(BOARD_B_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
 	nmcli connection up "$(BOARD_B_UUID)" 2>/dev/null || \
@@ -204,16 +277,16 @@ _connect-b-if-needed:
 	@echo "$(GREEN)Board B reachable at $(BOARD_B_IP)$(RESET)"
 
 # ===========================================================================
-#  MULTI-MINT TESTS (requires lock via connect-* dependency)
+#  MULTI-MINT TESTS (requires per-board lock)
 # ===========================================================================
 
 test-discovery-a: ## Test multi-mint discovery on Board A
-	$(call require_lock)
+	$(call require_lock_a)
 	@$(MAKE) _connect-a-if-needed
 	@$(MAKE) _test-discovery IP=$(BOARD_A_IP)
 
 test-discovery-b: ## Test multi-mint discovery on Board B
-	$(call require_lock)
+	$(call require_lock_b)
 	@$(MAKE) _connect-b-if-needed
 	@$(MAKE) _test-discovery IP=$(BOARD_B_IP)
 
@@ -232,12 +305,12 @@ _test-discovery:
 		echo "$(RED)Failed to count price_per_step tags$(RESET)"
 
 test-mints-a: ## Test /mints endpoint on Board A
-	$(call require_lock)
+	$(call require_lock_a)
 	@$(MAKE) _connect-a-if-needed
 	@$(MAKE) _test-mints IP=$(BOARD_A_IP)
 
 test-mints-b: ## Test /mints endpoint on Board B
-	$(call require_lock)
+	$(call require_lock_b)
 	@$(MAKE) _connect-b-if-needed
 	@$(MAKE) _test-mints IP=$(BOARD_B_IP)
 
@@ -255,12 +328,12 @@ _test-mints:
 		echo "$(RED)Failed to parse mint status$(RESET)"
 
 test-multi-mint-a: ## Full multi-mint test suite on Board A
-	$(call require_lock)
+	$(call require_lock_a)
 	@$(MAKE) _connect-a-if-needed
 	@$(MAKE) _test-multi-mint IP=$(BOARD_A_IP) BOARD=A
 
 test-multi-mint-b: ## Full multi-mint test suite on Board B
-	$(call require_lock)
+	$(call require_lock_b)
 	@$(MAKE) _connect-b-if-needed
 	@$(MAKE) _test-multi-mint IP=$(BOARD_B_IP) BOARD=B
 
@@ -294,8 +367,9 @@ _test-multi-mint:
 	@echo "$(GREEN)$(BOLD)  Multi-Mint Test Complete — Board $(BOARD)$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
 
-test-all-boards: ## Test both boards sequentially
-	$(call require_lock)
+test-all-boards: ## Test both boards sequentially (needs lock-a + lock-b)
+	$(call require_lock_a)
+	$(call require_lock_b)
 	@echo "$(BOLD)Testing Board A...$(RESET)"
 	@$(MAKE) _connect-a-if-needed
 	@$(MAKE) _test-multi-mint IP=$(BOARD_A_IP) BOARD=A
@@ -312,8 +386,7 @@ CVM_NSEC_DEFAULT = a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a
 CVM_NSEC_A       = 9af47906b45aca5e238390f3d03c8274e154198e81aa2095065627d1e61ca968
 CVM_RELAY        = wss://relay.primal.net
 
-# pubkey targets are read-only — no lock needed
-cvm-pubkey-a: ## Print Board A's CVM npub (from board nsec)
+cvm-pubkey-a: ## Print Board A's CVM npub (no lock needed)
 	@echo "$(BOLD)=== Board A ContextVM npub ===$(RESET)"
 	@NPUB=$$(nak key public $(CVM_NSEC_A)) && \
 		echo "  hex:    $$NPUB" && \
@@ -321,7 +394,7 @@ cvm-pubkey-a: ## Print Board A's CVM npub (from board nsec)
 		echo "" && \
 		echo "  Search: https://contextvm.org/servers"
 
-cvm-pubkey-b: ## Print Board B's CVM npub (from default nsec)
+cvm-pubkey-b: ## Print Board B's CVM npub (no lock needed)
 	@echo "$(BOLD)=== Board B ContextVM npub ===$(RESET)"
 	@NPUB=$$(nak key public $(CVM_NSEC_DEFAULT)) && \
 		echo "  hex:    $$NPUB" && \
@@ -330,12 +403,12 @@ cvm-pubkey-b: ## Print Board B's CVM npub (from default nsec)
 		echo "  Search: https://contextvm.org/servers"
 
 test-cvm-a: ## CVM announcement integration test on Board A
-	$(call require_lock)
+	$(call require_lock_a)
 	@$(MAKE) _connect-a-if-needed
 	@$(MAKE) _test-cvm NSEC=$(CVM_NSEC_A) IP=$(BOARD_A_IP)
 
 test-cvm-b: ## CVM announcement integration test on Board B
-	$(call require_lock)
+	$(call require_lock_b)
 	@$(MAKE) _connect-b-if-needed
 	@$(MAKE) _test-cvm NSEC=$(CVM_NSEC_DEFAULT) IP=$(BOARD_B_IP)
 
@@ -385,7 +458,7 @@ _test-cvm:
 	@echo "$(BOLD)=======================================$(RESET)"
 
 test-cvm-mcp-a: ## End-to-end MCP tools/call via CVM on Board A
-	$(call require_lock)
+	$(call require_lock_a)
 	@$(MAKE) _connect-a-if-needed
 	@echo ""
 	@echo "$(BOLD)=======================================$(RESET)"

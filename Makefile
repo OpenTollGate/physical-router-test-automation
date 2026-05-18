@@ -378,12 +378,14 @@ hybrid-restart-and-watch: ## Restart service via SSH, verify via serial if SSH d
 	@$(MAKE) -C mint-health h-restart-and-watch ROUTER=$(ROUTER)
 
 # ===========================================================================
-#  HARDWARE MUTEX (unified — protects ESP32 boards + OpenWRT routers)
+#  HARDWARE MUTEX (unified — protects OpenWRT routers; ESP32 has per-board)
 # ===========================================================================
 
 .PHONY: lock unlock lock-status force-unlock
 
-lock: ## Acquire hardware lock (ESP32 + routers) — set PHASE='description'
+LOCK_DIR := locks
+
+lock: ## Acquire router hardware lock — set PHASE='description'
 	@if [ -f "$(HARDWARE_LOCK)" ]; then \
 		echo "$(RED)$(BOLD)Cannot acquire lock — hardware already locked:$(RESET)"; \
 		echo ""; \
@@ -400,10 +402,10 @@ lock: ## Acquire hardware lock (ESP32 + routers) — set PHASE='description'
 	echo "session: $$USER@$$HOSTNAME" >> $(HARDWARE_LOCK); \
 	echo "timestamp: $$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $(HARDWARE_LOCK); \
 	echo "phase: $(PHASE)" >> $(HARDWARE_LOCK); \
-	echo "$(GREEN)$(BOLD)Hardware lock acquired (ESP32 boards + routers)$(RESET)"; \
+	echo "$(GREEN)$(BOLD)Router hardware lock acquired$(RESET)"; \
 	cat $(HARDWARE_LOCK)
 
-unlock: ## Release hardware lock
+unlock: ## Release router hardware lock
 	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
 		echo "$(YELLOW)No lock file found — already unlocked.$(RESET)"; \
 		exit 0; \
@@ -412,21 +414,25 @@ unlock: ## Release hardware lock
 	rm -f $(HARDWARE_LOCK); \
 	echo "$(GREEN)Hardware lock released.$(RESET)"
 
-lock-status: ## Show current hardware lock status
+lock-status: ## Show all lock statuses (routers + ESP32 boards)
+	@echo "$(BOLD)=== Router Lock ===$(RESET)"
 	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
-		echo "$(GREEN)Hardware is unlocked — ESP32 boards and routers available.$(RESET)"; \
+		echo "$(GREEN)Router hardware unlocked — available.$(RESET)"; \
 	else \
-		echo "$(YELLOW)$(BOLD)Hardware is locked (ESP32 + routers):$(RESET)"; \
+		echo "$(YELLOW)$(BOLD)Router hardware locked:$(RESET)"; \
 		echo ""; \
 		cat $(HARDWARE_LOCK); \
 	fi
+	@echo ""
+	@echo "$(BOLD)=== ESP32 Board Locks ===$(RESET)"
+	@$(MAKE) -C esp32 lock-status
 
-force-unlock: ## Force-release hardware lock (use with caution)
+force-unlock: ## Force-release router hardware lock (use with caution)
 	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
 		echo "$(YELLOW)No lock file found — already unlocked.$(RESET)"; \
 		exit 0; \
 	fi; \
-	echo "$(RED)$(BOLD)WARNING: Force-releasing hardware lock!$(RESET)"; \
+	echo "$(RED)$(BOLD)WARNING: Force-releasing router hardware lock!$(RESET)"; \
 	echo "$(RED)Previous holder:$(RESET)"; \
 	cat $(HARDWARE_LOCK); \
 	rm -f $(HARDWARE_LOCK); \
@@ -469,103 +475,115 @@ setup: ## Install dependencies (npm + playwright + serial)
 	@echo "  make esp32-cvm-pubkey-b                  # print Board B CVM npub"
 
 # ===========================================================================
-#  ESP32 BOARD TESTS (multi-mint firmware)
+#  ESP32 BOARD TESTS (per-board locks)
 # ===========================================================================
 
- .PHONY: esp32-flash-a esp32-flash-b esp32-monitor-a esp32-monitor-b \
+ .PHONY: esp32-flash-a esp32-flash-b esp32-flash-c \
+         esp32-monitor-a esp32-monitor-b esp32-monitor-c \
          esp32-connect-a esp32-connect-b esp32-disconnect \
          esp32-test-discovery-a esp32-test-discovery-b \
          esp32-test-mints-a esp32-test-mints-b \
          esp32-test-multi-mint-a esp32-test-multi-mint-b esp32-test-all-boards \
          esp32-test-cvm-a esp32-test-cvm-b esp32-test-cvm-mcp-a \
          esp32-cvm-pubkey-a esp32-cvm-pubkey-b \
-         esp32-lock esp32-unlock esp32-lock-status esp32-force-unlock \
+         esp32-lock-a esp32-lock-b esp32-lock-c \
+         esp32-unlock-a esp32-unlock-b esp32-unlock-c \
+         esp32-lock-status \
+         esp32-force-unlock-a esp32-force-unlock-b esp32-force-unlock-c \
          esp32-build
 
-esp32-flash-a: ## Flash multi-mint firmware to Board A
-	$(call require_hardware_lock)
+esp32-flash-a: ## Flash firmware to Board A (requires lock-a)
 	@$(MAKE) -C esp32 flash-a
 
-esp32-flash-b: ## Flash multi-mint firmware to Board B
-	$(call require_hardware_lock)
+esp32-flash-b: ## Flash firmware to Board B (requires lock-b)
 	@$(MAKE) -C esp32 flash-b
 
-esp32-monitor-a: ## Serial monitor Board A
-	$(call require_hardware_lock)
+esp32-flash-c: ## Flash firmware to Board C (requires lock-c)
+	@$(MAKE) -C esp32 flash-c
+
+esp32-monitor-a: ## Serial monitor Board A (requires lock-a)
 	@$(MAKE) -C esp32 monitor-a
 
-esp32-monitor-b: ## Serial monitor Board B
-	$(call require_hardware_lock)
+esp32-monitor-b: ## Serial monitor Board B (requires lock-b)
 	@$(MAKE) -C esp32 monitor-b
 
-esp32-connect-a: ## Connect laptop to Board A AP
-	$(call require_hardware_lock)
+esp32-monitor-c: ## Serial monitor Board C (requires lock-c)
+	@$(MAKE) -C esp32 monitor-c
+
+esp32-connect-a: ## Connect laptop to Board A AP (requires lock-a)
 	@$(MAKE) -C esp32 connect-a
 
-esp32-connect-b: ## Connect laptop to Board B AP
-	$(call require_hardware_lock)
+esp32-connect-b: ## Connect laptop to Board B AP (requires lock-b)
 	@$(MAKE) -C esp32 connect-b
 
 esp32-disconnect: ## Disconnect from board AP
 	@$(MAKE) -C esp32 disconnect
 
-esp32-test-discovery-a: ## Test multi-mint discovery on Board A
-	$(call require_hardware_lock)
+esp32-test-discovery-a: ## Test discovery on Board A (requires lock-a)
 	@$(MAKE) -C esp32 test-discovery-a
 
-esp32-test-discovery-b: ## Test multi-mint discovery on Board B
-	$(call require_hardware_lock)
+esp32-test-discovery-b: ## Test discovery on Board B (requires lock-b)
 	@$(MAKE) -C esp32 test-discovery-b
 
-esp32-test-mints-a: ## Test /mints endpoint on Board A
-	$(call require_hardware_lock)
+esp32-test-mints-a: ## Test /mints on Board A (requires lock-a)
 	@$(MAKE) -C esp32 test-mints-a
 
-esp32-test-mints-b: ## Test /mints endpoint on Board B
-	$(call require_hardware_lock)
+esp32-test-mints-b: ## Test /mints on Board B (requires lock-b)
 	@$(MAKE) -C esp32 test-mints-b
 
-esp32-test-multi-mint-a: ## Full multi-mint test suite on Board A
-	$(call require_hardware_lock)
+esp32-test-multi-mint-a: ## Full multi-mint test on Board A (requires lock-a)
 	@$(MAKE) -C esp32 test-multi-mint-a
 
-esp32-test-multi-mint-b: ## Full multi-mint test suite on Board B
-	$(call require_hardware_lock)
+esp32-test-multi-mint-b: ## Full multi-mint test on Board B (requires lock-b)
 	@$(MAKE) -C esp32 test-multi-mint-b
 
-esp32-test-all-boards: ## Test both ESP32 boards
-	$(call require_hardware_lock)
+esp32-test-all-boards: ## Test both boards (requires lock-a + lock-b)
 	@$(MAKE) -C esp32 test-all-boards
 
- esp32-build: ## Build ESP32 multi-mint firmware
+ esp32-build: ## Build ESP32 firmware (no lock)
 	@$(MAKE) -C esp32 build
 
-esp32-test-cvm-a: ## CVM announcement integration test on Board A
-	$(call require_hardware_lock)
+esp32-test-cvm-a: ## CVM announcement test on Board A (requires lock-a)
 	@$(MAKE) -C esp32 test-cvm-a
 
-esp32-test-cvm-b: ## CVM announcement integration test on Board B
-	$(call require_hardware_lock)
+esp32-test-cvm-b: ## CVM announcement test on Board B (requires lock-b)
 	@$(MAKE) -C esp32 test-cvm-b
 
-esp32-test-cvm-mcp-a: ## End-to-end MCP tools/call test on Board A
-	$(call require_hardware_lock)
+esp32-test-cvm-mcp-a: ## MCP tools/call test on Board A (requires lock-a)
 	@$(MAKE) -C esp32 test-cvm-mcp-a
 
-esp32-cvm-pubkey-a: ## Print Board A's CVM npub
+esp32-cvm-pubkey-a: ## Print Board A's CVM npub (no lock)
 	@$(MAKE) -C esp32 cvm-pubkey-a
 
-esp32-cvm-pubkey-b: ## Print Board B's CVM npub
+esp32-cvm-pubkey-b: ## Print Board B's CVM npub (no lock)
 	@$(MAKE) -C esp32 cvm-pubkey-b
 
-esp32-lock: ## Acquire ESP32 board lock (PHASE='description')
-	@$(MAKE) -C esp32 lock PHASE="$(PHASE)"
+esp32-lock-a: ## Acquire Board A lock (PHASE='description')
+	@$(MAKE) -C esp32 lock-a PHASE="$(PHASE)"
 
-esp32-unlock: ## Release ESP32 board lock
-	@$(MAKE) -C esp32 unlock
+esp32-lock-b: ## Acquire Board B lock
+	@$(MAKE) -C esp32 lock-b PHASE="$(PHASE)"
 
-esp32-lock-status: ## Show ESP32 board lock status
+esp32-lock-c: ## Acquire Board C lock
+	@$(MAKE) -C esp32 lock-c PHASE="$(PHASE)"
+
+esp32-unlock-a: ## Release Board A lock
+	@$(MAKE) -C esp32 unlock-a
+
+esp32-unlock-b: ## Release Board B lock
+	@$(MAKE) -C esp32 unlock-b
+
+esp32-unlock-c: ## Release Board C lock
+	@$(MAKE) -C esp32 unlock-c
+
+esp32-lock-status: ## Show all ESP32 board lock statuses
 	@$(MAKE) -C esp32 lock-status
 
-esp32-force-unlock: ## Force-release ESP32 board lock (caution)
-	@$(MAKE) -C esp32 force-unlock
+esp32-force-unlock-a: ## Force-release Board A lock
+	@$(MAKE) -C esp32 force-unlock-a
+
+esp32-force-unlock-b: ## Force-release Board B lock
+	@$(MAKE) -C esp32 force-unlock-b
+
+esp32-force-unlock-c: ## Force-release Board C lock
+	@$(MAKE) -C esp32 force-unlock-c

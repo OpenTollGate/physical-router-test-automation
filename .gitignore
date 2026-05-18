@@ -6,7 +6,7 @@ playwright-report/
 *.ipk
 .env
 **/routers.env
-**/esp32.lock
+**/*.lock
 hardware.lock
 routers.lock
 scripts/__pycache__/
