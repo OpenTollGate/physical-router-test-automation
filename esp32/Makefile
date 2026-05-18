@@ -8,7 +8,8 @@ include boards.env
         cvm-pubkey-a cvm-pubkey-b \
         lock-a lock-b lock-c unlock-a unlock-b unlock-c \
         lock-status force-unlock-a force-unlock-b force-unlock-c \
-        build \
+        build detect-wpa-security generate-spiffs \
+        flash-spiffs-a flash-spiffs-b flash-spiffs-c \
         relay-build relay-flash-b relay-connect-b \
         relay-test-smoke relay-test-nip11 relay-test-pubsub \
         relay-test-sync relay-test-full
@@ -39,8 +40,8 @@ endef
 
 define acquire_lock
 	@if [ -f "$(LOCK_DIR)/$(1).lock" ]; then \
-		owner=$$(grep '^session:' $(LOCK_DIR)/$(1).lock | head -1 | sed 's/session: *//'); \
-		if [ "$$owner" = "$$USER@$$HOSTNAME" ]; then \
+		owner=$$(grep '^session:' $(LOCK_DIR)/$(1).lock | head -1 | sed 's/session: *//' | cut -d@ -f1); \
+		if [ "$$owner" = "$$USER" ]; then \
 			echo "$(YELLOW)$(1) already locked by this session — refreshing lock$(RESET)"; \
 		else \
 			echo "$(RED)$(BOLD)Cannot acquire lock — $(1) locked by another session:$(RESET)"; \
@@ -58,7 +59,7 @@ define acquire_lock
 	echo "port: $(2)" >> $(LOCK_DIR)/$(1).lock; \
 	echo "branch: $$branch" >> $(LOCK_DIR)/$(1).lock; \
 	echo "worktree: $$worktree" >> $(LOCK_DIR)/$(1).lock; \
-	echo "session: $$USER@$$HOSTNAME" >> $(LOCK_DIR)/$(1).lock; \
+	echo "session: $$USER@$$(hostname)" >> $(LOCK_DIR)/$(1).lock; \
 	echo "timestamp: $$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $(LOCK_DIR)/$(1).lock; \
 	echo "phase: $(PHASE)" >> $(LOCK_DIR)/$(1).lock; \
 	echo "$(GREEN)$(BOLD)Board $(1) lock acquired$(RESET)"; \
@@ -113,6 +114,13 @@ help: ## Show ESP32 board test targets
 	@echo ""
 	@echo "$(CYAN)--- Build (no lock needed) ---$(RESET)"
 	@echo "  make build              # Build firmware (no lock)"
+	@echo ""
+	@echo "$(CYAN)--- SPIFFS + WPA Auto-Detect (no lock for gen, lock for flash) ---$(RESET)"
+	@echo "  make detect-wpa-security # Scan WiFi, print WPA2/WPA3 mode"
+	@echo "  make generate-spiffs    # Build SPIFFS image with detected WPA mode"
+	@echo "  make flash-spiffs-a     # Flash SPIFFS to Board A"
+	@echo "  make flash-spiffs-b     # Flash SPIFFS to Board B"
+	@echo "  make flash-spiffs-c     # Flash SPIFFS to Board C"
 	@echo ""
 	@echo "$(CYAN)--- Local Relay tests (Board B, requires lock-b) ---$(RESET)"
 	@echo "  make relay-build        # Build relay firmware (no lock)"
@@ -208,6 +216,69 @@ build: ## Build firmware
 	@echo "$(CYAN)Building firmware...$(RESET)"
 	@bash -c '$(ESP_IDF_SH) && cd $(FIRMWARE_DIR) && idf.py build 2>&1 | tail -5'
 	@echo "$(GREEN)Build complete$(RESET)"
+
+# ===========================================================================
+#  WPA AUTO-DETECT + SPIFFS GENERATION (no lock needed)
+# ===========================================================================
+
+SPIFFS_DIR     := /tmp/tollgate_spiffs
+SPIFFS_BIN     := /tmp/tollgate_spiffs.bin
+SPIFFS_SIZE    := 0xF0000
+SPIFFS_OFFSET  := 0x410000
+WIFI_SSID      ?= $(shell grep -oP 'WIFI_SSID\s*=\s*\K.*' $(FIRMWARE_DIR)/.env 2>/dev/null || echo "EnterSSID-2.4GHz")
+WIFI_PASSWORD  ?= $(shell grep -oP 'WIFI_PASSWORD\s*=\s*\K.*' $(FIRMWARE_DIR)/.env 2>/dev/null || echo "c03rad0r123")
+
+detect-wpa-security: ## Scan WiFi and detect WPA security mode for configured SSID
+	@echo "$(CYAN)Scanning WiFi networks...$(RESET)"
+	@SEC=$$(nmcli -t -f SSID,SECURITY dev wifi list 2>/dev/null | \
+		grep "^$(WIFI_SSID):" | head -1 | cut -d: -f2); \
+	if [ -z "$$SEC" ] || [ "$$SEC" = "--" ]; then \
+		echo "$(YELLOW)SSID '$(WIFI_SSID)' not found or open — defaulting to WPA2$(RESET)"; \
+		echo "WPA2"; \
+	elif echo "$$SEC" | grep -qi "WPA3"; then \
+		echo "$(GREEN)Detected: WPA3 ($$SEC)$(RESET)"; \
+		echo "WPA3"; \
+	else \
+		echo "$(GREEN)Detected: WPA2 ($$SEC)$(RESET)"; \
+		echo "WPA2"; \
+	fi
+
+generate-spiffs: ## Generate SPIFFS image with auto-detected WPA mode
+	@echo "$(CYAN)Generating SPIFFS image...$(RESET)"
+	@rm -rf $(SPIFFS_DIR) && mkdir -p $(SPIFFS_DIR)
+	@WPA_MODE=$$(nmcli -t -f SSID,SECURITY dev wifi list 2>/dev/null | grep "^$(WIFI_SSID):" | head -1 | cut -d: -f2 | grep -qi "WPA3" && echo "WPA3" || echo "WPA2"); \
+	echo "$(CYAN)Detected WPA mode: $$WPA_MODE$(RESET)"; \
+	if [ -f "$(FIRMWARE_DIR)/main/config.json" ]; then \
+		cp "$(FIRMWARE_DIR)/main/config.json" "$(SPIFFS_DIR)/config.json"; \
+	else \
+		echo '{}' > "$(SPIFFS_DIR)/config.json"; \
+	fi; \
+	python3 -c "import json; d=json.load(open('$(SPIFFS_DIR)/config.json')); d['wifi_auth_mode']='$$WPA_MODE'; json.dump(d,open('$(SPIFFS_DIR)/config.json','w'),indent=2)"
+	@bash -c '$(ESP_IDF_SH) && python3 $$IDF_PATH/components/spiffs/spiffsgen.py $(SPIFFS_SIZE) $(SPIFFS_DIR) $(SPIFFS_BIN)'
+	@echo "$(GREEN)SPIFFS image generated: $(SPIFFS_BIN)$(RESET)"
+	@echo "$(CYAN)Contents:$(RESET)"
+	@cat $(SPIFFS_DIR)/config.json | python3 -m json.tool 2>/dev/null | head -20
+
+flash-spiffs-a: ## Flash SPIFFS to Board A
+	$(call require_lock_a)
+	@$(MAKE) generate-spiffs
+	@echo "$(CYAN)Flashing SPIFFS to Board A ($(BOARD_A_PORT)) at offset $(SPIFFS_OFFSET)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_A_PORT) -b 115200 --after no_reset write_flash $(SPIFFS_OFFSET) $(SPIFFS_BIN) 2>&1 | tail -5'
+	@echo "$(GREEN)SPIFFS flashed to Board A$(RESET)"
+
+flash-spiffs-b: ## Flash SPIFFS to Board B
+	$(call require_lock_b)
+	@$(MAKE) generate-spiffs
+	@echo "$(CYAN)Flashing SPIFFS to Board B ($(BOARD_B_PORT)) at offset $(SPIFFS_OFFSET)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_B_PORT) -b 115200 --after no_reset write_flash $(SPIFFS_OFFSET) $(SPIFFS_BIN) 2>&1 | tail -5'
+	@echo "$(GREEN)SPIFFS flashed to Board B$(RESET)"
+
+flash-spiffs-c: ## Flash SPIFFS to Board C
+	$(call require_lock_c)
+	@$(MAKE) generate-spiffs
+	@echo "$(CYAN)Flashing SPIFFS to Board C ($(BOARD_C_PORT)) at offset $(SPIFFS_OFFSET)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_C_PORT) -b 115200 --after no_reset write_flash $(SPIFFS_OFFSET) $(SPIFFS_BIN) 2>&1 | tail -5'
+	@echo "$(GREEN)SPIFFS flashed to Board C$(RESET)"
 
 # ===========================================================================
 #  FLASH (requires per-board lock)
@@ -621,11 +692,12 @@ relay-test-full: ## Run all relay tests sequentially (requires lock-b)
 ARCH_FIRMWARE_DIR := /home/c03rad0r/esp32-tollgate-arch
 ARCH_IP           := 10.192.45.1
 ARCH_SSID         := TollGate-C0E9CA
-ARCH_PORT         := /dev/ttyACM0
+ARCH_PORT         := /dev/ttyACM1
 ARCH_WIFI_IFACE   := wlp59s0
 ARCH_TESTS_DIR    := $(ARCH_FIRMWARE_DIR)/tests/integration
 
 .PHONY: arch-build arch-flash-a arch-monitor-a arch-connect-a arch-disconnect \
+        arch-generate-spiffs arch-flash-spiffs-a \
         arch-test-smoke arch-test-network arch-test-api arch-test-dns-fw \
         arch-test-reset arch-test-session arch-test-phase2 arch-test-full \
         arch-test-cleanup arch-bootlog-a
@@ -642,6 +714,31 @@ arch-flash-a: ## Flash arch firmware to Board A (requires lock)
 	@echo "$(CYAN)Flashing arch firmware to Board A ($(ARCH_PORT))...$(RESET)"
 	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && cd $(ARCH_FIRMWARE_DIR) && idf.py -p $(ARCH_PORT) flash 2>&1 | tail -10'
 	@echo "$(GREEN)Board A flashed with arch firmware (clean SPIFFS)$(RESET)"
+
+ARCH_SPIFFS_DIR   := /tmp/arch_spiffs
+ARCH_SPIFFS_BIN   := /tmp/arch_spiffs.bin
+ARCH_SPIFFS_SIZE  := 0xF0000
+ARCH_SPIFFS_OFFSET := 0x410000
+ARCH_WIFI_SSID    ?= EnterSSID-2.4GHz
+
+arch-generate-spiffs: ## Generate SPIFFS for arch firmware with auto-detected WPA mode
+	@echo "$(CYAN)Generating arch SPIFFS image...$(RESET)"
+	@rm -rf $(ARCH_SPIFFS_DIR) && mkdir -p $(ARCH_SPIFFS_DIR)
+	@WPA_MODE=$$($(MAKE) --no-print-directory detect-wpa-security WIFI_SSID="$(ARCH_WIFI_SSID)"); \
+	WPA_MODE=$$(echo "$$WPA_MODE" | tail -1); \
+	echo "$(CYAN)Detected WPA mode: $$WPA_MODE$(RESET)"; \
+	python3 -c "import json,sys; json.dump({'nsec':'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2','wifi_networks':[{'ssid':'$(ARCH_WIFI_SSID)','password':'c03rad0r123!'}],'ap_password':'','wifi_auth_mode':sys.argv[1],'mint_url':'https://testnut.cashu.space','price_per_step':21,'step_size_ms':60000}, open('$(ARCH_SPIFFS_DIR)/config.json','w'), indent=2)" "$$WPA_MODE"
+	@echo "$(CYAN)Building SPIFFS image ($(ARCH_SPIFFS_SIZE) bytes)...$(RESET)"
+	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && python3 $$IDF_PATH/components/spiffs/spiffsgen.py $(ARCH_SPIFFS_SIZE) $(ARCH_SPIFFS_DIR) $(ARCH_SPIFFS_BIN) 2>&1'
+	@echo "$(GREEN)SPIFFS image: $(ARCH_SPIFFS_BIN)$(RESET)"
+	@cat $(ARCH_SPIFFS_DIR)/config.json
+
+arch-flash-spiffs-a: ## Flash SPIFFS to Board A with WPA auto-detect (requires lock)
+	$(call require_lock_a)
+	@$(MAKE) arch-generate-spiffs
+	@echo "$(CYAN)Flashing SPIFFS to Board A at offset $(ARCH_SPIFFS_OFFSET)...$(RESET)"
+	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 --after hard_reset write_flash $(ARCH_SPIFFS_OFFSET) $(ARCH_SPIFFS_BIN) 2>&1 | tail -5'
+	@echo "$(GREEN)SPIFFS flashed to Board A — rebooting$(RESET)"
 
 arch-monitor-a: ## Serial monitor for arch Board A (requires lock)
 	$(call require_lock_a)

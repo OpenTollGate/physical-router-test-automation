@@ -118,6 +118,8 @@ help: ## Show this help
 	@echo "$(CYAN)--- Arch component extraction tests (Board A, tollgate_core) ---$(RESET)"
 	@echo "  make arch-build                   # build tollgate_core firmware"
 	@echo "  make arch-flash-a                 # flash to Board A (requires lock)"
+	@echo "  make arch-generate-spiffs         # generate SPIFFS with auto-detected WPA mode"
+	@echo "  make arch-flash-spiffs-a          # flash SPIFFS to Board A (requires lock)"
 	@echo "  make arch-bootlog-a               # capture boot log (requires lock)"
 	@echo "  make arch-connect-a               # WiFi connect to Board A"
 	@echo "  make arch-test-smoke              # smoke test (~30s)"
@@ -411,8 +413,8 @@ LOCK_DIR := locks
 
 lock: ## Acquire router hardware lock — set PHASE='description'
 	@if [ -f "$(HARDWARE_LOCK)" ]; then \
-		owner=$$(grep '^session:' $(HARDWARE_LOCK) | head -1 | sed 's/session: *//'); \
-		if [ "$$owner" = "$$USER@$$HOSTNAME" ]; then \
+		owner=$$(grep '^session:' $(HARDWARE_LOCK) | head -1 | sed 's/session: *//' | cut -d@ -f1); \
+		if [ "$$owner" = "$$USER" ]; then \
 			echo "$(YELLOW)Hardware already locked by this session — refreshing lock$(RESET)"; \
 		else \
 			echo "$(RED)$(BOLD)Cannot acquire lock — hardware locked by another session:$(RESET)"; \
@@ -428,7 +430,7 @@ lock: ## Acquire router hardware lock — set PHASE='description'
 	echo "locked: true" > $(HARDWARE_LOCK); \
 	echo "branch: $$branch" >> $(HARDWARE_LOCK); \
 	echo "worktree: $$worktree" >> $(HARDWARE_LOCK); \
-	echo "session: $$USER@$$HOSTNAME" >> $(HARDWARE_LOCK); \
+	echo "session: $$USER@$$(hostname)" >> $(HARDWARE_LOCK); \
 	echo "timestamp: $$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $(HARDWARE_LOCK); \
 	echo "phase: $(PHASE)" >> $(HARDWARE_LOCK); \
 	echo "$(GREEN)$(BOLD)Router hardware lock acquired$(RESET)"; \
@@ -666,6 +668,12 @@ arch-build: ## Build arch (tollgate_core) firmware
 
 arch-flash-a: ## Flash arch firmware to Board A (requires lock)
 	@$(MAKE) -C esp32 arch-flash-a
+
+arch-generate-spiffs: ## Generate SPIFFS with auto-detected WPA mode
+	@$(MAKE) -C esp32 arch-generate-spiffs
+
+arch-flash-spiffs-a: ## Flash SPIFFS to Board A with WPA config (requires lock)
+	@$(MAKE) -C esp32 arch-flash-spiffs-a
 
 arch-monitor-a: ## Serial monitor for arch Board A (requires lock)
 	@$(MAKE) -C esp32 arch-monitor-a
