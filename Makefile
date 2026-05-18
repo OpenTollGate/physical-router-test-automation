@@ -390,6 +390,7 @@ setup: ## Install dependencies (npm + playwright + serial)
          esp32-test-multi-mint-a esp32-test-multi-mint-b esp32-test-all-boards \
          esp32-test-cvm-a esp32-test-cvm-b esp32-test-cvm-mcp-a \
          esp32-cvm-pubkey-a esp32-cvm-pubkey-b \
+         esp32-lock esp32-unlock esp32-lock-status esp32-force-unlock \
          esp32-build
 
 esp32-flash-a: ## Flash multi-mint firmware to Board A
@@ -451,3 +452,15 @@ esp32-cvm-pubkey-a: ## Print Board A's CVM npub
 
 esp32-cvm-pubkey-b: ## Print Board B's CVM npub
 	@$(MAKE) -C esp32 cvm-pubkey-b
+
+esp32-lock: ## Acquire ESP32 board lock (PHASE='description')
+	@$(MAKE) -C esp32 lock PHASE="$(PHASE)"
+
+esp32-unlock: ## Release ESP32 board lock
+	@$(MAKE) -C esp32 unlock
+
+esp32-lock-status: ## Show ESP32 board lock status
+	@$(MAKE) -C esp32 lock-status
+
+esp32-force-unlock: ## Force-release ESP32 board lock (caution)
+	@$(MAKE) -C esp32 force-unlock
