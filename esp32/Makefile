@@ -582,7 +582,7 @@ test-cvm-mcp-a: ## End-to-end MCP tools/call via CVM on Board A
 #  LOCAL RELAY TESTS (Board B, feature/local-relay)
 # ===========================================================================
 
-RELAY_FIRMWARE_DIR = /home/c03rad0r/esp32-tollgate-relay
+RELAY_FIRMWARE_DIR = /home/c03rad0r/esp32-tollgate-hardening
 RELAY_IP           = $(BOARD_B_IP)
 RELAY_PORT_NUM     = 4869
 RELAY_SSID         = $(BOARD_B_SSID)
