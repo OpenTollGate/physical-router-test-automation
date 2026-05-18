@@ -692,7 +692,7 @@ relay-test-full: ## Run all relay tests sequentially (requires lock-b)
 ARCH_FIRMWARE_DIR := /home/c03rad0r/esp32-tollgate-arch
 ARCH_IP           := 10.192.45.1
 ARCH_SSID         := TollGate-C0E9CA
-ARCH_PORT         := /dev/ttyACM1
+ARCH_PORT         := /dev/ttyACM0
 ARCH_WIFI_IFACE   := wlp59s0
 ARCH_TESTS_DIR    := $(ARCH_FIRMWARE_DIR)/tests/integration
 
@@ -707,13 +707,14 @@ arch-build: ## Build arch (tollgate_core) firmware
 	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && cd $(ARCH_FIRMWARE_DIR) && idf.py build 2>&1 | tail -5'
 	@echo "$(GREEN)Build complete$(RESET)"
 
-arch-flash-a: ## Flash arch firmware to Board A (requires lock)
+arch-flash-a: ## Flash arch firmware + SPIFFS to Board A (requires lock)
 	$(call require_lock_a)
+	@$(MAKE) arch-generate-spiffs
 	@echo "$(CYAN)Erasing flash on Board A ($(ARCH_PORT))...$(RESET)"
 	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 erase_flash 2>&1 | tail -3'
-	@echo "$(CYAN)Flashing arch firmware to Board A ($(ARCH_PORT))...$(RESET)"
-	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && cd $(ARCH_FIRMWARE_DIR) && idf.py -p $(ARCH_PORT) flash 2>&1 | tail -10'
-	@echo "$(GREEN)Board A flashed with arch firmware (clean SPIFFS)$(RESET)"
+	@echo "$(CYAN)Flashing firmware + SPIFFS to Board A ($(ARCH_PORT))...$(RESET)"
+	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 $(ARCH_FIRMWARE_DIR)/build/bootloader/bootloader.bin 0x8000 $(ARCH_FIRMWARE_DIR)/build/partition_table/partition-table.bin 0x10000 $(ARCH_FIRMWARE_DIR)/build/esp32-tollgate.bin $(ARCH_SPIFFS_OFFSET) $(ARCH_SPIFFS_BIN) 2>&1 | tail -8'
+	@echo "$(GREEN)Board A flashed with arch firmware + SPIFFS (clean)$(RESET)"
 
 ARCH_SPIFFS_DIR   := /tmp/arch_spiffs
 ARCH_SPIFFS_BIN   := /tmp/arch_spiffs.bin
