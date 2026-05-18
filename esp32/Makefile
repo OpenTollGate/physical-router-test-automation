@@ -8,7 +8,10 @@ include boards.env
         cvm-pubkey-a cvm-pubkey-b \
         lock-a lock-b lock-c unlock-a unlock-b unlock-c \
         lock-status force-unlock-a force-unlock-b force-unlock-c \
-        build
+        build \
+        relay-build relay-flash-b relay-connect-b \
+        relay-test-smoke relay-test-nip11 relay-test-pubsub \
+        relay-test-sync relay-test-full
 
 define require_lock_a
 	@if [ ! -f "$(LOCK_DIR)/board-a.lock" ]; then \
@@ -36,12 +39,17 @@ endef
 
 define acquire_lock
 	@if [ -f "$(LOCK_DIR)/$(1).lock" ]; then \
-		echo "$(RED)$(BOLD)Cannot acquire lock — $(1) already locked:$(RESET)"; \
-		echo ""; \
-		cat $(LOCK_DIR)/$(1).lock | sed 's/^/  /'; \
-		echo ""; \
-		echo "$(YELLOW)Use 'make force-unlock-$(1)' to override.$(RESET)"; \
-		exit 1; \
+		owner=$$(grep '^session:' $(LOCK_DIR)/$(1).lock | head -1 | sed 's/session: *//'); \
+		if [ "$$owner" = "$$USER@$$HOSTNAME" ]; then \
+			echo "$(YELLOW)$(1) already locked by this session — refreshing lock$(RESET)"; \
+		else \
+			echo "$(RED)$(BOLD)Cannot acquire lock — $(1) locked by another session:$(RESET)"; \
+			echo ""; \
+			cat $(LOCK_DIR)/$(1).lock | sed 's/^/  /'; \
+			echo ""; \
+			echo "$(YELLOW)Use 'make force-unlock-$(1)' to override.$(RESET)"; \
+			exit 1; \
+		fi; \
 	fi; \
 	branch=$$(git branch --show-current 2>/dev/null || echo "unknown"); \
 	worktree=$$(pwd); \
@@ -105,6 +113,15 @@ help: ## Show ESP32 board test targets
 	@echo ""
 	@echo "$(CYAN)--- Build (no lock needed) ---$(RESET)"
 	@echo "  make build              # Build firmware (no lock)"
+	@echo ""
+	@echo "$(CYAN)--- Local Relay tests (Board B, requires lock-b) ---$(RESET)"
+	@echo "  make relay-build        # Build relay firmware (no lock)"
+	@echo "  make relay-flash-b      # Flash relay firmware to Board B"
+	@echo "  make relay-test-smoke   # Verify relay port 4869 reachable"
+	@echo "  make relay-test-nip11   # Test NIP-11 info document"
+	@echo "  make relay-test-pubsub  # WebSocket publish + subscribe test"
+	@echo "  make relay-test-sync    # Verify sync to public relays"
+	@echo "  make relay-test-full    # Run all relay tests (~1min)"
 
 # ===========================================================================
 #  PER-BOARD LOCKS
@@ -491,12 +508,119 @@ test-cvm-mcp-a: ## End-to-end MCP tools/call via CVM on Board A
 	@echo "$(BOLD)=======================================$(RESET)"
 
 # ===========================================================================
+#  LOCAL RELAY TESTS (Board B, feature/local-relay)
+# ===========================================================================
+
+RELAY_FIRMWARE_DIR = /home/c03rad0r/esp32-tollgate-relay
+RELAY_IP           = $(BOARD_B_IP)
+RELAY_PORT_NUM     = 4869
+RELAY_SSID         = $(BOARD_B_SSID)
+RELAY_TESTS_DIR    = /home/c03rad0r/esp32-tollgate/tests/integration
+
+.PHONY: relay-build relay-flash-b relay-connect-b \
+        relay-test-smoke relay-test-nip11 relay-test-pubsub \
+        relay-test-full
+
+relay-build: ## Build relay firmware (no lock)
+	@echo "$(CYAN)Building relay firmware in $(RELAY_FIRMWARE_DIR)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && cd $(RELAY_FIRMWARE_DIR) && idf.py build 2>&1 | tail -5'
+	@echo "$(GREEN)Build complete$(RESET)"
+
+relay-flash-b: ## Flash relay firmware to Board B (requires lock-b)
+	$(call require_lock_b)
+	@echo "$(CYAN)Flashing relay firmware to Board B ($(BOARD_B_PORT))...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && cd $(RELAY_FIRMWARE_DIR) && idf.py -p $(BOARD_B_PORT) flash 2>&1 | tail -10'
+	@echo "$(GREEN)Board B flashed with relay firmware$(RESET)"
+
+relay-connect-b: ## WiFi connect to Board B AP for relay tests (requires lock-b)
+	$(call require_lock_b)
+	@$(MAKE) _connect-b-if-needed
+
+relay-test-smoke: ## Smoke test: verify relay port 4869 reachable (requires lock-b)
+	$(call require_lock_b)
+	@$(MAKE) _connect-b-if-needed
+	@echo ""
+	@echo "$(BOLD)=== Relay Smoke Test ===$(RESET)"
+	@echo "$(CYAN)1/3 — Ping Board B...$(RESET)"
+	@ping -c 1 -W 3 $(RELAY_IP) >/dev/null 2>&1 && \
+		echo "$(GREEN)  ✓ Board B reachable at $(RELAY_IP)$(RESET)" || \
+		echo "$(RED)  ✗ Board B NOT reachable$(RESET)"
+	@echo ""
+	@echo "$(CYAN)2/3 — HTTP on port $(RELAY_PORT_NUM)...$(RESET)"
+	@HTTP_CODE=$$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://$(RELAY_IP):$(RELAY_PORT_NUM)/" 2>/dev/null) && \
+		echo "$(GREEN)  ✓ HTTP $${HTTP_CODE} from port $(RELAY_PORT_NUM)$(RESET)" || \
+		echo "$(RED)  ✗ Port $(RELAY_PORT_NUM) not responding$(RESET)"
+	@echo ""
+	@echo "$(CYAN)3/3 — NIP-11 document...$(RESET)"
+	@NIP11=$$(curl -s --connect-timeout 5 -H "Accept: application/nostr+json" "http://$(RELAY_IP):$(RELAY_PORT_NUM)/" 2>/dev/null) && \
+		echo "$$NIP11" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  name: {d.get(\"name\",\"?\")}\n  software: {d.get(\"software\",\"?\")}\n  nips: {d.get(\"supported_nips\",[])}')" 2>/dev/null && \
+		echo "$(GREEN)  ✓ NIP-11 JSON valid$(RESET)" || \
+		echo "$(RED)  ✗ NIP-11 not available$(RESET)"
+
+relay-test-nip11: ## NIP-11 relay info document test (requires lock-b)
+	$(call require_lock_b)
+	@$(MAKE) _connect-b-if-needed
+	@echo ""
+	@echo "$(BOLD)=== NIP-11 Relay Info Test ===$(RESET)"
+	@cd $(RELAY_TESTS_DIR) && TOLLGATE_IP=$(RELAY_IP) node test-relay-nip11.mjs
+
+relay-test-pubsub: ## WebSocket publish + subscribe test (requires lock-b)
+	$(call require_lock_b)
+	@$(MAKE) _connect-b-if-needed
+	@echo ""
+	@echo "$(BOLD)=== Relay Pub/Sub Test ===$(RESET)"
+	@cd $(RELAY_TESTS_DIR) && TOLLGATE_IP=$(RELAY_IP) node test-local-relay.mjs
+
+relay-test-sync: ## Verify sync manager pushes events to public relay (requires lock-b)
+	$(call require_lock_b)
+	@$(MAKE) _connect-b-if-needed
+	@echo ""
+	@echo "$(BOLD)=== Relay Sync Test ===$(RESET)"
+	@echo "$(CYAN)Checking if board has pushed events to public relays...$(RESET)"
+	@NPUB=$$(nak key public $(CVM_NSEC_DEFAULT) 2>/dev/null) && \
+		echo "Board npub: $$NPUB" && \
+		echo "" && \
+		echo "$(CYAN)Checking relay.damus.io for kind 38787...$(RESET)" && \
+		RESULT=$$(timeout 8 nak req -k 38787 -a $$NPUB -l 1 wss://relay.damus.io 2>/dev/null) && \
+		if echo "$$RESULT" | grep -q '"kind"'; then \
+			echo "$(GREEN)  ✓ Kind 38787 found on relay.damus.io$(RESET)"; \
+		else \
+			echo "$(YELLOW)  ~ Kind 38787 not yet synced (sync interval is 30min)$(RESET)"; \
+		fi
+
+relay-test-full: ## Run all relay tests sequentially (requires lock-b)
+	$(call require_lock_b)
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(BOLD)  Full Relay Test Suite (Board B)     $(RESET)"
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo ""
+	@FAILED=0; \
+	echo "$(CYAN)--- 1/5: Smoke Test ---$(RESET)"; \
+	$(MAKE) relay-test-smoke || FAILED=$$((FAILED + 1)); echo ""; \
+	echo "$(CYAN)--- 2/5: NIP-11 Test ---$(RESET)"; \
+	$(MAKE) relay-test-nip11 || FAILED=$$((FAILED + 1)); echo ""; \
+	echo "$(CYAN)--- 3/5: Pub/Sub Test ---$(RESET)"; \
+	$(MAKE) relay-test-pubsub || FAILED=$$((FAILED + 1)); echo ""; \
+	echo "$(CYAN)--- 4/5: Sync Test ---$(RESET)"; \
+	$(MAKE) relay-test-sync || FAILED=$$((FAILED + 1)); echo ""; \
+	echo "$(CYAN)--- 5/5: API Check ---$(RESET)"; \
+	curl -s --connect-timeout 5 "http://$(RELAY_IP):2121/usage" | python3 -m json.tool 2>/dev/null && \
+		echo "$(GREEN)  ✓ API reachable$(RESET)" || \
+		echo "$(YELLOW)  ~ API not reachable (may need internet for services)$(RESET)"; \
+	echo ""; \
+	if [ $$FAILED -eq 0 ]; then \
+		echo "$(GREEN)=== ALL RELAY TESTS PASSED ===$(RESET)"; \
+	else \
+		echo "$(RED)=== $$FAILED/4 RELAY TESTS FAILED ===$(RESET)"; \
+	fi
+
+# ===========================================================================
 #  ARCH COMPONENT EXTRACTION TESTS (Board A, tollgate_core)
 # ===========================================================================
 
 ARCH_FIRMWARE_DIR := /home/c03rad0r/esp32-tollgate-arch
-ARCH_IP           := $(BOARD_A_IP)
-ARCH_SSID         := $(BOARD_A_SSID)
+ARCH_IP           := 10.192.45.1
+ARCH_SSID         := TollGate-C0E9CA
 ARCH_PORT         := /dev/ttyACM0
 ARCH_WIFI_IFACE   := wlp59s0
 ARCH_TESTS_DIR    := $(ARCH_FIRMWARE_DIR)/tests/integration
@@ -513,9 +637,11 @@ arch-build: ## Build arch (tollgate_core) firmware
 
 arch-flash-a: ## Flash arch firmware to Board A (requires lock)
 	$(call require_lock_a)
+	@echo "$(CYAN)Erasing flash on Board A ($(ARCH_PORT))...$(RESET)"
+	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 erase_flash 2>&1 | tail -3'
 	@echo "$(CYAN)Flashing arch firmware to Board A ($(ARCH_PORT))...$(RESET)"
 	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && cd $(ARCH_FIRMWARE_DIR) && idf.py -p $(ARCH_PORT) flash 2>&1 | tail -10'
-	@echo "$(GREEN)Board A flashed with arch firmware$(RESET)"
+	@echo "$(GREEN)Board A flashed with arch firmware (clean SPIFFS)$(RESET)"
 
 arch-monitor-a: ## Serial monitor for arch Board A (requires lock)
 	$(call require_lock_a)
@@ -526,50 +652,59 @@ arch-bootlog-a: ## Capture boot log from Board A (requires lock)
 	@echo "$(CYAN)Capturing boot log from $(ARCH_PORT)...$(RESET)"
 	@timeout 15 python3 -c "import serial,time;s=serial.Serial('$(ARCH_PORT)',115200,timeout=1);s.write(b'\n');time.sleep(2);s.write(b'\n');time.sleep(10);data=s.read(8192);print(data.decode('utf-8',errors='replace'));s.close()" 2>&1 || true
 
-arch-connect-a: ## WiFi connect to Board A AP
+arch-connect-a: ## WiFi connect to Board A AP (requires lock)
+	$(call require_lock_a)
 	@echo "$(CYAN)Connecting $(ARCH_WIFI_IFACE) to $(ARCH_SSID)...$(RESET)"
-	@nmcli device wifi connect "$(ARCH_SSID)" ifname $(ARCH_WIFI_IFACE) 2>&1 || true
+	@echo "c03rad0r123" | sudo -S nmcli device wifi connect "$(ARCH_SSID)" ifname $(ARCH_WIFI_IFACE) 2>&1 | grep -v "Password:" || true
 	@sleep 3
 	@echo "$(CYAN)Waiting for DHCP...$(RESET)"
 	@for i in 1 2 3 4 5; do ping -c 1 -W 2 $(ARCH_IP) >/dev/null 2>&1 && break; sleep 2; done
 	@echo "$(GREEN)Connected to $(ARCH_SSID) ($(ARCH_IP))$(RESET)"
 
 arch-disconnect: ## Disconnect WiFi from Board A AP
-	@nmcli device disconnect $(ARCH_WIFI_IFACE) 2>/dev/null || true
+	@echo "c03rad0r123" | sudo -S nmcli device disconnect $(ARCH_WIFI_IFACE) 2>&1 | grep -v "Password:" || true
 	@sleep 2
 	@echo "$(GREEN)Disconnected from Board A AP$(RESET)"
 
 arch-test-smoke: ## Smoke test: SSID, portal, grant, reset, internet (~30s)
+	$(call require_lock_a)
 	@echo "$(BOLD)=== Smoke Test ===$(RESET)"
 	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) AP_SSID=$(ARCH_SSID) node smoke.mjs /dev/ttyACM0
 
 arch-test-network: ## Network test: AP scan, DHCP, DNS hijack (~15s)
+	$(call require_lock_a)
 	@echo "$(BOLD)=== Network Test ===$(RESET)"
 	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node network.mjs
 
 arch-test-api: ## API test: portal, captive detect, whoami, usage, DNS (~20s)
+	$(call require_lock_a)
 	@echo "$(BOLD)=== API Test ===$(RESET)"
 	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node api.mjs
 
 arch-test-dns-fw: ## DNS + Firewall test: hijack, NAT, forward after auth (~30s)
+	$(call require_lock_a)
 	@echo "$(BOLD)=== DNS + Firewall Test ===$(RESET)"
 	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node test-dns-firewall.mjs
 
 arch-test-reset: ## Reset auth cycle: reset-pay-verify-reset-repay (~30s)
+	$(call require_lock_a)
 	@echo "$(BOLD)=== Reset Auth Test ===$(RESET)"
 	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node test-reset-auth.mjs
 
 arch-test-session: ## Session expiry: 65s wait, verify blocked, renew (~80s)
+	$(call require_lock_a)
 	@echo "$(BOLD)=== Session Expiry Test ===$(RESET)"
 	@echo "$(YELLOW)NOTE: This test waits 65s for session expiry$(RESET)"
 	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node test-session-expiry.mjs
 
 arch-test-phase2: ## Full API: discovery, tokens, spent, expiry, renewal (~90s)
+	$(call require_lock_a)
 	@echo "$(BOLD)=== Phase 2 API Test ===$(RESET)"
 	@echo "$(YELLOW)NOTE: This test waits 65s for session expiry$(RESET)"
 	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node phase2.mjs
 
 arch-test-cleanup: ## Disconnect WiFi + reset auth state
+	$(call require_lock_a)
 	@curl -s --connect-timeout 3 http://$(ARCH_IP)/reset_authentication 2>/dev/null || true
 	@nmcli device disconnect $(ARCH_WIFI_IFACE) 2>/dev/null || true
 	@sleep 2

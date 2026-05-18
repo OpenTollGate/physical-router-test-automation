@@ -129,6 +129,15 @@ help: ## Show this help
 	@echo "  make arch-test-phase2             # full API test (~90s)"
 	@echo "  make arch-test-full               # all tests (~4min)"
 	@echo "  make arch-test-cleanup            # disconnect + reset auth"
+	@echo ""
+	@echo "$(CYAN)--- Local Relay tests (Board B, feature/local-relay) ---$(RESET)"
+	@echo "  make relay-build                  # build relay firmware (no lock)"
+	@echo "  make relay-flash-b                # flash to Board B (requires lock-b)"
+	@echo "  make relay-test-smoke             # verify port 4869 reachable"
+	@echo "  make relay-test-nip11             # NIP-11 info document test"
+	@echo "  make relay-test-pubsub            # WS publish + subscribe test"
+	@echo "  make relay-test-sync              # verify sync to public relays"
+	@echo "  make relay-test-full              # all relay tests (~1min)"
 
 # ===========================================================================
 #  SMOKE TESTS
@@ -402,12 +411,17 @@ LOCK_DIR := locks
 
 lock: ## Acquire router hardware lock — set PHASE='description'
 	@if [ -f "$(HARDWARE_LOCK)" ]; then \
-		echo "$(RED)$(BOLD)Cannot acquire lock — hardware already locked:$(RESET)"; \
-		echo ""; \
-		cat $(HARDWARE_LOCK); \
-		echo ""; \
-		echo "$(YELLOW)Use 'make force-unlock' to override (with caution).$(RESET)"; \
-		exit 1; \
+		owner=$$(grep '^session:' $(HARDWARE_LOCK) | head -1 | sed 's/session: *//'); \
+		if [ "$$owner" = "$$USER@$$HOSTNAME" ]; then \
+			echo "$(YELLOW)Hardware already locked by this session — refreshing lock$(RESET)"; \
+		else \
+			echo "$(RED)$(BOLD)Cannot acquire lock — hardware locked by another session:$(RESET)"; \
+			echo ""; \
+			cat $(HARDWARE_LOCK); \
+			echo ""; \
+			echo "$(YELLOW)Use 'make force-unlock' to override (with caution).$(RESET)"; \
+			exit 1; \
+		fi; \
 	fi; \
 	branch=$$(git branch --show-current 2>/dev/null || echo "unknown"); \
 	worktree=$$(pwd); \
@@ -488,6 +502,14 @@ setup: ## Install dependencies (npm + playwright + serial)
 	@echo "  make esp32-test-cvm-mcp-a                # MCP tools/call end-to-end on Board A"
 	@echo "  make esp32-cvm-pubkey-a                  # print Board A CVM npub"
 	@echo "  make esp32-cvm-pubkey-b                  # print Board B CVM npub"
+	@echo ""
+	@echo "$(CYAN)--- ESP32 Local Relay tests ---$(RESET)"
+	@echo "  make relay-build                         # build relay firmware (no lock)"
+	@echo "  make relay-flash-b                       # flash relay firmware to Board B"
+	@echo "  make relay-test-smoke                    # verify relay port 4869"
+	@echo "  make relay-test-nip11                    # NIP-11 relay info test"
+	@echo "  make relay-test-pubsub                   # WS pub/sub test"
+	@echo "  make relay-test-full                     # all relay tests"
 
 # ===========================================================================
 #  ESP32 BOARD TESTS (per-board locks)
@@ -602,6 +624,38 @@ esp32-force-unlock-b: ## Force-release Board B lock
 
 esp32-force-unlock-c: ## Force-release Board C lock
 	@$(MAKE) -C esp32 force-unlock-c
+
+# ===========================================================================
+#  LOCAL RELAY TESTS (Board B, feature/local-relay)
+# ===========================================================================
+
+ .PHONY: relay-build relay-flash-b relay-connect-b \
+         relay-test-smoke relay-test-nip11 relay-test-pubsub \
+         relay-test-sync relay-test-full
+
+relay-build: ## Build relay firmware (no lock)
+	@$(MAKE) -C esp32 relay-build
+
+relay-flash-b: ## Flash relay firmware to Board B (requires lock-b)
+	@$(MAKE) -C esp32 relay-flash-b
+
+relay-connect-b: ## WiFi connect to Board B AP (requires lock-b)
+	@$(MAKE) -C esp32 relay-connect-b
+
+relay-test-smoke: ## Relay smoke test: port 4869 reachable (requires lock-b)
+	@$(MAKE) -C esp32 relay-test-smoke
+
+relay-test-nip11: ## NIP-11 relay info document test (requires lock-b)
+	@$(MAKE) -C esp32 relay-test-nip11
+
+relay-test-pubsub: ## WebSocket publish + subscribe test (requires lock-b)
+	@$(MAKE) -C esp32 relay-test-pubsub
+
+relay-test-sync: ## Verify sync to public relays (requires lock-b)
+	@$(MAKE) -C esp32 relay-test-sync
+
+relay-test-full: ## Run all relay tests (~1min, requires lock-b)
+	@$(MAKE) -C esp32 relay-test-full
 
 # ===========================================================================
 #  ARCH COMPONENT EXTRACTION TESTS (tollgate_core on Board A)
