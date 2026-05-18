@@ -24,6 +24,11 @@
 #   make status ROUTER=alpha          # check service status
 #   make shell ROUTER=alpha           # interactive SSH session
 #   make rescue-router ROUTER=beta VIA=alpha  # rescue offline router
+#   make esp32-flash-a                # flash multi-mint firmware to Board A
+#   make esp32-flash-b                # flash multi-mint firmware to Board B
+#   make esp32-test-multi-mint-a      # full multi-mint test on Board A
+#   make esp32-test-multi-mint-b      # full multi-mint test on Board B
+#   make esp32-test-all-boards        # test both ESP32 boards
 #
 # Setup:
 #   cp mint-health/routers.env.example mint-health/routers.env
@@ -359,3 +364,90 @@ setup: ## Install dependencies (npm + playwright + serial)
 	@echo "  cp mint-health/routers.env.example mint-health/routers.env   # fill in real values"
 	@echo "  cp upstream-wifi/routers.env.example upstream-wifi/routers.env"
 	@echo "  cp .env.example .env                                         # fill in LuCI credentials"
+	@echo ""
+	@echo "$(CYAN)--- ESP32 board tests ---$(RESET)"
+	@echo "  make esp32-flash-a                       # flash multi-mint firmware to Board A"
+	@echo "  make esp32-flash-b                       # flash multi-mint firmware to Board B"
+	@echo "  make esp32-test-multi-mint-a             # full multi-mint test on Board A"
+	@echo "  make esp32-test-multi-mint-b             # full multi-mint test on Board B"
+	@echo "  make esp32-test-all-boards               # test both ESP32 boards"
+	@echo ""
+	@echo "$(CYAN)--- ESP32 ContextVM tests ---$(RESET)"
+	@echo "  make esp32-test-cvm-a                    # CVM announcement test on Board A"
+	@echo "  make esp32-test-cvm-b                    # CVM announcement test on Board B"
+	@echo "  make esp32-test-cvm-mcp-a                # MCP tools/call end-to-end on Board A"
+	@echo "  make esp32-cvm-pubkey-a                  # print Board A CVM npub"
+	@echo "  make esp32-cvm-pubkey-b                  # print Board B CVM npub"
+
+# ===========================================================================
+#  ESP32 BOARD TESTS (multi-mint firmware)
+# ===========================================================================
+
+ .PHONY: esp32-flash-a esp32-flash-b esp32-monitor-a esp32-monitor-b \
+         esp32-connect-a esp32-connect-b esp32-disconnect \
+         esp32-test-discovery-a esp32-test-discovery-b \
+         esp32-test-mints-a esp32-test-mints-b \
+         esp32-test-multi-mint-a esp32-test-multi-mint-b esp32-test-all-boards \
+         esp32-test-cvm-a esp32-test-cvm-b esp32-test-cvm-mcp-a \
+         esp32-cvm-pubkey-a esp32-cvm-pubkey-b \
+         esp32-build
+
+esp32-flash-a: ## Flash multi-mint firmware to Board A
+	@$(MAKE) -C esp32 flash-a
+
+esp32-flash-b: ## Flash multi-mint firmware to Board B
+	@$(MAKE) -C esp32 flash-b
+
+esp32-monitor-a: ## Serial monitor Board A
+	@$(MAKE) -C esp32 monitor-a
+
+esp32-monitor-b: ## Serial monitor Board B
+	@$(MAKE) -C esp32 monitor-b
+
+esp32-connect-a: ## Connect laptop to Board A AP
+	@$(MAKE) -C esp32 connect-a
+
+esp32-connect-b: ## Connect laptop to Board B AP
+	@$(MAKE) -C esp32 connect-b
+
+esp32-disconnect: ## Disconnect from board AP
+	@$(MAKE) -C esp32 disconnect
+
+esp32-test-discovery-a: ## Test multi-mint discovery on Board A
+	@$(MAKE) -C esp32 test-discovery-a
+
+esp32-test-discovery-b: ## Test multi-mint discovery on Board B
+	@$(MAKE) -C esp32 test-discovery-b
+
+esp32-test-mints-a: ## Test /mints endpoint on Board A
+	@$(MAKE) -C esp32 test-mints-a
+
+esp32-test-mints-b: ## Test /mints endpoint on Board B
+	@$(MAKE) -C esp32 test-mints-b
+
+esp32-test-multi-mint-a: ## Full multi-mint test suite on Board A
+	@$(MAKE) -C esp32 test-multi-mint-a
+
+esp32-test-multi-mint-b: ## Full multi-mint test suite on Board B
+	@$(MAKE) -C esp32 test-multi-mint-b
+
+esp32-test-all-boards: ## Test both ESP32 boards
+	@$(MAKE) -C esp32 test-all-boards
+
+ esp32-build: ## Build ESP32 multi-mint firmware
+	@$(MAKE) -C esp32 build
+
+esp32-test-cvm-a: ## CVM announcement integration test on Board A
+	@$(MAKE) -C esp32 test-cvm-a
+
+esp32-test-cvm-b: ## CVM announcement integration test on Board B
+	@$(MAKE) -C esp32 test-cvm-b
+
+esp32-test-cvm-mcp-a: ## End-to-end MCP tools/call test on Board A
+	@$(MAKE) -C esp32 test-cvm-mcp-a
+
+esp32-cvm-pubkey-a: ## Print Board A's CVM npub
+	@$(MAKE) -C esp32 cvm-pubkey-a
+
+esp32-cvm-pubkey-b: ## Print Board B's CVM npub
+	@$(MAKE) -C esp32 cvm-pubkey-b
