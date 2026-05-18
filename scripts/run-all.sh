@@ -53,21 +53,21 @@ echo ""
 RC=0
 
 echo "=== Running Playwright LuCI tests ==="
-"$SCRIPT_DIR/run-tests.sh" --no-render --run-dir "$RESULTS_DIR" 2>&1 | tee "$RESULTS_DIR/raw/playwright-output-standalone.log" || {
+"$SCRIPT_DIR/run-tests.sh" --no-render --run-dir "$RESULTS_DIR" || {
   echo "WARNING: Playwright tests failed (exit $?)"
   RC=1
 }
 
 echo ""
 echo "=== Running pytest API tests ==="
-"$SCRIPT_DIR/run-api.sh" --no-render --run-dir "$RESULTS_DIR" 2>&1 | tee "$RESULTS_DIR/raw/api-output-standalone.log" || {
+"$SCRIPT_DIR/run-api.sh" --no-render --run-dir "$RESULTS_DIR" || {
   echo "WARNING: API tests failed (exit $?)"
   RC=1
 }
 
 echo ""
 echo "=== Running pytest phone tests ==="
-"$SCRIPT_DIR/run-phone.sh" --no-render --run-dir "$RESULTS_DIR" 2>&1 | tee "$RESULTS_DIR/raw/phone-output-standalone.log" || {
+"$SCRIPT_DIR/run-phone.sh" --no-render --run-dir "$RESULTS_DIR" || {
   echo "WARNING: Phone tests failed (exit $?)"
   RC=1
 }

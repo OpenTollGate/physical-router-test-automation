@@ -199,6 +199,66 @@ def merge_counts(runners):
     return merged
 
 
+def _query_router_version(router_ip):
+    """SSH to router and query tollgate version socket. Returns dict or None."""
+    ssh_user = os.environ.get("TOLLGATE_SSH_USER", "root")
+    ssh_password = os.environ.get("TOLLGATE_SSH_PASSWORD")
+    ssh_key = os.environ.get("TOLLGATE_SSH_KEY")
+    jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST")
+
+    ssh_opts = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR"]
+    # BatchMode=yes prevents password auth; only use it when sshpass is NOT providing the password
+    if not ssh_password:
+        ssh_opts += ["-o", "BatchMode=yes"]
+
+    cmd = ["ssh"] + ssh_opts
+
+    if jump_host:
+        cmd += ["-J", jump_host]
+    if ssh_key and os.path.isfile(ssh_key):
+        cmd += ["-i", ssh_key]
+
+    cmd.append(f"{ssh_user}@{router_ip}")
+
+    remote_cmd = """echo '{"command": "version"}' | socat - UNIX-CONNECT:/var/run/tollgate.sock"""
+    cmd.append(remote_cmd)
+
+    if ssh_password:
+        cmd = ["sshpass", "-p", ssh_password] + cmd
+
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            print(f"WARNING: SSH version query failed (exit {result.returncode}): {result.stderr.strip()}", file=sys.stderr)
+            return None
+        output = result.stdout.strip()
+        if not output:
+            print("WARNING: SSH version query returned empty output", file=sys.stderr)
+            return None
+        resp = json.loads(output)
+        if not resp.get("success"):
+            print(f"WARNING: version query not successful: {resp.get('message', '')}", file=sys.stderr)
+            return None
+        message = resp.get("message", "")
+        info = {}
+        for line in message.split("\n"):
+            if ": " in line:
+                key, _, value = line.partition(": ")
+                info[key.strip()] = value.strip()
+        return {
+            "commit": info.get("commit"),
+            "version": info.get("version"),
+            "build_time": info.get("build_time"),
+            "openwrt_version": info.get("openwrt_version"),
+            "go_version": info.get("go_version"),
+        }
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError) as e:
+        print(f"WARNING: failed to query router version: {e}", file=sys.stderr)
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Collect test results into canonical JSON")
     parser.add_argument("--run-dir", required=True, help="Root directory for this test run")
@@ -221,6 +281,8 @@ def main():
     parser.add_argument("--router-ip", default=None)
     parser.add_argument("--client-type", default=None)
     parser.add_argument("--viewport", default=None)
+    parser.add_argument("--query-router", default=None, metavar="IP",
+                        help="SSH to router and query tollgate version socket to populate SUT metadata")
     parser.add_argument("--virtual-lab", action="store_true", default=False)
     parser.add_argument("--allow-failures", action="store_true", default=False)
     parser.add_argument("--started-at", default=None)
@@ -293,6 +355,7 @@ def main():
             runner["artifacts"] = {
                 "json": rel_path,
                 "html": os.path.join(base_dir, "report.html") if base_dir else "report.html",
+                "log": os.path.join(base_dir, "output.log") if base_dir else "output.log",
             }
             runners.append(runner)
             all_tests.extend(tests)
@@ -316,6 +379,19 @@ def main():
         "backend": args.sut_backend or "unknown",
         "installed_version": args.sut_version or "unknown",
     }
+
+    if args.query_router:
+        version_info = _query_router_version(args.query_router)
+        if version_info:
+            commit = version_info.get("commit")
+            if commit:
+                sut["commit"] = commit
+                sut["commit_short"] = commit[:7]
+            if version_info.get("version"):
+                sut["installed_version"] = version_info["version"]
+            for field in ("build_time", "openwrt_version", "go_version"):
+                if version_info.get(field):
+                    sut[field] = version_info[field]
 
     test_suite = {
         "repo": "OpenTollGate/physical-router-test-automation",

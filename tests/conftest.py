@@ -603,7 +603,12 @@ def _auto_portal_screenshot(item, report, results_dir, adb):
     raw = os.path.join(results_dir, "raw")
     os.makedirs(raw, exist_ok=True)
 
-    status = "failed" if report.failed else "passed"
+    if report.failed:
+        status = "failed"
+    elif report.skipped:
+        status = "skipped"
+    else:
+        status = "passed"
     safe_name = re.sub(r'[^\w\-.]', '_', item.name)
     img_path = os.path.join(raw, f"{safe_name}-{status}.png")
 
@@ -636,6 +641,8 @@ def _auto_portal_video(item, report, results_dir, adb):
     if not results_dir or not adb or not hasattr(adb, "record_portal_video"):
         return
     if not report.failed and not (report.passed and os.environ.get("TOLLGATE_RECORD_ALL") == "1"):
+        return
+    if report.passed and "virtual_lab" not in item.keywords and "publish_screenshot" not in item.keywords:
         return
 
     raw = os.path.join(results_dir, "raw")
@@ -692,6 +699,7 @@ def pytest_runtest_makereport(item, call):
         results_dir = getattr(item, "_results_dir", None)
         adb = item.funcargs.get("adb")
         router = item.funcargs.get("router")
+        safe_name = re.sub(r'[^\w\-.]', '_', item.name)
 
         if not adb:
             adb = getattr(item.session, "_tollgate_adb", None)
@@ -701,7 +709,6 @@ def pytest_runtest_makereport(item, call):
 
         if report.failed:
             raw = os.path.join(results_dir, "raw") if results_dir else None
-            safe_name = re.sub(r'[^\w\-.]', '_', item.name)
             if raw:
                 os.makedirs(raw, exist_ok=True)
 
@@ -738,7 +745,7 @@ def pytest_runtest_makereport(item, call):
                         pass
             if router:
                 try:
-                    router.collect_logs(results_dir, adb=adb)
+                    router.collect_logs(results_dir, adb=adb, bundle=safe_name)
                 except Exception:
                     pass
                 report.longrepr = str(report.longrepr) + _debug_summary(adb, router)

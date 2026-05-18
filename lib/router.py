@@ -5,6 +5,7 @@ import tempfile
 import time
 import re
 import logging
+import shlex
 
 from lib.constants import BACKEND_PORT, CGI_PORT, TEST_MINT_URL
 from lib.backend import BackendConfig
@@ -150,6 +151,19 @@ class Router:
         out = r.stdout.strip()
         return re.sub(r"Warning:.*Permanently added[^\n]*\n?", "", out).strip()
 
+    def write_remote_text(self, remote_path: str, content: str, timeout: int = 15):
+        result = self.ssh_stdin(f"cat > {shlex.quote(remote_path)}", content, timeout=timeout)
+        if result.returncode == 0:
+            return
+        noise = re.compile(r"Warning:.*Permanently added[^\n]*")
+        cleaned = noise.sub("", result.stderr).strip()
+        raise RuntimeError(
+            f"Failed to write {remote_path} ({result.returncode}): {cleaned[:300]}"
+        )
+
+    def write_remote_json(self, remote_path: str, payload, indent: int = 2, timeout: int = 15):
+        self.write_remote_text(remote_path, json.dumps(payload, indent=indent), timeout=timeout)
+
     def ssh_stdin(self, cmd: str, data: str, timeout: int = 15):
         return subprocess.run(
             self._ssh_base + [cmd],
@@ -272,8 +286,8 @@ class Router:
         )
         return r.stdout.strip()
 
-    def backend_curl_xff(self, path: str, ip: str = None, method: str = None,
-                         headers: dict = None, data: str = None) -> str:
+    def backend_curl_xff(self, path: str, ip: str | None = None, method: str | None = None,
+                         headers: dict | None = None, data: str | None = None) -> str:
         ip = ip or self.phone_ip
         parts = ["curl", "-s", "-H", f"'X-Forwarded-For: {ip}'"]
         if method:
@@ -286,7 +300,7 @@ class Router:
         parts.append(f"'{path}'")
         return self.ssh(" ".join(parts))
 
-    def pay_direct(self, token: str, ip: str = None) -> dict:
+    def pay_direct(self, token: str, ip: str | None = None) -> dict:
         ip = ip or self.phone_ip
         tmpf = "/tmp/tg-pay-token.txt"
         self.ssh_stdin(f"cat > {tmpf}", token)
@@ -302,7 +316,7 @@ class Router:
         except json.JSONDecodeError:
             return {"raw": resp}
 
-    def pay_direct_mac(self, token: str, mac: str = None, ip: str = None) -> dict:
+    def pay_direct_mac(self, token: str, mac: str | None = None, ip: str | None = None) -> dict:
         """Pay via backend /pay endpoint with MAC-based client identification.
 
         The backend resolves the client MAC by looking up the requester IP
@@ -327,14 +341,14 @@ class Router:
         except json.JSONDecodeError:
             return {"raw": resp}
 
-    def pay_via_header(self, token: str, mac: str = None) -> str:
+    def pay_via_header(self, token: str, mac: str | None = None) -> str:
         mac = mac or self.phone_mac
         return self.ssh(
             f"curl -s -H 'X-Cashu: {token}' "
             f"'http://[::1]:{BACKEND_PORT}/pay?mac={mac}'"
         )
 
-    def get_client_ip_from_nds(self, mac: str = None) -> str:
+    def get_client_ip_from_nds(self, mac: str | None = None) -> str:
         """Look up the IP that NDS registered for a client MAC.
 
         NDS may see a different IP than the static one configured in env vars
@@ -355,7 +369,7 @@ class Router:
                         return m.group(1)
         return ""
 
-    def get_nds_state(self, mac: str = None) -> str:
+    def get_nds_state(self, mac: str | None = None) -> str:
         mac = mac or self.phone_mac
         out = self.ssh("ndsctl clients 2>&1", timeout=10)
         lines = out.split("\n")
@@ -367,7 +381,7 @@ class Router:
                         return m.group(1)
         return ""
 
-    def wait_for_auth(self, timeout: int = 30, mac: str = None) -> bool:
+    def wait_for_auth(self, timeout: int = 30, mac: str | None = None) -> bool:
         start = time.time()
         while time.time() - start < timeout:
             if self.get_nds_state(mac) == "Authenticated":
@@ -378,7 +392,7 @@ class Router:
             time.sleep(1)
         return self.get_nds_state(mac) == "Authenticated"
 
-    def get_session(self, ip: str = None) -> dict:
+    def get_session(self, ip: str | None = None) -> dict:
         ip = ip or self.phone_ip
         resp = self.backend_curl_xff(self.backend_url("/balance"), ip)
         try:
@@ -386,12 +400,12 @@ class Router:
         except json.JSONDecodeError:
             return {"raw": resp}
 
-    def get_remaining_seconds(self, ip: str = None) -> int:
+    def get_remaining_seconds(self, ip: str | None = None) -> int:
         session = self.get_session(ip)
         remaining_ms = session.get("remaining", 0)
         return remaining_ms // 1000 if remaining_ms and remaining_ms > 0 else 0
 
-    def wait_for_session_expiry(self, mac: str = None, poll_interval: float = 1, max_wait: int = 120) -> int:
+    def wait_for_session_expiry(self, mac: str | None = None, poll_interval: float = 1, max_wait: int = 120) -> int:
         mac = mac or self.phone_mac
         start = time.time()
         while time.time() - start < max_wait:
@@ -400,7 +414,7 @@ class Router:
             time.sleep(poll_interval)
         raise TimeoutError(f"Session did not expire within {max_wait}s")
 
-    def reset_state(self, mac: str = None, adb=None):
+    def reset_state(self, mac: str | None = None, adb=None):
         if not mac and not self.phone_mac and adb:
             detected = adb.wifi_mac()
             if detected:
@@ -417,7 +431,7 @@ class Router:
         self.ssh("echo '' > /tmp/tollgate-portal.log")
         self.ssh("echo '' > /www/pending-token.txt")
 
-    def apply_pricing(self, step_size: int = None, metric: str = "milliseconds"):
+    def apply_pricing(self, step_size: int | None = None, metric: str = "milliseconds"):
         if step_size is None:
             from lib.constants import DEFAULT_STEP_SIZE_MS
             step_size = DEFAULT_STEP_SIZE_MS
@@ -547,10 +561,10 @@ class Router:
         mint_str = ", ".join(mint_urls)
         log.info(f"Replaced accepted mints with: {mint_str}, restarted backend")
 
-    def cli_command(self, command: str, args: list | None = None, timeout: int = 10) -> dict:
+    def cli_command(self, command: str, args: list[str] | None = None, timeout: int = 10) -> dict:
         if not self.backend.has_cli_socket:
             raise NotImplementedError("Rust backend has no CLI socket")
-        payload = {"command": command}
+        payload: dict[str, object] = {"command": command}
         if args:
             payload["args"] = args
         raw = self.ssh(
@@ -577,8 +591,10 @@ class Router:
     def get_tollgate_logs(self, filter_expr: str = "tollgate", lines: int = 200) -> str:
         return self.ssh(f"logread -l {lines} -e {filter_expr} 2>/dev/null")
 
-    def collect_logs(self, results_dir: str, adb=None):
+    def collect_logs(self, results_dir: str, adb=None, bundle: str | None = None):
         raw = os.path.join(results_dir, "raw")
+        if bundle:
+            raw = os.path.join(raw, "failures", bundle)
         os.makedirs(raw, exist_ok=True)
         log_cmds = [
             ("portal.log", "cat /tmp/tollgate-portal.log"),

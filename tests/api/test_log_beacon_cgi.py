@@ -31,7 +31,7 @@ def test_log_beacon_appends_data(router):
 def test_log_beacon_truncates_at_limit(router):
     if not _beacon_cgi_available(router):
         pytest.skip("tollgate-log CGI not installed on this build")
-    router.ssh("dd if=/dev/urandom bs=1024 count=600 2>/dev/null | base64 > /tmp/tollgate-portal.log")
+    router.ssh("dd if=/dev/zero bs=1024 count=600 2>/dev/null | tr '\\0' 'A' > /tmp/tollgate-portal.log")
     initial_size = router.ssh("wc -c < /tmp/tollgate-portal.log").strip()
     router.ssh(f"curl -s -X POST '{router.cgi_url('tollgate-log')}' -d 'trigger-truncate'")
     final_size = router.ssh("wc -c < /tmp/tollgate-portal.log").strip()

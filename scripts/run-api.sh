@@ -87,8 +87,15 @@ FINISHED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 # --- Collect and render ---
 if [[ "$NO_RENDER" == "false" ]]; then
   echo "==> Collecting results..."
+
+  # --- Query router for SUT version ---
+  ROUTER_QUERY_ARG=""
+  if [[ -n "${TOLLGATE_SSH_HOST:-}" ]]; then
+    ROUTER_QUERY_ARG="--query-router $TOLLGATE_SSH_HOST"
+  fi
+
   python3 "$SCRIPT_DIR/collect-results.py" \
-    --run-dir "$RESULTS_DIR" \
+    --run-dir "$RESULTS_DIR" $ROUTER_QUERY_ARG \
     --pytest "api=raw/api/junit.xml" \
     --run-id "$RUN_ID" \
     --sut-backend "${TOLLGATE_BACKEND:-go}" \

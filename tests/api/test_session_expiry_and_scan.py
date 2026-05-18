@@ -208,9 +208,16 @@ def _try_config_command(router, args):
     """Send a config command via Unix socket, return (success, response)."""
     try:
         resp = router.cli_command("config", args=args)
-        if "raw" in resp and ("not found" in resp["raw"].lower()
-                               or "unknown" in resp["raw"].lower()):
+        raw = str(resp.get("raw", "")).lower() if isinstance(resp, dict) else str(resp).lower()
+        if "raw" in resp and ("not found" in raw or "unknown" in raw):
             return False, resp["raw"]
+        if isinstance(resp, dict):
+            error = str(resp.get("error", "")).lower()
+            success = resp.get("success")
+            if error and ("unknown command" in error or "not available" in error or "unsupported" in error):
+                return False, resp
+            if success is False and error:
+                return False, resp
         return True, resp
     except Exception as exc:
         return False, str(exc)
@@ -233,12 +240,12 @@ def test_mint_config_get_set_via_socket(router):
             f"(requires PR #112/113). Response: {str(resp_get)[:200]}"
         )
 
-    log.info("config get is available: %s", str(resp_get)[:300])
+    log.info("config get command is available")
 
     ok_set, resp_set = _try_config_command(router, ["set", "test_key", "test_value"])
 
     if ok_set:
-        log.info("config set is available: %s", str(resp_set)[:200])
+        log.info("config set command is available")
     else:
         log.info(
             "config set not available (response: %s). "
@@ -284,7 +291,7 @@ def test_dot_path_config_access(router):
             )
         return
 
-    log.info("Dot-path config access works: %s", str(resp_dot)[:300])
+    log.info("Dot-path config access works")
 
     # If dot-path works, verify the value matches the config file
     dot_url = ""

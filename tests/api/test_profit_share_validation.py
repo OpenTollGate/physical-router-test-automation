@@ -9,7 +9,6 @@ config, restart the service, and verify the backend stays up (doesn't
 crash) — either resetting to defaults or logging a warning.
 """
 
-import base64
 import json
 import logging
 import time
@@ -32,10 +31,7 @@ def _read_config(router):
 
 
 def _write_config(router, cfg):
-    """Write a config dict back to the router via base64 to avoid heredoc issues."""
-    payload = json.dumps(cfg, indent=2)
-    b64 = base64.b64encode(payload.encode()).decode()
-    router.ssh(f"echo '{b64}' | base64 -d > /etc/tollgate/config.json")
+    router.write_remote_json("/etc/tollgate/config.json", cfg)
 
 
 def _restart_service(router):

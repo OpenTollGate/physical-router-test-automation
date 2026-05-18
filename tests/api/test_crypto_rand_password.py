@@ -36,10 +36,16 @@ def _try_network_command(router, subcommand, args=None):
     """
     try:
         resp = router.cli_command("network", args=[subcommand] + (args or []))
-        if "raw" in resp and ("not found" in resp["raw"].lower()
-                               or "unknown" in resp["raw"].lower()
-                               or "no such" in resp["raw"].lower()):
+        raw = str(resp.get("raw", "")).lower() if isinstance(resp, dict) else str(resp).lower()
+        if "raw" in resp and ("not found" in raw or "unknown" in raw or "no such" in raw):
             return False, resp["raw"]
+        if isinstance(resp, dict):
+            error = str(resp.get("error", "")).lower()
+            success = resp.get("success")
+            if error and ("unknown network subcommand" in error or "unknown command" in error or "not available" in error):
+                return False, resp
+            if success is False and error:
+                return False, resp
         return True, resp
     except Exception as exc:
         return False, str(exc)
@@ -60,7 +66,7 @@ def test_current_password_generation_available(router):
             f"(requires PR #111 fix/security-crypto-rand). Response: {str(resp)[:200]}"
         )
 
-    log.info("network set-private-network is available: %s", resp)
+    log.info("network set-private-network command is available")
 
 
 def test_password_generation_creates_valid_wpa2_password(router):

@@ -1,4 +1,3 @@
-import base64
 import json
 import re
 import time
@@ -23,8 +22,7 @@ def _skip_if_no_degraded_support(router):
 
 
 def _write_config(router, config_str):
-    encoded = base64.b64encode(config_str.encode()).decode()
-    router.ssh(f"echo '{encoded}' | base64 -d > /etc/tollgate/config.json")
+    router.write_remote_text("/etc/tollgate/config.json", config_str)
 
 
 @pytest.fixture(scope="module")
@@ -145,6 +143,8 @@ def test_bad_mint_handled_gracefully(router, config):
         code = router.api_status("/")
         assert code in (200, 503), f"Expected 200 or 503 with bad mint, got {code}"
 
+        price_tags = []
+        bad_in_discovery = []
         for _ in range(6):
             body = router.api_body("/")
             data = json.loads(body)
