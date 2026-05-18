@@ -422,8 +422,12 @@ _test-cvm:
 		echo "Relay: $(CVM_RELAY)" && \
 		echo ""
 	@echo "$(CYAN)1/4 — API reachability...$(RESET)"
-	@curl -s --connect-timeout 5 "http://$(IP):2121/usage" | python3 -m json.tool > /dev/null 2>&1 && \
-		echo "$(GREEN)  ✓ API reachable$(RESET)" || \
+	@HTTP_CODE=$$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://$(IP):2121/usage") && \
+		if [ "$$HTTP_CODE" = "200" ]; then \
+			echo "$(GREEN)  ✓ API reachable (HTTP $$HTTP_CODE)$(RESET)"; \
+		else \
+			echo "$(YELLOW)  ~ API returned HTTP $$HTTP_CODE$(RESET)"; \
+		fi || \
 		echo "$(RED)  ✗ API not reachable$(RESET)"
 	@echo ""
 	@echo "$(CYAN)2/4 — Kind 11316 server announcement...$(RESET)"
