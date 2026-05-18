@@ -114,6 +114,21 @@ help: ## Show this help
 	@echo "  MINT    - mint URL for block/unblock (default: https://nofee.testnut.cashu.space)"
 	@echo "  VIA     - intermediate router for rescue"
 	@echo "  PHASE   - description for router lock"
+	@echo ""
+	@echo "$(CYAN)--- Arch component extraction tests (Board A, tollgate_core) ---$(RESET)"
+	@echo "  make arch-build                   # build tollgate_core firmware"
+	@echo "  make arch-flash-a                 # flash to Board A (requires lock)"
+	@echo "  make arch-bootlog-a               # capture boot log (requires lock)"
+	@echo "  make arch-connect-a               # WiFi connect to Board A"
+	@echo "  make arch-test-smoke              # smoke test (~30s)"
+	@echo "  make arch-test-network            # network test (~15s)"
+	@echo "  make arch-test-api                # API endpoint test (~20s)"
+	@echo "  make arch-test-dns-fw             # DNS + firewall test (~30s)"
+	@echo "  make arch-test-reset              # reset auth cycle (~30s)"
+	@echo "  make arch-test-session            # session expiry (~80s)"
+	@echo "  make arch-test-phase2             # full API test (~90s)"
+	@echo "  make arch-test-full               # all tests (~4min)"
+	@echo "  make arch-test-cleanup            # disconnect + reset auth"
 
 # ===========================================================================
 #  SMOKE TESTS
@@ -587,3 +602,52 @@ esp32-force-unlock-b: ## Force-release Board B lock
 
 esp32-force-unlock-c: ## Force-release Board C lock
 	@$(MAKE) -C esp32 force-unlock-c
+
+# ===========================================================================
+#  ARCH COMPONENT EXTRACTION TESTS (tollgate_core on Board A)
+# ===========================================================================
+
+arch-build: ## Build arch (tollgate_core) firmware
+	@$(MAKE) -C esp32 arch-build
+
+arch-flash-a: ## Flash arch firmware to Board A (requires lock)
+	@$(MAKE) -C esp32 arch-flash-a
+
+arch-monitor-a: ## Serial monitor for arch Board A (requires lock)
+	@$(MAKE) -C esp32 arch-monitor-a
+
+arch-bootlog-a: ## Capture boot log from Board A (requires lock)
+	@$(MAKE) -C esp32 arch-bootlog-a
+
+arch-connect-a: ## WiFi connect to Board A AP
+	@$(MAKE) -C esp32 arch-connect-a
+
+arch-disconnect: ## Disconnect WiFi from Board A AP
+	@$(MAKE) -C esp32 arch-disconnect
+
+arch-test-smoke: ## Smoke test (~30s)
+	@$(MAKE) -C esp32 arch-test-smoke
+
+arch-test-network: ## Network test (~15s)
+	@$(MAKE) -C esp32 arch-test-network
+
+arch-test-api: ## API endpoint test (~20s)
+	@$(MAKE) -C esp32 arch-test-api
+
+arch-test-dns-fw: ## DNS + Firewall test (~30s)
+	@$(MAKE) -C esp32 arch-test-dns-fw
+
+arch-test-reset: ## Reset auth cycle test (~30s)
+	@$(MAKE) -C esp32 arch-test-reset
+
+arch-test-session: ## Session expiry test (~80s)
+	@$(MAKE) -C esp32 arch-test-session
+
+arch-test-phase2: ## Phase 2 API test (~90s)
+	@$(MAKE) -C esp32 arch-test-phase2
+
+arch-test-cleanup: ## Disconnect WiFi + reset auth
+	@$(MAKE) -C esp32 arch-test-cleanup
+
+arch-test-full: ## Run all arch E2E tests (~4min)
+	@$(MAKE) -C esp32 arch-test-full

@@ -489,3 +489,115 @@ test-cvm-mcp-a: ## End-to-end MCP tools/call via CVM on Board A
 		fi
 	@echo ""
 	@echo "$(BOLD)=======================================$(RESET)"
+
+# ===========================================================================
+#  ARCH COMPONENT EXTRACTION TESTS (Board A, tollgate_core)
+# ===========================================================================
+
+ARCH_FIRMWARE_DIR := /home/c03rad0r/esp32-tollgate-arch
+ARCH_IP           := $(BOARD_A_IP)
+ARCH_SSID         := $(BOARD_A_SSID)
+ARCH_PORT         := /dev/ttyACM0
+ARCH_WIFI_IFACE   := wlp59s0
+ARCH_TESTS_DIR    := $(ARCH_FIRMWARE_DIR)/tests/integration
+
+.PHONY: arch-build arch-flash-a arch-monitor-a arch-connect-a arch-disconnect \
+        arch-test-smoke arch-test-network arch-test-api arch-test-dns-fw \
+        arch-test-reset arch-test-session arch-test-phase2 arch-test-full \
+        arch-test-cleanup arch-bootlog-a
+
+arch-build: ## Build arch (tollgate_core) firmware
+	@echo "$(CYAN)Building arch firmware in $(ARCH_FIRMWARE_DIR)...$(RESET)"
+	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && cd $(ARCH_FIRMWARE_DIR) && idf.py build 2>&1 | tail -5'
+	@echo "$(GREEN)Build complete$(RESET)"
+
+arch-flash-a: ## Flash arch firmware to Board A (requires lock)
+	$(call require_lock_a)
+	@echo "$(CYAN)Flashing arch firmware to Board A ($(ARCH_PORT))...$(RESET)"
+	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && cd $(ARCH_FIRMWARE_DIR) && idf.py -p $(ARCH_PORT) flash 2>&1 | tail -10'
+	@echo "$(GREEN)Board A flashed with arch firmware$(RESET)"
+
+arch-monitor-a: ## Serial monitor for arch Board A (requires lock)
+	$(call require_lock_a)
+	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && cd $(ARCH_FIRMWARE_DIR) && idf.py -p $(ARCH_PORT) monitor'
+
+arch-bootlog-a: ## Capture boot log from Board A (requires lock)
+	$(call require_lock_a)
+	@echo "$(CYAN)Capturing boot log from $(ARCH_PORT)...$(RESET)"
+	@timeout 15 python3 -c "import serial,time;s=serial.Serial('$(ARCH_PORT)',115200,timeout=1);s.write(b'\n');time.sleep(2);s.write(b'\n');time.sleep(10);data=s.read(8192);print(data.decode('utf-8',errors='replace'));s.close()" 2>&1 || true
+
+arch-connect-a: ## WiFi connect to Board A AP
+	@echo "$(CYAN)Connecting $(ARCH_WIFI_IFACE) to $(ARCH_SSID)...$(RESET)"
+	@nmcli device wifi connect "$(ARCH_SSID)" ifname $(ARCH_WIFI_IFACE) 2>&1 || true
+	@sleep 3
+	@echo "$(CYAN)Waiting for DHCP...$(RESET)"
+	@for i in 1 2 3 4 5; do ping -c 1 -W 2 $(ARCH_IP) >/dev/null 2>&1 && break; sleep 2; done
+	@echo "$(GREEN)Connected to $(ARCH_SSID) ($(ARCH_IP))$(RESET)"
+
+arch-disconnect: ## Disconnect WiFi from Board A AP
+	@nmcli device disconnect $(ARCH_WIFI_IFACE) 2>/dev/null || true
+	@sleep 2
+	@echo "$(GREEN)Disconnected from Board A AP$(RESET)"
+
+arch-test-smoke: ## Smoke test: SSID, portal, grant, reset, internet (~30s)
+	@echo "$(BOLD)=== Smoke Test ===$(RESET)"
+	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) AP_SSID=$(ARCH_SSID) node smoke.mjs /dev/ttyACM0
+
+arch-test-network: ## Network test: AP scan, DHCP, DNS hijack (~15s)
+	@echo "$(BOLD)=== Network Test ===$(RESET)"
+	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node network.mjs
+
+arch-test-api: ## API test: portal, captive detect, whoami, usage, DNS (~20s)
+	@echo "$(BOLD)=== API Test ===$(RESET)"
+	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node api.mjs
+
+arch-test-dns-fw: ## DNS + Firewall test: hijack, NAT, forward after auth (~30s)
+	@echo "$(BOLD)=== DNS + Firewall Test ===$(RESET)"
+	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node test-dns-firewall.mjs
+
+arch-test-reset: ## Reset auth cycle: reset-pay-verify-reset-repay (~30s)
+	@echo "$(BOLD)=== Reset Auth Test ===$(RESET)"
+	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node test-reset-auth.mjs
+
+arch-test-session: ## Session expiry: 65s wait, verify blocked, renew (~80s)
+	@echo "$(BOLD)=== Session Expiry Test ===$(RESET)"
+	@echo "$(YELLOW)NOTE: This test waits 65s for session expiry$(RESET)"
+	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node test-session-expiry.mjs
+
+arch-test-phase2: ## Full API: discovery, tokens, spent, expiry, renewal (~90s)
+	@echo "$(BOLD)=== Phase 2 API Test ===$(RESET)"
+	@echo "$(YELLOW)NOTE: This test waits 65s for session expiry$(RESET)"
+	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node phase2.mjs
+
+arch-test-cleanup: ## Disconnect WiFi + reset auth state
+	@curl -s --connect-timeout 3 http://$(ARCH_IP)/reset_authentication 2>/dev/null || true
+	@nmcli device disconnect $(ARCH_WIFI_IFACE) 2>/dev/null || true
+	@sleep 2
+	@echo "$(GREEN)Cleanup complete$(RESET)"
+
+arch-test-full: ## Run all arch E2E tests sequentially (~4min)
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(BOLD)  Full Arch E2E Test Suite (Board A)   $(RESET)"
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo ""
+	@FAILED=0; \
+	echo "$(CYAN)--- 1/7: Smoke Test ---$(RESET)"; \
+	$(MAKE) arch-test-smoke || FAILED=$$((FAILED + 1)); echo ""; \
+	echo "$(CYAN)--- 2/7: Network Test ---$(RESET)"; \
+	$(MAKE) arch-test-network || FAILED=$$((FAILED + 1)); echo ""; \
+	echo "$(CYAN)--- 3/7: API Test ---$(RESET)"; \
+	$(MAKE) arch-test-api || FAILED=$$((FAILED + 1)); echo ""; \
+	echo "$(CYAN)--- 4/7: DNS + Firewall Test ---$(RESET)"; \
+	$(MAKE) arch-test-dns-fw || FAILED=$$((FAILED + 1)); echo ""; \
+	echo "$(CYAN)--- 5/7: Reset Auth Test ---$(RESET)"; \
+	$(MAKE) arch-test-reset || FAILED=$$((FAILED + 1)); echo ""; \
+	echo "$(CYAN)--- 6/7: Session Expiry Test ---$(RESET)"; \
+	$(MAKE) arch-test-session || FAILED=$$((FAILED + 1)); echo ""; \
+	echo "$(CYAN)--- 7/7: Phase 2 API Test ---$(RESET)"; \
+	$(MAKE) arch-test-phase2 || FAILED=$$((FAILED + 1)); echo ""; \
+	echo ""; \
+	if [ $$FAILED -eq 0 ]; then \
+		echo "$(GREEN)=== ALL 7 ARCH E2E TESTS PASSED ===$(RESET)"; \
+	else \
+		echo "$(RED)=== $$FAILED/7 ARCH E2E TESTS FAILED ===$(RESET)"; \
+	fi
