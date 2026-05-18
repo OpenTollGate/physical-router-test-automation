@@ -331,7 +331,51 @@ if [ -z "$PAGES_BASE_URL" ]; then
   fi
 fi
 
+REPORT_URL="${PAGES_BASE_URL}/reports/${COMMIT_SHORT}/${DIR_TIMESTAMP}/report/index.html"
+
+wait_for_pages_url() {
+  local url="$1"
+  local attempts="${2:-18}"
+  local sleep_secs="${3:-5}"
+
+  python3 - "$url" "$attempts" "$sleep_secs" <<'PY'
+import sys
+import time
+import urllib.error
+import urllib.request
+
+url = sys.argv[1]
+attempts = int(sys.argv[2])
+sleep_secs = int(sys.argv[3])
+headers = {"User-Agent": "physical-router-test-automation/1.0"}
+
+for attempt in range(1, attempts + 1):
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            if 200 <= resp.status < 300:
+                print(f"==> Live report confirmed ({resp.status}) on attempt {attempt}/{attempts}")
+                sys.exit(0)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            pass
+        else:
+            print(f"==> Waiting for Pages propagation ({attempt}/{attempts}): HTTP {exc.code}", file=sys.stderr)
+    except Exception as exc:
+        print(f"==> Waiting for Pages propagation ({attempt}/{attempts}): {exc}", file=sys.stderr)
+
+    if attempt < attempts:
+        time.sleep(sleep_secs)
+
+print(f"WARNING: Pages did not serve {url} after {attempts * sleep_secs}s", file=sys.stderr)
+sys.exit(1)
+PY
+}
+
+echo "==> Waiting for report to become live on GitHub Pages..."
+wait_for_pages_url "$REPORT_URL" || true
+
 echo ""
 echo "==> Report published to gh-pages"
-echo "==> Report: ${PAGES_BASE_URL}/reports/${COMMIT_SHORT}/${DIR_TIMESTAMP}/report/index.html"
+echo "==> Report: ${REPORT_URL}"
 echo "==> Dashboard: ${PAGES_BASE_URL}/"
