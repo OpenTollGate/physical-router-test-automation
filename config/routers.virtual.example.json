@@ -1,0 +1,29 @@
+{
+  "default": "virtual-reseller",
+  "routers": {
+    "virtual-seller": {
+      "model": "openwrt-x86_64-qemu",
+      "luciUrl": "http://127.0.0.1:8081",
+      "sshHost": "127.0.0.1",
+      "sshUser": "root",
+      "sshPort": 2201,
+      "arch": "x86_64",
+      "tollgateSsidPrefix": "TollGate-",
+      "openwrtVersion": "24.10.1",
+      "openwrtTarget": "x86/64",
+      "openwrtProfile": "generic"
+    },
+    "virtual-reseller": {
+      "model": "openwrt-x86_64-qemu",
+      "luciUrl": "http://127.0.0.1:8082",
+      "sshHost": "127.0.0.1",
+      "sshUser": "root",
+      "sshPort": 2202,
+      "arch": "x86_64",
+      "tollgateSsidPrefix": "TollGate-",
+      "openwrtVersion": "24.10.1",
+      "openwrtTarget": "x86/64",
+      "openwrtProfile": "generic"
+    }
+  }
+}

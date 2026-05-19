@@ -86,7 +86,7 @@ help: ## Show this help
 	@echo "  make test-cashu-payment   ROUTER=alpha      # e2e cashu payment via browser"
 	@echo ""
 	@echo "$(CYAN)--- Router management ---$(RESET)"
-	@echo "  make deploy               ROUTER=alpha      # cross-compile + deploy binaries"
+	@echo "  make hw-deploy              ROUTER=alpha      # cross-compile + deploy binaries"
 	@echo "  make deploy-develop       ROUTER=alpha      # deploy from develop worktree"
 	@echo "  make test-develop-smoke   ROUTER=alpha      # CLI config smoke tests"
 	@echo "  make test-develop-playwright ROUTER=alpha    # Playwright tests vs develop"
@@ -272,7 +272,7 @@ full-all: ## Run all test suites (lint + playwright + degraded + upstream)
 #  ROUTER MANAGEMENT
 # ===========================================================================
 
-.PHONY: deploy deploy-cli status shell logs check-sta-health fix-dns cleanup \
+.PHONY: hw-deploy deploy-ci deploy-cli status shell logs check-sta-health fix-dns cleanup \
         setup-fresh fund-wallet restore-prod diagnose-config test-default-mints \
         rescue-router save-upstream restore-upstream \
         test-hostname test-ssl-self-signed test-ssl-remove test-ssl-status test-ssl-full \
@@ -289,7 +289,7 @@ DEVELOP_SRC ?= $(HOME)/tollgate-worktrees/develop/src
 DEVICE ?= gl-mt3000
 RESTART_WAIT ?= 10
 
-deploy: ## Cross-compile and deploy daemon + CLI to router
+hw-deploy: ## Cross-compile and deploy daemon + CLI to router
 	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-deploy ROUTER=$(ROUTER)
 
@@ -917,3 +917,145 @@ arch-test-cleanup: ## Disconnect WiFi + reset auth
 
 arch-test-full: ## Run all arch E2E tests (~4min)
 	@$(MAKE) -C esp32 arch-test-full
+
+# ===========================================================================
+#  PYTEST / CI / REPORT TARGETS (from main branch)
+# ===========================================================================
+
+.PHONY: pytest-smoke pytest-critical pytest-extended pytest-api pytest-phone \
+        pytest-test \
+        pytest-smoke-mac pytest-critical-mac pytest-api-mac pytest-test-mac \
+        pytest-smoke-linux pytest-api-linux pytest-test-linux \
+        pytest-smoke-rust pytest-api-rust pytest-test-rust pytest-critical-rust \
+        luci deploy-ci deploy-ci-rust setup-python \
+        run-api run-phone run-luci run-all \
+        collect render-report sanitize publish pr-smoke clean
+
+# --- Pytest test tiers (raw pytest, no canonical run dir) ---
+
+pytest-smoke:
+	pytest -m smoke
+
+pytest-critical:
+	pytest -m critical
+
+pytest-extended:
+	pytest -m extended
+
+pytest-api:
+	pytest -m api
+
+pytest-phone:
+	pytest -m phone --publish
+
+pytest-test:
+	pytest
+
+# --- macOS client (no phone) ---
+
+pytest-smoke-mac:
+	pytest -m smoke --client=mac
+
+pytest-critical-mac:
+	pytest -m critical --client=mac
+
+pytest-api-mac:
+	pytest -m api --client=mac
+
+pytest-test-mac:
+	pytest --client=mac
+
+# --- Linux client (no phone) ---
+
+pytest-smoke-linux:
+	pytest -m smoke --client=linux
+
+pytest-api-linux:
+	pytest -m api --client=linux
+
+pytest-test-linux:
+	pytest --client=linux
+
+# --- Rust v1 backend ---
+
+pytest-smoke-rust:
+	TOLLGATE_BACKEND=rust pytest -m smoke --backend=rust
+
+pytest-api-rust:
+	TOLLGATE_BACKEND=rust pytest -m api --backend=rust
+
+pytest-test-rust:
+	TOLLGATE_BACKEND=rust pytest --backend=rust
+
+pytest-critical-rust:
+	TOLLGATE_BACKEND=rust pytest -m critical --backend=rust
+
+# --- Canonical run dir targets ---
+
+run-api:
+	./scripts/run-api.sh
+
+run-phone:
+	./scripts/run-phone.sh
+
+run-luci:
+	./scripts/run-tests.sh
+
+run-all:
+	./scripts/run-all.sh
+
+# --- Playwright LuCI tests (legacy) ---
+
+luci:
+	npx playwright test
+
+# --- Collect and render from latest run ---
+
+RESULTS_DIR := results
+
+collect:
+	@run=$$(ls -dt $(RESULTS_DIR)/*/ 2>/dev/null | head -1); \
+	if [ -z "$$run" ]; then echo "No results to collect"; exit 1; fi; \
+	python3 scripts/collect-results.py --run-dir "$$run" --allow-failures
+
+render-report:
+	@run=$$(ls -dt $(RESULTS_DIR)/*/ 2>/dev/null | head -1); \
+	if [ -z "$$run" ]; then echo "No results to render"; exit 1; fi; \
+	python3 scripts/render-report.py --run-dir "$$run"
+
+# --- CI artifact deploy ---
+
+deploy-ci:
+	bash scripts/deploy-ci.sh
+
+deploy-ci-rust:
+	bash scripts/deploy-rust-ci.sh
+
+# --- Setup (Python venv) ---
+
+setup-python:
+	bash scripts/setup-python.sh
+
+# --- Results pipeline ---
+
+sanitize:
+	@run=$$(ls -dt $(RESULTS_DIR)/*/ 2>/dev/null | head -1); \
+	if [ -z "$$run" ]; then echo "No results to sanitize"; exit 1; fi; \
+	bash scripts/sanitize-results.sh "$$run"
+
+publish:
+	@run=$$(ls -dt $(RESULTS_DIR)/*/ 2>/dev/null | head -1); \
+	if [ -z "$$run" ]; then echo "No results to publish"; exit 1; fi; \
+	bash scripts/publish-report.sh "$$run"
+
+# --- PR smoke test ---
+
+pr-smoke:
+	@echo "Usage: ./scripts/test-pr.sh --pr <N> [--reset] [--test api|all] [--publish]"
+
+# --- Clean ---
+
+clean:
+	rm -rf $(RESULTS_DIR)/*
+	rm -f report.html
+	rm -rf .pytest_cache __pycache__

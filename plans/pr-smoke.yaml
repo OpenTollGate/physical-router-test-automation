@@ -1,0 +1,13 @@
+name: pr-smoke
+description: Fast PR check on one router — API tests only
+deploy: true
+reset: optional
+exclusive_router: false
+runners:
+  - name: api
+    command: ./scripts/run-api.sh --no-render
+    framework: pytest
+    markers: [api]
+    timeout: 60
+required_capabilities:
+  - router

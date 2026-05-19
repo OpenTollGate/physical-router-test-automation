@@ -1,0 +1,658 @@
+import subprocess
+import json
+import os
+import tempfile
+import time
+import re
+import logging
+import shlex
+
+from lib.constants import BACKEND_PORT, CGI_PORT, TEST_MINT_URL
+from lib.backend import BackendConfig
+
+log = logging.getLogger("tollgate.router")
+
+
+class Router:
+    def __init__(self, host: str, phone_ip: str, phone_mac: str, domain: str,
+                 identity_file: str | None = None, jump_host: str | None = None,
+                 port: int | None = None, backend: BackendConfig | None = None):
+        self.host = host
+        self.phone_ip = phone_ip
+        self.phone_mac = phone_mac
+        self.domain = domain
+        self.identity_file = identity_file
+        # Normalize: localhost jump hosts are meaningless (same machine).
+        if jump_host and jump_host in {"localhost", "127.0.0.1", "::1"}:
+            jump_host = None
+        self.jump_host = jump_host
+        self.port = port
+        self.backend = backend or BackendConfig()
+        self._ssh_pw = os.environ.get("TOLLGATE_SSH_PASSWORD") or os.environ.get("TOLLGATE_LUCI_PASSWORD")
+
+        self._control_dir = tempfile.mkdtemp(prefix="tollgate-ssh-")
+        self._control_path = os.path.join(self._control_dir, "control")
+
+        ssh_opts = [
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR",
+            "-o", f"ControlPath={self._control_path}",
+            "-o", "ControlMaster=auto",
+            "-o", "ControlPersist=60",
+        ]
+        if not identity_file and self._ssh_pw:
+            self._ssh_base = ["sshpass", "-e", "ssh"] + ssh_opts
+        else:
+            self._ssh_base = ["ssh"] + ssh_opts
+        if port:
+            self._ssh_base.extend(["-p", str(port)])
+        if identity_file:
+            self._ssh_base.extend(["-i", identity_file])
+        if jump_host:
+            self._ssh_base.extend(["-J", jump_host])
+        self._ssh_base.append(f"root@{host}")
+
+    def close(self):
+        try:
+            subprocess.run(
+                ["ssh", "-o", f"ControlPath={self._control_path}", "-O", "exit", f"root@{self.host}"],
+                capture_output=True, timeout=5,
+            )
+        except Exception:
+            pass
+        try:
+            os.remove(self._control_path)
+        except FileNotFoundError:
+            pass
+        try:
+            os.rmdir(self._control_dir)
+        except OSError:
+            pass
+
+    def resolve_phone_client(self, adb) -> tuple:
+        mac = adb.wifi_mac()
+        if mac:
+            self.phone_mac = mac
+        ip = adb.wifi_ip()
+        if mac and ip:
+            self.phone_ip = ip
+            log.info(f"Phone auto-detected: MAC={mac} IP={ip}")
+            return mac, ip
+        if mac:
+            try:
+                leases = self.ssh("cat /tmp/dhcp.leases 2>/dev/null")
+                for line in leases.strip().split("\n"):
+                    fields = line.split()
+                    if len(fields) >= 3 and fields[1].lower() == mac.lower():
+                        self.phone_ip = fields[2]
+                        log.info(f"Phone from DHCP lease: MAC={mac} IP={fields[2]}")
+                        return mac, fields[2]
+            except Exception:
+                pass
+        return self.phone_mac, self.phone_ip
+
+    @property
+    def gateway_ip(self) -> str:
+        if self.domain:
+            return self.domain
+        gw = self._detect_gateway()
+        if gw:
+            return gw
+        return self.host
+
+    def _detect_gateway(self) -> str:
+        try:
+            out = self.ssh("ip -4 route show default 2>/dev/null | awk '{print $3}'")
+            if out and not out.startswith("Usage"):
+                return out.split("\n")[0].strip()
+        except Exception:
+            pass
+        return ""
+
+    def backend_url(self, path="/"):
+        return f"http://[::1]:{BACKEND_PORT}{path}"
+
+    def get_nds_portal_port(self) -> int:
+        """NDS gatewayport from UCI, cached. Falls back to 2050."""
+        if not hasattr(self, '_nds_portal_port'):
+            try:
+                port = self.ssh(
+                    "uci -q get nodogsplash.@nodogsplash[0].gatewayport"
+                ).strip()
+                self._nds_portal_port = int(port) if port else 2050
+            except Exception:
+                self._nds_portal_port = 2050
+        return self._nds_portal_port
+
+    def get_nds_gateway_domain(self) -> str:
+        """NDS gatewaydomainname from UCI, cached. Empty string if not set."""
+        if not hasattr(self, '_nds_gateway_domain'):
+            try:
+                domain = self.ssh(
+                    "uci -q get nodogsplash.@nodogsplash[0].gatewaydomainname"
+                ).strip()
+                self._nds_gateway_domain = domain
+            except Exception:
+                self._nds_gateway_domain = ""
+        return self._nds_gateway_domain
+
+    def ensure_nds_gateway_domain_supported(self):
+        """Patch /etc/init.d/nodogsplash to include gatewaydomainname if missing."""
+        if self.ssh("grep -q gatewaydomainname /etc/init.d/nodogsplash").strip():
+            return
+        self.ssh(
+            "sed -i 's/gatewayaddress gatewayport/gatewayaddress gatewayport gatewaydomainname/' "
+            "/etc/init.d/nodogsplash"
+        )
+        self.ssh("/etc/init.d/nodogsplash restart")
+
+    def _detect_cgi_port(self) -> int:
+        """Auto-detect the NDS gateway port serving CGI scripts."""
+        try:
+            out = self.ssh(
+                "netstat -tlnp 2>/dev/null | grep nodogsplash | head -1"
+            )
+            if out and ":" in out:
+                port = out.split(":")[1].split()[0]
+                return int(port)
+        except Exception:
+            pass
+        return CGI_PORT
+
+    def cgi_url(self, endpoint):
+        port = self._detect_cgi_port()
+        return f"http://127.0.0.1:{port}/cgi-bin/{endpoint}"
+
+    def _ssh_env(self):
+        env = os.environ.copy()
+        if self._ssh_pw:
+            env["SSHPASS"] = self._ssh_pw
+        return env
+
+    def ssh(self, cmd: str, timeout: int = 30) -> str:
+        r = subprocess.run(
+            self._ssh_base + [cmd],
+            capture_output=True, text=True, timeout=timeout,
+            env=self._ssh_env(),
+        )
+        if r.returncode != 0:
+            noise = re.compile(r"Warning:.*Permanently added[^\n]*")
+            cleaned = noise.sub("", r.stderr).strip()
+            if cleaned:
+                log.warning("ssh returned %d: %s", r.returncode, cleaned[:200])
+        out = r.stdout.strip()
+        return re.sub(r"Warning:.*Permanently added[^\n]*\n?", "", out).strip()
+
+    def write_remote_text(self, remote_path: str, content: str, timeout: int = 15):
+        result = self.ssh_stdin(f"cat > {shlex.quote(remote_path)}", content, timeout=timeout)
+        if result.returncode == 0:
+            return
+        noise = re.compile(r"Warning:.*Permanently added[^\n]*")
+        cleaned = noise.sub("", result.stderr).strip()
+        raise RuntimeError(
+            f"Failed to write {remote_path} ({result.returncode}): {cleaned[:300]}"
+        )
+
+    def write_remote_json(self, remote_path: str, payload, indent: int = 2, timeout: int = 15):
+        self.write_remote_text(remote_path, json.dumps(payload, indent=indent), timeout=timeout)
+
+    def ssh_stdin(self, cmd: str, data: str, timeout: int = 15):
+        return subprocess.run(
+            self._ssh_base + [cmd],
+            input=data, capture_output=True, text=True, timeout=timeout,
+            env=self._ssh_env(),
+        )
+
+    def scp_to(self, local_path: str, remote_path: str, timeout: int = 120):
+        ssh_opts = [
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR",
+        ]
+        pw = os.environ.get("TOLLGATE_SSH_PASSWORD") or os.environ.get("TOLLGATE_LUCI_PASSWORD")
+        if self.identity_file:
+            cmd = ["scp", "-O", "-i", self.identity_file] + ssh_opts
+        elif pw:
+            cmd = ["sshpass", "-e", "scp", "-O"] + ssh_opts
+        else:
+            cmd = ["scp", "-O"] + ssh_opts
+        if self.jump_host:
+            cmd += ["-J", self.jump_host]
+        if self.port:
+            cmd += ["-P", str(self.port)]
+        cmd += [str(local_path), f"root@{self.host}:{remote_path}"]
+        env = os.environ.copy()
+        if pw:
+            env["SSHPASS"] = pw
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+        if r.returncode != 0:
+            raise RuntimeError(f"SCP failed ({r.returncode}): {r.stderr.strip()[:300]}")
+
+
+    def fix_nodogsplash_dhcp(self):
+        """Ensure nodogsplash allows DHCP through its ndsRTR chain.
+
+        Nodogsplash's ndsRTR chain drops ALL unauthenticated packets (mark
+        0x10000) at rule 1, which silently kills DHCP DISCOVER from clients
+        before they reach the port-67 ACCEPT rule further down the chain.
+        Without this fix, phones can associate at L2 but never get an IP,
+        causing Android to show "Connection failed" and auto-reconnect to
+        a known-good network.
+        """
+        try:
+            out = self.ssh("iptables -L ndsRTR -n 2>/dev/null", timeout=10)
+            if "udp dpt:67" in out:
+                # Check if DHCP accept is BEFORE the mark-based drop
+                lines = out.strip().split("\n")
+                dhcp_line = None
+                drop_line = None
+                for i, line in enumerate(lines):
+                    if "udp dpt:67" in line and dhcp_line is None:
+                        dhcp_line = i
+                    if "0x10000" in line and drop_line is None:
+                        drop_line = i
+                if dhcp_line is not None and drop_line is not None and dhcp_line < drop_line:
+                    log.debug("ndsRTR DHCP bypass already in place")
+                    return
+            self.ssh(
+                "iptables -I ndsRTR 1 -p udp --dport 67 -j ACCEPT && "
+                "iptables -I ndsRTR 1 -p udp --dport 68 -j ACCEPT",
+                timeout=10,
+            )
+            log.info("Inserted DHCP bypass rules in ndsRTR chain")
+        except Exception as e:
+            log.warning(f"Could not fix nodogsplash DHCP: {e}")
+
+    def disable_ipv6_on_lan(self):
+        """Disable IPv6 on the LAN interface to prevent captive portal bypass.
+
+        Nodogsplash only manages IPv4 iptables. If IPv6 Router Advertisements
+        are active, WiFi clients get global IPv6 addresses and Android validates
+        connectivity over IPv6, completely bypassing the captive portal.
+        """
+        try:
+            self.ssh(
+                "uci set dhcp.lan.ra='disabled' && "
+                "uci set dhcp.lan.dhcpv6='disabled' && "
+                "uci set network.lan.ip6assign='0' && "
+                "uci commit dhcp && uci commit network",
+                timeout=10,
+            )
+            # Flush any existing global IPv6 addresses from br-lan
+            self.ssh(
+                "ip -6 addr show br-lan scope global | grep inet6 | "
+                "awk '{print $2}' | while read addr; do "
+                "ip addr del \"$addr\" dev br-lan 2>/dev/null; done",
+                timeout=10,
+            )
+            log.info("IPv6 disabled on LAN (RA, DHCPv6, ip6assign=0)")
+        except Exception as e:
+            log.warning(f"Could not disable IPv6 on LAN: {e}")
+
+    def api_status(self, path: str) -> int:
+        url = f"http://[::1]:{BACKEND_PORT}{path}"
+        if self.jump_host:
+            try:
+                out = self.ssh(f"curl -s -o /dev/null -w '%{{http_code}}' '{url}'", timeout=15)
+                return int(out.strip()) if out.strip().isdigit() else 0
+            except Exception:
+                return 0
+        r = subprocess.run(
+            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+             f"http://{self.host}:{BACKEND_PORT}{path}"],
+            capture_output=True, text=True, timeout=15,
+        )
+        code = r.stdout.strip()
+        return int(code) if code.isdigit() else 0
+
+    def api_body(self, path: str) -> str:
+        url = f"http://[::1]:{BACKEND_PORT}{path}"
+        if self.jump_host:
+            try:
+                return self.ssh(f"curl -s '{url}'", timeout=15)
+            except Exception:
+                return ""
+        r = subprocess.run(
+            ["curl", "-s", f"http://{self.host}:{BACKEND_PORT}{path}"],
+            capture_output=True, text=True, timeout=15,
+        )
+        return r.stdout.strip()
+
+    def backend_curl_xff(self, path: str, ip: str | None = None, method: str | None = None,
+                         headers: dict | None = None, data: str | None = None) -> str:
+        ip = ip or self.phone_ip
+        parts = ["curl", "-s", "-H", f"'X-Forwarded-For: {ip}'"]
+        if method:
+            parts += ["-X", method]
+        if headers:
+            for k, v in headers.items():
+                parts += ["-H", f"'{k}: {v}'"]
+        if data:
+            parts += ["-d", f"'{data}'"]
+        parts.append(f"'{path}'")
+        return self.ssh(" ".join(parts))
+
+    def pay_direct(self, token: str, ip: str | None = None) -> dict:
+        ip = ip or self.phone_ip
+        tmpf = "/tmp/tg-pay-token.txt"
+        self.ssh_stdin(f"cat > {tmpf}", token)
+        resp = self.ssh(
+            f"curl -s -m 20 -X POST '{self.backend_url('/')}' "
+            f"-H 'Content-Type: text/plain' "
+            f"-H 'X-Forwarded-For: {ip}' "
+            f"-d @{tmpf}; rm -f {tmpf}",
+            timeout=60,
+        )
+        try:
+            return json.loads(resp)
+        except json.JSONDecodeError:
+            return {"raw": resp}
+
+    def pay_direct_mac(self, token: str, mac: str | None = None, ip: str | None = None) -> dict:
+        """Pay via backend /pay endpoint with MAC-based client identification.
+
+        The backend resolves the client MAC by looking up the requester IP
+        in /tmp/dhcp.leases (NOT from the ?mac= query parameter).  We must
+        send X-Forwarded-For so the backend uses the real client IP instead
+        of RemoteAddr (which is [::1] when curl runs on the router itself).
+        """
+        mac = mac or self.phone_mac
+        ip = ip or self.phone_ip
+        escaped = token.replace("'", "'\\''")
+        resp = self.ssh(
+            f"printf '%s' '{escaped}' > /tmp/tg-pay-token.txt && "
+            f"curl -s -m 20 -X POST '{self.backend_url('/')}' "
+            f"-H 'Content-Type: text/plain' "
+            f"-H 'X-Forwarded-For: {ip}' "
+            f"-d @/tmp/tg-pay-token.txt; "
+            f"rm -f /tmp/tg-pay-token.txt",
+            timeout=60,
+        )
+        try:
+            return json.loads(resp)
+        except json.JSONDecodeError:
+            return {"raw": resp}
+
+    def pay_via_header(self, token: str, mac: str | None = None) -> str:
+        mac = mac or self.phone_mac
+        return self.ssh(
+            f"curl -s -H 'X-Cashu: {token}' "
+            f"'http://[::1]:{BACKEND_PORT}/pay?mac={mac}'"
+        )
+
+    def get_client_ip_from_nds(self, mac: str | None = None) -> str:
+        """Look up the IP that NDS registered for a client MAC.
+
+        NDS may see a different IP than the static one configured in env vars
+        (e.g., DHCP-assigned .120 vs static .100 on a dual-IP VM). This queries
+        ndsctl clients and returns the IP NDS actually associated with the MAC.
+        """
+        mac = mac or self.phone_mac
+        if not mac:
+            return ""
+        out = self.ssh("ndsctl clients 2>&1", timeout=10)
+        lines = out.split("\n")
+        mac_clean = mac.replace(":", "").upper()
+        for i, line in enumerate(lines):
+            if mac in line or mac_clean in line.replace(":", "").upper():
+                for j in range(i, min(i + 20, len(lines))):
+                    m = re.search(r"ip=(\S+)", lines[j])
+                    if m:
+                        return m.group(1)
+        return ""
+
+    def get_nds_state(self, mac: str | None = None) -> str:
+        mac = mac or self.phone_mac
+        out = self.ssh("ndsctl clients 2>&1", timeout=10)
+        lines = out.split("\n")
+        for i, line in enumerate(lines):
+            if mac in line or mac.replace(":", "").upper() in line.replace(":", "").upper():
+                for j in range(i, min(i + 20, len(lines))):
+                    m = re.search(r"state=(\S+)", lines[j])
+                    if m:
+                        return m.group(1)
+        return ""
+
+    def wait_for_auth(self, timeout: int = 30, mac: str | None = None) -> bool:
+        start = time.time()
+        while time.time() - start < timeout:
+            if self.get_nds_state(mac) == "Authenticated":
+                return True
+            # Fallback: if backend delayed auth didn't fire, trigger manually
+            if time.time() - start > 10:
+                self.ssh(f"ndsctl auth {mac or self.phone_mac} 2>&1", timeout=5)
+            time.sleep(1)
+        return self.get_nds_state(mac) == "Authenticated"
+
+    def get_session(self, ip: str | None = None) -> dict:
+        ip = ip or self.phone_ip
+        resp = self.backend_curl_xff(self.backend_url("/balance"), ip)
+        try:
+            return json.loads(resp)
+        except json.JSONDecodeError:
+            return {"raw": resp}
+
+    def get_remaining_seconds(self, ip: str | None = None) -> int:
+        session = self.get_session(ip)
+        remaining_ms = session.get("remaining", 0)
+        return remaining_ms // 1000 if remaining_ms and remaining_ms > 0 else 0
+
+    def wait_for_session_expiry(self, mac: str | None = None, poll_interval: float = 1, max_wait: int = 120) -> int:
+        mac = mac or self.phone_mac
+        start = time.time()
+        while time.time() - start < max_wait:
+            if self.get_nds_state(mac) != "Authenticated":
+                return int(time.time() - start)
+            time.sleep(poll_interval)
+        raise TimeoutError(f"Session did not expire within {max_wait}s")
+
+    def reset_state(self, mac: str | None = None, adb=None):
+        if not mac and not self.phone_mac and adb:
+            detected = adb.wifi_mac()
+            if detected:
+                self.phone_mac = detected
+                log.info(f"reset_state auto-detected MAC: {detected}")
+        mac = mac or self.phone_mac
+        if adb:
+            adb.shell("am force-stop com.android.captiveportallogin")
+        if self.backend.has_sessions_json:
+            self.ssh("echo '{}' > /etc/tollgate/sessions.json")
+        self.restart_backend()
+        time.sleep(3)
+        self.ssh(f"ndsctl deauth {mac} 2>&1 || true")
+        self.ssh("echo '' > /tmp/tollgate-portal.log")
+        self.ssh("echo '' > /www/pending-token.txt")
+
+    def apply_pricing(self, step_size: int | None = None, metric: str = "milliseconds"):
+        if step_size is None:
+            from lib.constants import DEFAULT_STEP_SIZE_MS
+            step_size = DEFAULT_STEP_SIZE_MS
+        self.ssh(
+            f"sed -i 's/\"step_size\":[[:space:]]*[0-9]*/\"step_size\": {step_size}/' "
+            f"/etc/tollgate/config.json"
+        )
+        self.ssh(
+            f"sed -i 's/\"metric\":[[:space:]]*\"[^\"]*\"/\"metric\": \"{metric}\"/' "
+            f"/etc/tollgate/config.json"
+        )
+        self.restart_backend()
+        self._wait_for_backend()
+
+    def restore_pricing(self):
+        self.ssh("cp /etc/tollgate/config.json.test-backup /etc/tollgate/config.json")
+        self.restart_backend()
+        self._wait_for_backend()
+
+    def _wait_for_backend(self, timeout: int = 15):
+        start = time.time()
+        while time.time() - start < timeout:
+            code = self.api_status("/")
+            if code == 200:
+                return
+            time.sleep(1)
+        log.warning(f"Backend not healthy after {timeout}s")
+
+    def wait_for_cli_socket(self, timeout: int = 30, interval: int = 1) -> bool:
+        """Poll for CLI socket readiness after backend restart.
+
+        Returns True if /var/run/tollgate.sock exists within timeout seconds.
+        Returns False if timeout expires.
+        """
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                result = self.ssh("test -S /var/run/tollgate.sock && echo READY", timeout=5)
+                if "READY" in result:
+                    return True
+            except Exception:
+                pass
+            time.sleep(interval)
+        return False
+
+    def restart_backend(self, timeout: int = 30):
+        """Restart the backend service and wait for CLI socket to be ready.
+
+        Raises RuntimeError if the socket doesn't come back within timeout seconds.
+        """
+        self.ssh("service tollgate-wrt restart", timeout=15)
+        if not self.wait_for_cli_socket(timeout=timeout):
+            raise RuntimeError("Backend CLI socket did not become ready after restart")
+
+    def get_portal_log(self) -> str:
+        return self.ssh("cat /tmp/tollgate-portal.log 2>/dev/null")
+
+    def clear_portal_log(self):
+        self.ssh("echo '' > /tmp/tollgate-portal.log")
+
+    def enable_debug_portal(self):
+        self.ssh("mkdir -p /etc/tollgate && touch /etc/tollgate/debug-portal")
+
+    def disable_debug_portal(self):
+        self.ssh("rm -f /etc/tollgate/debug-portal")
+
+    def ensure_test_mint(self):
+        cfg_raw = self.ssh("cat /etc/tollgate/config.json")
+        cfg = json.loads(cfg_raw)
+        if any(m.get("url") == TEST_MINT_URL for m in cfg.get("accepted_mints", [])):
+            return
+        cfg.setdefault("accepted_mints", []).append({
+            "url": TEST_MINT_URL,
+            "min_balance": 0,
+            "balance_tolerance_percent": 0,
+            "payout_interval_seconds": 60,
+            "min_payout_amount": 0,
+            "price_per_step": 1,
+            "price_unit": "sats",
+            "purchase_min_steps": 0,
+        })
+        tmp = "/tmp/config-testmint.json"
+        with open(tmp, "w") as f:
+            json.dump(cfg, f, indent=2)
+        self.scp_to(tmp, "/etc/tollgate/config.json")
+        os.remove(tmp)
+        self.restart_backend()
+        log.info(f"Added {TEST_MINT_URL} to accepted mints, restarted backend")
+
+    def replace_mints(self, mint_urls: list[str] | None = None):
+        """Replace all accepted mints with only the specified URLs.
+        
+        Args:
+            mint_urls: List of mint URLs to use. Defaults to [TEST_MINT_URL].
+        """
+        if mint_urls is None:
+            mint_urls = [TEST_MINT_URL]
+        
+        # Read current config
+        cfg_raw = self.ssh("cat /etc/tollgate/config.json")
+        cfg = json.loads(cfg_raw)
+        
+        # Build new accepted_mints list
+        new_mints = []
+        for url in mint_urls:
+            new_mints.append({
+                "url": url,
+                "min_balance": 0,
+                "balance_tolerance_percent": 0,
+                "payout_interval_seconds": 60,
+                "min_payout_amount": 0,
+                "price_per_step": 1,
+                "price_unit": "sats",
+                "purchase_min_steps": 0,
+            })
+        
+        cfg["accepted_mints"] = new_mints
+        
+        tmp = "/tmp/config-replace-mints.json"
+        with open(tmp, "w") as f:
+            json.dump(cfg, f, indent=2)
+        self.scp_to(tmp, "/etc/tollgate/config.json")
+        os.remove(tmp)
+
+        self.restart_backend()
+
+        mint_str = ", ".join(mint_urls)
+        log.info(f"Replaced accepted mints with: {mint_str}, restarted backend")
+
+    def cli_command(self, command: str, args: list[str] | None = None, timeout: int = 10) -> dict:
+        if not self.backend.has_cli_socket:
+            raise NotImplementedError("Rust backend has no CLI socket")
+        payload: dict[str, object] = {"command": command}
+        if args:
+            payload["args"] = args
+        raw = self.ssh(
+            f"echo '{json.dumps(payload)}' | socat - UNIX-CONNECT:/var/run/tollgate.sock",
+            timeout=timeout,
+        )
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {"raw": raw}
+
+    def get_tollgate_version(self) -> dict:
+        return self.cli_command("version")
+
+    def get_wallet_info(self) -> dict:
+        return self.cli_command("wallet", args=["info"])
+
+    def get_wallet_balance(self) -> dict:
+        return self.cli_command("wallet", args=["balance"])
+
+    def get_tollgate_status(self) -> dict:
+        return self.cli_command("status")
+
+    def get_tollgate_logs(self, filter_expr: str = "tollgate", lines: int = 200) -> str:
+        return self.ssh(f"logread -l {lines} -e {filter_expr} 2>/dev/null")
+
+    def collect_logs(self, results_dir: str, adb=None, bundle: str | None = None):
+        raw = os.path.join(results_dir, "raw")
+        if bundle:
+            raw = os.path.join(raw, "failures", bundle)
+        os.makedirs(raw, exist_ok=True)
+        log_cmds = [
+            ("portal.log", "cat /tmp/tollgate-portal.log"),
+            ("backend.log", "logread -l 200 -e tollgate 2>/dev/null"),
+            ("ndsctl-status.txt", "timeout 5 ndsctl status 2>/dev/null || true"),
+            ("ndsctl-clients.txt", "timeout 5 ndsctl clients 2>/dev/null || true"),
+            ("iptables-nds.txt", "iptables -L ndsRTR -n -v 2>/dev/null || true"),
+            ("iptables-nds-out.txt", "iptables -L ndsOUT -n -v 2>/dev/null || true"),
+            ("tollgate-config.json", "cat /etc/tollgate/config.json 2>/dev/null || true"),
+            ("process-list.txt", "ps | grep -E 'tollgate|nodog' 2>/dev/null || true"),
+            ("dhcp-leases.txt", "cat /tmp/dhcp.leases 2>/dev/null || true"),
+            ("ipv6-addrs.txt", "ip -6 addr show br-lan scope global 2>/dev/null || echo 'none'"),
+        ]
+        if self.backend.has_sessions_json:
+            log_cmds.append(("tollgate-sessions.json", "cat /etc/tollgate/sessions.json 2>/dev/null || echo '{}'"))
+        for name, cmd in log_cmds:
+            try:
+                with open(os.path.join(raw, name), "w") as f:
+                    f.write(self.ssh(cmd, timeout=10))
+            except Exception:
+                pass
+        if adb:
+            try:
+                with open(os.path.join(raw, "logcat.txt"), "w") as f:
+                    f.write(adb.shell("logcat -d -t 200"))
+            except Exception:
+                pass

@@ -1,0 +1,19 @@
+name: destructive
+description: Destructive tests — firmware upgrade, reboot recovery. Opt-in only.
+deploy: true
+reset: false
+exclusive_router: true
+runners:
+  - name: destructive
+    command: TOLLGATE_ENABLE_SYSUPGRADE_TESTS=true npx playwright test tests/destructive/ --config=tests/playwright.config.mjs
+    framework: playwright
+    timeout: 600
+required_capabilities:
+  - router
+  - firmware_image
+  - recovery_access
+notes:
+  - These tests may leave the router in a transitional state
+  - Requires TOLLGATE_ENABLE_SYSUPGRADE_TESTS=true
+  - Requires physical recovery access (U-Boot)
+  - NEVER run as part of default PR path

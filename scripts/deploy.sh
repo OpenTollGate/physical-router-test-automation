@@ -73,11 +73,13 @@ if [ -z "$IPK_FILE" ]; then
 fi
 
 echo "==> Deploying ${IPK_FILE##*/} to ${ROUTER_USER}@${ROUTER_IP}..."
-sshpass -e scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$IPK_FILE" "${ROUTER_USER}@${ROUTER_IP}:/tmp/tollgate-wrt.ipk"
+# -O forces legacy SCP protocol; OpenWrt busybox lacks sftp-server subsystem
+sshpass -e scp -O -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "$IPK_FILE" "${ROUTER_USER}@${ROUTER_IP}:/tmp/tollgate-wrt.ipk"
 
 echo "==> Installing on router..."
+# --force-overwrite is the correct OpenWrt opkg flag (--force-replace does not exist)
 sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ROUTER_USER}@${ROUTER_IP}" \
-  'opkg install --force-replace /tmp/tollgate-wrt.ipk && /etc/init.d/tollgate-wrt restart && /etc/init.d/uhttpd restart && rm -f /tmp/tollgate-wrt.ipk'
+  'opkg install --force-overwrite /tmp/tollgate-wrt.ipk && /etc/init.d/tollgate-wrt restart && /etc/init.d/tollgate-basic restart 2>/dev/null; /etc/init.d/uhttpd restart && rm -f /tmp/tollgate-wrt.ipk'
 
 echo "==> Installed version:"
 sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "${ROUTER_USER}@${ROUTER_IP}" \

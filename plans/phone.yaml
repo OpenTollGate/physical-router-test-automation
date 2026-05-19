@@ -1,0 +1,14 @@
+name: phone
+description: Phone/device tests — requires Android device via ADB
+deploy: false
+reset: false
+exclusive_router: true
+runners:
+  - name: phone
+    command: ./scripts/run-phone.sh --no-render
+    framework: pytest
+    markers: [phone]
+    timeout: 300
+required_capabilities:
+  - router
+  - adb_device

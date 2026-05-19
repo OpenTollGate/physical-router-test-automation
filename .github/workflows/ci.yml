@@ -1,0 +1,248 @@
+# =============================================================================
+# GitHub Actions CI Workflow for Physical Router Test Automation
+# =============================================================================
+# This workflow provides automated testing for the physical router test automation
+# project. It supports two types of tests:
+#
+# 1. Lint/Collect Tests (always runs on ubuntu-latest):
+#    - Validates code quality
+#    - Verifies test collection
+#    - Checks imports
+#    - No hardware required
+#
+# 2. Physical Router Tests (self-hosted runner):
+#    - UI tests against LuCI interface
+#    - Physical router tests (network config, payment protocol, data allotment)
+#    - Requires a self-hosted runner with access to test routers
+#
+# To enable self-hosted runner jobs:
+#   1. Configure a self-hosted runner in GitHub Actions
+#   2. Uncomment the `runs-on` line in test-ui and test-physical jobs
+#   3. Add required secrets to repository settings
+# =============================================================================
+
+name: CI
+
+on:
+  # Trigger on push to main branch
+  push:
+    branches: [main]
+  # Trigger on pull requests to main branch
+  pull_request:
+    branches: [main]
+  # Allow manual dispatch for testing specific commits
+  workflow_dispatch:
+    inputs:
+      tollgate_commit:
+        description: 'TollGate commit hash to test'
+        required: false
+        default: ''
+      viewport:
+        description: 'Viewport (desktop or mobile)'
+        required: false
+        default: 'desktop'
+
+# =============================================================================
+# Job 1: Lint/Collect Tests
+# =============================================================================
+# Runs on standard GitHub-hosted ubuntu-latest runner (no hardware needed)
+# Purpose: Validate code quality, check imports, verify test collection
+# Status: Always runs (not conditional)
+# =============================================================================
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout repository code
+      - uses: actions/checkout@v4
+
+      # Set up Node.js 22
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Install dependencies
+      - run: npm install
+
+      # Install Playwright browsers and dependencies
+      - run: npx playwright install --with-deps
+
+      # Verify test collection (no hardware needed)
+      - name: Verify test collection
+        run: npm run test:list
+
+      # Check that all helper modules can be imported
+      - name: Check imports
+        run: |
+          node -e "Promise.all([
+            './tests/helpers/command.mjs',
+            './tests/helpers/inventory.mjs',
+            './tests/helpers/ssh.mjs',
+            './tests/helpers/network.mjs',
+            './tests/helpers/router-config.mjs',
+            './tests/helpers/payment-protocol.mjs'
+          ].map(p=>import(p))).then(()=>console.log('all helpers import OK'))"
+
+# =============================================================================
+# Job 2: LuCI UI Tests (Self-Hosted)
+# =============================================================================
+# Runs physical router UI tests against LuCI interface
+# Requirements:
+#   - Self-hosted runner with access to test router
+#   - Secrets: TOLLGATE_LUCI_URL, TOLLGATE_LUCI_USER, TOLLGATE_LUCI_PASSWORD
+#   - Secrets: TOLLGATE_SSH_HOST
+#
+# To enable:
+#   1. Uncomment the `runs-on` line below
+#   2. Label the self-hosted runner with "tollgate-router" label
+#   3. Configure secrets in repository settings
+# =============================================================================
+  test-ui:
+    needs: lint
+    # Disabled until self-hosted runner is configured
+    if: false
+    runs-on: [self-hosted, tollgate-router]
+    env:
+      # LuCI interface URL (e.g., http://192.168.1.1)
+      TOLLGATE_LUCI_URL: ${{ secrets.TOLLGATE_LUCI_URL }}
+      # LuCI username for authentication
+      TOLLGATE_LUCI_USER: ${{ secrets.TOLLGATE_LUCI_USER }}
+      # LuCI password for authentication
+      TOLLGATE_LUCI_PASSWORD: ${{ secrets.TOLLGATE_LUCI_PASSWORD }}
+      # SSH host for remote access
+      TOLLGATE_SSH_HOST: ${{ secrets.TOLLGATE_SSH_HOST }}
+    steps:
+      # Checkout repository code
+      - uses: actions/checkout@v4
+
+      # Set up Node.js 22
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Install dependencies
+      - run: npm install
+
+      # Install Playwright browsers and dependencies
+      - run: npx playwright install --with-deps
+
+      # Run LuCI UI tests (excluding desktop interactions)
+      - name: Run LuCI UI tests
+        run: npx playwright test tests/tollgate.spec.mjs --config=tests/playwright.config.mjs
+
+      # Upload test report artifacts (even if tests fail)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-report
+          path: test-results/
+
+# =============================================================================
+# Job 3: Physical Router Tests (Self-Hosted)
+# =============================================================================
+# Runs physical router tests for:
+#   - Network configuration
+#   - Payment protocol
+#   - Data allotment
+#   - WiFi client tests
+#
+# Requirements:
+#   - Self-hosted runner connected to physical routers
+#   - Secrets: TOLLGATE_LUCI_PASSWORD, TOLLGATE_SSH_HOST, TOLLGATE_SSH_PASSWORD
+#   - Secrets: TOLLGATE_WIFI_INTERFACE
+#   - Environment variables for test configuration
+#
+# To enable:
+#   1. Uncomment the `runs-on` line below
+#   2. Label the self-hosted runner with "tollgate-router" label
+#   3. Configure secrets in repository settings
+# =============================================================================
+  test-physical:
+    needs: lint
+    # Disabled until self-hosted runner is configured
+    if: false
+    runs-on: [self-hosted, tollgate-router]
+    env:
+      # LuCI password (for UI tests)
+      TOLLGATE_LUCI_PASSWORD: ${{ secrets.TOLLGATE_LUCI_PASSWORD }}
+      # SSH host for remote access
+      TOLLGATE_SSH_HOST: ${{ secrets.TOLLGATE_SSH_HOST }}
+      # SSH password for remote access
+      TOLLGATE_SSH_PASSWORD: ${{ secrets.TOLLGATE_SSH_PASSWORD }}
+      # WiFi interface name (e.g., wlan0, eth1)
+      TOLLGATE_WIFI_INTERFACE: ${{ secrets.TOLLGATE_WIFI_INTERFACE }}
+      # Enable WiFi client tests
+      TOLLGATE_ENABLE_WIFI_CLIENT_TESTS: true
+      # Enable data allotment tests
+      TOLLGATE_ENABLE_DATA_ALLOTMENT_TESTS: true
+    steps:
+      # Checkout repository code
+      - uses: actions/checkout@v4
+
+      # Set up Node.js 22
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Install dependencies
+      - run: npm install
+
+      # Install Playwright browsers and dependencies
+      - run: npx playwright install --with-deps
+
+      # Run physical router tests (excluding desktop interactions)
+      - name: Run physical router tests
+        run: npx playwright test --config=tests/playwright.config.mjs --grep-invert "desktop interactions"
+
+      # Upload test report artifacts (even if tests fail)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: physical-test-report
+          path: test-results/
+
+# =============================================================================
+# Job 4: Publish Test Report (Main Branch Only)
+# =============================================================================
+# Publishes test report to GitHub Pages after successful runs on main branch
+# Requirements:
+#   - Dependencies must be installed
+#   - Secrets: TOLLGATE_LUCI_URL, TOLLGATE_LUCI_USER, TOLLGATE_LUCI_PASSWORD
+#
+# Runs only when:
+#   - Event is a push to main branch
+#   - test-ui job succeeds (uses needs: [test-ui])
+# =============================================================================
+  publish:
+    needs: [test-ui]
+    # Only run on push to main (not PRs)
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    env:
+      # Enable publish mode
+      TOLLGATE_PUBLISH: true
+      # Keep last 20 reports on GitHub Pages
+      TOLLGATE_GH_PAGES_KEEP: 20
+    steps:
+      # Checkout repository code
+      - uses: actions/checkout@v4
+
+      # Set up Node.js 22
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Install dependencies
+      - run: npm install
+
+      # Install Playwright browsers and dependencies
+      - run: npx playwright install --with-deps
+
+      # Run tests and publish report
+      # Uses manual dispatch commit if provided, otherwise current commit
+      - name: Run tests and publish report
+        env:
+          TOLLGATE_LUCI_URL: ${{ secrets.TOLLGATE_LUCI_URL }}
+          TOLLGATE_LUCI_USER: ${{ secrets.TOLLGATE_LUCI_USER }}
+          TOLLGATE_LUCI_PASSWORD: ${{ secrets.TOLLGATE_LUCI_PASSWORD }}
+        run: bash scripts/run-tests.sh ${{ github.event.inputs.tollgate_commit || github.sha }} desktop

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TollGate Test Reports</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:#f0f2f5;color:#1a1a2e;line-height:1.5}
+.header{background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);color:#fff;padding:1.5rem 2rem;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+.header h1{font-size:1.5rem;font-weight:600;letter-spacing:.5px}
+.header .updated{font-size:.85rem;opacity:.8}
+.container{max-width:1400px;margin:2rem auto;padding:0 1rem}
+.summary{display:flex;gap:1rem;margin-bottom:2rem;flex-wrap:wrap}
+.summary-card{background:#fff;border-radius:8px;padding:1rem 1.5rem;flex:1;min-width:160px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.summary-card .label{font-size:.8rem;text-transform:uppercase;letter-spacing:.5px;color:#666;margin-bottom:.25rem}
+.summary-card .value{font-size:1.75rem;font-weight:700;color:#1a1a2e}
+.commit-group{background:#fff;border-radius:8px;margin-bottom:1.5rem;box-shadow:0 1px 3px rgba(0,0,0,.08);overflow:hidden}
+.commit-header{padding:1rem 1.5rem;border-bottom:1px solid #eee;display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
+.commit-header .hash{font-family:"SF Mono",SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace;font-size:1rem;font-weight:600}
+.commit-header .hash a{color:#302b63;text-decoration:none}
+.commit-header .hash a:hover{text-decoration:underline}
+.badge{display:inline-block;font-size:.75rem;font-weight:500;padding:2px 8px;border-radius:12px;vertical-align:middle}
+.badge-branch{background:#e8f0fe;color:#1a73e8;text-decoration:none}
+.badge-branch:hover{background:#d2e3fc}
+.badge-pr{background:#e6f4ea;color:#137333;text-decoration:none}
+.badge-pr:hover{background:#ceead6}
+.badge-passed{background:#e6f4ea;color:#137333}
+.badge-failed{background:#fce8e8;color:#d93025}
+.badge-errored{background:#fce8e8;color:#d93025}
+.badge-partial{background:#fce8b2;color:#b06000}
+.badge-version{background:#f1f3f4;color:#5f6368}
+.badge-vlab{background:#f3e8fd;color:#6a1b9a}
+.runs{padding:.5rem 0}
+.run-row{display:grid;grid-template-columns:155px 50px 75px 55px 180px 65px 1fr 50px 55px;align-items:center;padding:.65rem 1.5rem;border-bottom:1px solid #f5f5f5;font-size:.875rem;gap:.5rem}
+.run-row:last-child{border-bottom:none}
+.run-row:hover{background:#fafbfc}
+.run-time{color:#555;font-variant-numeric:tabular-nums}
+.run-plan{font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.3px;background:#fce8b2;color:#b06000;padding:2px 6px;border-radius:4px;text-align:center}
+.run-router,.run-client{color:#444;font-family:"SF Mono",SFMono-Regular,Consolas,monospace;font-size:.75rem;white-space:nowrap;min-width:0;max-width:180px;overflow:hidden;text-overflow:ellipsis;display:block}
+.runner-summary{font-size:.8rem;color:#555}
+.runner-summary .rname{font-weight:600;color:#333}
+.runner-summary .rcount{font-variant-numeric:tabular-nums}
+.runner-summary .rp{color:#137333}
+.runner-summary .rf{color:#d93025}
+.runner-summary .rs{color:#80868b}
+.run-dur{font-variant-numeric:tabular-nums;color:#555;font-size:.8rem}
+/* biome-ignore lint/style/noDescendingSpecificity: extracted dashboard CSS preserved verbatim */
+.run-link a{color:#1a73e8;text-decoration:none;font-weight:500;font-size:.8rem}
+/* biome-ignore lint/style/noDescendingSpecificity: extracted dashboard CSS preserved verbatim */
+.run-link a:hover{text-decoration:underline}
+.run-header{display:grid;grid-template-columns:155px 50px 75px 55px 180px 65px 1fr 50px 55px;padding:.5rem 1.5rem;background:#fafbfc;font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#666;border-bottom:1px solid #eee;gap:.5rem}
+.empty{padding:3rem;text-align:center;color:#888;font-size:1rem}
+</style>
+</head>
+<body>
+<div class="header">
+<h1>TollGate Test Reports</h1>
+<div class="updated">Last updated: [[ last_updated ]]</div>
+</div>
+<div class="container">
+<div class="summary">
+<div class="summary-card"><div class="label">Total Runs</div><div class="value">[[ total_runs ]]</div></div>
+<div class="summary-card"><div class="label">Commits Tested</div><div class="value">[[ total_commits ]]</div></div>
+</div>
+[% if not commit_groups %]
+<div class="empty">No test reports found.</div>
+[% else %]
+[% for group in commit_groups %]
+<div class="commit-group">
+<div class="commit-header">
+[% if group.commit and group.commit != 'unknown' and group.commit_url %]
+<span class="hash"><a href="[[ group.commit_url ]]">[[ group.short ]]</a></span>
+[% else %]
+<span class="hash">[[ group.short ]]</span>
+[% endif %]
+[% if group.version and group.version != 'unknown' %]
+<span class="badge badge-version" title="OpenWrt: [[ group.openwrt_version ]] | Built: [[ group.build_time ]]">[[ group.version ]]</span>
+[% endif %]
+[% if group.branch and group.branch != 'unknown' %]
+<a class="badge badge-branch" href="[[ group.branch_url ]]">[[ group.branch ]]</a>
+[% endif %]
+[% if group.pr %]
+<a class="badge badge-pr" href="[[ group.pr_url ]]">#[[ group.pr ]]</a>
+[% endif %]
+[% if group.virtual_lab %]
+<span class="badge badge-vlab" title="Virtual Lab">Virtual Lab</span>
+[% endif %]
+</div>
+<div class="run-header">
+<span>Timestamp</span>
+<span>Plan</span>
+<span>Status</span>
+<span>Backend</span>
+<span>Router</span>
+<span>Client</span>
+<span>Runners</span>
+<span>Dur.</span>
+<span>Report</span>
+</div>
+<div class="runs">
+[% for run in group.runs %]
+<div class="run-row">
+<span class="run-time">[[ run.started_at|format_ts ]]</span>
+<span class="run-plan">[[ run.test_plan or '-' ]]</span>
+<span><span class="badge badge-[[ run.badge_status ]]">[[ run.badge_status ]]</span></span>
+<span class="run-client">[[ run.backend ]]</span>
+<span class="run-router" title="[% if run.installed_version %]Version: [[ run.installed_version ]]&#10;OpenWrt: [[ run.openwrt_version ]][% endif %]">[% if run.router_id == 'unknown' and run.installed_version and run.installed_version != 'unknown' %][[ run.installed_version ]][% elif run.router_id != 'unknown' %][[ run.router_id ]][% else %]-[% endif %]</span>
+<span class="run-client">[[ run.client_type ]]</span>
+<span class="runner-summary">[% if run.runners %][% for runner in run.runners %]<span class="rname">[[ runner.name ]]</span> <span class="rcount"><span class="rp">[[ get(runner, 'counts.passed', 0) ]]✓</span><span class="rf">[[ get(runner, 'counts.failed', 0) + get(runner, 'counts.errors', 0) ]]✗</span><span class="rs">[[ get(runner, 'counts.skipped', 0) ]]○</span></span>[% if not loop.last %] &nbsp;/ [% endif %][% endfor %][% else %]<span class="rcount"><span class="rp">[[ get(run, 'counts.passed', 0) ]]✓</span> <span class="rf">[[ get(run, 'counts.failed', 0) ]]✗</span> <span class="rs">[[ get(run, 'counts.skipped', 0) ]]○</span></span>[% endif %]</span>
+<span class="run-dur">[[ run.duration_ms|format_duration ]]</span>
+<span class="run-link"><a href="[[ run.report_path ]]">View</a></span>
+</div>
+[% endfor %]
+</div>
+</div>
+[% endfor %]
+[% endif %]
+</div>
+</body>
+</html>

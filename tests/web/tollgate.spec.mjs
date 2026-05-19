@@ -1,5 +1,9 @@
 import { test, expect } from '@playwright/test';
-import { fileExists, readFile, cleanupFiles, getWalletBalance, getWalletInfo, drainViaCLI, fundViaCLI, mintTestnutTokens, getPrivateSSID, setPrivateSSID, isSafeForNetworkTests } from './helpers/router.mjs';
+import { fileExists, readFile, cleanupFiles } from '../helpers/router-files.mjs';
+import { getWalletBalance, getWalletInfo, drainViaCLI, fundViaCLI } from '../helpers/router-wallet.mjs';
+import { mintTestnutTokens } from '../helpers/payment-protocol.mjs';
+import { getPrivateSSID, setPrivateSSID } from '../helpers/router-config.mjs';
+import { isSafeForNetworkTests } from '../helpers/network.mjs';
 
 const username = process.env.TOLLGATE_LUCI_USER;
 const password = process.env.TOLLGATE_LUCI_PASSWORD;
@@ -61,7 +65,7 @@ async function waitForAdvanced(page) {
 
 // ── Shared: all viewports ───────────────────────────────────
 
-test('dashboard loads', async ({ page }) => {
+test('dashboard loads', { annotation: { type: 'publish-screenshot', description: 'No sensitive data: version info, 0 sats balance' } }, async ({ page }) => {
 	await page.waitForFunction(
 		() => { const el = document.getElementById('ov_version'); return el && el.textContent.trim() !== '—'; },
 		{ timeout: 15000 }
@@ -113,7 +117,7 @@ test.describe('desktop interactions', () => {
 		});
 	});
 
-	test('dashboard: fund empty warning', async ({ page }) => {
+	test('dashboard: fund empty warning', { annotation: { type: 'publish-screenshot', description: 'No sensitive data: "Enter a token first" error' } }, async ({ page }) => {
 		await page.waitForTimeout(3000);
 		await page.evaluate(() => { const el = document.getElementById('wl_token'); if (el) el.value = ''; });
 		await page.getByRole('button', { name: 'Fund Wallet' }).click();
@@ -121,7 +125,7 @@ test.describe('desktop interactions', () => {
 		expect(await $('wl_fund_state')(page)).toContain('Enter a token');
 	});
 
-	test('dashboard: drain modal', async ({ page }) => {
+	test('dashboard: drain modal', { annotation: { type: 'publish-screenshot', description: 'No sensitive data: modal dialog only' } }, async ({ page }) => {
 		await page.waitForTimeout(3000);
 		await page.getByRole('button', { name: 'Drain All Funds' }).click();
 		await page.waitForTimeout(500);
@@ -474,7 +478,7 @@ test.describe('desktop interactions', () => {
 		await editor.fill(original);
 	});
 
-	test('drain: modal appears and can be cancelled', async ({ page }) => {
+	test('drain: modal appears and can be cancelled', { annotation: { type: 'publish-screenshot', description: 'No sensitive data: modal dialog only' } }, async ({ page }) => {
 		await page.waitForTimeout(3000);
 		await page.getByRole('button', { name: 'Drain All Funds' }).click();
 		await page.waitForTimeout(500);
@@ -549,7 +553,7 @@ test.describe('desktop interactions', () => {
 		expect(fileExists(filePath)).toBeTruthy();
 		const content = readFile(filePath);
 		expect(content).toContain('TollGate Wallet Drain');
-		expect(content).toMatch(/cashuA/i);
+		expect(content).toMatch(/cashu[AB]/i);
 
 		expect(getWalletBalance()).toBe(0);
 
@@ -572,9 +576,17 @@ test.describe('desktop interactions', () => {
 
 		const info = getWalletInfo();
 		expect(info?.data?.total_balance).toBeGreaterThan(0);
+
+		// Assert all funded mints are testnet (safety check for publish)
+		const mintBalances = info?.data?.mint_balances || {};
+		for (const [url, bal] of Object.entries(mintBalances)) {
+			if (bal > 0) {
+				expect(url.toLowerCase()).toContain('testnut');
+			}
+		}
 	});
 
-	test('fund: garbage token shows error', async ({ page }) => {
+	test('fund: garbage token shows error', { annotation: { type: 'publish-screenshot', description: 'No sensitive data: invalid token error' } }, async ({ page }) => {
 		await page.waitForTimeout(3000);
 		await page.evaluate(() => { const el = document.getElementById('wl_token'); if (el) el.value = 'not-a-valid-token-at-all'; });
 		await page.getByRole('button', { name: 'Fund Wallet' }).click();
@@ -621,7 +633,7 @@ test.describe('desktop interactions', () => {
 				expect(fileExists(filePath)).toBeTruthy();
 				const content = readFile(filePath);
 				expect(content).toContain('TollGate Wallet Drain');
-				expect(content).toMatch(/cashuA/i);
+				expect(content).toMatch(/cashu[AB]/i);
 				cleanupFiles(filePath);
 			}
 		}

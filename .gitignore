@@ -2,11 +2,45 @@ node_modules/
 test-results/
 report/
 playwright-report/
+test-run-*
 .DS_Store
 *.ipk
+scripts/mint-token/mint-token
 .env
+
+# Python
+__pycache__/
+*.pyc
+_cashu_db/
+/report.html
+results/
+
+# Router inventory (contains IPs, SSIDs)
+config/routers.json
+
+# Firmware build credentials (contains passwords)
+credentials/
+
+# Temporary work directories
+.tmp/
+findings/
+
+# Agent orchestration artifacts
+.sisyphus/
+
+# Playwright MCP session logs
+.playwright-mcp/
+
+# Hardware test environment files
 **/routers.env
 **/*.lock
 hardware.lock
 routers.lock
-scripts/__pycache__/
+
+# Screenshots and test artifacts — never commit or publish these
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webm
+*.mp4

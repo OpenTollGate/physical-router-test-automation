@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Test Report — <!--[[ run.get("run_id", "report")|esc ]]--></title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
+<style>*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+background:#f5f5f7;color:#1a1a2e;line-height:1.6;padding:1rem}
+.mono{font-family:"SF Mono",SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace}
+.container{max-width:1100px;margin:0 auto}
+.card{background:#fff;border-radius:8px;padding:1.5rem;margin-bottom:1.25rem;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.section-title{font-size:1rem;font-weight:700;margin-bottom:0.75rem;color:#1a1a2e;
+border-bottom:2px solid #e8eaed;padding-bottom:0.4rem}
+h1{font-size:1.5rem;font-weight:700;margin-bottom:0.5rem}
+.meta-grid{display:grid;grid-template-columns:140px 1fr;gap:4px 12px;font-size:0.875rem}
+.meta-grid .label{color:#80868b;font-weight:500}
+.meta-grid .value{color:#1a1a2e}
+a{color:#1a73e8;text-decoration:none}
+a:hover{text-decoration:underline}
+.runners-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1rem}
+.runner-card{background:#fff;border-radius:8px;padding:1.25rem;box-shadow:0 1px 3px rgba(0,0,0,.08);
+border-left:4px solid #e8eaed}
+.runner-card.passed{border-left-color:#137333}
+.runner-card.failed,.runner-card.errored{border-left-color:#d93025}
+.runner-card .runner-name{font-size:1rem;font-weight:700;margin-bottom:0.5rem}
+.runner-card .runner-meta{font-size:0.8rem;color:#80868b;margin-bottom:0.75rem}
+.counts-row{display:flex;gap:0.75rem;flex-wrap:wrap;font-size:0.8rem;font-weight:600}
+.counts-row .c-pass{color:#137333}.counts-row .c-fail{color:#d93025}
+.counts-row .c-skip{color:#80868b}.counts-row .c-flaky{color:#b06000}
+.counts-row .c-err{color:#ea4335}
+.artifacts-links{margin-top:0.6rem;font-size:0.8rem}
+.artifacts-links a{margin-right:0.75rem}
+table{width:100%;border-collapse:collapse;font-size:0.875rem}
+th{background:#f1f3f4;font-weight:600;text-align:left;padding:8px 10px;
+border-bottom:2px solid #dadce0;white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid #f1f3f4}
+tr:hover td{background:#fafbfc}
+.mono-cell{font-family:"SF Mono",SFMono-Regular,Consolas,monospace;font-size:0.8rem}
+details{margin-bottom:0}
+details>summary{cursor:pointer;font-size:1rem;font-weight:700;padding:0.4rem 0;
+border-bottom:2px solid #e8eaed;margin-bottom:0.75rem;user-select:none}
+details>summary:hover{color:#1a73e8}
+.footer{font-size:0.75rem;color:#80868b;text-align:center;padding:1.5rem 0 0.5rem;
+border-top:1px solid #e8eaed;margin-top:1rem}
+.native-links{list-style:none;padding:0}
+.native-links li{padding:4px 0;font-size:0.875rem}
+@media(max-width:700px){
+.meta-grid{grid-template-columns:1fr;gap:2px}
+.runners-grid{grid-template-columns:1fr}
+body{padding:0.5rem}
+}
+</style>
+</head>
+<body>
+<div class="container">
+<!--[[ render_header(run) ]]-->
+<!--[[ render_sut(run) ]]-->
+<!--[[ render_lab(run) ]]-->
+<!--[[ render_runners(run) ]]-->
+<!--[[ render_failed(run, summary) ]]-->
+<!--[[ render_skipped(run, summary) ]]-->
+<!--[[ render_native_links(run) ]]-->
+<!--[[ render_footer(run, generated_at) ]]-->
+</div>
+</body>
+</html>

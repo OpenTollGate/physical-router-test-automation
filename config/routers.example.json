@@ -1,0 +1,17 @@
+{
+  "default": "lab-router-a",
+  "routers": {
+    "lab-router-a": {
+      "model": "example-openwrt-router",
+      "luciUrl": "http://192.168.13.112:8080",
+      "sshHost": "192.168.13.112",
+      "sshUser": "root",
+      "arch": "aarch64_cortex-a53",
+      "wifiInterface": "wlan0",
+      "tollgateSsidPrefix": "TollGate-",
+      "openwrtVersion": "24.10.1",
+      "openwrtTarget": "mediatek/filogic",
+      "openwrtProfile": "glinet_gl-mt3000"
+    }
+  }
+}
