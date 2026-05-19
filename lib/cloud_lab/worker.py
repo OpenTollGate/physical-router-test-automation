@@ -12,6 +12,7 @@ import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from lib.cloud_lab.constants import (
     CLOUD_ARCH,
@@ -19,6 +20,8 @@ from lib.cloud_lab.constants import (
     DEBIAN_MAC,
     OPENWRT_IP,
     RESULTS_ROOT,
+    SELLER_OPENWRT_IP,
+    SELLER_OPENWRT_MAC,
     SUITE_REPO_URL,
     TEST_DIR,
     VIRT_LAB_PASSWORD,
@@ -40,6 +43,9 @@ class WorkerConfig:
     artifact_repo: str
     suite_ref: str
     backend: str
+    reseller_scenarios: bool
+    secondary_router_host: str
+    secondary_router_port: str
     publish: bool
     project: str
     zone: str
@@ -56,6 +62,13 @@ def _metadata_get(key: str) -> str:
         return resp.read().decode().strip()
 
 
+def _metadata_get_optional(key: str, default: str = "") -> str:
+    try:
+        return _metadata_get(key)
+    except Exception:
+        return default
+
+
 def load_config_from_metadata() -> WorkerConfig:
     return WorkerConfig(
         run_id=_metadata_get("tollgate-run-id"),
@@ -66,6 +79,9 @@ def load_config_from_metadata() -> WorkerConfig:
         artifact_repo=_metadata_get("tollgate-artifact-repo"),
         suite_ref=_metadata_get("tollgate-suite-ref"),
         backend=_metadata_get("tollgate-backend"),
+        reseller_scenarios=_metadata_get_optional("tollgate-reseller-scenarios").lower() in ("true", "1", "yes"),
+        secondary_router_host=_metadata_get_optional("tollgate-secondary-router-host"),
+        secondary_router_port=_metadata_get_optional("tollgate-secondary-router-port"),
         publish=_metadata_get("tollgate-publish").lower() in ("true", "1", "yes"),
         project=_metadata_get("tollgate-project"),
         zone=_metadata_get("tollgate-zone"),
@@ -118,7 +134,12 @@ def ensure_suite_checkout(config: WorkerConfig) -> None:
         _run(f"cd {TEST_DIR} && git checkout {shlex.quote(config.suite_ref)}", timeout=60)
 
 
-def write_env_file(backend: str) -> None:
+def write_env_file(config: WorkerConfig) -> None:
+    reseller_scenarios = "1" if config.reseller_scenarios else ""
+    backend = config.backend
+    secondary_host = config.secondary_router_host
+    if config.reseller_scenarios and not secondary_host:
+        secondary_host = SELLER_OPENWRT_IP
     env_content = (
         f"TOLLGATE_LUCI_PASSWORD={VIRT_LAB_PASSWORD}\n"
         f"TOLLGATE_SSH_PASSWORD={VIRT_LAB_PASSWORD}\n"
@@ -136,6 +157,10 @@ def write_env_file(backend: str) -> None:
         f"TOLLGATE_BACKEND={backend}\n"
         f"TOLLGATE_VIEWPORT=desktop\n"
         f"TOLLGATE_DISABLE_ARTIFACT_RERUN=1\n"
+        f"TOLLGATE_ENABLE_RESELLER_SCENARIOS={reseller_scenarios}\n"
+        f"TOLLGATE_SECONDARY_ROUTER_HOST={secondary_host}\n"
+        f"TOLLGATE_SECONDARY_ROUTER_PORT={config.secondary_router_port}\n"
+        f"TOLLGATE_SECONDARY_ROUTER_PASSWORD={VIRT_LAB_PASSWORD}\n"
         f"GH_TOKEN={os.environ.get('GH_TOKEN', '')}\n"
     )
     Path(TEST_DIR, ".env").write_text(env_content)
@@ -160,7 +185,7 @@ def ensure_outer_deps() -> None:
     r = _run("test -x /tmp/cashu-venv/bin/cashu && echo CASHU_OK", timeout=10, check=False)
     if "CASHU_OK" not in r.stdout:
         log.info("Setting up cashu CLI venv...")
-        _run(
+        r = _run(
             "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv >/dev/null && "
             "rm -rf /tmp/cashu-venv && python3 -m venv /tmp/cashu-venv && "
             "/tmp/cashu-venv/bin/pip install -q --upgrade pip && "
@@ -175,7 +200,10 @@ def ensure_outer_deps() -> None:
             "PY\n"
             "test -x /tmp/cashu-venv/bin/cashu && echo CASHU_OK",
             timeout=240,
+            check=False,
         )
+        if "CASHU_OK" not in (r.stdout or ""):
+            log.warning("Cashu CLI install failed (non-fatal, some tests will skip)")
 
 
 def ensure_github_cli(token: str) -> None:
@@ -209,8 +237,9 @@ def reset_openwrt_overlay_only() -> None:
         f"cd {VIRT_LAB_WORKDIR} && "
         "OWRT_BASE=images/openwrt-base.qcow2; "
         "[ -f \"$OWRT_BASE\" ] || OWRT_BASE=../images/openwrt-base.qcow2; "
-        "rm -f overlays/tollgate-poc.qcow2 && "
-        "qemu-img create -f qcow2 -F qcow2 -b \"$OWRT_BASE\" overlays/tollgate-poc.qcow2 >/dev/null",
+        "rm -f overlays/tollgate-poc.qcow2 overlays/tollgate-seller.qcow2 && "
+        "qemu-img create -f qcow2 -F qcow2 -b \"$OWRT_BASE\" overlays/tollgate-poc.qcow2 >/dev/null && "
+        "qemu-img create -f qcow2 -F qcow2 -b \"$OWRT_BASE\" overlays/tollgate-seller.qcow2 >/dev/null",
         timeout=60,
     )
     r = _run(f"test -f {VIRT_LAB_WORKDIR}/overlays/debian-client.qcow2 && echo DEBIAN_OVERLAY_OK", check=False)
@@ -240,6 +269,9 @@ def setup_bridge() -> None:
         "ip tuntap add dev tg-poc-tap2 mode tap user root 2>/dev/null || true; "
         "ip link set tg-poc-tap2 master tg-poc-br 2>/dev/null || true; "
         "ip link set tg-poc-tap2 up; "
+        "ip tuntap add dev tg-poc-tap3 mode tap user root 2>/dev/null || true; "
+        "ip link set tg-poc-tap3 master tg-poc-br 2>/dev/null || true; "
+        "ip link set tg-poc-tap3 up; "
         "iptables -t nat -C POSTROUTING -s 10.99.99.0/24 ! -o tg-poc-br -j MASQUERADE 2>/dev/null || "
         "iptables -t nat -A POSTROUTING -s 10.99.99.0/24 ! -o tg-poc-br -j MASQUERADE; "
         f"mkdir -p {VIRT_LAB_WORKDIR}/run",
@@ -247,11 +279,42 @@ def setup_bridge() -> None:
     )
 
 
-def start_inner_vms() -> None:
+def _configure_openwrt_identity(host: str, ip: str, gateway: str = "10.99.99.2") -> None:
+    script = (
+        f"uci set network.lan.ipaddr='{ip}'; "
+        "uci set network.lan.netmask='255.255.255.0'; "
+        f"uci set network.lan.gateway='{gateway}'; "
+        "uci set network.lan.dns='8.8.8.8'; "
+        "uci commit network; /etc/init.d/network restart >/dev/null 2>&1 &"
+    )
+    _inner_ssh(host, script, timeout=20)
+
+
+def start_inner_vms(config: WorkerConfig) -> None:
     setup_bridge()
     reset_openwrt_overlay_only()
 
-    log.info("Starting OpenWrt VM...")
+    if config.reseller_scenarios and not config.secondary_router_host:
+        log.info("Starting managed seller OpenWrt VM for reseller scenarios...")
+        _run(
+            f"cd {VIRT_LAB_WORKDIR} && "
+            "setsid -f qemu-system-x86_64 -enable-kvm -m 256 -smp 1 -nographic "
+            "-drive file=overlays/tollgate-seller.qcow2,format=qcow2,if=virtio "
+            "-netdev tap,id=net0,ifname=tg-poc-tap3,script=no,downscript=no "
+            f"-device virtio-net-pci,netdev=net0,mac={SELLER_OPENWRT_MAC} "
+            "-pidfile run/openwrt-seller.pid </dev/null >/tmp/openwrt-seller.log 2>&1",
+            timeout=20,
+        )
+        if not _wait_inner_ssh(OPENWRT_IP):
+            raise RuntimeError("Seller OpenWrt VM did not boot at default IP")
+        _configure_openwrt_identity(OPENWRT_IP, SELLER_OPENWRT_IP)
+        time.sleep(8)
+        if not _wait_inner_ssh(SELLER_OPENWRT_IP):
+            raise RuntimeError("Seller OpenWrt VM did not become reachable at managed IP")
+        config.secondary_router_host = SELLER_OPENWRT_IP
+        log.info("Seller OpenWrt VM SSH OK at %s", SELLER_OPENWRT_IP)
+
+    log.info("Starting reseller OpenWrt VM...")
     _run(
         f"cd {VIRT_LAB_WORKDIR} && "
         "setsid -f qemu-system-x86_64 -enable-kvm -m 256 -smp 1 -nographic "
@@ -263,7 +326,7 @@ def start_inner_vms() -> None:
     )
     if not _wait_inner_ssh(OPENWRT_IP):
         raise RuntimeError("OpenWrt VM did not become reachable")
-    log.info("OpenWrt VM SSH OK")
+    log.info("Reseller OpenWrt VM SSH OK")
 
     _run(
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
@@ -310,24 +373,49 @@ def ensure_debian_client_deps() -> bool:
 
 
 def deploy_tollgate(config: WorkerConfig) -> None:
-    repo_arg = shlex.quote(config.artifact_repo)
-    branch_arg = shlex.quote(config.sut_branch)
-    run_id_arg = shlex.quote(config.artifact_run_id)
-    backend_arg = shlex.quote(config.backend)
-    py = (
-        "import sys,logging,os;"
-        "os.environ['TOLLGATE_DISABLE_ARTIFACT_RERUN']='1';"
-        "logging.basicConfig(level=logging.INFO,format='%(asctime)s [%(name)s] %(message)s',datefmt='%H:%M:%S');"
-        "from lib.router import Router;"
-        "from lib.deploy import deploy_branch;"
-        "from lib.backend import BackendConfig;"
-        f"b=BackendConfig({backend_arg});"
-        f"r=Router(host='{OPENWRT_IP}',phone_ip='',phone_mac='',domain='',backend=b);"
-        f"result=deploy_branch(r,{branch_arg},arch='{CLOUD_ARCH}',force=True,reboot=False,"
-        f"repo={repo_arg},backend=b,run_id={run_id_arg});"
-        "print(f\"version={result['installed_version']} health={result['health_code']} success={result['success']}\");"
-        "sys.exit(0 if result['success'] else 1)"
+    repo_arg = repr(config.artifact_repo)
+    branch_arg = repr(config.sut_branch)
+    run_id_arg = repr(config.artifact_run_id)
+    backend_arg = repr(config.backend)
+    py = f"""
+import logging
+import os
+import sys
+
+from lib.backend import BackendConfig
+from lib.deploy import deploy_branch
+from lib.router import Router
+
+os.environ["TOLLGATE_DISABLE_ARTIFACT_RERUN"] = "1"
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s", datefmt="%H:%M:%S")
+
+backend = BackendConfig({backend_arg})
+hosts = [{OPENWRT_IP!r}]
+secondary = {config.secondary_router_host!r}
+if secondary:
+    hosts.append(secondary)
+
+ok = True
+for host in hosts:
+    router = Router(host=host, phone_ip="", phone_mac="", domain="", backend=backend)
+    result = deploy_branch(
+        router,
+        {branch_arg},
+        arch={CLOUD_ARCH!r},
+        force=True,
+        reboot=False,
+        repo={repo_arg},
+        backend=backend,
+        run_id={run_id_arg},
     )
+    print(
+        f"host={{host}} version={{result['installed_version']}} "
+        f"health={{result['health_code']}} success={{result['success']}}"
+    )
+    ok = ok and bool(result["success"])
+
+sys.exit(0 if ok else 1)
+"""
     _run(
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
         f"python3 -c {shlex.quote(py)}",
@@ -348,9 +436,20 @@ def wait_for_backend() -> None:
 def run_tests(config: WorkerConfig, results_dir: str) -> int:
     expected_pr = f"--expected-pr={config.sut_pr} " if config.sut_pr else ""
     backend = config.backend
+    run_scenarios = config.reseller_scenarios
+    scenario_cmd = ""
+    if run_scenarios:
+        scenario_cmd = (
+            f"scenario_exit=0; "
+            f"python3 -m pytest tests/scenarios/test_reseller_mode.py -v --tb=short --backend={backend} "
+            f"{expected_pr}--client=container --results {results_dir} "
+            f"--junitxml={results_dir}/raw/scenarios/junit.xml "
+            f"--html={results_dir}/raw/scenarios/report.html --self-contained-html "
+            f"2>&1 | tee {results_dir}/raw/scenarios/output.log || scenario_exit=${{PIPESTATUS[0]}}; "
+        )
     test_cmd = (
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
-        f"mkdir -p {results_dir}/raw/api {results_dir}/raw/visual {results_dir}/report && "
+        f"mkdir -p {results_dir}/raw/api {results_dir}/raw/visual {results_dir}/raw/scenarios {results_dir}/report && "
         "visual_exit=0; api_exit=0; "
         f"python3 -m pytest tests/api/test_visual_happy_path.py -v --tb=short --backend={backend} "
         f"{expected_pr}--client=container --results {results_dir} "
@@ -363,7 +462,9 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         f"--junitxml={results_dir}/raw/api/junit.xml "
         f"--html={results_dir}/raw/api/report.html --self-contained-html "
         f"2>&1 | tee {results_dir}/raw/api/output.log || api_exit=${{PIPESTATUS[0]}}; "
+        f"{scenario_cmd}"
         f"if [ \"$visual_exit\" -ne 0 ]; then exit \"$visual_exit\"; fi; "
+        f"if [ \"${{scenario_exit:-0}}\" -ne 0 ]; then exit \"$scenario_exit\"; fi; "
         "exit \"$api_exit\""
     )
     r = _run(test_cmd, timeout=1200, check=False)
@@ -373,10 +474,13 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
 def collect_and_render(config: WorkerConfig, results_dir: str, started_at: str, finished_at: str) -> None:
     commit_arg = f"--sut-commit {config.sut_commit} " if config.sut_commit else ""
     pr_arg = f"--sut-pr {config.sut_pr} " if config.sut_pr else ""
+    scenario_pytest = ""
+    if config.reseller_scenarios:
+        scenario_pytest = "--pytest scenarios=raw/scenarios/junit.xml "
     _run(
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
         f"python3 scripts/collect-results.py --run-dir {results_dir} "
-        f"--pytest visual=raw/visual/junit.xml --pytest api=raw/api/junit.xml "
+        f"--pytest visual=raw/visual/junit.xml --pytest api=raw/api/junit.xml {scenario_pytest}"
         f"--run-id {config.run_id} "
         f"--sut-repo {config.artifact_repo} --sut-branch {shlex.quote(config.sut_branch)} "
         f"{commit_arg}{pr_arg}--sut-backend {config.backend} "
@@ -407,7 +511,7 @@ def publish_results(config: WorkerConfig, results_dir: str) -> str:
     return "https://tests.tollgate.me/"
 
 
-def post_pr_comment(config: WorkerConfig, report_url: str, counts: dict) -> None:
+def post_pr_comment(config: WorkerConfig, report_url: str, counts: dict[str, Any]) -> None:
     if not config.sut_pr:
         return
     body = (
@@ -456,10 +560,10 @@ def run_worker(config: WorkerConfig) -> int:
     try:
         os.environ["GH_TOKEN"] = config.gh_token
         ensure_suite_checkout(config)
-        write_env_file(config.backend)
         ensure_outer_deps()
         ensure_github_cli(config.gh_token)
-        start_inner_vms()
+        start_inner_vms(config)
+        write_env_file(config)
         ensure_debian_client_deps()
         deploy_tollgate(config)
         wait_for_backend()
@@ -467,7 +571,7 @@ def run_worker(config: WorkerConfig) -> int:
         finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         collect_and_render(config, results_dir, started_at, finished_at)
 
-        counts: dict = {}
+        counts: dict[str, Any] = {}
         run_json = Path(results_dir) / "run.json"
         if run_json.exists():
             counts = json.loads(run_json.read_text()).get("counts", {})

@@ -231,6 +231,42 @@ def router(request, backend):
     )
 
 
+@pytest.fixture(scope="session")
+def secondary_router(backend):
+    host = os.environ.get("TOLLGATE_SECONDARY_ROUTER_HOST", "")
+    if not host:
+        yield None
+        return
+
+    password = os.environ.get(
+        "TOLLGATE_SECONDARY_ROUTER_PASSWORD",
+        os.environ.get("TOLLGATE_SSH_PASSWORD", os.environ.get("TOLLGATE_LUCI_PASSWORD", "")),
+    )
+    port = os.environ.get("TOLLGATE_SECONDARY_ROUTER_PORT", "")
+    original_password = os.environ.get("TOLLGATE_SSH_PASSWORD")
+    if password:
+        os.environ["TOLLGATE_SSH_PASSWORD"] = password
+    try:
+        secondary = Router(
+            host=host,
+            phone_ip=os.environ.get("TOLLGATE_SECONDARY_CLIENT_IP", ""),
+            phone_mac=os.environ.get("TOLLGATE_SECONDARY_CLIENT_MAC", ""),
+            domain=os.environ.get("TOLLGATE_SECONDARY_DOMAIN", ""),
+            identity_file=os.environ.get("TOLLGATE_SECONDARY_ROUTER_SSH_KEY", "") or None,
+            jump_host=os.environ.get("TOLLGATE_SECONDARY_ROUTER_JUMP_HOST", "") or None,
+            port=int(port) if port else None,
+            backend=backend,
+        )
+    finally:
+        if original_password is None:
+            os.environ.pop("TOLLGATE_SSH_PASSWORD", None)
+        else:
+            os.environ["TOLLGATE_SSH_PASSWORD"] = original_password
+
+    yield secondary
+    secondary.close()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def deploy_session(request, router, backend):
     from lib import deploy as deploy_lib
@@ -498,6 +534,12 @@ def pytest_runtest_setup(item):
 
     if "rust_only" in item.keywords and backend_type == "go":
         pytest.skip("Rust-only test")
+
+    if (
+        "reseller_scenario" in item.keywords
+        and os.environ.get("TOLLGATE_ENABLE_RESELLER_SCENARIOS") != "1"
+    ):
+        pytest.skip("set TOLLGATE_ENABLE_RESELLER_SCENARIOS=1 to run reseller scenarios")
 
     client_mode = item.config.getoption("--client")
     if client_mode in ("mac", "linux", "container"):

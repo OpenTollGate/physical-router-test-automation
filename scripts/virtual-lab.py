@@ -963,6 +963,43 @@ def run_poc(args: argparse.Namespace) -> int:
     return smoke_poc(args)
 
 
+def run_reseller_scenarios(args: argparse.Namespace) -> int:
+    host = cast(str, args.host)
+    results_dir = cast(str, args.results_dir)
+    backend = cast(str, args.backend)
+    secondary_host = cast(str | None, args.secondary_router_host)
+    secondary_port = cast(str | None, args.secondary_router_port)
+    if not secondary_host:
+        print(
+            "ERROR: run-reseller-scenarios requires --secondary-router-host. "
+            "The single-router POC can smoke-test the harness, but real reseller coverage needs a seller router.",
+            file=sys.stderr,
+        )
+        return 2
+
+    env_parts = [
+        f"TOLLGATE_LUCI_PASSWORD={shlex.quote(POC_PASSWORD)}",
+        f"TOLLGATE_SSH_PASSWORD={shlex.quote(POC_PASSWORD)}",
+        f"TOLLGATE_SSH_HOST={shlex.quote(POC_GATEWAY)}",
+        f"TOLLGATE_SSH_JUMP_HOST={shlex.quote(host)}",
+        "TOLLGATE_CLIENT_TYPE=container",
+        "TOLLGATE_VIRTUAL_LAB=1",
+        "TOLLGATE_ENABLE_RESELLER_SCENARIOS=1",
+        f"TOLLGATE_CLIENT_IP={shlex.quote(DEBIAN_CLIENT_IP)}",
+        f"TOLLGATE_CLIENT_MAC={shlex.quote(DEBIAN_MAC)}",
+        f"TOLLGATE_BACKEND={shlex.quote(backend)}",
+    ]
+    env_parts.append(f"TOLLGATE_SECONDARY_ROUTER_HOST={shlex.quote(secondary_host)}")
+    if secondary_port:
+        env_parts.append(f"TOLLGATE_SECONDARY_ROUTER_PORT={shlex.quote(secondary_port)}")
+
+    command = " ".join(env_parts) + (
+        " python3 -m pytest tests/scenarios/test_reseller_mode.py "
+        f"--backend={shlex.quote(backend)} --client=container --results {shlex.quote(results_dir)} -v"
+    )
+    return _print_result(run_local(["bash", "-lc", command], timeout=600))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage the TollGate virtual lab")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1000,6 +1037,17 @@ def build_parser() -> argparse.ArgumentParser:
     _ = smoke_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = smoke_parser.add_argument("--timeout", type=int, default=120)
     smoke_parser.set_defaults(func=smoke_poc)
+
+    reseller_parser = subparsers.add_parser(
+        "run-reseller-scenarios",
+        help="Run virtualizable reseller-mode scenario tests against the virtual lab",
+    )
+    _ = reseller_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
+    _ = reseller_parser.add_argument("--results-dir", default="results/virtual-reseller-scenarios")
+    _ = reseller_parser.add_argument("--backend", default="go", choices=["go", "rust"])
+    _ = reseller_parser.add_argument("--secondary-router-host", default=None)
+    _ = reseller_parser.add_argument("--secondary-router-port", default=None)
+    reseller_parser.set_defaults(func=run_reseller_scenarios)
 
     prepare_debian_parser = subparsers.add_parser("prepare-debian", help="Download Debian nocloud image and create overlay")
     _ = prepare_debian_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")

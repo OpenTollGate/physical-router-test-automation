@@ -10,6 +10,9 @@ import subprocess
 import sys
 import textwrap
 import time
+import base64
+import io
+import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -181,7 +184,66 @@ def _gh_token() -> str:
     return token
 
 
-def _build_startup_script() -> str:
+_OVERLAY_ALLOWLIST = {
+    "docs/virtual-lab.md",
+    "lib/cloud_lab/constants.py",
+    "lib/cloud_lab/gcp.py",
+    "lib/cloud_lab/worker.py",
+    "lib/reseller_mode.py",
+    "pytest.ini",
+    "scripts/cloud-lab.py",
+    "scripts/virtual-lab.py",
+    "tests/conftest.py",
+    "tests/scenarios/test_reseller_mode.py",
+}
+
+
+def _working_tree_overlay() -> str:
+    """Return a base64 tar.gz overlay for local suite changes needed by cloud runs."""
+    repo_dir = Path(__file__).resolve().parents[2]
+    changed: list[str] = []
+    status = subprocess.run(
+        ["git", "-C", str(repo_dir), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    if status.returncode != 0:
+        return ""
+    for line in status.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if path in _OVERLAY_ALLOWLIST:
+            changed.append(path)
+    if not changed:
+        return ""
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for rel in sorted(set(changed)):
+            full = repo_dir / rel
+            if full.is_file():
+                tar.add(full, arcname=rel)
+    payload = base64.b64encode(buf.getvalue()).decode()
+    print(f"Including local suite overlay for cloud run: {', '.join(sorted(set(changed)))}")
+    return payload
+
+
+def _build_startup_script(suite_overlay_b64: str = "") -> str:
+    overlay_step = ""
+    if suite_overlay_b64:
+        overlay_step = textwrap.dedent(f"""\
+            cat > /tmp/tollgate-suite-overlay.tar.gz.b64 <<'OVERLAY'
+            {suite_overlay_b64}
+            OVERLAY
+            base64 -d /tmp/tollgate-suite-overlay.tar.gz.b64 > /tmp/tollgate-suite-overlay.tar.gz
+            tar xzf /tmp/tollgate-suite-overlay.tar.gz -C /opt/tollgate-test
+            echo "Applied local suite overlay"
+        """)
     return textwrap.dedent(f"""\
         #!/bin/bash
         set -euo pipefail
@@ -223,9 +285,11 @@ def _build_startup_script() -> str:
         rm -rf tollgate-test
         git clone --depth 50 https://github.com/{SUITE_REPO}.git tollgate-test
         cd tollgate-test
+        git config --global --add safe.directory /opt/tollgate-test
         SUITE_REF=$(curl -sf -H "Metadata-Flavor: Google" \\
             http://metadata.google.internal/computeMetadata/v1/instance/attributes/tollgate-suite-ref)
         git checkout "$SUITE_REF"
+        {overlay_step}
 
         if [ -d /opt/tollgate-venv ]; then
             /opt/tollgate-venv/bin/pip install -q -r requirements.txt 2>/dev/null || true
@@ -246,6 +310,10 @@ def submit_run(
     artifact_timeout_s: int = 1800,
     machine_type: str = DEFAULT_MACHINE_TYPE,
     disk_size_gb: int = DEFAULT_DISK_SIZE_GB,
+    reseller_scenarios: bool = False,
+    secondary_router_host: str = "",
+    secondary_router_port: str = "",
+    keep_vm_on_failure: bool = False,
 ) -> dict[str, str]:
     """Pre-flight artifact check, then create fire-and-forget GCP VM. Returns run metadata."""
     project = get_project()
@@ -260,7 +328,7 @@ def submit_run(
     suite_ref = _suite_ref()
     token = _gh_token()
 
-    startup_script = _build_startup_script()
+    startup_script = _build_startup_script(_working_tree_overlay())
     script_path = Path(f"/tmp/tollgate-startup-{vm_name}.sh")
     script_path.write_text(startup_script)
 
@@ -278,6 +346,10 @@ def submit_run(
         "tollgate-zone": zone,
         "tollgate-vm-name": vm_name,
         "tollgate-gh-token": token,
+        "tollgate-reseller-scenarios": "true" if reseller_scenarios else "false",
+        "tollgate-secondary-router-host": secondary_router_host,
+        "tollgate-secondary-router-port": secondary_router_port,
+        "tollgate-keep-vm-on-failure": "true" if keep_vm_on_failure else "false",
     }
     metadata_payload = ",".join(f"{k}={v}" for k, v in metadata.items())
 

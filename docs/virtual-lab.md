@@ -49,6 +49,9 @@ python3 scripts/virtual-lab.py smoke-poc --host 218
 # 6. Check status
 python3 scripts/virtual-lab.py status-poc --host 218
 
+# 6b. Run virtualizable reseller-mode scenarios once a seller router is exposed
+python3 scripts/virtual-lab.py run-reseller-scenarios --host 218 --secondary-router-host <seller-ip>
+
 # 7. Clean up
 python3 scripts/virtual-lab.py stop-poc --host 218
 ```
@@ -103,6 +106,9 @@ interface. The VM uses the host bridge IP (192.168.1.2) as its gateway.
 - TollGate session management
 - Token payment flow via curl
 - Router-to-router / multihop scenarios (future)
+- Virtualizable reseller-mode behavior when run with
+  `TOLLGATE_ENABLE_RESELLER_SCENARIOS=1` or
+  `scripts/virtual-lab.py run-reseller-scenarios`
 
 ## What still requires physical hardware
 
@@ -140,6 +146,25 @@ Ubuntu host 218
     ├── curl/ping for connectivity checks
     └── Chromium for captive portal browser flow
 ```
+
+The reseller-mode tests are intentionally split into two groups:
+
+- `tests/scenarios/test_reseller_mode.py` uses only SSH/UCI/CLI/DNS-blocking
+  operations and is designed to run on physical routers, the on-prem QEMU lab,
+  and the GCP cloud lab.
+- WiFi/RF behavior such as upstream site scan, RSSI, association, and emergency
+  scan remains physical-hardware-only for now.
+
+GCP runs can opt into the virtualizable scenario tier with:
+
+```bash
+./scripts/cloud-lab.py submit --pr 122 --publish --reseller-scenarios \
+  --secondary-router-host <seller-ip-reachable-from-reseller>
+```
+
+`--reseller-scenarios` intentionally fails fast unless a secondary/seller router
+is configured. This prevents a green cloud/on-prem report that skipped the core
+router-to-router assertions.
 
 ## Files
 
