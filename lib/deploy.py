@@ -162,14 +162,31 @@ def _list_workflow_runs(
 
 
 def _run_has_arch_artifact(repo: str, run_id: str, arch: str) -> bool:
-    """Return True if the workflow run has a downloadable .ipk for arch."""
+    """Return True if the workflow run has a downloadable .ipk for arch.
+
+    Uses the GitHub API to check artifact names without downloading.
+    Falls back to download-based check if the API call fails.
+    """
+    try:
+        r = subprocess.run(
+            ["gh", "api",
+             f"repos/{repo}/actions/runs/{run_id}/artifacts",
+             "--paginate", "-q", ".artifacts[].name"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if r.returncode == 0:
+            for line in r.stdout.strip().splitlines():
+                if arch in line and ".ipk" in line and "upx" not in line:
+                    log.info("Found artifact '%s' via API check", line)
+                    return True
+            return False
+    except (subprocess.TimeoutExpired, Exception):
+        pass
+
     with tempfile.TemporaryDirectory(prefix="tollgate-artifact-check-") as tmp:
         r = subprocess.run(
             ["gh", "run", "download", run_id, "--repo", repo, "--dir", tmp],
-            capture_output=True,
-            text=True,
-            timeout=300,
-            check=False,
+            capture_output=True, text=True, timeout=300, check=False,
         )
         if r.returncode != 0:
             return False
