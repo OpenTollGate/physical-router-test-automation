@@ -635,7 +635,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
             f"{expected_pr}--client=container --results {results_dir} "
             f"--junitxml={results_dir}/raw/scenarios/junit.xml "
             f"--html={results_dir}/raw/scenarios/report.html --self-contained-html "
-            f"2>&1 | tee {results_dir}/raw/scenarios/output.log || scenario_exit=${{PIPESTATUS[0]}}; "
+            f">{results_dir}/raw/scenarios/output.log 2>&1; scenario_exit=$?; "
         )
     test_cmd = (
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
@@ -645,19 +645,20 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         f"{expected_pr}--client=container --results {results_dir} "
         f"--junitxml={results_dir}/raw/visual/junit.xml "
         f"--html={results_dir}/raw/visual/report.html --self-contained-html "
-        f"2>&1 | tee {results_dir}/raw/visual/output.log || visual_exit=${{PIPESTATUS[0]}}; "
+        f">{results_dir}/raw/visual/output.log 2>&1; visual_exit=$?; "
         f"python3 -m pytest tests/api/ -v --tb=short --backend={backend} "
         f"{expected_pr}--client=container --results {results_dir} "
         f"--ignore=tests/api/test_visual_happy_path.py "
         f"--junitxml={results_dir}/raw/api/junit.xml "
         f"--html={results_dir}/raw/api/report.html --self-contained-html "
-        f"2>&1 | tee {results_dir}/raw/api/output.log || api_exit=${{PIPESTATUS[0]}}; "
+        f">{results_dir}/raw/api/output.log 2>&1; api_exit=$?; "
         f"{scenario_cmd}"
         f"if [ \"$visual_exit\" -ne 0 ]; then exit \"$visual_exit\"; fi; "
         f"if [ \"${{scenario_exit:-0}}\" -ne 0 ]; then exit \"$scenario_exit\"; fi; "
         "exit \"$api_exit\""
     )
     r = _run(test_cmd, timeout=1200, check=False)
+    log.info("Test stdout (%d bytes): %s", len(r.stdout), _redact(r.stdout[-2000:]))
     return r.returncode
 
 
