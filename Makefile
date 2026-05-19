@@ -95,6 +95,14 @@ help: ## Show this help
 	@echo "  make cleanup              ROUTER=alpha      # remove blocks and restore config"
 	@echo "  make rescue-router        ROUTER=beta VIA=alpha  # rescue offline router"
 	@echo ""
+	@echo "$(CYAN)--- Hostname & SSL tests ---$(RESET)"
+	@echo "  make test-hostname        ROUTER=alpha      # verify hostname is set"
+	@echo "  make test-ssl-full        ROUTER=alpha      # full SSL lifecycle test"
+	@echo "  make test-ssl-self-signed ROUTER=alpha      # test self-signed SSL apply"
+	@echo "  make test-ssl-remove      ROUTER=alpha      # test SSL remove"
+	@echo "  make ssl-status           ROUTER=alpha      # show SSL status (read-only)"
+	@echo "  make ssl-remove-force     ROUTER=alpha      # force-remove SSL config"
+	@echo ""
 	@echo "$(CYAN)--- Serial console (no-network) ---$(RESET)"
 	@echo "  make serial-shell         ROUTER=alpha      # interactive serial console"
 	@echo "  make serial-status        ROUTER=alpha      # status via serial"
@@ -263,7 +271,8 @@ full-all: ## Run all test suites (lint + playwright + degraded + upstream)
 
 .PHONY: deploy deploy-cli status shell logs check-sta-health fix-dns cleanup \
         setup-fresh fund-wallet restore-prod diagnose-config test-default-mints \
-        rescue-router save-upstream restore-upstream
+        rescue-router save-upstream restore-upstream \
+        test-hostname test-ssl-self-signed test-ssl-remove test-ssl-status test-ssl-full ssl-status ssl-remove-force
 
 deploy: ## Cross-compile and deploy daemon + CLI to router
 	$(call require_hardware_lock)
@@ -468,6 +477,37 @@ force-unlock: ## Force-release router hardware lock (use with caution)
 	cat $(HARDWARE_LOCK); \
 	rm -f $(HARDWARE_LOCK); \
 	echo "$(GREEN)Hardware lock force-released.$(RESET)"
+
+# ===========================================================================
+#  HOSTNAME & SSL TESTS (feat/set-hostname)
+# ===========================================================================
+
+test-hostname: ## Verify hostname setup on router (not OpenWrt default)
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-hostname ROUTER=$(ROUTER)
+
+test-ssl-self-signed: ## Test self-signed SSL apply on router
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-self-signed ROUTER=$(ROUTER)
+
+test-ssl-remove: ## Test SSL remove on router
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-remove ROUTER=$(ROUTER)
+
+test-ssl-status: ## Test tollgate ssl status command on router
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-status ROUTER=$(ROUTER)
+
+test-ssl-full: ## Full SSL lifecycle: apply → verify → remove → verify cleanup
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-full ROUTER=$(ROUTER)
+
+ssl-status: ## Show current SSL status on router (read-only, no lock)
+	@$(MAKE) -C mint-health r-ssl-status ROUTER=$(ROUTER)
+
+ssl-remove-force: ## Force-remove SSL config on router (cleanup)
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-ssl-remove-force ROUTER=$(ROUTER)
 
 # ===========================================================================
 #  SETUP

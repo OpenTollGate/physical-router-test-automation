@@ -66,6 +66,8 @@ r-test-startup-hygiene r-test-startup-hygiene-setup r-test-startup-hygiene-verif
         s-shell s-boot-log s-wait-boot s-status s-recovery s-wait-pattern \
         s-cleanup s-cold-boot-test s-check-merchant s-check-degraded \
         h-status h-check-merchant h-restart-and-watch h-cleanup \
+        r-test-hostname r-test-ssl-self-signed r-test-ssl-remove r-test-ssl-status \
+        r-test-ssl-full r-ssl-status r-ssl-remove-force \
         routers help
 
 SSID    ?=
@@ -2415,3 +2417,161 @@ r-test-cashu-payment: ## [remote] Run cashu e2e payment Playwright test (mint to
 		echo "$(RED)$(BOLD)Cashu e2e payment test FAILED (exit $$test_rc)$(RESET)"; \
 		exit $$test_rc; \
 	fi
+
+# ===========================================================================
+#  HOSTNAME & SSL TESTS (feat/set-hostname)
+# ===========================================================================
+
+r-test-hostname: ## [remote] Verify hostname is set correctly (not OpenWrt default)
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== Hostname Test [$(ROUTER)] ===$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)1/3 — Check UCI hostname...$(RESET)"; \
+	hostname=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci -q get system.@system[0].hostname"); \
+	echo "  UCI hostname: $$hostname"; \
+	if [ "$$hostname" = "OpenWrt" ]; then \
+		echo "$(RED)FAIL: Hostname is still OpenWrt default$(RESET)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)OK: Hostname is '$$hostname' (not default OpenWrt)$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)2/3 — Check running kernel hostname...$(RESET)"; \
+	kernel_hostname=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "cat /proc/sys/kernel/hostname"); \
+	echo "  Kernel hostname: $$kernel_hostname"; \
+	if [ "$$kernel_hostname" != "$$hostname" ]; then \
+		echo "$(RED)FAIL: Kernel hostname ($$kernel_hostname) != UCI hostname ($$hostname)$(RESET)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)OK: Kernel hostname matches UCI$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)3/3 — Check uhttpd commonname matches...$(RESET)"; \
+	commonname=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci -q get uhttpd.main.commonname"); \
+	echo "  uhttpd commonname: $$commonname"; \
+	if [ "$$commonname" != "$$hostname" ]; then \
+		echo "$(YELLOW)WARN: uhttpd commonname ($$commonname) != hostname ($$hostname)$(RESET)"; \
+	else \
+		echo "$(GREEN)OK: uhttpd commonname matches$(RESET)"; \
+	fi; \
+	echo ""; \
+	echo "$(GREEN)$(BOLD)Hostname test PASSED [$(ROUTER)]$(RESET)"
+
+r-ssl-status: ## [remote] Show current SSL status on router
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== SSL Status [$(ROUTER)] ===$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate ssl status 2>&1 || echo 'CLI command not available — deploy new CLI first'"
+
+r-test-ssl-self-signed: ## [remote] Test self-signed SSL apply via Go CLI
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== SSL Self-Signed Apply Test [$(ROUTER)] ===$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)Pre-flight: verify no existing SSL config...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "ls -la /etc/tollgate/ssl/ 2>/dev/null || echo 'No SSL dir (clean state)'"; \
+	echo ""; \
+	echo "$(CYAN)1/4 — Apply self-signed cert (piping 'y' for confirmation)...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "echo y | tollgate ssl apply 2>&1"; \
+	apply_rc=$$?; \
+	if [ $$apply_rc -ne 0 ]; then \
+		echo "$(RED)FAIL: tollgate ssl apply exited with code $$apply_rc$(RESET)"; \
+		exit 1; \
+	fi; \
+	echo ""; \
+	echo "$(CYAN)2/4 — Verify cert files installed...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "ls -la /etc/tollgate/ssl/server.crt /etc/tollgate/ssl/server.key 2>&1"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -f /etc/tollgate/ssl/server.crt && test -f /etc/tollgate/ssl/server.key" || { echo "$(RED)FAIL: cert/key files not found$(RESET)"; exit 1; }; \
+	echo "$(GREEN)OK: cert+key files exist$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)3/4 — Verify uhttpd config...$(RESET)"; \
+	cert_uci=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci -q get uhttpd.main.cert"); \
+	key_uci=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci -q get uhttpd.main.key"); \
+	https_listen=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci -q get uhttpd.main.listen_https"); \
+	echo "  cert: $$cert_uci"; \
+	echo "  key:  $$key_uci"; \
+	echo "  listen_https: $$https_listen"; \
+	if [ "$$cert_uci" != "/etc/tollgate/ssl/server.crt" ]; then \
+		echo "$(RED)FAIL: uhttpd cert not pointing to tollgate SSL dir$(RESET)"; \
+		exit 1; \
+	fi; \
+	echo "$(GREEN)OK: uhttpd configured correctly$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)4/4 — Verify HTTPS listener is up (check uhttpd process)...$(RESET)"; \
+	sleep 2; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "netstat -tlnp 2>/dev/null | grep ':443' || echo 'WARN: no listener on 443 (may be different tool)'; true"; \
+	echo ""; \
+	echo "$(GREEN)$(BOLD)SSL self-signed apply test PASSED [$(ROUTER)]$(RESET)"; \
+	echo "$(YELLOW)Run r-test-ssl-remove to clean up, or r-test-ssl-status to check.$(RESET)"
+
+r-test-ssl-remove: ## [remote] Test SSL remove via Go CLI
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== SSL Remove Test [$(ROUTER)] ===$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)1/3 — Remove SSL (piping 'y' for confirmation)...$(RESET)"; \
+	backup_exists=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -d /etc/tollgate/ssl/backup && echo yes || echo no"); \
+	if [ "$$backup_exists" = "no" ]; then \
+		echo "$(YELLOW)No SSL backup found — nothing to remove. Run r-test-ssl-self-signed first.$(RESET)"; \
+		exit 0; \
+	fi; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "echo y | tollgate ssl remove 2>&1"; \
+	remove_rc=$$?; \
+	if [ $$remove_rc -ne 0 ]; then \
+		echo "$(RED)FAIL: tollgate ssl remove exited with code $$remove_rc$(RESET)"; \
+		exit 1; \
+	fi; \
+	echo ""; \
+	echo "$(CYAN)2/3 — Verify cert files removed...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -f /etc/tollgate/ssl/server.crt && echo 'WARN: cert still exists' || echo 'OK: cert removed'"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -d /etc/tollgate/ssl/backup && echo 'WARN: backup still exists' || echo 'OK: backup removed'"; \
+	echo ""; \
+	echo "$(CYAN)3/3 — Verify uhttpd reverted...$(RESET)"; \
+	cert_uci=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci -q get uhttpd.main.cert"); \
+	echo "  uhttpd cert: $$cert_uci"; \
+	if [ "$$cert_uci" = "/etc/tollgate/ssl/server.crt" ]; then \
+		echo "$(YELLOW)WARN: uhttpd still pointing to tollgate SSL cert (may have been set before)$(RESET)"; \
+	else \
+		echo "$(GREEN)OK: uhttpd cert reverted$(RESET)"; \
+	fi; \
+	echo ""; \
+	echo "$(GREEN)$(BOLD)SSL remove test PASSED [$(ROUTER)]$(RESET)"
+
+r-test-ssl-status: ## [remote] Test tollgate ssl status command output
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== SSL Status Command Test [$(ROUTER)] ===$(RESET)"; \
+	output=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate ssl status 2>&1"); \
+	echo "$$output"; \
+	echo "$$output" | grep -q "SSL" && echo "$(GREEN)OK: ssl status command responds$(RESET)" || echo "$(RED)FAIL: unexpected output$(RESET)"
+
+r-ssl-remove-force: ## [remote] Force-remove SSL config (non-interactive, for cleanup)
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== Force SSL Remove [$(ROUTER)] ===$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "echo y | tollgate ssl remove 2>&1 || true"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "rm -rf /etc/tollgate/ssl/server.crt /etc/tollgate/ssl/server.key /etc/tollgate/ssl/backup 2>/dev/null"; \
+	echo "$(GREEN)SSL config force-removed$(RESET)"
+
+r-test-ssl-full: ## [remote] Full SSL lifecycle test: apply self-signed → verify → remove → verify cleanup
+	@$(CHECK_LOCK)
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(BOLD)  Full SSL Lifecycle Test [$(ROUTER)]$(RESET)"
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo ""
+	@echo "$(CYAN)Phase 1: Clean slate...$(RESET)"
+	@$(MAKE) -f Makefile r-ssl-remove-force ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 2: Apply self-signed cert...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-self-signed ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 3: Check SSL status...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-status ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 4: Remove SSL...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-remove ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 5: Verify clean state...$(RESET)"
+	@$(MAKE) -f Makefile r-ssl-status ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(GREEN)$(BOLD)  Full SSL lifecycle test PASSED [$(ROUTER)]$(RESET)"
+	@echo "$(BOLD)=======================================$(RESET)"
