@@ -115,6 +115,16 @@ while time.time() < deadline:
         sys.stdout.flush()
     if 'Please press Enter' in data:
         booted = True
+        print('\nFresh boot detected (first-boot prompt)')
+        break
+    if 'root@OpenWrt' in data or data.strip().endswith('#'):
+        booted = True
+        print('\nAlready-provisioned boot detected (shell prompt)')
+        # Already at shell, skip provisioning — just verify network
+        send_and_wait(s, "ip addr show br-lan | grep 'inet '", wait=2)
+        s.close()
+        print('PROVISIONED OK (existing)')
+        sys.exit(0)
         break
     time.sleep(2)
 if not booted:
@@ -149,7 +159,9 @@ send_and_wait(s, "uci set firewall.@rule[-1].target='ACCEPT'", wait=2)
 send_and_wait(s, 'uci commit firewall', wait=2)
 send_and_wait(s, 'fw4 restart', wait=5)
 
-print('Configuring internet access via host bridge...')
+print('Configuring LAN IP and internet access via host bridge...')
+send_and_wait(s, "uci set network.lan.ipaddr='10.99.99.1'", wait=2)
+send_and_wait(s, "uci set network.lan.netmask='255.255.255.0'", wait=2)
 send_and_wait(s, "uci set network.lan.gateway='10.99.99.2'", wait=2)
 send_and_wait(s, "uci set network.lan.dns='8.8.8.8'", wait=2)
 send_and_wait(s, 'uci commit network', wait=2)
@@ -271,6 +283,10 @@ send_and_wait(s, 'resize2fs /dev/vda1', wait=10)
 print('DEBIAN PROVISIONED OK')
 s.close()
 """
+
+
+def host_is_remote(host: str) -> bool:
+    return host.strip() not in {"", "local", "localhost", "127.0.0.1"}
 
 
 @dataclass(frozen=True)
@@ -934,6 +950,90 @@ fi
     return _print_result(run_remote(host, quote_script(script), timeout=60))
 
 
+def debug_poc(args: argparse.Namespace) -> int:
+    host = cast(str, args.host)
+    workdir = cast(str, args.workdir)
+    pidfile, _serial_sock, disk = _poc_paths(workdir)
+    script = f'''
+set +e
+workdir={shlex.quote(workdir)}
+workdir=$(eval printf '%s' "$workdir")
+
+printf '===== VIRTUAL LAB DEBUG =====\\n\\n'
+
+printf '== 1. QEMU processes ==\\n'
+ps aux | grep qemu | grep -v grep || printf 'No QEMU processes\\n'
+
+printf '\\n== 2. Network (bridge/tap) ==\\n'
+ip addr show {POC_BRIDGE} 2>/dev/null || printf '{POC_BRIDGE} missing\\n'
+ip link show {POC_TAP} 2>/dev/null | head -2 || printf '{POC_TAP} missing\\n'
+ip link show {DEBIAN_TAP} 2>/dev/null | head -2 || printf '{DEBIAN_TAP} missing\\n'
+bridge link show | grep -E '{POC_TAP}|{DEBIAN_TAP}' || printf 'No taps bridged\\n'
+
+printf '\\n== 3. IP connectivity ==\\n'
+printf 'Pinging {POC_GATEWAY}... '
+ping -c 1 -W 2 {POC_GATEWAY} 2>/dev/null && printf 'OK\\n' || printf 'FAIL\\n'
+printf 'Pinging {DEBIAN_CLIENT_IP}... '
+ping -c 1 -W 2 {DEBIAN_CLIENT_IP} 2>/dev/null && printf 'OK\\n' || printf 'FAIL\\n'
+
+printf '\\n== 4. OpenWrt VM (SSH) ==\\n'
+VM_OK=false
+if sshpass -p {POC_PASSWORD} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR root@{POC_GATEWAY} '
+  printf "  hostname: "; hostname
+  printf "  uptime:   "; uptime
+  printf "  load:     "; cat /proc/loadavg
+  printf "  memory:\\n"; free -m | head -2
+  printf "  br-lan IP:\\n"; ip addr show br-lan | grep "inet "
+  printf "  routes:\\n"; ip route show
+  printf "  DNS:\\n"; cat /etc/resolv.conf
+' 2>/dev/null; then
+  VM_OK=true
+else
+  printf '  SSH to {POC_GATEWAY} FAILED\\n'
+fi
+
+if [ "$VM_OK" = true ]; then
+  printf '\\n== 5. OpenWrt services ==\\n'
+  sshpass -p {POC_PASSWORD} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR root@{POC_GATEWAY} '
+    printf "  TollGate process:\\n"
+    ps | grep tollgate | grep -v grep || printf "    NOT RUNNING\\n"
+    printf "  TollGate /health:\\n"
+    curl -s --connect-timeout 3 http://127.0.0.1:2121/health 2>/dev/null || printf "    NO RESPONSE\\n"
+    printf "\\n  ndsctl status:\\n"
+    ndsctl status 2>/dev/null | head -10 || printf "    nodogsplash not running\\n"
+    printf "\\n  DHCP leases:\\n"
+    cat /tmp/dhcp.leases 2>/dev/null || printf "    none\\n"
+    printf "\\n  Firewall (tollgate rules):\\n"
+    iptables -L -n 2>/dev/null | grep -i "tol\\|nds\\|2121" || printf "    no tollgate rules found\\n"
+    printf "\\n  Recent TollGate logs (last 20):\\n"
+    tail -20 /tmp/tollgate-debug.log 2>/dev/null || logread -e tollgate 2>/dev/null | tail -10 || printf "    no logs\\n"
+  ' 2>/dev/null
+fi
+
+printf '\\n== 6. Debian client (SSH) ==\\n'
+if sshpass -p {POC_PASSWORD} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR root@{DEBIAN_CLIENT_IP} '
+  printf "  hostname: "; hostname
+  printf "  IP:\\n"; ip addr show | grep "inet " | grep -v 127
+  printf "  gateway:\\n"; ip route show default
+  printf "  DNS:\\n"; cat /etc/resolv.conf
+  printf "  ping gateway: "; ping -c 1 -W 2 {POC_GATEWAY} 2>/dev/null && printf "OK\\n" || printf "FAIL\\n"
+  printf "  ping internet: "; ping -c 1 -W 2 8.8.8.8 2>/dev/null && printf "OK\\n" || printf "FAIL\\n"
+  printf "  captive portal: "; curl -s -o /dev/null -w "%{{http_code}}" --connect-timeout 5 http://captiveportal.example.com/ 2>/dev/null; printf "\\n"
+' 2>/dev/null; then
+  :
+else
+  printf '  SSH to {DEBIAN_CLIENT_IP} FAILED\\n'
+fi
+
+printf '\\n== 7. NAT/forwarding rules ==\\n'
+sudo iptables -t nat -L POSTROUTING -n 2>/dev/null | grep -E "10.99.99|MASQ" || printf '  no NAT rules\\n'
+sudo iptables -L FORWARD -n 2>/dev/null | head -5
+
+printf '\\n===== END DEBUG =====\\n'
+'''
+    return _print_result(run_remote(host, quote_script(script), timeout=60))
+
+
 def smoke_poc(args: argparse.Namespace) -> int:
     host = cast(str, args.host)
     timeout = cast(int, args.timeout)
@@ -1038,6 +1138,11 @@ def build_parser() -> argparse.ArgumentParser:
     _ = smoke_parser.add_argument("--timeout", type=int, default=120)
     smoke_parser.set_defaults(func=smoke_poc)
 
+    debug_parser = subparsers.add_parser("debug-poc", help="Comprehensive mid-flight debug of the virtual lab")
+    _ = debug_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
+    _ = debug_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    debug_parser.set_defaults(func=debug_poc)
+
     reseller_parser = subparsers.add_parser(
         "run-reseller-scenarios",
         help="Run virtualizable reseller-mode scenario tests against the virtual lab",
@@ -1073,7 +1178,10 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     if hasattr(args, "workdir") and args.workdir:
-        args.workdir = os.path.expanduser(args.workdir)
+        if host_is_remote(getattr(args, "host", "")):
+            pass
+        else:
+            args.workdir = os.path.expanduser(args.workdir)
     func = cast(Callable[[argparse.Namespace], int], args.func)
     return func(args)
 

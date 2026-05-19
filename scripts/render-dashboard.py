@@ -160,9 +160,9 @@ def badge_status(run):
 
 
 def repo_base_url(repo):
-    if repo and "/" in repo:
+    if repo and repo != "unknown" and "/" in repo:
         return "https://github.com/%s" % repo
-    return "https://github.com/%s" % DEFAULT_REPO
+    return ""
 
 
 def collect_runs(reports_dir):
@@ -211,6 +211,8 @@ def build_commit_groups(runs):
         if group_key not in groups:
             meta = run
             repo = meta.get("repo", "") or DEFAULT_REPO
+            if repo == "unknown":
+                repo = ""
             branch = meta.get("branch", "")
             pr = meta.get("pr", "")
             base_url = repo_base_url(repo)
@@ -222,9 +224,9 @@ def build_commit_groups(runs):
                 "short": short,
                 "branch": branch,
                 "pr": pr if str(pr) not in ("0", "") else "",
-                "commit_url": "%s/commit/%s" % (base_url, commit),
-                "branch_url": "%s/tree/%s" % (base_url, branch) if branch else "",
-                "pr_url": "%s/pull/%s" % (base_url, pr) if str(pr) not in ("0", "") else "",
+                "commit_url": "%s/commit/%s" % (base_url, commit) if base_url else "",
+                "branch_url": "%s/tree/%s" % (base_url, branch) if base_url and branch else "",
+                "pr_url": "%s/pull/%s" % (base_url, pr) if base_url and str(pr) not in ("0", "") else "",
                 "version": meta.get("installed_version", ""),
                 "build_time": meta.get("build_time", ""),
                 "openwrt_version": meta.get("openwrt_version", ""),
@@ -270,7 +272,13 @@ def main():
     commit_groups = build_commit_groups(runs)
     total_runs = len(runs)
     total_commits = len(commit_groups)
-    last_updated = format_ts(runs[0]["started_at"]) if runs else "N/A"
+    last_updated = format_ts(runs[0]["started_at"]) if runs and runs[0].get("started_at") else ""
+    if not last_updated and runs:
+        ts_dir = runs[0].get("ts_dir", "")
+        if ts_dir and len(ts_dir) >= 15:
+            last_updated = format_ts(ts_dir[:15].replace("T", "T"))
+    if not last_updated:
+        last_updated = "N/A"
 
     rendered = template.render(
         last_updated=last_updated,

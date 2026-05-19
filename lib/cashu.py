@@ -35,7 +35,7 @@ class CashuMint:
         env["PATH"] = f"{self.venv_path}/bin:{env.get('PATH', '')}"
         return env
 
-    def ensure_mint_available(self, timeout: int = 5):
+    def ensure_mint_available(self, timeout: int = 15):
         keys_url = f"{self.mint_url.rstrip('/')}/v1/keys"
         req = request.Request(keys_url, headers={"User-Agent": "tollgate-test/1.0"})
         try:

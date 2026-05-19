@@ -205,7 +205,13 @@ for SCAN_DIR in "${SCAN_DIRS[@]}"; do
 
         case "$file" in
             *.html|*.htm|*.xml|*.log|*.txt|*.json)
-                sanitize_text "$file" "$dest"
+                if [ "$INPLACE" = true ] && [ "$file" = "$dest" ]; then
+                    tmp="$(mktemp)"
+                    sanitize_text "$file" "$tmp"
+                    mv "$tmp" "$dest"
+                else
+                    sanitize_text "$file" "$dest"
+                fi
                 ;;
             *.png|*.jpg|*.jpeg|*.gif|*.webp)
                 if [ "$CONTAINER_MODE" = true ]; then

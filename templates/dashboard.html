@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TollGate Test Reports</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:#f0f2f5;color:#1a1a2e;line-height:1.5}
@@ -69,7 +70,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
 [% for group in commit_groups %]
 <div class="commit-group">
 <div class="commit-header">
-[% if group.commit and group.commit != 'unknown' %]
+[% if group.commit and group.commit != 'unknown' and group.commit_url %]
 <span class="hash"><a href="[[ group.commit_url ]]">[[ group.short ]]</a></span>
 [% else %]
 <span class="hash">[[ group.short ]]</span>
@@ -102,7 +103,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
 [% for run in group.runs %]
 <div class="run-row">
 <span class="run-time">[[ run.started_at|format_ts ]]</span>
-<span class="run-plan">[[ run.test_plan or 'e2e' ]]</span>
+<span class="run-plan">[[ run.test_plan or '-' ]]</span>
 <span><span class="badge badge-[[ run.badge_status ]]">[[ run.badge_status ]]</span></span>
 <span class="run-client">[[ run.backend ]]</span>
 <span class="run-router" title="[% if run.installed_version %]Version: [[ run.installed_version ]]&#10;OpenWrt: [[ run.openwrt_version ]][% endif %]">[% if run.router_id == 'unknown' and run.installed_version and run.installed_version != 'unknown' %][[ run.installed_version ]][% elif run.router_id != 'unknown' %][[ run.router_id ]][% else %]-[% endif %]</span>

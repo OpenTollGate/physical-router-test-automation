@@ -388,13 +388,17 @@ def main():
     run_id = args.run_id
     if not run_id:
         now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        try:
-            sha = subprocess.check_output(
-                ["git", "rev-parse", "--short", "HEAD"],
-                stderr=subprocess.DEVNULL,
-            ).decode().strip()
-        except Exception:
-            sha = "unknown"
+        sut_commit_raw = args.sut_commit
+        if sut_commit_raw:
+            sha = sut_commit_raw[:7]
+        else:
+            try:
+                sha = subprocess.check_output(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    stderr=subprocess.DEVNULL,
+                ).decode().strip()
+            except Exception:
+                sha = "unknown"
         run_id = f"{now}-{sha}"
 
     suite_commit = args.suite_commit
@@ -415,8 +419,10 @@ def main():
         if "=" not in entry:
             print(f"ERROR: --pytest requires NAME=PATH format, got: {entry}", file=sys.stderr)
             sys.exit(2)
-        name, rel_path = entry.split("=", 1)
-        full_path = os.path.join(run_dir, rel_path)
+        name, raw_path = entry.split("=", 1)
+        # Ensure path is relative to run_dir (accepts both relative and absolute)
+        full_path = os.path.join(run_dir, raw_path) if not os.path.isabs(raw_path) else raw_path
+        rel_path = os.path.relpath(full_path, run_dir)
         base_dir = os.path.dirname(rel_path)
         log_rel = os.path.join(base_dir, "output.log") if base_dir else "output.log"
         log_full = os.path.join(run_dir, log_rel)
@@ -459,8 +465,9 @@ def main():
         if "=" not in entry:
             print(f"ERROR: --playwright requires NAME=PATH format, got: {entry}", file=sys.stderr)
             sys.exit(2)
-        name, rel_path = entry.split("=", 1)
-        full_path = os.path.join(run_dir, rel_path)
+        name, raw_path = entry.split("=", 1)
+        full_path = os.path.join(run_dir, raw_path) if not os.path.isabs(raw_path) else raw_path
+        rel_path = os.path.relpath(full_path, run_dir)
         if not os.path.isfile(full_path):
             parse_errors.append(f"Missing Playwright JSON: {full_path}")
             continue
