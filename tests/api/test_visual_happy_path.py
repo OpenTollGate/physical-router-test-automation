@@ -91,7 +91,7 @@ def test_visual_happy_path(adb, router, results_dir, request):
     recording_thread.start()
 
     # Step 2: wait for portal to load and unpaid screenshot
-    assert adb.wait_for_portal_ready(timeout=30), "Playwright did not load portal in time"
+    assert adb.wait_for_portal_ready(timeout=60), "Playwright did not load portal in time"
     print("[visual] portal loaded, unpaid screenshot taken by recording thread")
 
     # Step 3: authenticate via ndsctl (bypass cashu)

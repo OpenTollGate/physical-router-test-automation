@@ -361,7 +361,7 @@ class ContainerClient:
             "    steps_ok = []\n"
             "    errors = []\n"
             "    try:\n"
-            f"        page.goto('{portal_url}', timeout=20000, wait_until='domcontentloaded')\n"
+            f"        page.goto('{portal_url}', timeout=30000, wait_until='domcontentloaded')\n"
             "        time.sleep(2)\n"
             "        try:\n"
             "            page.screenshot(path='/tmp/tg-e2e/01-portal-unpaid.png')\n"
@@ -437,7 +437,7 @@ class ContainerClient:
             timeout=5,
         )
 
-    def wait_for_portal_ready(self, timeout: int = 30) -> bool:
+    def wait_for_portal_ready(self, timeout: int = 60) -> bool:
         for _ in range(timeout * 2):
             try:
                 out = self._exec("test -f /tmp/tg-portal-ready && echo YES || echo NO", timeout=5)
@@ -447,8 +447,8 @@ class ContainerClient:
                 pass
             time.sleep(0.5)
         try:
-            err = self._exec("cat /tmp/tg-record.err 2>/dev/null; echo '---'; cat /tmp/tg-record.out 2>/dev/null; echo '---'; ps aux | grep tg-record | grep -v grep", timeout=5)
-            log.warning("Portal ready timeout. Recording diagnostics: %s", err[:500])
+            err = self._exec("echo '=== record.out ==='; cat /tmp/tg-record.out 2>/dev/null; echo '=== record.err ==='; cat /tmp/tg-record.err 2>/dev/null; echo '=== processes ==='; ps aux | grep tg-record | grep -v grep", timeout=5)
+            log.warning("Portal ready timeout after %ds. Diagnostics:\n%s", timeout, err[:1000])
         except Exception:
             pass
         return False

@@ -265,6 +265,15 @@ def inject_file(path: Path) -> None:
         return
 
     html = html.replace('<source src="" type="video/mp4">', '<source src="">')
+
+    import re as _re
+    html = _re.sub(
+        r'<video[^>]*>\s*<source\s+src=""[^>]*/?>\s*</video>',
+        '',
+        html,
+        flags=_re.IGNORECASE,
+    )
+
     path.write_text(html.replace("</body>", SNIPPET + "\n</body>"))
     print(f"==> Injected report UI into {path}")
 

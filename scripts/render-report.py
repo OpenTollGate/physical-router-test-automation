@@ -417,6 +417,14 @@ def render_native_links(run):
             links.append(f'<li><a href="../{esc(artifacts["json"])}">{esc(name)} Playwright JSON</a></li>')
         if "log" in artifacts:
             links.append(f'<li><a href="../{esc(artifacts["log"])}">{esc(name)} Output Log</a></li>')
+
+    e2e = run.get("e2e_artifacts", {})
+    if e2e.get("video"):
+        links.append(f'<li><a href="../{esc(e2e["video"])}">Portal Flow Video (WebM)</a></li>')
+    for i, ss in enumerate(e2e.get("screenshots", [])):
+        label = Path(ss).stem.replace("-", " ").title() if ss else f"Screenshot {i+1}"
+        links.append(f'<li><a href="../{esc(ss)}">{esc(label)}</a></li>')
+
     if not links:
         return ""
     return f"""\
