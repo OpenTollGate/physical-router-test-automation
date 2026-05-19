@@ -208,7 +208,11 @@ class WiFi:
         )
 
     def _get_portal_host(self) -> str:
-        """Get the router's LAN gateway IP from br-lan interface."""
+        """Get the portal hostname from NDS gatewaydomainname, falling back to LAN IP."""
+        domain = self.router.get_nds_gateway_domain()
+        if domain:
+            log.info(f"Using NDS gateway domain: {domain}")
+            return domain
         ip = self.router.ssh("ip addr show br-lan | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
         if not ip:
             raise RuntimeError("Could not determine router LAN IP from br-lan interface")
@@ -216,10 +220,11 @@ class WiFi:
         return ip
 
     def _open_portal_on_phone(self, state_pattern: str, timeout: int = 30) -> bool:
-        # Get portal host IP dynamically from router
-        if not hasattr(self, '_portal_host'):
-            self._portal_host = self._get_portal_host()
-        portal_url = f"http://{self._portal_host}:{self.router.get_nds_portal_port()}/"
+        # Ensure NDS init script supports gatewaydomainname if configured
+        if self.router.get_nds_gateway_domain():
+            self.router.ensure_nds_gateway_domain_supported()
+        portal_host = self._get_portal_host()
+        portal_url = f"http://{portal_host}:{self.router.get_nds_portal_port()}/"
         log.info(f"Opening portal at {portal_url}")
 
         # Clear any previous browser state

@@ -126,6 +126,28 @@ class Router:
                 self._nds_portal_port = 2050
         return self._nds_portal_port
 
+    def get_nds_gateway_domain(self) -> str:
+        """NDS gatewaydomainname from UCI, cached. Empty string if not set."""
+        if not hasattr(self, '_nds_gateway_domain'):
+            try:
+                domain = self.ssh(
+                    "uci -q get nodogsplash.@nodogsplash[0].gatewaydomainname"
+                ).strip()
+                self._nds_gateway_domain = domain
+            except Exception:
+                self._nds_gateway_domain = ""
+        return self._nds_gateway_domain
+
+    def ensure_nds_gateway_domain_supported(self):
+        """Patch /etc/init.d/nodogsplash to include gatewaydomainname if missing."""
+        if self.ssh("grep -q gatewaydomainname /etc/init.d/nodogsplash").strip():
+            return
+        self.ssh(
+            "sed -i 's/gatewayaddress gatewayport/gatewayaddress gatewayport gatewaydomainname/' "
+            "/etc/init.d/nodogsplash"
+        )
+        self.ssh("/etc/init.d/nodogsplash restart")
+
     def _detect_cgi_port(self) -> int:
         """Auto-detect the NDS gateway port serving CGI scripts."""
         try:
