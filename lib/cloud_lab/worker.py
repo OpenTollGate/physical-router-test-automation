@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shlex
+import socket
 import subprocess
 import sys
 import time
@@ -138,6 +139,146 @@ def _run(cmd: str, timeout: int = 120, check: bool = True) -> subprocess.Complet
     return r
 
 
+def _virt_lab_workdir() -> Path:
+    return Path(os.path.expandvars(VIRT_LAB_WORKDIR))
+
+
+def _launch_qemu(
+    *,
+    name: str,
+    memory_mb: int,
+    cpus: int,
+    disk_name: str,
+    tap_name: str,
+    mac: str,
+) -> subprocess.Popen[str]:
+    workdir = _virt_lab_workdir()
+    run_dir = workdir / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    serial_sock = run_dir / f"{name}.serial.sock"
+    monitor_sock = run_dir / f"{name}.monitor.sock"
+    pidfile = run_dir / f"{name}.pid"
+    qemu_log = Path(f"/tmp/{name}-qemu.log")
+    for path in (serial_sock, monitor_sock, pidfile):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+    cmd = [
+        "qemu-system-x86_64",
+        "-enable-kvm",
+        "-m",
+        str(memory_mb),
+        "-smp",
+        str(cpus),
+        "-display",
+        "none",
+        "-serial",
+        f"unix:{serial_sock},server=on,wait=off",
+        "-monitor",
+        f"unix:{monitor_sock},server=on,wait=off",
+        "-drive",
+        f"file={workdir / 'overlays' / disk_name},format=qcow2,if=virtio",
+        "-netdev",
+        f"tap,id=net0,ifname={tap_name},script=no,downscript=no",
+        "-device",
+        f"virtio-net-pci,netdev=net0,mac={mac}",
+        "-pidfile",
+        str(pidfile),
+    ]
+    log.info("Launching %s QEMU: disk=%s tap=%s mac=%s", name, disk_name, tap_name, mac)
+    with qemu_log.open("w") as log_file:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+            cwd=workdir,
+        )
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(f"{name} QEMU exited early with rc={proc.returncode}; see {qemu_log}")
+        if serial_sock.exists():
+            return proc
+        time.sleep(0.5)
+    raise RuntimeError(f"{name} QEMU did not create serial socket at {serial_sock}")
+
+
+def _recv_serial(conn: socket.socket, timeout: float = 2.0) -> str:
+    conn.settimeout(timeout)
+    chunks: list[bytes] = []
+    try:
+        while True:
+            chunk = conn.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except TimeoutError:
+        pass
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def _serial_send_wait(conn: socket.socket, command: str, wait: float = 2.0) -> str:
+    conn.sendall((command + "\n").encode())
+    time.sleep(wait)
+    return _recv_serial(conn, timeout=2.0)
+
+
+def _provision_openwrt_serial(name: str, ip: str, timeout: int = 90) -> None:
+    serial_sock = _virt_lab_workdir() / "run" / f"{name}.serial.sock"
+    deadline = time.time() + timeout
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        while True:
+            try:
+                conn.connect(str(serial_sock))
+                break
+            except (ConnectionRefusedError, FileNotFoundError):
+                if time.time() >= deadline:
+                    raise RuntimeError(f"{name} serial socket was not ready at {serial_sock}")
+                time.sleep(1)
+
+        log.info("Provisioning %s OpenWrt over serial for %s", name, ip)
+        conn.sendall(b"\n")
+        booted = False
+        while time.time() < deadline:
+            data = _recv_serial(conn, timeout=2.0)
+            if "Please press Enter" in data:
+                booted = True
+                break
+            time.sleep(1)
+        if not booted:
+            raise RuntimeError(f"{name} OpenWrt did not reach serial boot prompt")
+
+        _serial_send_wait(conn, "", wait=2)
+        password = shlex.quote(VIRT_LAB_PASSWORD)
+        commands = [
+            f"printf '%s\\n%s\\n' {password} {password} | passwd root",
+            "uci set dropbear.@dropbear[0].PasswordAuth='on'",
+            "uci commit dropbear",
+            "/etc/init.d/dropbear restart",
+            "uci add firewall rule",
+            "uci set firewall.@rule[-1].name='Allow-SSH-WAN'",
+            "uci set firewall.@rule[-1].src='wan'",
+            "uci set firewall.@rule[-1].dest_port='22'",
+            "uci set firewall.@rule[-1].proto='tcp'",
+            "uci set firewall.@rule[-1].target='ACCEPT'",
+            "uci commit firewall",
+            "fw4 restart",
+            f"uci set network.lan.ipaddr='{ip}'",
+            "uci set network.lan.netmask='255.255.255.0'",
+            "uci set network.lan.gateway='10.99.99.2'",
+            "uci set network.lan.dns='8.8.8.8'",
+            "uci commit network",
+            "/etc/init.d/network restart",
+        ]
+        for command in commands:
+            _serial_send_wait(conn, command, wait=2)
+    time.sleep(8)
+
+
 def _inner_ssh(host: str, remote_cmd: str, timeout: int = 15) -> subprocess.CompletedProcess[str]:
     cmd = (
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
@@ -257,11 +398,14 @@ def ensure_github_cli(token: str) -> None:
         "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gh >/dev/null; fi",
         timeout=180,
     )
+    r = _run("GH_TOKEN=$GH_TOKEN gh auth status >/dev/null 2>&1 && echo GH_OK", timeout=15, check=False)
+    if "GH_OK" in r.stdout:
+        return
     # Retry gh auth — transient DNS/network issues on first boot can cause failures
     last_err = ""
     for attempt in range(1, 4):
         r = _run(
-            f"printf '%s\\n' {shlex.quote(token)} | gh auth login --with-token 2>&1",
+            f"env -u GH_TOKEN -u GITHUB_TOKEN printf '%s\\n' {shlex.quote(token)} | env -u GH_TOKEN -u GITHUB_TOKEN gh auth login --with-token 2>&1",
             timeout=30,
             check=False,
         )
@@ -286,6 +430,7 @@ def reset_openwrt_overlay_only() -> None:
         f"cd {VIRT_LAB_WORKDIR} && "
         "OWRT_BASE=images/openwrt-base.qcow2; "
         "[ -f \"$OWRT_BASE\" ] || OWRT_BASE=../images/openwrt-base.qcow2; "
+        "OWRT_BASE=$(readlink -f \"$OWRT_BASE\"); "
         "rm -f overlays/tollgate-poc.qcow2 overlays/tollgate-seller.qcow2 && "
         "qemu-img create -f qcow2 -F qcow2 -b \"$OWRT_BASE\" overlays/tollgate-poc.qcow2 >/dev/null && "
         "qemu-img create -f qcow2 -F qcow2 -b \"$OWRT_BASE\" overlays/tollgate-seller.qcow2 >/dev/null",
@@ -300,6 +445,7 @@ def reset_openwrt_overlay_only() -> None:
             f"cd {VIRT_LAB_WORKDIR} && "
             "DEB_BASE=images/debian-12-nocloud-amd64.qcow2; "
             "[ -f \"$DEB_BASE\" ] || DEB_BASE=../images/debian-12-nocloud-amd64.qcow2; "
+            "DEB_BASE=$(readlink -f \"$DEB_BASE\"); "
             "qemu-img create -f qcow2 -F qcow2 -b \"$DEB_BASE\" overlays/debian-client.qcow2 >/dev/null && "
             "qemu-img resize --shrink overlays/debian-client.qcow2 10G >/dev/null 2>&1 || true",
             timeout=60,
@@ -328,51 +474,40 @@ def setup_bridge() -> None:
     )
 
 
-def _configure_openwrt_identity(host: str, ip: str, gateway: str = "10.99.99.2") -> None:
-    script = (
-        f"uci set network.lan.ipaddr='{ip}'; "
-        "uci set network.lan.netmask='255.255.255.0'; "
-        f"uci set network.lan.gateway='{gateway}'; "
-        "uci set network.lan.dns='8.8.8.8'; "
-        "uci commit network; /etc/init.d/network restart >/dev/null 2>&1 &"
-    )
-    _inner_ssh(host, script, timeout=20)
-
-
 def start_inner_vms(config: WorkerConfig) -> None:
     setup_bridge()
     reset_openwrt_overlay_only()
 
     if config.reseller_scenarios and not config.secondary_router_host:
         log.info("Starting managed seller OpenWrt VM for reseller scenarios...")
-        _run(
-            f"cd {VIRT_LAB_WORKDIR} && "
-            "setsid -f qemu-system-x86_64 -enable-kvm -m 256 -smp 1 -nographic "
-            "-drive file=overlays/tollgate-seller.qcow2,format=qcow2,if=virtio "
-            "-netdev tap,id=net0,ifname=tg-poc-tap3,script=no,downscript=no "
-            f"-device virtio-net-pci,netdev=net0,mac={SELLER_OPENWRT_MAC} "
-            "-pidfile run/openwrt-seller.pid </dev/null >/tmp/openwrt-seller.log 2>&1",
-            timeout=20,
+        seller_proc = _launch_qemu(
+            name="openwrt-seller",
+            memory_mb=256,
+            cpus=1,
+            disk_name="tollgate-seller.qcow2",
+            tap_name="tg-poc-tap3",
+            mac=SELLER_OPENWRT_MAC,
         )
-        if not _wait_inner_ssh(OPENWRT_IP):
-            raise RuntimeError("Seller OpenWrt VM did not boot at default IP")
-        _configure_openwrt_identity(OPENWRT_IP, SELLER_OPENWRT_IP)
-        time.sleep(8)
+        _provision_openwrt_serial("openwrt-seller", SELLER_OPENWRT_IP)
+        if seller_proc.poll() is not None:
+            raise RuntimeError(f"Seller OpenWrt VM exited during provisioning with rc={seller_proc.returncode}")
         if not _wait_inner_ssh(SELLER_OPENWRT_IP):
             raise RuntimeError("Seller OpenWrt VM did not become reachable at managed IP")
         config.secondary_router_host = SELLER_OPENWRT_IP
         log.info("Seller OpenWrt VM SSH OK at %s", SELLER_OPENWRT_IP)
 
     log.info("Starting reseller OpenWrt VM...")
-    _run(
-        f"cd {VIRT_LAB_WORKDIR} && "
-        "setsid -f qemu-system-x86_64 -enable-kvm -m 256 -smp 1 -nographic "
-        "-drive file=overlays/tollgate-poc.qcow2,format=qcow2,if=virtio "
-        "-netdev tap,id=net0,ifname=tg-poc-tap,script=no,downscript=no "
-        "-device virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56 "
-        "-pidfile run/openwrt.pid </dev/null >/tmp/openwrt.log 2>&1",
-        timeout=20,
+    reseller_proc = _launch_qemu(
+        name="openwrt",
+        memory_mb=256,
+        cpus=1,
+        disk_name="tollgate-poc.qcow2",
+        tap_name="tg-poc-tap",
+        mac="52:54:00:12:34:56",
     )
+    _provision_openwrt_serial("openwrt", OPENWRT_IP)
+    if reseller_proc.poll() is not None:
+        raise RuntimeError(f"Reseller OpenWrt VM exited during provisioning with rc={reseller_proc.returncode}")
     if not _wait_inner_ssh(OPENWRT_IP):
         raise RuntimeError("OpenWrt VM did not become reachable")
     log.info("Reseller OpenWrt VM SSH OK")
@@ -386,16 +521,17 @@ def start_inner_vms(config: WorkerConfig) -> None:
     )
 
     log.info("Starting Debian VM (cached overlay)...")
-    _run(
-        f"cd {VIRT_LAB_WORKDIR} && "
-        "setsid -f qemu-system-x86_64 -enable-kvm -m 1024 -smp 2 -nographic "
-        "-drive file=overlays/debian-client.qcow2,format=qcow2,if=virtio "
-        "-netdev tap,id=net0,ifname=tg-poc-tap2,script=no,downscript=no "
-        f"-device virtio-net-pci,netdev=net0,mac={DEBIAN_MAC} "
-        "-pidfile run/debian.pid </dev/null >/tmp/debian.log 2>&1",
-        timeout=20,
+    debian_proc = _launch_qemu(
+        name="debian",
+        memory_mb=1024,
+        cpus=2,
+        disk_name="debian-client.qcow2",
+        tap_name="tg-poc-tap2",
+        mac=DEBIAN_MAC,
     )
     time.sleep(25)
+    if debian_proc.poll() is not None:
+        raise RuntimeError(f"Debian VM exited before SSH with rc={debian_proc.returncode}")
     if not _wait_inner_ssh(DEBIAN_IP):
         raise RuntimeError("Debian VM did not become reachable")
     log.info("Debian VM SSH OK")
