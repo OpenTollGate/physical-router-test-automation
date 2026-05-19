@@ -250,18 +250,25 @@ def _build_startup_script(suite_overlay_b64: str = "") -> str:
         exec >> /var/log/tollgate-run.log 2>&1
         echo "=== TollGate cloud worker started $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
+        export HOME="/root"
         export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         export GH_TOKEN=$(curl -sf -H "Metadata-Flavor: Google" \\
             http://metadata.google.internal/computeMetadata/v1/instance/attributes/tollgate-gh-token)
 
         cleanup() {{
+            STATUS=$?
             ZONE=$(curl -sf -H "Metadata-Flavor: Google" \\
                 http://metadata.google.internal/computeMetadata/v1/instance/attributes/tollgate-zone)
             PROJECT=$(curl -sf -H "Metadata-Flavor: Google" \\
                 http://metadata.google.internal/computeMetadata/v1/instance/attributes/tollgate-project)
             NAME=$(curl -sf -H "Metadata-Flavor: Google" \\
                 http://metadata.google.internal/computeMetadata/v1/instance/name)
+            KEEP=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/attributes/tollgate-keep-vm-on-failure || true)
             echo "=== Teardown $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+            if [ "$STATUS" -ne 0 ] && [ "$KEEP" = "true" ]; then
+                echo "Keeping VM for debugging because startup failed and keep-vm-on-failure=true"
+                return
+            fi
             gcloud compute instances delete "$NAME" --project="$PROJECT" --zone="$ZONE" \\
                 --delete-disks=all --quiet 2>/dev/null || true
         }}
