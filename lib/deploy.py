@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -128,6 +129,152 @@ def install_test_deps(router):
     router.ssh("opkg update", timeout=60)
     router.ssh(f"opkg install {' '.join(TEST_DEPS)}", timeout=120)
     log.info("Test dependencies installed")
+
+
+def _list_workflow_runs(
+    repo: str,
+    workflow: str,
+    *,
+    branch: str | None = None,
+    commit: str | None = None,
+    limit: int = 10,
+) -> list[dict]:
+    cmd = [
+        "gh", "run", "list",
+        "--repo", repo,
+        "--workflow", workflow,
+        "--limit", str(limit),
+        "--json", "databaseId,status,conclusion,headBranch,headSha",
+    ]
+    if commit:
+        cmd.extend(["--commit", commit])
+    elif branch:
+        cmd.extend(["--branch", branch])
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
+    if r.returncode != 0:
+        err = r.stderr.strip() or r.stdout.strip() or "unknown gh error"
+        raise RuntimeError(f"gh run list failed: {err}")
+    try:
+        data = json.loads(r.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Could not parse gh run list output: {exc}") from exc
+    return data if isinstance(data, list) else []
+
+
+def _run_has_arch_artifact(repo: str, run_id: str, arch: str) -> bool:
+    """Return True if the workflow run has a downloadable .ipk for arch."""
+    with tempfile.TemporaryDirectory(prefix="tollgate-artifact-check-") as tmp:
+        r = subprocess.run(
+            ["gh", "run", "download", run_id, "--repo", repo, "--dir", tmp],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        if r.returncode != 0:
+            return False
+        matches = [
+            p for p in Path(tmp).rglob("*.ipk")
+            if p.is_file() and arch in p.name and "upx" not in p.name
+        ]
+        return bool(matches)
+
+
+def _watch_run(repo: str, run_id: str, timeout_s: int) -> bool:
+    """Wait for a workflow run to finish. Returns True if watch succeeded."""
+    r = subprocess.run(
+        [
+            "gh", "run", "watch", run_id,
+            "--repo", repo,
+            "--exit-status",
+            "--interval", "15",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=max(timeout_s, 60),
+        check=False,
+    )
+    return r.returncode == 0
+
+
+def ensure_artifact(
+    *,
+    branch: str,
+    arch: str,
+    repo: str,
+    workflow: str,
+    commit: str | None = None,
+    timeout_s: int = 1800,
+) -> str:
+    """Wait until a CI run has a downloadable artifact for arch. Never triggers builds.
+
+    Returns the GitHub Actions run database ID.
+    """
+    deadline = time.time() + timeout_s
+    actions_url = f"https://github.com/{repo}/actions/workflows"
+
+    while time.time() < deadline:
+        try:
+            runs = _list_workflow_runs(repo, workflow, branch=branch, commit=commit, limit=15)
+        except RuntimeError as exc:
+            log.warning("%s", exc)
+            runs = []
+
+        if not runs:
+            remaining = int(deadline - time.time())
+            log.info(
+                "No workflow runs yet for %s@%s (workflow=%r). Waiting... (%ds left)",
+                repo, branch or commit, workflow, max(remaining, 0),
+            )
+            time.sleep(min(30, max(remaining, 1)))
+            continue
+
+        for run in runs:
+            run_id = str(run.get("databaseId", ""))
+            if not run_id:
+                continue
+            status = str(run.get("status", "")).lower()
+            conclusion = str(run.get("conclusion") or "").lower()
+
+            if status in ("queued", "in_progress", "pending", "waiting", "requested"):
+                remaining = max(int(deadline - time.time()), 60)
+                log.info("Run %s is %s — waiting up to %ds", run_id, status, remaining)
+                _watch_run(repo, run_id, remaining)
+                status = "completed"
+                conclusion = ""
+                view = subprocess.run(
+                    ["gh", "run", "view", run_id, "--repo", repo, "--json", "conclusion,status"],
+                    capture_output=True, text=True, timeout=30, check=False,
+                )
+                if view.returncode == 0:
+                    try:
+                        info = json.loads(view.stdout)
+                        conclusion = str(info.get("conclusion") or "").lower()
+                        status = str(info.get("status", "")).lower()
+                    except json.JSONDecodeError:
+                        pass
+
+            if status == "completed" and conclusion not in ("", "success"):
+                log.info("Skipping run %s (conclusion=%s)", run_id, conclusion)
+                continue
+
+            if status == "completed" or conclusion == "success":
+                if _run_has_arch_artifact(repo, run_id, arch):
+                    log.info("Artifact ready: run %s has %s .ipk", run_id, arch)
+                    return run_id
+                log.info("Run %s succeeded but has no %s artifact yet", run_id, arch)
+
+        remaining = int(deadline - time.time())
+        if remaining <= 0:
+            break
+        log.info("No downloadable artifact yet — rechecking in 30s (%ds left)", remaining)
+        time.sleep(min(30, remaining))
+
+    ref = commit or branch
+    raise RuntimeError(
+        f"No downloadable {arch} CI artifact for {repo}@{ref} within {timeout_s}s. "
+        f"Push to the branch and wait for workflow '{workflow}' to complete: {actions_url}"
+    )
 
 
 def download_artifact(branch: str, arch: str, run_id: str | None = None,

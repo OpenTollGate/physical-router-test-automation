@@ -338,7 +338,7 @@ class ContainerClient:
         """Start a Playwright session recording video of the portal flow.
 
         The script runs on the VM and blocks until completion. It:
-        1. Navigates to http://example.com — NDS intercepts and redirects to portal
+        1. Navigates to portal URL (bypassing external trigger)
         2. Screenshots the unpaid portal
         3. Writes /tmp/tg-portal-ready (signals test to proceed with payment)
         4. Polls for /tmp/tg-paid (test creates this after payment)
@@ -349,56 +349,80 @@ class ContainerClient:
         9. Closes context (saves video)
         """
         portal_url = f"http://{POC_GATEWAY}:{NDS_PORTAL_PORT}/"
-        trigger_url = "http://example.com/"
         script = (
             "from playwright.sync_api import sync_playwright\n"
-            "import time, os\n"
-            "p = sync_playwright().start()\n"
-            "browser = p.chromium.launch(headless=True, args=['--no-sandbox'])\n"
-            "ctx = browser.new_context(record_video_dir='/tmp/tg-video', record_video_size={'width': 1280, 'height': 720})\n"
-            "page = ctx.new_page()\n"
+            "import time, os, shutil\n"
+            "p = None; browser = None; ctx = None; page = None\n"
             "try:\n"
-            f"    page.goto('{trigger_url}', timeout=20000)\n"
-            "    time.sleep(1)\n"
-            f"    if '{POC_GATEWAY}:{NDS_PORTAL_PORT}' not in page.url:\n"
+            "    p = sync_playwright().start()\n"
+            "    browser = p.chromium.launch(headless=True, args=['--no-sandbox'])\n"
+            "    ctx = browser.new_context(record_video_dir='/tmp/tg-video', record_video_size={'width': 1280, 'height': 720})\n"
+            "    page = ctx.new_page()\n"
+            "    steps_ok = []\n"
+            "    errors = []\n"
+            "    try:\n"
             f"        page.goto('{portal_url}', timeout=20000, wait_until='domcontentloaded')\n"
-            "    time.sleep(2)\n"
-            "    page.screenshot(path='/tmp/tg-e2e/01-portal-unpaid.png')\n"
-            "    open('/tmp/tg-portal-ready', 'w').close()\n"
+            "        time.sleep(2)\n"
+            "        try:\n"
+            "            page.screenshot(path='/tmp/tg-e2e/01-portal-unpaid.png')\n"
+            "            steps_ok.append('unpaid-screenshot')\n"
+            "        except Exception as e:\n"
+            "            errors.append(f'unpaid-screenshot: {e}')\n"
+            "    except Exception as e:\n"
+            "        errors.append(f'goto-portal: {e}')\n"
             "    for _ in range(120):\n"
             "        if os.path.exists('/tmp/tg-paid'):\n"
             "            break\n"
             "        time.sleep(0.5)\n"
             "    else:\n"
-            "        raise TimeoutError('timed out waiting for payment signal')\n"
-            "    time.sleep(2)\n"
-            f"    page.reload(timeout=15000, wait_until='domcontentloaded')\n"
-            "    time.sleep(1)\n"
-            "    page.screenshot(path='/tmp/tg-e2e/02-portal-paid.png')\n"
-            "    time.sleep(1)\n"
-            "    page.goto('http://1.1.1.1', timeout=15000, wait_until='domcontentloaded')\n"
-            "    time.sleep(1)\n"
-            "    page.screenshot(path='/tmp/tg-e2e/03-internet-access.png')\n"
-            "    print('RECORD_OK')\n"
+            "        errors.append('timeout waiting for payment signal')\n"
+            "    try:\n"
+            f"        page.reload(timeout=15000, wait_until='domcontentloaded')\n"
+            "        time.sleep(1)\n"
+            "        page.screenshot(path='/tmp/tg-e2e/02-portal-paid.png')\n"
+            "        steps_ok.append('paid-screenshot')\n"
+            "    except Exception as e:\n"
+            "        errors.append(f'paid-screenshot: {e}')\n"
+            "    try:\n"
+            "        page.goto('http://1.1.1.1', timeout=15000, wait_until='domcontentloaded')\n"
+            "        time.sleep(1)\n"
+            "        page.screenshot(path='/tmp/tg-e2e/03-internet-access.png')\n"
+            "        steps_ok.append('internet-access-screenshot')\n"
+            "    except Exception as e:\n"
+            "        errors.append(f'internet-access-screenshot: {e}')\n"
+            "    if 'unpaid-screenshot' in steps_ok:\n"
+            "        print('RECORD_OK')\n"
+            "    else:\n"
+            "        print('RECORD_ERROR: ' + ', '.join(errors))\n"
             "except Exception as e:\n"
-            "    try:\n"
-            "        page.screenshot(path='/tmp/tg-e2e/99-error.png')\n"
-            "    except Exception:\n"
-            "        pass\n"
             "    print(f'RECORD_ERROR: {e}')\n"
-            "    open('/tmp/tg-portal-ready', 'w').close()\n"
             "finally:\n"
-            "    video_path = None\n"
-            "    try:\n"
-            "        video_path = page.video.path()\n"
-            "    except Exception:\n"
-            "        pass\n"
-            "    ctx.close()\n"
-            "    browser.close()\n"
-            "    if video_path:\n"
-            "        import shutil\n"
-            "        shutil.copy2(str(video_path), '/tmp/tg-e2e/portal-flow.webm')\n"
-            "    p.stop()\n"
+            "    open('/tmp/tg-portal-ready', 'w').close()\n"
+            "    if ctx:\n"
+            "        video_path = None\n"
+            "        try:\n"
+            "            video_path = page.video.path()\n"
+            "        except Exception:\n"
+            "            pass\n"
+            "        try:\n"
+            "            ctx.close()\n"
+            "        except Exception:\n"
+            "            pass\n"
+            "        if video_path:\n"
+            "            try:\n"
+            "                shutil.copy2(str(video_path), '/tmp/tg-e2e/portal-flow.webm')\n"
+            "            except Exception:\n"
+            "                pass\n"
+            "    if browser:\n"
+            "        try:\n"
+            "            browser.close()\n"
+            "        except Exception:\n"
+            "            pass\n"
+            "    if p:\n"
+            "        try:\n"
+            "            p.stop()\n"
+            "        except Exception:\n"
+            "            pass\n"
         )
         self._exec(
             "rm -f /tmp/tg-portal-ready /tmp/tg-paid && "
@@ -409,7 +433,7 @@ class ContainerClient:
         )
         self._exec(
             "rm -f /tmp/tg-record.out /tmp/tg-record.err; "
-            "nohup python3 /tmp/tg-record.py >/tmp/tg-record.out 2>/tmp/tg-record.err &",
+            "setsid python3 /tmp/tg-record.py >/tmp/tg-record.out 2>/tmp/tg-record.err &",
             timeout=5,
         )
 
@@ -422,6 +446,11 @@ class ContainerClient:
             except Exception:
                 pass
             time.sleep(0.5)
+        try:
+            err = self._exec("cat /tmp/tg-record.err 2>/dev/null; echo '---'; cat /tmp/tg-record.out 2>/dev/null; echo '---'; ps aux | grep tg-record | grep -v grep", timeout=5)
+            log.warning("Portal ready timeout. Recording diagnostics: %s", err[:500])
+        except Exception:
+            pass
         return False
 
     def signal_paid(self) -> None:

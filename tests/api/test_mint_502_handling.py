@@ -81,6 +81,8 @@ def test_local_502_mint_returns_502(router):
         "curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 "
         f"{LOCAL_502_MINT_URL}/v1/keysets"
     ).strip()
+    if code in ("000", "001"):
+        pytest.skip(f"Local 502 mint at {LOCAL_502_MINT_URL} not reachable (HTTP {code}) — not deployed in this environment")
     assert code == "502", f"Expected 502 from local 502 mint, got {code}"
 
 

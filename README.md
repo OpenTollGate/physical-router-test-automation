@@ -59,6 +59,36 @@ source ~/.tollgate-test-venv/bin/activate
 
 `test-pr.sh` handles the full workflow: resolve PR to branch/commit, verify router connectivity, factory reset (if `--reset`), deploy, run tests, parse JUnit results, generate HTML report, and optionally publish.
 
+## Cloud lab (GCP, fire-and-forget)
+
+Run API + container E2E tests in a nested-virt GCP VM (OpenWrt + Debian client). No physical router required.
+
+**Prerequisites:** `gcloud` CLI (authenticated), `gh` CLI (authenticated), `GH_TOKEN` or `gh auth login`, GCP snapshot `tollgate-runner-baked-v2`.
+
+```bash
+# Wait for upstream CI x86_64 artifact, spawn autonomous VM, exit immediately
+./scripts/cloud-lab.py submit --pr 42 --publish
+
+# By commit (use --branch if not on an open PR)
+./scripts/cloud-lab.py submit --commit abc1234 --branch feat/foo --publish
+
+# By branch name
+./scripts/cloud-lab.py submit --branch feat/foo --publish
+
+# Block until VM self-deletes
+./scripts/cloud-lab.py submit --pr 42 --publish --wait
+
+# Check run status / tail logs
+./scripts/cloud-lab.py status-run --run-id 20260519T120000Z-abc1234
+
+# Remove orphaned run VMs (older than 2h)
+./scripts/cloud-lab.py cleanup-stale
+```
+
+The VM clones this test framework, resets only the OpenWrt overlay (Debian/Playwright overlay is cached in the snapshot), deploys the TollGate `.ipk`, runs pytest, publishes to [tests.tollgate.me](https://tests.tollgate.me/), posts a PR comment, and deletes itself.
+
+`submit` waits for an **in-progress or completed** upstream CI build with a downloadable `x86_64` artifact. It does not trigger new CI builds.
+
 ## Deploy to Router
 
 Two deployment paths are available:
@@ -331,6 +361,8 @@ All 26 scripts in `scripts/`:
 
 | Script | Purpose |
 |---|---|
+| `cloud-lab.py` | GCP nested-virt cloud lab — `submit` (fire-and-forget PR/commit tests), `status-run`, `cleanup-stale` |
+| `cloud-lab-worker.sh` | Autonomous worker entrypoint (runs on GCP VM via startup script) |
 | `virtual-lab.py` | Manage local TollGate virtual lab — diagnostics, bootstrap, and lifecycle commands for Ubuntu VM test environments |
 
 ## Test Directories

@@ -215,6 +215,42 @@ If `99-asu-defaults` is still there, it failed partway through. Read it, fix the
 
 After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check that the upstream network is providing DHCP. Verify with `ping 192.168.13.1` from the router.
 
+## GCP cloud lab (fire-and-forget)
+
+`scripts/cloud-lab.py submit` runs TollGate API tests in nested KVM on a GCP VM (`n2-standard-2` + snapshot `tollgate-runner-baked-v2`).
+
+### Flow
+
+1. **Local (blocking):** `ensure_artifact()` waits for upstream CI to finish and expose an `x86_64` `.ipk` (never triggers new builds).
+2. **GCP VM (async):** startup script clones this repo, runs `lib.cloud_lab.worker`, publishes to gh-pages, self-deletes.
+
+### Secrets
+
+| Variable | Purpose |
+|----------|---------|
+| `GH_TOKEN` or `GITHUB_TOKEN` | Passed to VM metadata for `gh` artifact download, gh-pages push, PR comments |
+| `TOLLGATE_GCP_SSH_KEY` | SSH key for `gcloud compute ssh` / debugging (default `~/.ssh/google_compute_engine`) |
+
+`GH_TOKEN` in instance metadata is acceptable for a private lab; prefer Secret Manager for shared projects.
+
+### Debian overlay caching
+
+- **Debian qcow2 overlay** (Playwright + Chromium) lives on the baked snapshot — do **not** reset it per run.
+- **OpenWrt overlay** is recreated from base each run for a clean TollGate install.
+- Re-bake snapshot `tollgate-runner-baked-v2` when Debian packages or Playwright versions change.
+
+### Commands
+
+```bash
+./scripts/cloud-lab.py submit --pr 42 --publish
+./scripts/cloud-lab.py status-run --run-id <id>
+./scripts/cloud-lab.py cleanup-stale   # delete RUNNING tollgate VMs >2h old
+```
+
+### Out of scope for cloud
+
+Phone tests, physical-router LuCI Playwright, destructive sysupgrade — use `test-pr.sh` on lab hardware.
+
 ## Security Notes
 
 - Built firmware images contain credentials (SSH key + password) in the uci-defaults script. Treat images as sensitive.

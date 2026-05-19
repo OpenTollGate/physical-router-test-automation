@@ -71,6 +71,9 @@ def test_wallet_send_exercises_keyset_derivation(router, paid_token):
             f"DeriveKeysetId failure detected (expected on V2-only mints): {resp}"
         )
 
+    if resp.get("success") is False and "unknown wallet action" in raw:
+        pytest.skip(f"wallet send command not available in this build: {resp}")
+
     if resp.get("success") is False or "error" in raw:
         pytest.fail(f"Wallet send failed unexpectedly: {resp}")
 

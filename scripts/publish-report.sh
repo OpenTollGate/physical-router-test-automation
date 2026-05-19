@@ -313,7 +313,22 @@ git add -A
 git commit -m "report: ${COMMIT_SHORT} ${DIR_TIMESTAMP}" || true
 
 echo "==> Pushing to gh-pages..."
-git push -f origin gh-pages 2>&1
+PUSH_OK=0
+for attempt in 1 2 3; do
+  if git push -f origin gh-pages 2>&1; then
+    PUSH_OK=1
+    break
+  fi
+  if [ "$attempt" -lt 3 ]; then
+  echo "WARNING: gh-pages push failed (attempt ${attempt}/3), rebasing and retrying in $((attempt * 5))s..."
+  git pull --rebase origin gh-pages 2>/dev/null || true
+  sleep $((attempt * 5))
+  fi
+done
+if [ "$PUSH_OK" -ne 1 ]; then
+  echo "ERROR: gh-pages push failed after 3 attempts" >&2
+  exit 1
+fi
 
 # ── Print URLs ───────────────────────────────────────────────────────
 
