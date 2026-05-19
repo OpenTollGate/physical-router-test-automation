@@ -219,7 +219,7 @@ class WiFi:
         # Get portal host IP dynamically from router
         if not hasattr(self, '_portal_host'):
             self._portal_host = self._get_portal_host()
-        portal_url = f"http://{self._portal_host}:2050/"
+        portal_url = f"http://{self._portal_host}:{self.router.get_nds_portal_port()}/"
         log.info(f"Opening portal at {portal_url}")
 
         # Clear any previous browser state

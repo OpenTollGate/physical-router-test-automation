@@ -16,9 +16,10 @@ log = logging.getLogger("tollgate.test_url_param")
 
 def test_url_param_token(router, adb, cashu, wifi, connected_wifi, screenshot_portal):
     portal_host = router.domain or wifi._get_portal_host()
+    portal_port = router.get_nds_portal_port()
     token = cashu.mint(TOKEN_DEFAULT)
     encoded = urllib.parse.quote(token)
-    portal_url = f"http://{portal_host}:2050/?token={encoded}"
+    portal_url = f"http://{portal_host}:{portal_port}/?token={encoded}"
 
     adb.open_url(portal_url)
 

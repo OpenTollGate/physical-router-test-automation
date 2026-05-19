@@ -152,7 +152,7 @@ def test_payment_auth_delay_with_redirect(router, cashu):
     gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "10.99.99.1")
 
     _netns_exec("curl", "-s", "-o", "/dev/null", "--connect-timeout", "5",
-                f"http://{gateway}:2050/", timeout=10)
+                f"http://{gateway}:{router.get_nds_portal_port()}/", timeout=10)
     time.sleep(1)
 
     client_mac = _discover_client_mac(router, client_ip)
@@ -226,7 +226,7 @@ def test_payment_without_redirect_no_auth_delay(router, cashu):
     gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "10.99.99.1")
 
     _netns_exec("curl", "-s", "-o", "/dev/null", "--connect-timeout", "5",
-                f"http://{gateway}:2050/", timeout=10)
+                f"http://{gateway}:{router.get_nds_portal_port()}/", timeout=10)
     time.sleep(1)
 
     client_mac = _discover_client_mac(router, client_ip)

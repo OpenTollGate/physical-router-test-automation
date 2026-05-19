@@ -114,6 +114,18 @@ class Router:
     def backend_url(self, path="/"):
         return f"http://[::1]:{BACKEND_PORT}{path}"
 
+    def get_nds_portal_port(self) -> int:
+        """NDS gatewayport from UCI, cached. Falls back to 2050."""
+        if not hasattr(self, '_nds_portal_port'):
+            try:
+                port = self.ssh(
+                    "uci -q get nodogsplash.@nodogsplash[0].gatewayport"
+                ).strip()
+                self._nds_portal_port = int(port) if port else 2050
+            except Exception:
+                self._nds_portal_port = 2050
+        return self._nds_portal_port
+
     def _detect_cgi_port(self) -> int:
         """Auto-detect the NDS gateway port serving CGI scripts."""
         try:

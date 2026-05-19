@@ -155,7 +155,7 @@ class ADBDevice:
         """Open a URL in the phone's default browser via intent resolution."""
         self.shell(f"am start -a android.intent.action.VIEW -d '{url}'")
 
-    def open_portal(self, host: str, port: int = 2050) -> bool:
+    def open_portal(self, host: str, port: int = 80) -> bool:
         """Open the TollGate captive portal in the phone's browser."""
         url = f"http://{host}:{port}/"
         log.info(f"Opening portal at {url}")
