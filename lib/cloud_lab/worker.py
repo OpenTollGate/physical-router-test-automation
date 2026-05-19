@@ -420,6 +420,7 @@ def ensure_github_cli(token: str) -> None:
     r = _run("gh auth status 2>&1 && echo GH_OK", timeout=15, check=False)
     if "GH_OK" not in r.stdout:
         raise RuntimeError("gh auth status check failed on worker VM")
+    _run("gh auth setup-git", timeout=15)
 
 
 def reset_openwrt_overlay_only() -> None:
@@ -705,8 +706,8 @@ def publish_results(config: WorkerConfig, results_dir: str) -> str:
             f"./scripts/publish-report.sh {shlex.quote(results_dir)}",
             timeout=300,
         )
-    except subprocess.CalledProcessError as exc:
-        log.error("publish-report.sh failed (exit=%d): %s", exc.returncode, _redact(str(exc))[:500])
+    except RuntimeError as exc:
+        log.error("publish-report.sh failed: %s", _redact(str(exc))[:500])
         raise
     except Exception as exc:
         log.error("publish-report.sh unexpected error: %s", _redact(str(exc))[:500])
