@@ -1,6 +1,7 @@
 import re
 import time
 import logging
+import os
 
 log = logging.getLogger("tollgate.wifi")
 
@@ -207,18 +208,15 @@ class WiFi:
             r'data-sm="[^"]*"|Tollgate Captive Portal|TollGate.*portal_ready',
         )
 
-    def _get_portal_host(self, prefer_domain: bool = False) -> str:
-        """Get the router's LAN IP for portal access.
-
-        Always uses IP to avoid NDS redirect loops when gatewayport=80
-        and gatewaydomainname resolves to the router's own IP.
-        Set prefer_domain=True only for tests verifying DNS resolution.
-        """
-        if prefer_domain:
-            domain = self.router.get_nds_gateway_domain()
-            if domain:
-                log.info(f"Using NDS gateway domain: {domain}")
-                return domain
+    def _get_portal_host(self) -> str:
+        portal_host = os.environ.get("TOLLGATE_PORTAL_HOST")
+        if portal_host:
+            log.info(f"Using configured portal host: {portal_host}")
+            return portal_host
+        domain = self.router.get_nds_gateway_domain()
+        if domain:
+            log.info(f"Using NDS gateway domain: {domain}")
+            return domain
         ip = self.router.ssh("ip addr show br-lan | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
         if not ip:
             raise RuntimeError("Could not determine router LAN IP from br-lan interface")
@@ -229,7 +227,7 @@ class WiFi:
         if self.router.get_nds_gateway_domain():
             self.router.ensure_nds_gateway_domain_supported()
         portal_host = self._get_portal_host()
-        portal_url = f"http://{portal_host}:{self.router.get_nds_portal_port()}/"
+        portal_url = f"http://{portal_host}/"
         log.info(f"Opening portal at {portal_url}")
 
         # Clear any previous browser state
