@@ -261,7 +261,7 @@ def submit_run(
     token = _gh_token()
 
     startup_script = _build_startup_script()
-    script_path = Path(f"/tmp/tollgate-startup-{run_id}.sh")
+    script_path = Path(f"/tmp/tollgate-startup-{vm_name}.sh")
     script_path.write_text(startup_script)
 
     metadata = {
