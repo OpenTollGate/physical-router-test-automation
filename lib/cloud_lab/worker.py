@@ -30,6 +30,20 @@ from lib.cloud_lab.constants import (
 
 log = logging.getLogger("tollgate.cloud_worker")
 
+_REDACT_PATTERNS = [
+    r"(gho_|ghp_|github_pat_)[A-Za-z0-9_]+",
+    r"(GH_TOKEN=|gh-token=)[^\s,]+",
+    r"(password|passwd|sshpass\s+-p)\s+[^\s,]+",
+]
+
+
+def _redact(text: str) -> str:
+    import re as _re
+
+    for pat in _REDACT_PATTERNS:
+        text = _re.sub(pat, r"\1***", text)
+    return text
+
 METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/instance/attributes"
 
 
@@ -71,7 +85,7 @@ def _metadata_get_optional(key: str, default: str = "") -> str:
 
 
 def load_config_from_metadata() -> WorkerConfig:
-    return WorkerConfig(
+    cfg = WorkerConfig(
         run_id=_metadata_get("tollgate-run-id"),
         sut_branch=_metadata_get("tollgate-sut-branch"),
         sut_commit=_metadata_get("tollgate-sut-commit"),
@@ -90,10 +104,22 @@ def load_config_from_metadata() -> WorkerConfig:
         vm_name=_metadata_get("tollgate-vm-name"),
         gh_token=_metadata_get("tollgate-gh-token"),
     )
+    log.info(
+        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s",
+        cfg.run_id, cfg.sut_branch, cfg.artifact_repo, cfg.backend,
+        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure,
+    )
+    log.info(
+        "Artifact: run_id=%s suite_ref=%s reseller=%s secondary=%s",
+        cfg.artifact_run_id, cfg.suite_ref[:7], cfg.reseller_scenarios, cfg.secondary_router_host or "(none)",
+    )
+    return cfg
 
 
 def _run(cmd: str, timeout: int = 120, check: bool = True) -> subprocess.CompletedProcess[str]:
-    log.debug("run: %s", cmd[:200])
+    redacted = _redact(cmd[:300])
+    log.debug("run: %s", redacted)
+    t0 = time.monotonic()
     r = subprocess.run(
         ["bash", "-c", cmd],
         capture_output=True,
@@ -101,9 +127,14 @@ def _run(cmd: str, timeout: int = 120, check: bool = True) -> subprocess.Complet
         timeout=timeout,
         check=False,
     )
-    if check and r.returncode != 0:
-        err = (r.stderr or r.stdout or "").strip()[-800:]
-        raise RuntimeError(f"Command failed ({r.returncode}): {cmd[:120]}\n{err}")
+    elapsed = time.monotonic() - t0
+    if r.returncode != 0:
+        err = _redact((r.stderr or r.stdout or "").strip()[-500:])
+        log.info("cmd failed (%.1fs, rc=%d): %s | stderr: %s", elapsed, r.returncode, redacted[:120], err[:300])
+        if check:
+            raise RuntimeError(f"Command failed ({r.returncode}): {cmd[:120]}\n{err}")
+    else:
+        log.debug("cmd ok (%.1fs): %s", elapsed, redacted[:120])
     return r
 
 
@@ -129,9 +160,10 @@ def _wait_inner_ssh(host: str, timeout: int = 90) -> bool:
 def ensure_suite_checkout(config: WorkerConfig) -> None:
     test_dir = Path(TEST_DIR)
     if test_dir.exists() and (test_dir / ".git").exists():
+        log.info("Suite checkout: re-fetching %s at %s", SUITE_REPO_URL, config.suite_ref[:7])
         _run(f"cd {TEST_DIR} && git fetch --depth 1 origin && git checkout {shlex.quote(config.suite_ref)}", timeout=120)
     else:
-        parent = test_dir.parent
+        log.info("Suite checkout: cloning %s at %s", SUITE_REPO_URL, config.suite_ref[:7])
         _run(f"rm -rf {TEST_DIR} && git clone --depth 50 {SUITE_REPO_URL} {TEST_DIR}", timeout=180)
         _run(f"cd {TEST_DIR} && git checkout {shlex.quote(config.suite_ref)}", timeout=60)
 
@@ -438,16 +470,20 @@ sys.exit(0 if ok else 1)
         f"python3 -c {shlex.quote(py)}",
         timeout=300,
     )
+    log.info("Deploy complete for %d host(s)", 1 + bool(config.secondary_router_host))
 
 
 def wait_for_backend() -> None:
-    for _ in range(30):
+    for attempt in range(30):
         r = _run(f"curl -s -o /dev/null -w '%{{http_code}}' http://{OPENWRT_IP}:2121/ || true", timeout=10, check=False)
-        if "200" in r.stdout:
-            log.info("TollGate backend healthy")
+        code = r.stdout.strip()
+        if "200" in code:
+            log.info("TollGate backend healthy (attempt %d, http=%s)", attempt + 1, code)
             return
+        if attempt % 5 == 0:
+            log.info("Waiting for backend... attempt %d, http=%s", attempt + 1, code)
         time.sleep(2)
-    raise RuntimeError("TollGate backend did not become healthy")
+    raise RuntimeError("TollGate backend did not become healthy after 60s")
 
 
 def run_tests(config: WorkerConfig, results_dir: str) -> int:
@@ -573,19 +609,40 @@ def run_worker(config: WorkerConfig) -> int:
     results_dir = f"{RESULTS_ROOT}/{config.run_id}"
     started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     test_exit = 1
+    wall_t0 = time.monotonic()
 
     try:
+        log.info("=== Pipeline start ===")
+
         os.environ["GH_TOKEN"] = config.gh_token
+        log.info("[1/9] Suite checkout (ref=%s)", config.suite_ref[:7])
         ensure_suite_checkout(config)
+
+        log.info("[2/9] Outer deps (venv + cashu)")
         ensure_outer_deps()
+
+        log.info("[3/9] GitHub CLI auth (token=***%s)", config.gh_token[-4:] if len(config.gh_token) > 8 else "***")
         ensure_github_cli(config.gh_token)
+
+        log.info("[4/9] Inner VMs (OpenWrt + Debian)")
         start_inner_vms(config)
+
+        log.info("[5/9] Write .env + Debian client deps")
         write_env_file(config)
         ensure_debian_client_deps()
+
+        log.info("[6/9] Deploy TollGate (branch=%s, artifact_run=%s)", config.sut_branch, config.artifact_run_id)
         deploy_tollgate(config)
+
+        log.info("[7/9] Wait for backend health")
         wait_for_backend()
+
+        log.info("[8/9] Run tests (results_dir=%s)", results_dir)
         test_exit = run_tests(config, results_dir)
+        log.info("Tests finished with exit=%d (%.1fs elapsed)", test_exit, time.monotonic() - wall_t0)
+
         finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        log.info("[9/9] Collect + render results")
         collect_and_render(config, results_dir, started_at, finished_at)
 
         counts: dict[str, Any] = {}
@@ -595,24 +652,30 @@ def run_worker(config: WorkerConfig) -> int:
 
         report_url = ""
         if config.publish and run_json.exists():
+            log.info("Publishing results to gh-pages...")
             report_url = publish_results(config, results_dir)
             log.info("Published: %s", report_url)
             post_pr_comment(config, report_url, counts)
 
         log.info(
-            "Run complete: passed=%s failed=%s skipped=%s exit=%s",
+            "=== Pipeline complete: passed=%s failed=%s skipped=%s exit=%d (%.1fs) ===",
             counts.get("passed", "?"),
             counts.get("failed", "?"),
             counts.get("skipped", "?"),
             test_exit,
+            time.monotonic() - wall_t0,
         )
         return test_exit
+    except Exception as exc:
+        log.error("Pipeline failed at step: %s (%.1fs elapsed)", _redact(str(exc))[:200], time.monotonic() - wall_t0)
+        raise
     finally:
         stop_inner_vms()
         if config.keep_vm_on_failure and test_exit != 0:
-            log.error("Keeping VM for debugging because run failed and keep_vm_on_failure is enabled")
-            raise SystemExit(test_exit)
-        delete_self(config)
+            log.error("Keeping VM alive for debugging (keep_vm_on_failure=true)")
+        else:
+            log.info("Self-deleting VM %s", config.vm_name)
+            delete_self(config)
 
 
 def main() -> int:
