@@ -383,8 +383,12 @@ def ensure_outer_deps() -> None:
 
 def ensure_github_cli(token: str) -> None:
     os.environ["GH_TOKEN"] = token
+    _run("git config --global --add safe.directory '*'", timeout=10, check=False)
     r = _run("command -v gh >/dev/null && gh auth status >/dev/null 2>&1 && echo GH_OK", timeout=15, check=False)
     if "GH_OK" in r.stdout:
+        _run("gh auth setup-git", timeout=15)
+        _run("git config --global user.email 'tollgate-cloud-lab@users.noreply.github.com'", timeout=10, check=False)
+        _run("git config --global user.name 'TollGate Cloud Lab'", timeout=10, check=False)
         return
     log.info("Installing GitHub CLI...")
     _run(
@@ -400,8 +404,10 @@ def ensure_github_cli(token: str) -> None:
     )
     r = _run("GH_TOKEN=$GH_TOKEN gh auth status >/dev/null 2>&1 && echo GH_OK", timeout=15, check=False)
     if "GH_OK" in r.stdout:
+        _run("gh auth setup-git", timeout=15)
+        _run("git config --global user.email 'tollgate-cloud-lab@users.noreply.github.com'", timeout=10, check=False)
+        _run("git config --global user.name 'TollGate Cloud Lab'", timeout=10, check=False)
         return
-    # Retry gh auth — transient DNS/network issues on first boot can cause failures
     last_err = ""
     for attempt in range(1, 4):
         r = _run(
@@ -421,6 +427,8 @@ def ensure_github_cli(token: str) -> None:
     if "GH_OK" not in r.stdout:
         raise RuntimeError("gh auth status check failed on worker VM")
     _run("gh auth setup-git", timeout=15)
+    _run("git config --global user.email 'tollgate-cloud-lab@users.noreply.github.com'", timeout=10, check=False)
+    _run("git config --global user.name 'TollGate Cloud Lab'", timeout=10, check=False)
 
 
 def reset_openwrt_overlay_only() -> None:
