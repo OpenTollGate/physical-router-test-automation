@@ -2,6 +2,9 @@ include boards.env
 
 .PHONY: help flash-a flash-b flash-c monitor-a monitor-b monitor-c \
         connect-a connect-b disconnect \
+        reset-a reset-b reset-c \
+        wait-ready-a wait-ready-b wait-ready-c \
+        provision-a provision-b provision-c \
         test-discovery-a test-discovery-b test-mints-a test-mints-b \
         test-multi-mint-a test-multi-mint-b test-all-boards \
         test-cvm-a test-cvm-b test-cvm-mcp-a \
@@ -89,9 +92,18 @@ help: ## Show ESP32 board test targets
 	@echo "  make lock-status        # Show all lock statuses"
 	@echo ""
 	@echo "$(CYAN)--- Flash & Monitor (requires board lock) ---$(RESET)"
-	@echo "  make flash-a            # Flash Board A ($(BOARD_A_PORT))"
-	@echo "  make flash-b            # Flash Board B ($(BOARD_B_PORT))"
-	@echo "  make flash-c            # Flash Board C ($(BOARD_C_PORT))"
+	@echo "  make flash-a            # Flash Board A firmware only ($(BOARD_A_PORT))"
+	@echo "  make flash-b            # Flash Board B firmware only ($(BOARD_B_PORT))"
+	@echo "  make flash-c            # Flash Board C firmware only ($(BOARD_C_PORT))"
+	@echo "  make provision-a        # Full provision Board A (erase + fw + SPIFFS + wait)"
+	@echo "  make provision-b        # Full provision Board B"
+	@echo "  make provision-c        # Full provision Board C"
+	@echo "  make reset-a            # Reset Board A (no reflash)"
+	@echo "  make reset-b            # Reset Board B (no reflash)"
+	@echo "  make reset-c            # Reset Board C (no reflash)"
+	@echo "  make wait-ready-a       # Poll Board A :2121 until ready"
+	@echo "  make wait-ready-b       # Poll Board B :2121 until ready"
+	@echo "  make wait-ready-c       # Poll Board C :2121 until ready"
 	@echo "  make monitor-a          # Serial monitor Board A"
 	@echo "  make monitor-b          # Serial monitor Board B"
 	@echo "  make monitor-c          # Serial monitor Board C"
@@ -256,8 +268,11 @@ detect-wpa-security: ## Scan WiFi and detect WPA security mode for configured SS
 		echo "WPA2"; \
 	fi
 
-generate-spiffs: ## Generate SPIFFS image with auto-detected WPA mode
-	@echo "$(CYAN)Generating SPIFFS image...$(RESET)"
+SPIFFS_BOARD   ?= a
+SPIFFS_NSEC    := $(shell grep "BOARD_$$(echo $(SPIFFS_BOARD) | tr '[:lower:]' '[:upper]')_NSEC\s*=" $(FIRMWARE_DIR)/.env 2>/dev/null | sed 's/.*=//')
+
+generate-spiffs: ## Generate SPIFFS image with auto-detected WPA mode and board nsec (SPIFFS_BOARD=a|b|c)
+	@echo "$(CYAN)Generating SPIFFS image for board $(SPIFFS_BOARD)...$(RESET)"
 	@rm -rf $(SPIFFS_DIR) && mkdir -p $(SPIFFS_DIR)
 	@WPA_MODE=$$(nmcli -t -f SSID,SECURITY dev wifi list 2>/dev/null | grep "^$(WIFI_SSID):" | head -1 | cut -d: -f2 | grep -qi "WPA3" && echo "WPA3" || echo "WPA2"); \
 	echo "$(CYAN)Detected WPA mode: $$WPA_MODE$(RESET)"; \
@@ -266,7 +281,13 @@ generate-spiffs: ## Generate SPIFFS image with auto-detected WPA mode
 	else \
 		echo '{}' > "$(SPIFFS_DIR)/config.json"; \
 	fi; \
-	python3 -c "import json; d=json.load(open('$(SPIFFS_DIR)/config.json')); d['wifi_auth_mode']='$$WPA_MODE'; json.dump(d,open('$(SPIFFS_DIR)/config.json','w'),indent=2)"
+	NSEC="$(SPIFFS_NSEC)"; \
+	if [ -z "$$NSEC" ]; then \
+		echo "$(YELLOW)WARN: no nsec found for board $(SPIFFS_BOARD) in .env, using config.json as-is$(RESET)"; \
+	else \
+		echo "$(CYAN)Injecting nsec for board $(SPIFFS_BOARD) ($${NSEC:0:8}...)$(RESET)"; \
+	fi; \
+	python3 -c "import json,sys; d=json.load(open('$(SPIFFS_DIR)/config.json')); d['wifi_auth_mode']='$$WPA_MODE'; nsec='$$NSEC'; exec('if nsec: d.update({\"nsec\": nsec})'); json.dump(d,open('$(SPIFFS_DIR)/config.json','w'),indent=2)"
 	@bash -c '$(ESP_IDF_SH) && python3 $$IDF_PATH/components/spiffs/spiffsgen.py $(SPIFFS_SIZE) $(SPIFFS_DIR) $(SPIFFS_BIN)'
 	@echo "$(GREEN)SPIFFS image generated: $(SPIFFS_BIN)$(RESET)"
 	@echo "$(CYAN)Contents:$(RESET)"
@@ -274,21 +295,21 @@ generate-spiffs: ## Generate SPIFFS image with auto-detected WPA mode
 
 flash-spiffs-a: ## Flash SPIFFS to Board A
 	$(call require_lock_a)
-	@$(MAKE) generate-spiffs
+	@$(MAKE) generate-spiffs SPIFFS_BOARD=a
 	@echo "$(CYAN)Flashing SPIFFS to Board A ($(BOARD_A_PORT)) at offset $(SPIFFS_OFFSET)...$(RESET)"
 	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_A_PORT) -b 115200 --after no_reset write_flash $(SPIFFS_OFFSET) $(SPIFFS_BIN) 2>&1 | tail -5'
 	@echo "$(GREEN)SPIFFS flashed to Board A$(RESET)"
 
 flash-spiffs-b: ## Flash SPIFFS to Board B
 	$(call require_lock_b)
-	@$(MAKE) generate-spiffs
+	@$(MAKE) generate-spiffs SPIFFS_BOARD=b
 	@echo "$(CYAN)Flashing SPIFFS to Board B ($(BOARD_B_PORT)) at offset $(SPIFFS_OFFSET)...$(RESET)"
 	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_B_PORT) -b 115200 --after no_reset write_flash $(SPIFFS_OFFSET) $(SPIFFS_BIN) 2>&1 | tail -5'
 	@echo "$(GREEN)SPIFFS flashed to Board B$(RESET)"
 
 flash-spiffs-c: ## Flash SPIFFS to Board C
 	$(call require_lock_c)
-	@$(MAKE) generate-spiffs
+	@$(MAKE) generate-spiffs SPIFFS_BOARD=c
 	@echo "$(CYAN)Flashing SPIFFS to Board C ($(BOARD_C_PORT)) at offset $(SPIFFS_OFFSET)...$(RESET)"
 	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_C_PORT) -b 115200 --after no_reset write_flash $(SPIFFS_OFFSET) $(SPIFFS_BIN) 2>&1 | tail -5'
 	@echo "$(GREEN)SPIFFS flashed to Board C$(RESET)"
@@ -297,23 +318,124 @@ flash-spiffs-c: ## Flash SPIFFS to Board C
 #  FLASH (requires per-board lock)
 # ===========================================================================
 
-flash-a: ## Flash Board A
+FLASH_BOOT_WAIT := 50
+
+flash-a: ## Flash Board A (firmware only, no SPIFFS)
 	$(call require_lock_a)
 	@echo "$(CYAN)Flashing Board A ($(BOARD_A_PORT))...$(RESET)"
 	@bash -c '$(ESP_IDF_SH) && cd $(FIRMWARE_DIR) && idf.py -p $(BOARD_A_PORT) flash 2>&1 | tail -10'
 	@echo "$(GREEN)Board A flashed$(RESET)"
 
-flash-b: ## Flash Board B
+flash-b: ## Flash Board B (firmware only, no SPIFFS)
 	$(call require_lock_b)
 	@echo "$(CYAN)Flashing Board B ($(BOARD_B_PORT))...$(RESET)"
 	@bash -c '$(ESP_IDF_SH) && cd $(FIRMWARE_DIR) && idf.py -p $(BOARD_B_PORT) flash 2>&1 | tail -10'
 	@echo "$(GREEN)Board B flashed$(RESET)"
 
-flash-c: ## Flash Board C
+flash-c: ## Flash Board C (firmware only, no SPIFFS)
 	$(call require_lock_c)
 	@echo "$(CYAN)Flashing Board C ($(BOARD_C_PORT))...$(RESET)"
 	@bash -c '$(ESP_IDF_SH) && cd $(FIRMWARE_DIR) && idf.py -p $(BOARD_C_PORT) flash 2>&1 | tail -10'
 	@echo "$(GREEN)Board C flashed$(RESET)"
+
+# --- Reset board without reflashing (esptool run command) ---
+
+reset-a: ## Reset Board A (no reflash)
+	$(call require_lock_a)
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_A_PORT) --after hard_reset run 2>&1 | tail -3'
+	@echo "$(GREEN)Board A reset$(RESET)"
+
+reset-b: ## Reset Board B (no reflash)
+	$(call require_lock_b)
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_B_PORT) --after hard_reset run 2>&1 | tail -3'
+	@echo "$(GREEN)Board B reset$(RESET)"
+
+reset-c: ## Reset Board C (no reflash)
+	$(call require_lock_c)
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_C_PORT) --after hard_reset run 2>&1 | tail -3'
+	@echo "$(GREEN)Board C reset$(RESET)"
+
+# --- Wait for board to become ready (polls :2121/usage) ---
+
+wait-ready-a: ## Wait for Board A HTTP server to be ready
+	@echo "$(CYAN)Waiting for Board A at $(BOARD_A_IP):2121 to be ready...$(RESET)"
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+		if curl -s --connect-timeout 3 --max-time 5 "http://$(BOARD_A_IP):2121/usage" 2>/dev/null | grep -q "owner"; then \
+			echo "$(GREEN)Board A ready! (attempt $$i)$(RESET)"; \
+			curl -s --max-time 5 "http://$(BOARD_A_IP):2121/usage" | python3 -m json.tool 2>/dev/null; \
+			exit 0; \
+		fi; \
+		echo "  attempt $$i/15 — not ready, waiting 5s..."; \
+		sleep 5; \
+	done; \
+	echo "$(RED)Board A did not become ready after 75s$(RESET)"; \
+	exit 1
+
+wait-ready-b: ## Wait for Board B HTTP server to be ready
+	@echo "$(CYAN)Waiting for Board B at $(BOARD_B_IP):2121 to be ready...$(RESET)"
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+		if curl -s --connect-timeout 3 --max-time 5 "http://$(BOARD_B_IP):2121/usage" 2>/dev/null | grep -q "owner"; then \
+			echo "$(GREEN)Board B ready! (attempt $$i)$(RESET)"; \
+			curl -s --max-time 5 "http://$(BOARD_B_IP):2121/usage" | python3 -m json.tool 2>/dev/null; \
+			exit 0; \
+		fi; \
+		echo "  attempt $$i/15 — not ready, waiting 5s..."; \
+		sleep 5; \
+	done; \
+	echo "$(RED)Board B did not become ready after 75s$(RESET)"; \
+	exit 1
+
+wait-ready-c: ## Wait for Board C HTTP server to be ready
+	@echo "$(CYAN)Waiting for Board C at $(BOARD_C_IP):2121 to be ready...$(RESET)"
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+		if curl -s --connect-timeout 3 --max-time 5 "http://$(BOARD_C_IP):2121/usage" 2>/dev/null | grep -q "owner"; then \
+			echo "$(GREEN)Board C ready! (attempt $$i)$(RESET)"; \
+			curl -s --max-time 5 "http://$(BOARD_C_IP):2121/usage" | python3 -m json.tool 2>/dev/null; \
+			exit 0; \
+		fi; \
+		echo "  attempt $$i/15 — not ready, waiting 5s..."; \
+		sleep 5; \
+	done; \
+	echo "$(RED)Board C did not become ready after 75s$(RESET)"; \
+	exit 1
+
+# --- Full provision: erase → firmware + SPIFFS → reset → wait ready ---
+
+provision-a: ## Full provision Board A: erase + flash firmware + SPIFFS + wait (requires lock-a)
+	$(call require_lock_a)
+	@$(MAKE) generate-spiffs SPIFFS_BOARD=a
+	@echo "$(CYAN)Erasing flash on $(BOARD_A_PORT)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_A_PORT) -b 115200 erase_flash 2>&1 | tail -3'
+	@echo "$(CYAN)Flashing firmware + SPIFFS to $(BOARD_A_PORT)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_A_PORT) -b 115200 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 $(FIRMWARE_DIR)/build/bootloader/bootloader.bin 0x8000 $(FIRMWARE_DIR)/build/partition_table/partition-table.bin 0x10000 $(FIRMWARE_DIR)/build/esp32-tollgate.bin $(SPIFFS_OFFSET) $(SPIFFS_BIN) 2>&1 | tail -8'
+	@echo "$(GREEN)Firmware + SPIFFS flashed to Board A$(RESET)"
+	@echo "$(CYAN)Waiting $(FLASH_BOOT_WAIT)s for boot...$(RESET)"
+	@sleep $(FLASH_BOOT_WAIT)
+	@$(MAKE) wait-ready-a
+
+provision-b: ## Full provision Board B: erase + flash firmware + SPIFFS + wait (requires lock-b)
+	$(call require_lock_b)
+	@$(MAKE) generate-spiffs SPIFFS_BOARD=b
+	@echo "$(CYAN)Erasing flash on $(BOARD_B_PORT)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_B_PORT) -b 115200 erase_flash 2>&1 | tail -3'
+	@echo "$(CYAN)Flashing firmware + SPIFFS to $(BOARD_B_PORT)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_B_PORT) -b 115200 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 $(FIRMWARE_DIR)/build/bootloader/bootloader.bin 0x8000 $(FIRMWARE_DIR)/build/partition_table/partition-table.bin 0x10000 $(FIRMWARE_DIR)/build/esp32-tollgate.bin $(SPIFFS_OFFSET) $(SPIFFS_BIN) 2>&1 | tail -8'
+	@echo "$(GREEN)Firmware + SPIFFS flashed to Board B$(RESET)"
+	@echo "$(CYAN)Waiting $(FLASH_BOOT_WAIT)s for boot...$(RESET)"
+	@sleep $(FLASH_BOOT_WAIT)
+	@$(MAKE) wait-ready-b
+
+provision-c: ## Full provision Board C: erase + flash firmware + SPIFFS + wait (requires lock-c)
+	$(call require_lock_c)
+	@$(MAKE) generate-spiffs SPIFFS_BOARD=c
+	@echo "$(CYAN)Erasing flash on $(BOARD_C_PORT)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_C_PORT) -b 115200 erase_flash 2>&1 | tail -3'
+	@echo "$(CYAN)Flashing firmware + SPIFFS to $(BOARD_C_PORT)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_C_PORT) -b 115200 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 $(FIRMWARE_DIR)/build/bootloader/bootloader.bin 0x8000 $(FIRMWARE_DIR)/build/partition_table/partition-table.bin 0x10000 $(FIRMWARE_DIR)/build/esp32-tollgate.bin $(SPIFFS_OFFSET) $(SPIFFS_BIN) 2>&1 | tail -8'
+	@echo "$(GREEN)Firmware + SPIFFS flashed to Board C$(RESET)"
+	@echo "$(CYAN)Waiting $(FLASH_BOOT_WAIT)s for boot...$(RESET)"
+	@sleep $(FLASH_BOOT_WAIT)
+	@$(MAKE) wait-ready-c
 
 # ===========================================================================
 #  MONITOR (requires per-board lock)

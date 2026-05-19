@@ -746,9 +746,21 @@ setup: ## Install dependencies (npm + playwright + serial)
 	@echo "  cp upstream-wifi/routers.env.example upstream-wifi/routers.env"
 	@echo "  cp .env.example .env                                         # fill in LuCI credentials"
 	@echo ""
+	@echo "$(CYAN)--- ESP32 board provisioning ---$(RESET)"
+	@echo "  make esp32-provision-a                   # full provision Board A (erase + fw + SPIFFS + wait)"
+	@echo "  make esp32-provision-b                   # full provision Board B"
+	@echo "  make esp32-provision-c                   # full provision Board C"
+	@echo "  make esp32-flash-a                       # flash firmware only to Board A"
+	@echo "  make esp32-flash-b                       # flash firmware only to Board B"
+	@echo "  make esp32-flash-c                       # flash firmware only to Board C"
+	@echo "  make esp32-reset-a                       # reset Board A (no reflash)"
+	@echo "  make esp32-reset-b                       # reset Board B"
+	@echo "  make esp32-reset-c                       # reset Board C"
+	@echo "  make esp32-wait-ready-a                  # poll Board A :2121 until ready"
+	@echo "  make esp32-wait-ready-b                  # poll Board B :2121 until ready"
+	@echo "  make esp32-wait-ready-c                  # poll Board C :2121 until ready"
+	@echo ""
 	@echo "$(CYAN)--- ESP32 board tests ---$(RESET)"
-	@echo "  make esp32-flash-a                       # flash multi-mint firmware to Board A"
-	@echo "  make esp32-flash-b                       # flash multi-mint firmware to Board B"
 	@echo "  make esp32-test-multi-mint-a             # full multi-mint test on Board A"
 	@echo "  make esp32-test-multi-mint-b             # full multi-mint test on Board B"
 	@echo "  make esp32-test-all-boards               # test both ESP32 boards"
@@ -775,6 +787,9 @@ setup: ## Install dependencies (npm + playwright + serial)
  .PHONY: esp32-flash-a esp32-flash-b esp32-flash-c \
          esp32-monitor-a esp32-monitor-b esp32-monitor-c \
          esp32-connect-a esp32-connect-b esp32-disconnect \
+         esp32-reset-a esp32-reset-b esp32-reset-c \
+         esp32-wait-ready-a esp32-wait-ready-b esp32-wait-ready-c \
+         esp32-provision-a esp32-provision-b esp32-provision-c \
          esp32-test-discovery-a esp32-test-discovery-b \
          esp32-test-mints-a esp32-test-mints-b \
          esp32-test-multi-mint-a esp32-test-multi-mint-b esp32-test-all-boards \
@@ -794,6 +809,33 @@ esp32-flash-b: ## Flash firmware to Board B (requires lock-b)
 
 esp32-flash-c: ## Flash firmware to Board C (requires lock-c)
 	@$(MAKE) -C esp32 flash-c
+
+esp32-provision-a: ## Full provision Board A (erase + fw + SPIFFS + wait, requires lock-a)
+	@$(MAKE) -C esp32 provision-a
+
+esp32-provision-b: ## Full provision Board B (requires lock-b)
+	@$(MAKE) -C esp32 provision-b
+
+esp32-provision-c: ## Full provision Board C (requires lock-c)
+	@$(MAKE) -C esp32 provision-c
+
+esp32-reset-a: ## Reset Board A without reflashing (requires lock-a)
+	@$(MAKE) -C esp32 reset-a
+
+esp32-reset-b: ## Reset Board B without reflashing (requires lock-b)
+	@$(MAKE) -C esp32 reset-b
+
+esp32-reset-c: ## Reset Board C without reflashing (requires lock-c)
+	@$(MAKE) -C esp32 reset-c
+
+esp32-wait-ready-a: ## Wait for Board A :2121 to be ready
+	@$(MAKE) -C esp32 wait-ready-a
+
+esp32-wait-ready-b: ## Wait for Board B :2121 to be ready
+	@$(MAKE) -C esp32 wait-ready-b
+
+esp32-wait-ready-c: ## Wait for Board C :2121 to be ready
+	@$(MAKE) -C esp32 wait-ready-c
 
 esp32-monitor-a: ## Serial monitor Board A (requires lock-a)
 	@$(MAKE) -C esp32 monitor-a
