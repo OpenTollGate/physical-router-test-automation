@@ -12,8 +12,9 @@ import (
 	"github.com/Origami74/gonuts-tollgate/wallet"
 )
 
-const defaultMintURL = "https://nofee.testnut.cashu.space"
+const defaultMintURL = "https://testnut-compat.mints.orangesync.tech"
 const defaultAmount = 1013
+const feeBuffer = 10
 
 func main() {
 	mintURL := defaultMintURL
@@ -43,10 +44,12 @@ func main() {
 		log.Fatalf("LoadWallet: %v", err)
 	}
 
-	quote, err := w.RequestMint(amount, mintURL)
+	mintAmount := amount + feeBuffer
+
+	quote, err := w.RequestMint(mintAmount, mintURL)
 	if err != nil {
 		w.Shutdown()
-		log.Fatalf("RequestMint(%d, %s): %v", amount, mintURL, err)
+		log.Fatalf("RequestMint(%d, %s): %v", mintAmount, mintURL, err)
 	}
 
 	deadline := time.Now().Add(30 * time.Second)

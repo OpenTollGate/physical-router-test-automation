@@ -93,6 +93,7 @@ help: ## Show this help
 	@echo "  make test-develop-playwright ROUTER=alpha    # Playwright tests vs develop"
 	@echo "  make test-configwizzard-e2e ROUTER=alpha     # E2E: PR124 + configwizzard + :2121"
 	@echo "  make test-configwizzard-all  ROUTER=alpha    # deploy-develop + deploy-configwizzard + full E2E"
+	@echo "  make test-config-save     ROUTER=alpha      # config save round-trip + restart persistence"
 	@echo "  make status               ROUTER=alpha      # check service status"
 	@echo "  make shell                ROUTER=alpha      # interactive SSH session"
 	@echo "  make logs                 ROUTER=alpha      # tail tollgate logs"
@@ -287,7 +288,8 @@ full-all: ## Run all test suites (lint + playwright + degraded + upstream)
         test-ssl-real-cert test-ssl-real-cert-remove test-ssl-real-cert-full \
         test-ssl-all \
         deploy-develop test-develop-smoke test-develop-smoke-persist test-develop-playwright \
-        deploy-configwizzard test-configwizzard-e2e test-configwizzard-all
+        deploy-configwizzard test-configwizzard-e2e test-configwizzard-all \
+        test-config-save
 
 DEVELOP_SRC ?= $(HOME)/tollgate-worktrees/develop/src
 DEVICE ?= gl-mt3000
@@ -431,6 +433,13 @@ test-configwizzard-all: ## Deploy everything + run full E2E test suite
 	echo "$(BOLD)=======================================$(RESET)"; \
 	echo "$(GREEN)$(BOLD)  Full Configwizzard E2E complete [$(ROUTER)]$(RESET)"; \
 	echo "$(BOLD)=======================================$(RESET)"
+
+test-config-save: ## Run config save round-trip tests (save + disk verify + restart persistence)
+	$(call require_hardware_lock)
+	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" mint-health/routers.env | cut -d= -f2); \
+	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=== Config Save E2E Tests [$(ROUTER)] ($$router_host) ===$(RESET)"; \
+	bash scripts/test-config-save-e2e.sh "$$router_host"
 
 status: ## Check tollgate service status
 	@$(MAKE) -C mint-health r-status ROUTER=$(ROUTER)

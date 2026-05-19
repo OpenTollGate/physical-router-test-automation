@@ -6,8 +6,30 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const MINT_TOKEN_BIN = path.resolve(__dirname, '..', 'scripts', 'mint-token', 'mint-token');
-const MINT_URL = 'https://nofee.testnut.cashu.space';
+const MINT_URL = process.env.TOLLGATE_MINT_URL || 'https://testnut-compat.mints.orangesync.tech';
 const MINT_AMOUNT = '1';
+const MINT_RETRIES = 3;
+const MINT_RETRY_DELAY_MS = 3000;
+
+function mintToken(url, amount, retries = MINT_RETRIES) {
+	let lastError;
+	for (let attempt = 1; attempt <= retries; attempt++) {
+		try {
+			return execSync(`${MINT_TOKEN_BIN} ${url} ${amount}`, {
+				timeout: 60000,
+				encoding: 'utf-8',
+			});
+		} catch (e) {
+			lastError = e;
+			const msg = e.stderr || e.message || '';
+			if (attempt < retries) {
+				console.log(`  mint-token attempt ${attempt}/${retries} failed (${msg.trim().slice(0, 120)}), retrying in ${MINT_RETRY_DELAY_MS}ms...`);
+				execSync(`sleep ${MINT_RETRY_DELAY_MS / 1000}`);
+			}
+		}
+	}
+	throw lastError;
+}
 
 const ROUTER_IP = process.env.TOLLGATE_CAPTIVE_PORTAL_HOST || '192.168.41.1';
 const API_BASE = `http://${ROUTER_IP}:2121`;
@@ -149,10 +171,7 @@ test.describe('Captive Portal — cashu e2e payment', () => {
 	}, 'Skipped: tollgate service has no reachable mints (degraded mode)');
 
 	test('cashu token payment grants access and shows checkmark', async ({ page }) => {
-		const raw = execSync(`${MINT_TOKEN_BIN} ${MINT_URL} ${MINT_AMOUNT}`, {
-			timeout: 60000,
-			encoding: 'utf-8',
-		});
+		const raw = mintToken(MINT_URL, MINT_AMOUNT);
 		const { token, amount } = JSON.parse(raw);
 		expect(token, 'mint-token should produce a non-empty token').toBeTruthy();
 		expect(amount, 'minted amount should be >= 1').toBeGreaterThanOrEqual(1);
