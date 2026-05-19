@@ -436,11 +436,20 @@ def status_run(run_id: str, zone: str = DEFAULT_ZONE) -> int:
 
 
 def cleanup_stale(zone: str = DEFAULT_ZONE, max_age_hours: int = 2) -> int:
+    return _delete_tollgate_vms(zone, max_age_hours=max_age_hours)
+
+
+def cleanup_all(zone: str = DEFAULT_ZONE) -> int:
+    return _delete_tollgate_vms(zone, max_age_hours=0)
+
+
+def _delete_tollgate_vms(zone: str, max_age_hours: int = 2) -> int:
     project = get_project()
+    filter_str = "labels.tollgate_run=true" if max_age_hours == 0 else "labels.tollgate_run=true AND status=RUNNING"
     r = _run_gcloud([
         "compute", "instances", "list",
         f"--project={project}",
-        f"--filter=labels.tollgate_run=true AND status=RUNNING",
+        f"--filter={filter_str}",
         "--format=json",
     ], timeout=60)
     if r.returncode != 0:
@@ -463,7 +472,8 @@ def cleanup_stale(zone: str = DEFAULT_ZONE, max_age_hours: int = 2) -> int:
             continue
         if created > cutoff:
             continue
-        print(f"Deleting stale VM {name} (created {creation})...")
+        label = "stale" if max_age_hours > 0 else "tollgate"
+        print(f"Deleting {label} VM {name} (created {creation})...")
         dr = _run_gcloud([
             "compute", "instances", "delete", name,
             f"--project={project}", f"--zone={zone}",

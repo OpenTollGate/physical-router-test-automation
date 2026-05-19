@@ -24,6 +24,7 @@ from lib.cloud_lab.constants import (
     VM_NAME,
 )
 from lib.cloud_lab.gcp import (
+    cleanup_all,
     cleanup_stale,
     get_project,
     status_run,
@@ -158,6 +159,10 @@ def cmd_cleanup_stale(args: argparse.Namespace) -> int:
     return cleanup_stale(zone=cast(str, args.zone), max_age_hours=cast(int, args.max_age_hours))
 
 
+def cmd_cleanup_all(args: argparse.Namespace) -> int:
+    return cleanup_all(zone=cast(str, args.zone))
+
+
 def cmd_run_tests(args: argparse.Namespace) -> int:
     """Synchronous wrapper: submit + wait (legacy compatibility)."""
     args.wait = True
@@ -224,6 +229,10 @@ def build_parser() -> argparse.ArgumentParser:
     clean.add_argument("--zone", default=DEFAULT_ZONE)
     clean.add_argument("--max-age-hours", type=int, default=2)
     clean.set_defaults(func=cmd_cleanup_stale)
+
+    nuke = sub.add_parser("cleanup-all", help="Delete ALL tollgate VMs regardless of age")
+    nuke.add_argument("--zone", default=DEFAULT_ZONE)
+    nuke.set_defaults(func=cmd_cleanup_all)
 
     run = sub.add_parser("run-tests", help="Submit cloud run and wait (alias for submit --wait --publish)")
     run.add_argument("--zone", default=DEFAULT_ZONE)
