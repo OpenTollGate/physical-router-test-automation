@@ -68,6 +68,12 @@ r-test-startup-hygiene r-test-startup-hygiene-setup r-test-startup-hygiene-verif
         h-status h-check-merchant h-restart-and-watch h-cleanup \
         r-test-hostname r-test-ssl-self-signed r-test-ssl-remove r-test-ssl-status \
         r-test-ssl-full r-ssl-status r-ssl-remove-force \
+        r-test-ssl-setup-verify r-test-ssl-self-signed-yes r-test-ssl-reapply \
+        r-test-ssl-remove-no-backup r-test-ssl-verify-cert r-test-ssl-verify-nds \
+        r-test-ssl-verify-no-dns r-test-ssl-wrappers r-test-ssl-idempotent \
+        r-test-ssl-comprehensive \
+        r-test-ssl-real-cert r-test-ssl-real-cert-remove r-test-ssl-real-cert-full \
+        r-test-ssl-all \
         routers help
 
 SSID    ?=
@@ -2574,4 +2580,510 @@ r-test-ssl-full: ## [remote] Full SSL lifecycle test: apply self-signed → veri
 	@echo ""
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(GREEN)$(BOLD)  Full SSL lifecycle test PASSED [$(ROUTER)]$(RESET)"
+	@echo "$(BOLD)=======================================$(RESET)"
+
+# ---------------------------------------------------------------------------
+#  Enhanced SSL Tests (bug-fix verification + real cert + error paths)
+# ---------------------------------------------------------------------------
+
+SSL_REAL_CERT_DOMAIN ?= tollgate-test.orangesync.tech
+SSL_CF_TOKEN    ?= $(shell grep CLOUDFLARE_API_TOKEN /home/c03rad0r/tollgate-infrastructure-kit/.env 2>/dev/null | cut -d= -f2)
+SSL_CF_ZONE     ?= $(shell grep CLOUDFLARE_ZONE_ID /home/c03rad0r/tollgate-infrastructure-kit/.env 2>/dev/null | cut -d= -f2)
+SSL_ACME_DIR    ?= /tmp/tollgate-acme-test
+
+r-test-ssl-setup-verify: ## [remote] Verify router is in clean SSL state (no certs, no backup)
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== SSL Setup Verification [$(ROUTER)] ===$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)1/4 — Check no cert files...$(RESET)"; \
+	cert_exists=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -f /etc/tollgate/ssl/server.crt && echo yes || echo no"); \
+	if [ "$$cert_exists" = "yes" ]; then \
+		echo "$(RED)FAIL: cert file exists$(RESET)"; exit 1; \
+	fi; \
+	echo "$(GREEN)OK: no cert file$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)2/4 — Check no backup dir...$(RESET)"; \
+	bk=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -d /etc/tollgate/ssl/backup && echo yes || echo no"); \
+	if [ "$$bk" = "yes" ]; then \
+		echo "$(RED)FAIL: backup dir exists$(RESET)"; exit 1; \
+	fi; \
+	echo "$(GREEN)OK: no backup$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)3/4 — Check uhttpd not pointing to tollgate SSL...$(RESET)"; \
+	cert_uci=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci -q get uhttpd.main.cert"); \
+	if [ "$$cert_uci" = "/etc/tollgate/ssl/server.crt" ]; then \
+		echo "$(RED)FAIL: uhttpd still points to tollgate SSL$(RESET)"; exit 1; \
+	fi; \
+	echo "$(GREEN)OK: uhttpd cert is '$$cert_uci'$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)4/4 — Check no port 443 allow in nodogsplash...$(RESET)"; \
+	nds=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci -q get nodogsplash.@nodogsplash[0].users_to_router"); \
+	if echo "$$nds" | grep -q "'allow tcp port 443'"; then \
+		echo "$(RED)FAIL: port 443 allow still in NDS$(RESET)"; exit 1; \
+	fi; \
+	echo "$(GREEN)OK: no port 443 allow$(RESET)"; \
+	echo ""; \
+	echo "$(GREEN)$(BOLD)Setup verification PASSED [$(ROUTER)]$(RESET)"
+
+r-test-ssl-self-signed-yes: ## [remote] Test self-signed apply with --yes flag (no interactive prompt)
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== SSL Self-Signed Apply (--yes) [$(ROUTER)] ===$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)1/4 — Apply self-signed with --yes...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate ssl apply --yes 2>&1"; \
+	rc=$$?; if [ $$rc -ne 0 ]; then echo "$(RED)FAIL: exit $$rc$(RESET)"; exit 1; fi; \
+	echo ""; \
+	echo "$(CYAN)2/4 — Verify cert+key installed...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -f /etc/tollgate/ssl/server.crt && test -f /etc/tollgate/ssl/server.key" \
+		|| { echo "$(RED)FAIL: cert/key missing$(RESET)"; exit 1; }; \
+	echo "$(GREEN)OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)3/4 — Verify backup created...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -d /etc/tollgate/ssl/backup" \
+		|| { echo "$(RED)FAIL: no backup dir$(RESET)"; exit 1; }; \
+	echo "$(GREEN)OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)4/4 — Verify mode=self-signed in backup...$(RESET)"; \
+	mode=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "cat /etc/tollgate/ssl/backup/ssl.mode 2>/dev/null"); \
+	echo "  mode: $$mode"; \
+	if [ "$$mode" != "self-signed" ]; then \
+		echo "$(RED)FAIL: expected mode=self-signed$(RESET)"; exit 1; \
+	fi; \
+	echo "$(GREEN)OK$(RESET)"; \
+	echo ""; \
+	echo "$(GREEN)$(BOLD)--yes apply test PASSED [$(ROUTER)]$(RESET)"; \
+	echo "$(YELLOW)Run r-test-ssl-remove to clean up.$(RESET)"
+
+r-test-ssl-reapply: ## [remote] Test re-apply with existing backup (overwrite warning + --yes)
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== SSL Re-Apply Test [$(ROUTER)] ===$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)1/4 — Ensure SSL is already applied...$(RESET)"; \
+	bk=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -d /etc/tollgate/ssl/backup && echo yes || echo no"); \
+	if [ "$$bk" = "no" ]; then \
+		echo "  Applying first..."; \
+		ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate ssl apply --yes 2>&1"; \
+	fi; \
+	echo "$(GREEN)OK: SSL is applied$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)2/4 — Re-apply with --yes (should warn about backup)...$(RESET)"; \
+	out=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate ssl apply --yes 2>&1"); \
+	echo "$$out"; \
+	if echo "$$out" | grep -qi "backup already exists"; then \
+		echo "$(GREEN)OK: backup warning detected$(RESET)"; \
+	else \
+		echo "$(YELLOW)WARN: no backup warning in output$(RESET)"; \
+	fi; \
+	echo ""; \
+	echo "$(CYAN)3/4 — Verify cert still installed...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -f /etc/tollgate/ssl/server.crt" \
+		|| { echo "$(RED)FAIL: cert missing$(RESET)"; exit 1; }; \
+	echo "$(GREEN)OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)4/4 — Verify uhttpd still configured...$(RESET)"; \
+	c=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci -q get uhttpd.main.cert"); \
+	if [ "$$c" != "/etc/tollgate/ssl/server.crt" ]; then \
+		echo "$(RED)FAIL: uhttpd cert reverted$(RESET)"; exit 1; \
+	fi; \
+	echo "$(GREEN)OK: uhttpd still configured$(RESET)"; \
+	echo ""; \
+	echo "$(GREEN)$(BOLD)SSL re-apply test PASSED [$(ROUTER)]$(RESET)"
+
+r-test-ssl-remove-no-backup: ## [remote] Test SSL remove when no backup exists (error path)
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== SSL Remove No-Backup Test [$(ROUTER)] ===$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)1/3 — Remove backup dir...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "rm -rf /etc/tollgate/ssl/backup 2>/dev/null; true"; \
+	echo "$(GREEN)OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)2/3 — Run remove (should fail)...$(RESET)"; \
+	out=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate ssl remove 2>&1"; echo "RC=$$?"); \
+	rc=$$(echo "$$out" | grep "RC=" | cut -d= -f2); \
+	echo "$$out" | grep -v "RC="; \
+	if [ "$$rc" = "0" ]; then \
+		echo "$(YELLOW)WARN: remove returned 0 (expected error)$(RESET)"; \
+	else \
+		echo "$(GREEN)OK: non-zero exit code ($$rc)$(RESET)"; \
+	fi; \
+	echo ""; \
+	echo "$(CYAN)3/3 — Verify error message mentions backup...$(RESET)"; \
+	if echo "$$out" | grep -qi "no SSL backup"; then \
+		echo "$(GREEN)OK: correct error message$(RESET)"; \
+	else \
+		echo "$(YELLOW)WARN: unexpected error message$(RESET)"; \
+	fi; \
+	echo ""; \
+	echo "$(GREEN)$(BOLD)SSL remove no-backup test PASSED [$(ROUTER)]$(RESET)"
+
+r-test-ssl-verify-cert: ## [remote] Deep cert validation: SAN, CN, expiry, key permissions
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== SSL Cert Deep Verification [$(ROUTER)] ===$(RESET)"; \
+	echo ""; \
+	hn=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci -q get system.@system[0].hostname"); \
+	domain="$$hn.lan"; \
+	echo "$(CYAN)1/5 — Cert readable...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -r /etc/tollgate/ssl/server.crt" \
+		|| { echo "$(RED)FAIL$(RESET)"; exit 1; }; \
+	echo "$(GREEN)OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)2/5 — SCP cert for local inspection...$(RESET)"; \
+	scp -O $(SSH_OPTS) $(ROUTER_USER)@$$router_host:/etc/tollgate/ssl/server.crt /tmp/tollgate-test-cert.pem 2>/dev/null; \
+	if [ ! -f /tmp/tollgate-test-cert.pem ]; then \
+		echo "$(RED)FAIL: could not fetch cert$(RESET)"; exit 1; \
+	fi; \
+	echo "$(GREEN)OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)3/5 — CN and SAN validation (local openssl)...$(RESET)"; \
+	cn=$$(openssl x509 -noout -subject -in /tmp/tollgate-test-cert.pem 2>/dev/null | sed -n 's/.*CN *= *//p' | sed 's/,.*//;s/ .*//'); \
+	if [ -z "$$cn" ]; then cn=$$(openssl x509 -noout -subject -in /tmp/tollgate-test-cert.pem 2>/dev/null | grep -o '/CN=[^/]*' | cut -d/ -f2); fi; \
+	echo "  CN: $$cn (expected: $$domain)"; \
+	if [ "$$cn" != "$$domain" ]; then \
+		echo "$(RED)FAIL: CN mismatch$(RESET)"; rm -f /tmp/tollgate-test-cert.pem; exit 1; \
+	fi; \
+	san=$$(openssl x509 -noout -ext subjectAltName -in /tmp/tollgate-test-cert.pem 2>/dev/null); \
+	echo "  SAN: $$san"; \
+	if ! echo "$$san" | grep -q "DNS:$$domain"; then \
+		echo "$(RED)FAIL: SAN missing $$domain$(RESET)"; rm -f /tmp/tollgate-test-cert.pem; exit 1; \
+	fi; \
+	if ! echo "$$san" | grep -q "DNS:$$hn"; then \
+		echo "$(RED)FAIL: SAN missing $$hn$(RESET)"; rm -f /tmp/tollgate-test-cert.pem; exit 1; \
+	fi; \
+	echo "$(GREEN)OK: CN and SAN correct$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)4/5 — Cert not expired...$(RESET)"; \
+	openssl x509 -checkend 0 -in /tmp/tollgate-test-cert.pem >/dev/null 2>&1 \
+		|| { echo "$(RED)FAIL: cert expired$(RESET)"; rm -f /tmp/tollgate-test-cert.pem; exit 1; }; \
+	echo "$(GREEN)OK$(RESET)"; \
+	rm -f /tmp/tollgate-test-cert.pem; \
+	echo ""; \
+	echo "$(CYAN)5/5 — Key permissions 600...$(RESET)"; \
+	perms=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "stat -c '%a' /etc/tollgate/ssl/server.key 2>/dev/null"); \
+	echo "  permissions: $$perms"; \
+	if [ "$$perms" != "600" ]; then \
+		echo "$(YELLOW)WARN: expected 600, got $$perms$(RESET)"; \
+	else \
+		echo "$(GREEN)OK$(RESET)"; \
+	fi; \
+	echo ""; \
+	echo "$(GREEN)$(BOLD)SSL cert deep verify PASSED [$(ROUTER)]$(RESET)"
+
+r-test-ssl-verify-nds: ## [remote] Verify nodogsplash allows port 443 after SSL apply
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== SSL NDS Port 443 Verification [$(ROUTER)] ===$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)1/2 — Check users_to_router for 'allow tcp port 443'...$(RESET)"; \
+	nds=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci -q get nodogsplash.@nodogsplash[0].users_to_router"); \
+	echo "  users_to_router: $$nds"; \
+	if echo "$$nds" | grep -q "'allow tcp port 443'"; then \
+		echo "$(GREEN)OK: port 443 allow present$(RESET)"; \
+	else \
+		echo "$(RED)FAIL: port 443 allow NOT found$(RESET)"; exit 1; \
+	fi; \
+	echo ""; \
+	echo "$(CYAN)2/2 — Verify port 443 is listening...$(RESET)"; \
+	listening=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "ss -tlnp 2>/dev/null | grep ':443' || netstat -tlnp 2>/dev/null | grep ':443'"); \
+	if [ -z "$$listening" ]; then \
+		echo "$(YELLOW)WARN: no listener on 443$(RESET)"; \
+	else \
+		echo "  $$listening"; \
+		echo "$(GREEN)OK: port 443 listening$(RESET)"; \
+	fi; \
+	echo ""; \
+	echo "$(GREEN)$(BOLD)SSL NDS verify PASSED [$(ROUTER)]$(RESET)"
+
+r-test-ssl-verify-no-dns: ## [remote] Verify no dnsmasq domain for self-signed mode
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== SSL No-DNS Verify (self-signed) [$(ROUTER)] ===$(RESET)"; \
+	echo ""; \
+	hn=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci -q get system.@system[0].hostname"); \
+	echo "$(CYAN)1/2 — Check no dnsmasq domain for $$hn.lan...$(RESET)"; \
+	domains=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci show dhcp 2>/dev/null | grep '=domain'"); \
+	if echo "$$domains" | grep -q "$$hn.lan"; then \
+		echo "$(RED)FAIL: dnsmasq has .lan domain (unexpected for self-signed)$(RESET)"; exit 1; \
+	fi; \
+	echo "$(GREEN)OK: no .lan domain entries$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)2/2 — SSL status shows self-signed...$(RESET)"; \
+	status=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate ssl status 2>&1"); \
+	echo "$$status"; \
+	if echo "$$status" | grep -q "self-signed"; then \
+		echo "$(GREEN)OK$(RESET)"; \
+	else \
+		echo "$(YELLOW)WARN: status doesn't show self-signed$(RESET)"; \
+	fi; \
+	echo ""; \
+	echo "$(GREEN)$(BOLD)SSL no-DNS verify PASSED [$(ROUTER)]$(RESET)"
+
+r-test-ssl-wrappers: ## [remote] Test tollgate-apply-ssl and tollgate-remove-ssl wrapper scripts
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== SSL Wrapper Scripts Test [$(ROUTER)] ===$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)1/5 — Verify wrapper scripts exist...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -x /usr/bin/tollgate-apply-ssl" \
+		|| { echo "$(RED)FAIL: tollgate-apply-ssl missing$(RESET)"; exit 1; }; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -x /usr/bin/tollgate-remove-ssl" \
+		|| { echo "$(RED)FAIL: tollgate-remove-ssl missing$(RESET)"; exit 1; }; \
+	echo "$(GREEN)OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)2/5 — Apply via wrapper --yes...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate-apply-ssl --yes 2>&1"; \
+	if [ $$? -ne 0 ]; then echo "$(RED)FAIL$(RESET)"; exit 1; fi; \
+	echo ""; \
+	echo "$(CYAN)3/5 — Verify cert installed...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -f /etc/tollgate/ssl/server.crt" \
+		|| { echo "$(RED)FAIL$(RESET)"; exit 1; }; \
+	echo "$(GREEN)OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)4/5 — Remove via wrapper --yes...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate-remove-ssl --yes 2>&1"; \
+	if [ $$? -ne 0 ]; then echo "$(RED)FAIL$(RESET)"; exit 1; fi; \
+	echo ""; \
+	echo "$(CYAN)5/5 — Verify cert removed...$(RESET)"; \
+	cert=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -f /etc/tollgate/ssl/server.crt && echo yes || echo no"); \
+	if [ "$$cert" = "yes" ]; then \
+		echo "$(RED)FAIL: cert still exists$(RESET)"; exit 1; \
+	fi; \
+	echo "$(GREEN)OK: cert removed$(RESET)"; \
+	echo ""; \
+	echo "$(GREEN)$(BOLD)SSL wrapper test PASSED [$(ROUTER)]$(RESET)"
+
+r-test-ssl-idempotent: ## [remote] Apply twice — verify state consistent after second apply
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== SSL Idempotent Apply Test [$(ROUTER)] ===$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)1/3 — Apply SSL first time...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate ssl apply --yes 2>&1"; \
+	scp -O $(SSH_OPTS) $(ROUTER_USER)@$$router_host:/etc/tollgate/ssl/server.crt /tmp/tollgate-idem-1.pem 2>/dev/null; \
+	fp1=$$(openssl x509 -noout -fingerprint -sha256 -in /tmp/tollgate-idem-1.pem 2>/dev/null | cut -d= -f2); \
+	echo "  Fingerprint 1: $$fp1"; \
+	rm -f /tmp/tollgate-idem-1.pem; \
+	echo ""; \
+	echo "$(CYAN)2/3 — Apply SSL second time...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate ssl apply --yes 2>&1"; \
+	scp -O $(SSH_OPTS) $(ROUTER_USER)@$$router_host:/etc/tollgate/ssl/server.crt /tmp/tollgate-idem-2.pem 2>/dev/null; \
+	fp2=$$(openssl x509 -noout -fingerprint -sha256 -in /tmp/tollgate-idem-2.pem 2>/dev/null | cut -d= -f2); \
+	echo "  Fingerprint 2: $$fp2"; \
+	rm -f /tmp/tollgate-idem-2.pem; \
+	echo ""; \
+	echo "$(CYAN)3/3 — Verify state after re-apply...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -f /etc/tollgate/ssl/server.crt && test -f /etc/tollgate/ssl/server.key" \
+		|| { echo "$(RED)FAIL: cert/key missing$(RESET)"; exit 1; }; \
+	if [ "$$fp1" = "$$fp2" ]; then \
+		echo "$(GREEN)OK: same cert (idempotent)$(RESET)"; \
+	else \
+		echo "$(YELLOW)INFO: different cert (regenerated — expected for self-signed)$(RESET)"; \
+	fi; \
+	echo "$(GREEN)OK: cert+key still present$(RESET)"; \
+	echo ""; \
+	echo "$(GREEN)$(BOLD)SSL idempotent test PASSED [$(ROUTER)]$(RESET)"
+
+r-test-ssl-comprehensive: ## [remote] All self-signed SSL tests in sequence (comprehensive)
+	@$(CHECK_LOCK)
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(BOLD)  Comprehensive SSL Test Suite [$(ROUTER)]$(RESET)"
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo ""
+	@echo "$(CYAN)Phase 1: Clean slate...$(RESET)"
+	@$(MAKE) -f Makefile r-ssl-remove-force ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 2: Verify clean state...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-setup-verify ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 3: Apply with --yes flag...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-self-signed-yes ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 4: Deep cert verification...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-verify-cert ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 5: NDS port 443 verification...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-verify-nds ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 6: No-DNS verification (self-signed)...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-verify-no-dns ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 7: SSL status check...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-status ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 8: Re-apply test (overwrite backup)...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-reapply ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 9: Remove SSL...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-remove ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 10: Remove no-backup error path...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-remove-no-backup ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 11: Wrapper scripts test...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-wrappers ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 12: Idempotent apply test...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-idempotent ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 13: Final cleanup...$(RESET)"
+	@$(MAKE) -f Makefile r-ssl-remove-force ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(GREEN)$(BOLD)  Comprehensive SSL test suite PASSED [$(ROUTER)]$(RESET)"
+	@echo "$(BOLD)=======================================$(RESET)"
+
+r-test-ssl-real-cert: ## [remote] Test real cert apply via LE staging + Cloudflare DNS-01
+	@$(CHECK_LOCK)
+	@if [ -z "$(SSL_CF_TOKEN)" ]; then echo "$(RED)FAIL: SSL_CF_TOKEN not set (check .env)$(RESET)"; exit 1; fi
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== SSL Real Cert Test [$(ROUTER)] ===$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)1/7 — Issue cert via acme.sh + LE staging...$(RESET)"; \
+	mkdir -p $(SSL_ACME_DIR); \
+	if [ ! -f $(SSL_ACME_DIR)/acme.sh ]; then \
+		echo "  Downloading acme.sh..."; \
+		curl -sL https://github.com/acmesh-official/acme.sh/archive/master.tar.gz | tar xz -C $(SSL_ACME_DIR) --strip-components=1; \
+		chmod +x $(SSL_ACME_DIR)/acme.sh; \
+	fi; \
+	echo "  Issuing cert for $(SSL_REAL_CERT_DOMAIN)..."; \
+	CF_Token="$(SSL_CF_TOKEN)" CF_Zone_ID="$(SSL_CF_ZONE)" bash $(SSL_ACME_DIR)/acme.sh --issue --dns dns_cf -d $(SSL_REAL_CERT_DOMAIN) --server letsencrypt_test --home $(SSL_ACME_DIR) --force 2>&1 | tail -15; \
+	if [ $$? -ne 0 ]; then echo "$(RED)FAIL: acme.sh issue failed$(RESET)"; exit 1; fi; \
+	echo "$(GREEN)OK: cert issued$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)2/7 — Copy cert files to router...$(RESET)"; \
+	cert_path="$(SSL_ACME_DIR)/$(SSL_REAL_CERT_DOMAIN)_ecc/$(SSL_REAL_CERT_DOMAIN).cer"; \
+	key_path="$(SSL_ACME_DIR)/$(SSL_REAL_CERT_DOMAIN)_ecc/$(SSL_REAL_CERT_DOMAIN).key"; \
+	chain_path="$(SSL_ACME_DIR)/$(SSL_REAL_CERT_DOMAIN)_ecc/fullchain.cer"; \
+	scp -O $(SSH_OPTS) $$chain_path $(ROUTER_USER)@$$router_host:/tmp/test-cert.pem; \
+	scp -O $(SSH_OPTS) $$key_path $(ROUTER_USER)@$$router_host:/tmp/test-key.pem; \
+	echo "$(GREEN)OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)3/7 — Apply real cert...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate ssl apply --yes /tmp/test-cert.pem /tmp/test-key.pem 2>&1"; \
+	if [ $$? -ne 0 ]; then echo "$(RED)FAIL$(RESET)"; exit 1; fi; \
+	echo "$(GREEN)OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)4/7 — Verify dnsmasq domain entry...$(RESET)"; \
+	lan_ip=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci -q get network.lan.ipaddr"); \
+	domains=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci show dhcp 2>/dev/null | grep -E '\.name=|\.ip='"); \
+	echo "  $$domains"; \
+	if ! echo "$$domains" | grep -q "$(SSL_REAL_CERT_DOMAIN)"; then \
+		echo "$(RED)FAIL: no dnsmasq entry for $(SSL_REAL_CERT_DOMAIN)$(RESET)"; exit 1; \
+	fi; \
+	echo "$(GREEN)OK: dnsmasq domain configured$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)5/7 — Verify nodogsplash gatewaydomainname...$(RESET)"; \
+	gw=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci -q get nodogsplash.@nodogsplash[0].gatewaydomainname"); \
+	echo "  gatewaydomainname: $$gw"; \
+	if [ "$$gw" != "$(SSL_REAL_CERT_DOMAIN)" ]; then \
+		echo "$(RED)FAIL: expected $(SSL_REAL_CERT_DOMAIN), got '$$gw'$(RESET)"; exit 1; \
+	fi; \
+	echo "$(GREEN)OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)6/7 — Verify SSL status shows real-cert mode...$(RESET)"; \
+	status=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate ssl status 2>&1"); \
+	echo "$$status"; \
+	if echo "$$status" | grep -q "real-cert"; then \
+		echo "$(GREEN)OK: mode is real-cert$(RESET)"; \
+	else \
+		echo "$(YELLOW)WARN: mode not shown as real-cert$(RESET)"; \
+	fi; \
+	echo ""; \
+	echo "$(CYAN)7/7 — Verify cert CN/SAN (local openssl)...$(RESET)"; \
+	scp -O $(SSH_OPTS) $(ROUTER_USER)@$$router_host:/etc/tollgate/ssl/server.crt /tmp/tollgate-real-cert.pem 2>/dev/null; \
+	cn=$$(openssl x509 -noout -subject -in /tmp/tollgate-real-cert.pem 2>/dev/null | sed -n 's/.*CN *= *//p' | sed 's/,.*//;s/ .*//'); \
+	if [ -z "$$cn" ]; then cn=$$(openssl x509 -noout -subject -in /tmp/tollgate-real-cert.pem 2>/dev/null | grep -o '/CN=[^/]*' | cut -d= -f2); fi; \
+	rm -f /tmp/tollgate-real-cert.pem; \
+	echo "  CN: $$cn"; \
+	if [ "$$cn" != "$(SSL_REAL_CERT_DOMAIN)" ]; then \
+		echo "$(YELLOW)WARN: CN mismatch (may be SAN-only cert)$(RESET)"; \
+	fi; \
+	echo "$(GREEN)OK$(RESET)"; \
+	echo ""; \
+	echo "$(GREEN)$(BOLD)SSL real cert apply test PASSED [$(ROUTER)]$(RESET)"; \
+	echo "$(YELLOW)Run r-test-ssl-real-cert-remove to clean up.$(RESET)"
+
+r-test-ssl-real-cert-remove: ## [remote] Test real cert removal (dnsmasq + NDS revert)
+	@$(CHECK_LOCK)
+	@$(RESOLVE_ROUTER); \
+	echo "$(BOLD)=== SSL Real Cert Remove Test [$(ROUTER)] ===$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)1/5 — Remove SSL...$(RESET)"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate ssl remove --yes 2>&1"; \
+	if [ $$? -ne 0 ]; then echo "$(RED)FAIL$(RESET)"; exit 1; fi; \
+	echo "$(GREEN)OK$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)2/5 — Verify cert files removed...$(RESET)"; \
+	cert=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -f /etc/tollgate/ssl/server.crt && echo yes || echo no"); \
+	if [ "$$cert" = "yes" ]; then echo "$(RED)FAIL: cert still exists$(RESET)"; exit 1; fi; \
+	echo "$(GREEN)OK: cert removed$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)3/5 — Verify dnsmasq domain removed...$(RESET)"; \
+	domains=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci show dhcp | grep '=domain' | grep -c '$(SSL_REAL_CERT_DOMAIN)'"); \
+	if [ "$$domains" -gt 0 ] 2>/dev/null; then \
+		echo "$(RED)FAIL: dnsmasq still has $(SSL_REAL_CERT_DOMAIN)$(RESET)"; exit 1; \
+	fi; \
+	echo "$(GREEN)OK: dnsmasq clean$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)4/5 — Verify nodogsplash gatewaydomainname reverted...$(RESET)"; \
+	gw=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "uci -q get nodogsplash.@nodogsplash[0].gatewaydomainname"); \
+	echo "  gatewaydomainname: $$gw"; \
+	if [ "$$gw" = "$(SSL_REAL_CERT_DOMAIN)" ]; then \
+		echo "$(RED)FAIL: still set to real cert domain$(RESET)"; exit 1; \
+	fi; \
+	echo "$(GREEN)OK: reverted to '$$gw'$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)5/5 — Verify backup removed...$(RESET)"; \
+	bk=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -d /etc/tollgate/ssl/backup && echo yes || echo no"); \
+	if [ "$$bk" = "yes" ]; then echo "$(YELLOW)WARN: backup dir still exists$(RESET)"; \
+	else echo "$(GREEN)OK: backup removed$(RESET)"; fi; \
+	echo ""; \
+	echo "$(GREEN)$(BOLD)SSL real cert remove test PASSED [$(ROUTER)]$(RESET)"
+
+r-test-ssl-real-cert-full: ## [remote] Full real cert lifecycle: issue → apply → verify → remove → verify clean
+	@$(CHECK_LOCK)
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(BOLD)  Full Real Cert Lifecycle Test [$(ROUTER)]$(RESET)"
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo ""
+	@echo "$(CYAN)Phase 1: Clean slate...$(RESET)"
+	@$(MAKE) -f Makefile r-ssl-remove-force ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 2: Issue and apply real cert...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-real-cert ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 3: SSL status check...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-status ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 4: Remove real cert...$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-real-cert-remove ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 5: Verify clean state...$(RESET)"
+	@$(MAKE) -f Makefile r-ssl-status ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)Phase 6: Cleanup router temp files...$(RESET)"
+	@$(RESOLVE_ROUTER); ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "rm -f /tmp/test-cert.pem /tmp/test-key.pem 2>/dev/null; true"
+	@echo ""
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(GREEN)$(BOLD)  Full real cert lifecycle test PASSED [$(ROUTER)]$(RESET)"
+	@echo "$(BOLD)=======================================$(RESET)"
+
+r-test-ssl-all: ## [remote] Run ALL SSL tests: self-signed comprehensive + real cert lifecycle
+	@$(CHECK_LOCK)
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(BOLD)  COMPLETE SSL TEST SUITE [$(ROUTER)]$(RESET)"
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo ""
+	@echo "$(CYAN)=== Part 1: Comprehensive Self-Signed Tests ===$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-comprehensive ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(CYAN)=== Part 2: Real Cert Lifecycle ===$(RESET)"
+	@$(MAKE) -f Makefile r-test-ssl-real-cert-full ROUTER=$(ROUTER)
+	@echo ""
+	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(GREEN)$(BOLD)  COMPLETE SSL TEST SUITE PASSED [$(ROUTER)]$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"

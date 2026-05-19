@@ -87,6 +87,9 @@ help: ## Show this help
 	@echo ""
 	@echo "$(CYAN)--- Router management ---$(RESET)"
 	@echo "  make deploy               ROUTER=alpha      # cross-compile + deploy binaries"
+	@echo "  make deploy-develop       ROUTER=alpha      # deploy from develop worktree"
+	@echo "  make test-develop-smoke   ROUTER=alpha      # CLI config smoke tests"
+	@echo "  make test-develop-playwright ROUTER=alpha    # Playwright tests vs develop"
 	@echo "  make status               ROUTER=alpha      # check service status"
 	@echo "  make shell                ROUTER=alpha      # interactive SSH session"
 	@echo "  make logs                 ROUTER=alpha      # tail tollgate logs"
@@ -272,7 +275,19 @@ full-all: ## Run all test suites (lint + playwright + degraded + upstream)
 .PHONY: deploy deploy-cli status shell logs check-sta-health fix-dns cleanup \
         setup-fresh fund-wallet restore-prod diagnose-config test-default-mints \
         rescue-router save-upstream restore-upstream \
-        test-hostname test-ssl-self-signed test-ssl-remove test-ssl-status test-ssl-full ssl-status ssl-remove-force
+        test-hostname test-ssl-self-signed test-ssl-remove test-ssl-status test-ssl-full \
+        ssl-status ssl-remove-force \
+        test-ssl-setup-verify test-ssl-self-signed-yes test-ssl-reapply \
+        test-ssl-remove-no-backup test-ssl-verify-cert test-ssl-verify-nds \
+        test-ssl-verify-no-dns test-ssl-wrappers test-ssl-idempotent \
+        test-ssl-comprehensive \
+        test-ssl-real-cert test-ssl-real-cert-remove test-ssl-real-cert-full \
+        test-ssl-all \
+        deploy-develop test-develop-smoke test-develop-smoke-persist test-develop-playwright
+
+DEVELOP_SRC ?= $(HOME)/tollgate-worktrees/develop/src
+DEVICE ?= gl-mt3000
+RESTART_WAIT ?= 10
 
 deploy: ## Cross-compile and deploy daemon + CLI to router
 	$(call require_hardware_lock)
@@ -281,6 +296,99 @@ deploy: ## Cross-compile and deploy daemon + CLI to router
 deploy-cli: ## Cross-compile and deploy CLI only (no service restart)
 	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-deploy-cli ROUTER=$(ROUTER)
+
+deploy-develop: ## Cross-compile from develop worktree and deploy daemon + CLI to router
+	$(call require_hardware_lock)
+	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" mint-health/routers.env | cut -d= -f2); \
+	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=== Deploying develop branch to $(ROUTER) ($$router_host) [$(DEVICE)] ===$(RESET)"; \
+	if [ ! -d "$(DEVELOP_SRC)" ]; then echo "$(RED)Develop worktree not found at $(DEVELOP_SRC)$(RESET)"; exit 1; fi; \
+	echo "$(CYAN)1/4 — Building tollgate-wrt...$(RESET)"; \
+	if [ "$(DEVICE)" = "gl-ar300" ]; then \
+		cd "$(DEVELOP_SRC)" && GOOS=linux GOARCH=mips GOMIPS=softfloat CGO_ENABLED=0 go build -o /tmp/tollgate-wrt-develop -trimpath -ldflags="-s -w"; \
+	else \
+		cd "$(DEVELOP_SRC)" && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /tmp/tollgate-wrt-develop -trimpath -ldflags="-s -w"; \
+	fi; \
+	echo "$(CYAN)2/4 — Building tollgate CLI...$(RESET)"; \
+	if [ "$(DEVICE)" = "gl-ar300" ]; then \
+		cd "$(DEVELOP_SRC)/cmd/tollgate-cli" && GOOS=linux GOARCH=mips GOMIPS=softfloat CGO_ENABLED=0 go build -o /tmp/tollgate-cli-develop -trimpath -ldflags="-s -w"; \
+	else \
+		cd "$(DEVELOP_SRC)/cmd/tollgate-cli" && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /tmp/tollgate-cli-develop -trimpath -ldflags="-s -w"; \
+	fi; \
+	echo "$(CYAN)3/4 — Deploying to router...$(RESET)"; \
+	ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$$router_host "/etc/init.d/tollgate-wrt stop" 2>/dev/null || true; \
+	scp -O -o ConnectTimeout=10 -o StrictHostKeyChecking=no /tmp/tollgate-wrt-develop root@$$router_host:/usr/bin/tollgate-wrt; \
+	scp -O -o ConnectTimeout=10 -o StrictHostKeyChecking=no /tmp/tollgate-cli-develop root@$$router_host:/usr/bin/tollgate; \
+	ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$$router_host "chmod +x /usr/bin/tollgate-wrt /usr/bin/tollgate && /etc/init.d/tollgate-wrt start"; \
+	echo "$(CYAN)4/4 — Verifying...$(RESET)"; \
+	sleep 3; \
+	ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$$router_host "tollgate --json config schema" > /dev/null 2>&1 && echo "$(GREEN)Deploy OK — config schema responds$(RESET)" || echo "$(RED)Deploy FAILED — config schema not responding$(RESET)"
+
+test-develop-smoke: ## Run CLI config smoke tests on router with develop binaries
+	$(call require_hardware_lock)
+	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" mint-health/routers.env | cut -d= -f2); \
+	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
+	SH="ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$$router_host"; \
+	PASS=0; FAIL=0; \
+	echo "$(BOLD)=== Develop Smoke Tests [$(ROUTER)] ===$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)--- config schema ---$(RESET)"; \
+	$$SH "tollgate --json config schema" > /tmp/smoke-schema.json 2>&1 && grep -q '"json_key"' /tmp/smoke-schema.json && { echo "  $(GREEN)PASS$(RESET): schema returns FieldSchema array"; PASS=$$((PASS+1)); } || { echo "  $(RED)FAIL$(RESET): schema not responding"; FAIL=$$((FAIL+1)); }; \
+	echo "$(CYAN)--- config get ---$(RESET)"; \
+	$$SH "tollgate --json config get" > /tmp/smoke-config.json 2>&1 && grep -q '"metric"' /tmp/smoke-config.json && { echo "  $(GREEN)PASS$(RESET): config get returns full config"; PASS=$$((PASS+1)); } || { echo "  $(RED)FAIL$(RESET): config get failed"; FAIL=$$((FAIL+1)); }; \
+	echo "$(CYAN)--- config set + disk persistence ---$(RESET)"; \
+	ORIG_LOGLEVEL=$$($$SH "tollgate --json config get" 2>&1 | grep -oP '"log_level"\s*:\s*"\K[^"]*' | head -1); \
+	SET_OUT=$$($$SH "tollgate --json config set log_level warn" 2>&1); \
+	echo "$$SET_OUT" | grep -qP '"value"\s*:\s*"warn"' && { echo "  $(GREEN)PASS$(RESET): config set returns new value"; PASS=$$((PASS+1)); } || { echo "  $(RED)FAIL$(RESET): config set failed"; FAIL=$$((FAIL+1)); }; \
+	DISK_LEVEL=$$($$SH "grep log_level /etc/tollgate/config.json" 2>&1 | grep -oP '"log_level"\s*:\s*"\K[^"]*'); \
+	if [ "$$DISK_LEVEL" = "warn" ]; then echo "  $(GREEN)PASS$(RESET): value persisted to /etc/tollgate/config.json"; PASS=$$((PASS+1)); else echo "  $(RED)FAIL$(RESET): disk has $$DISK_LEVEL (expected warn)"; FAIL=$$((FAIL+1)); fi; \
+	$$SH "tollgate --json config set log_level $$ORIG_LOGLEVEL" > /dev/null 2>&1; \
+	echo "$(CYAN)--- enum validation ---$(RESET)"; \
+	ERR=$$($$SH "tollgate --json config set log_level INVALID" 2>&1); \
+	echo "$$ERR" | grep -qi "not in allowed" && { echo "  $(GREEN)PASS$(RESET): rejects invalid log_level enum"; PASS=$$((PASS+1)); } || { echo "  $(RED)FAIL$(RESET): accepted invalid enum (got: $$ERR)"; FAIL=$$((FAIL+1)); }; \
+	echo "$(CYAN)--- min/max validation (upper bound) ---$(RESET)"; \
+	ERR=$$($$SH "tollgate --json config set margin 5.0" 2>&1); \
+	echo "$$ERR" | grep -qi "exceeds maximum" && { echo "  $(GREEN)PASS$(RESET): rejects margin > 1.0"; PASS=$$((PASS+1)); } || { echo "  $(RED)FAIL$(RESET): accepted margin 5.0 (got: $$ERR)"; FAIL=$$((FAIL+1)); }; \
+	echo "$(CYAN)--- min/max validation (lower bound) ---$(RESET)"; \
+	ERR=$$($$SH "tollgate --json config set margin -- -0.5" 2>&1); \
+	echo "$$ERR" | grep -qi "below minimum" && { echo "  $(GREEN)PASS$(RESET): rejects negative margin"; PASS=$$((PASS+1)); } || { echo "  $(RED)FAIL$(RESET): accepted margin -0.5 (got: $$ERR)"; FAIL=$$((FAIL+1)); }; \
+	echo "$(CYAN)--- wallet balance ---$(RESET)"; \
+	$$SH "tollgate --json wallet balance" > /tmp/smoke-wallet.json 2>&1 && grep -q '"balance_sats"' /tmp/smoke-wallet.json && { echo "  $(GREEN)PASS$(RESET): wallet balance responds"; PASS=$$((PASS+1)); } || { echo "  $(RED)FAIL$(RESET): wallet balance failed"; FAIL=$$((FAIL+1)); }; \
+	echo "$(CYAN)--- health ---$(RESET)"; \
+	$$SH "tollgate --json health" > /dev/null 2>&1 && { echo "  $(GREEN)PASS$(RESET): health responds"; PASS=$$((PASS+1)); } || { echo "  $(RED)FAIL$(RESET): health failed"; FAIL=$$((FAIL+1)); }; \
+	echo "$(CYAN)--- status ---$(RESET)"; \
+	$$SH "tollgate --json status" > /dev/null 2>&1 && { echo "  $(GREEN)PASS$(RESET): status responds"; PASS=$$((PASS+1)); } || { echo "  $(RED)FAIL$(RESET): status failed"; FAIL=$$((FAIL+1)); }; \
+	echo ""; \
+	echo "$(BOLD)=== Results: $(GREEN)$$PASS passed$(RESET), $(RED)$$FAIL failed$(RESET) ==="; \
+	if [ "$$FAIL" -gt 0 ]; then exit 1; fi
+
+test-develop-smoke-persist: ## Run set+restart persistence test
+	$(call require_hardware_lock)
+	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" mint-health/routers.env | cut -d= -f2); \
+	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=== Persistence Test [$(ROUTER)] ===$(RESET)"; \
+	ORIG=$$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$$router_host "tollgate --json config get" 2>&1 | grep -oP '"log_level"\s*:\s*"\K[^"]*' | head -1); \
+	echo "  Original log_level: $$ORIG"; \
+	ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$$router_host "tollgate --json config set log_level error" > /dev/null 2>&1; \
+	echo "  Restarting service..."; \
+	ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$$router_host "/etc/init.d/tollgate-wrt restart" 2>&1 || true; \
+	echo "  Waiting $(RESTART_WAIT)s for service startup..."; \
+	sleep $(RESTART_WAIT); \
+	NEW=$$(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$$router_host "tollgate --json config get" 2>&1 | grep -oP '"log_level"\s*:\s*"\K[^"]*' | head -1); \
+	echo "  After restart log_level: $$NEW"; \
+	if [ "$$NEW" = "error" ]; then echo "  $(GREEN)PASS$(RESET): log_level persisted after restart"; \
+	else echo "  $(RED)FAIL$(RESET): log_level not persisted (got $$NEW)"; fi; \
+	ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$$router_host "tollgate --json config set log_level $$ORIG" > /dev/null 2>&1
+
+test-develop-playwright: ## Run Playwright tests against router with develop binaries
+	$(call require_hardware_lock)
+	@if [ ! -d node_modules ]; then echo "$(YELLOW)Run npm install first$(RESET)"; exit 1; fi
+	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" mint-health/routers.env | cut -d= -f2); \
+	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=== Playwright Tests [$(ROUTER)] ($$router_host) ===$(RESET)"; \
+	TOLLGATE_SSH_HOST=$$router_host \
+	TOLLGATE_CAPTIVE_PORTAL_HOST=$$router_host \
+	npx playwright test tests/tollgate.spec.mjs tests/captive-portal.spec.mjs --project=desktop
 
 status: ## Check tollgate service status
 	@$(MAKE) -C mint-health r-status ROUTER=$(ROUTER)
@@ -508,6 +616,62 @@ ssl-status: ## Show current SSL status on router (read-only, no lock)
 ssl-remove-force: ## Force-remove SSL config on router (cleanup)
 	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-ssl-remove-force ROUTER=$(ROUTER)
+
+test-ssl-setup-verify: ## Verify router is in clean SSL state
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-setup-verify ROUTER=$(ROUTER)
+
+test-ssl-self-signed-yes: ## Test self-signed apply with --yes flag
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-self-signed-yes ROUTER=$(ROUTER)
+
+test-ssl-reapply: ## Test re-apply with existing backup (overwrite warning)
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-reapply ROUTER=$(ROUTER)
+
+test-ssl-remove-no-backup: ## Test remove when no backup exists (error path)
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-remove-no-backup ROUTER=$(ROUTER)
+
+test-ssl-verify-cert: ## Deep cert validation: SAN, CN, expiry, permissions
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-verify-cert ROUTER=$(ROUTER)
+
+test-ssl-verify-nds: ## Verify nodogsplash allows port 443
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-verify-nds ROUTER=$(ROUTER)
+
+test-ssl-verify-no-dns: ## Verify no dnsmasq domain for self-signed
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-verify-no-dns ROUTER=$(ROUTER)
+
+test-ssl-wrappers: ## Test tollgate-apply-ssl and tollgate-remove-ssl wrappers
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-wrappers ROUTER=$(ROUTER)
+
+test-ssl-idempotent: ## Test apply twice — verify state consistent
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-idempotent ROUTER=$(ROUTER)
+
+test-ssl-comprehensive: ## All self-signed SSL tests in sequence (~10 min)
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-comprehensive ROUTER=$(ROUTER)
+
+test-ssl-real-cert: ## Test real cert via LE staging + Cloudflare DNS-01
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-real-cert ROUTER=$(ROUTER)
+
+test-ssl-real-cert-remove: ## Test real cert removal (dnsmasq + NDS revert)
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-real-cert-remove ROUTER=$(ROUTER)
+
+test-ssl-real-cert-full: ## Full real cert lifecycle (~5 min)
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-real-cert-full ROUTER=$(ROUTER)
+
+test-ssl-all: ## Run ALL SSL tests: comprehensive + real cert (~20 min)
+	$(call require_hardware_lock)
+	@$(MAKE) -C mint-health r-test-ssl-all ROUTER=$(ROUTER)
 
 # ===========================================================================
 #  SETUP
