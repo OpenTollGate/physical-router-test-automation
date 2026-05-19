@@ -39,7 +39,7 @@
 ROUTER ?= alpha
 SSID   ?=
 PASS   ?=
-MINT   ?= https://nofee.testnut.cashu.space
+MINT   ?= https://testnut-compat.mints.orangesync.tech
 VIA    ?=
 PHASE  ?=
 
@@ -88,8 +88,11 @@ help: ## Show this help
 	@echo "$(CYAN)--- Router management ---$(RESET)"
 	@echo "  make hw-deploy              ROUTER=alpha      # cross-compile + deploy binaries"
 	@echo "  make deploy-develop       ROUTER=alpha      # deploy from develop worktree"
+	@echo "  make deploy-configwizzard ROUTER=alpha      # build + deploy configurationwizzard SPA"
 	@echo "  make test-develop-smoke   ROUTER=alpha      # CLI config smoke tests"
 	@echo "  make test-develop-playwright ROUTER=alpha    # Playwright tests vs develop"
+	@echo "  make test-configwizzard-e2e ROUTER=alpha     # E2E: PR124 + configwizzard + :2121"
+	@echo "  make test-configwizzard-all  ROUTER=alpha    # deploy-develop + deploy-configwizzard + full E2E"
 	@echo "  make status               ROUTER=alpha      # check service status"
 	@echo "  make shell                ROUTER=alpha      # interactive SSH session"
 	@echo "  make logs                 ROUTER=alpha      # tail tollgate logs"
@@ -122,7 +125,7 @@ help: ## Show this help
 	@echo "  ROUTER  - router label from routers.env (default: alpha)"
 	@echo "  SSID    - upstream WiFi SSID"
 	@echo "  PASS    - upstream WiFi passphrase"
-	@echo "  MINT    - mint URL for block/unblock (default: https://nofee.testnut.cashu.space)"
+	@echo "  MINT    - mint URL for block/unblock (default: https://testnut-compat.mints.orangesync.tech)"
 	@echo "  VIA     - intermediate router for rescue"
 	@echo "  PHASE   - description for router lock"
 	@echo ""
@@ -283,7 +286,8 @@ full-all: ## Run all test suites (lint + playwright + degraded + upstream)
         test-ssl-comprehensive \
         test-ssl-real-cert test-ssl-real-cert-remove test-ssl-real-cert-full \
         test-ssl-all \
-        deploy-develop test-develop-smoke test-develop-smoke-persist test-develop-playwright
+        deploy-develop test-develop-smoke test-develop-smoke-persist test-develop-playwright \
+        deploy-configwizzard test-configwizzard-e2e test-configwizzard-all
 
 DEVELOP_SRC ?= $(HOME)/tollgate-worktrees/develop/src
 DEVICE ?= gl-mt3000
@@ -389,6 +393,44 @@ test-develop-playwright: ## Run Playwright tests against router with develop bin
 	TOLLGATE_SSH_HOST=$$router_host \
 	TOLLGATE_CAPTIVE_PORTAL_HOST=$$router_host \
 	npx playwright test tests/tollgate.spec.mjs tests/captive-portal.spec.mjs --project=desktop
+
+CONFIGWIZZARD_REPO ?= /tmp/configurationwizzard
+
+deploy-configwizzard: ## Build and deploy configurationwizzard SPA (admin + portal + rpcd plugin)
+	$(call require_hardware_lock)
+	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" mint-health/routers.env | cut -d= -f2); \
+	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
+	if [ ! -d "$(CONFIGWIZZARD_REPO)" ]; then echo "$(RED)configurationwizzard repo not found at $(CONFIGWIZZARD_REPO)$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=== Deploying configurationwizzard to $(ROUTER) ($$router_host) ===$(RESET)"; \
+	bash scripts/deploy-configwizzard.sh "$$router_host" "$(CONFIGWIZZARD_REPO)"
+
+test-configwizzard-e2e: ## Run E2E tests: PR124 CLI + rpcd plugin + :2121 API + SPA integration
+	$(call require_hardware_lock)
+	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" mint-health/routers.env | cut -d= -f2); \
+	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=== configurationwizzard E2E Tests [$(ROUTER)] ($$router_host) ===$(RESET)"; \
+	bash scripts/test-configwizzard-e2e.sh "$$router_host"
+
+test-configwizzard-all: ## Deploy everything + run full E2E test suite
+	$(call require_hardware_lock)
+	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" mint-health/routers.env | cut -d= -f2); \
+	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=======================================$(RESET)"; \
+	echo "$(BOLD)  Full Configwizzard E2E [$(ROUTER)]$(RESET)"; \
+	echo "$(BOLD)=======================================$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)1/3 — Deploying develop branch...$(RESET)"; \
+	$(MAKE) deploy-develop ROUTER=$(ROUTER); \
+	echo ""; \
+	echo "$(CYAN)2/3 — Deploying configurationwizzard SPA...$(RESET)"; \
+	$(MAKE) deploy-configwizzard ROUTER=$(ROUTER) CONFIGWIZZARD_REPO=$(CONFIGWIZZARD_REPO); \
+	echo ""; \
+	echo "$(CYAN)3/3 — Running E2E tests...$(RESET)"; \
+	$(MAKE) test-configwizzard-e2e ROUTER=$(ROUTER); \
+	echo ""; \
+	echo "$(BOLD)=======================================$(RESET)"; \
+	echo "$(GREEN)$(BOLD)  Full Configwizzard E2E complete [$(ROUTER)]$(RESET)"; \
+	echo "$(BOLD)=======================================$(RESET)"
 
 status: ## Check tollgate service status
 	@$(MAKE) -C mint-health r-status ROUTER=$(ROUTER)
