@@ -46,6 +46,7 @@ class WorkerConfig:
     reseller_scenarios: bool
     secondary_router_host: str
     secondary_router_port: str
+    keep_vm_on_failure: bool
     publish: bool
     project: str
     zone: str
@@ -82,6 +83,7 @@ def load_config_from_metadata() -> WorkerConfig:
         reseller_scenarios=_metadata_get_optional("tollgate-reseller-scenarios").lower() in ("true", "1", "yes"),
         secondary_router_host=_metadata_get_optional("tollgate-secondary-router-host"),
         secondary_router_port=_metadata_get_optional("tollgate-secondary-router-port"),
+        keep_vm_on_failure=_metadata_get_optional("tollgate-keep-vm-on-failure").lower() in ("true", "1", "yes"),
         publish=_metadata_get("tollgate-publish").lower() in ("true", "1", "yes"),
         project=_metadata_get("tollgate-project"),
         zone=_metadata_get("tollgate-zone"),
@@ -223,10 +225,25 @@ def ensure_github_cli(token: str) -> None:
         "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gh >/dev/null; fi",
         timeout=180,
     )
-    _run(f"printf '%s\\n' {shlex.quote(token)} | gh auth login --with-token >/dev/null 2>&1", timeout=30)
-    r = _run("gh auth status >/dev/null 2>&1 && echo GH_OK", timeout=15, check=False)
+    # Retry gh auth — transient DNS/network issues on first boot can cause failures
+    last_err = ""
+    for attempt in range(1, 4):
+        r = _run(
+            f"printf '%s\\n' {shlex.quote(token)} | gh auth login --with-token 2>&1",
+            timeout=30,
+            check=False,
+        )
+        if r.returncode == 0:
+            break
+        last_err = (r.stderr or r.stdout or "").strip()[-500:]
+        log.warning("gh auth attempt %d failed: %s", attempt, last_err[:200])
+        if attempt < 3:
+            time.sleep(5 * attempt)
+    else:
+        raise RuntimeError(f"gh auth failed after 3 attempts: {last_err}")
+    r = _run("gh auth status 2>&1 && echo GH_OK", timeout=15, check=False)
     if "GH_OK" not in r.stdout:
-        raise RuntimeError("gh auth failed on worker VM")
+        raise RuntimeError("gh auth status check failed on worker VM")
 
 
 def reset_openwrt_overlay_only() -> None:
@@ -592,6 +609,9 @@ def run_worker(config: WorkerConfig) -> int:
         return test_exit
     finally:
         stop_inner_vms()
+        if config.keep_vm_on_failure and test_exit != 0:
+            log.error("Keeping VM for debugging because run failed and keep_vm_on_failure is enabled")
+            raise SystemExit(test_exit)
         delete_self(config)
 
 
