@@ -687,17 +687,32 @@ def collect_and_render(config: WorkerConfig, results_dir: str, started_at: str, 
 
 
 def publish_results(config: WorkerConfig, results_dir: str) -> str:
-    _run(
-        f"cd {TEST_DIR} && TOLLGATE_GH_PAGES_CNAME=tests.tollgate.me "
-        f"./scripts/publish-report.sh {shlex.quote(results_dir)}",
-        timeout=300,
-    )
     run_json = Path(results_dir) / "run.json"
-    if run_json.exists():
-        data = json.loads(run_json.read_text())
-        commit_short = (data.get("sut") or {}).get("commit_short") or config.sut_commit[:7]
-        return f"https://tests.tollgate.me/reports/{commit_short}/{config.run_id}/report/index.html"
-    return "https://tests.tollgate.me/"
+    if not run_json.exists():
+        log.error("Cannot publish: run.json not found in %s", results_dir)
+        return "https://tests.tollgate.me/"
+
+    commit_short = config.sut_commit[:7]
+    data = json.loads(run_json.read_text())
+    nested = data.get("sut") or {}
+    commit_short = nested.get("commit_short") or commit_short
+    expected_url = f"https://tests.tollgate.me/reports/{commit_short}/{config.run_id}/report/index.html"
+    log.info("Publishing from results_dir=%s → expected_url=%s", results_dir, expected_url)
+
+    try:
+        _run(
+            f"cd {TEST_DIR} && TOLLGATE_GH_PAGES_CNAME=tests.tollgate.me "
+            f"./scripts/publish-report.sh {shlex.quote(results_dir)}",
+            timeout=300,
+        )
+    except subprocess.CalledProcessError as exc:
+        log.error("publish-report.sh failed (exit=%d): %s", exc.returncode, _redact(str(exc))[:500])
+        raise
+    except Exception as exc:
+        log.error("publish-report.sh unexpected error: %s", _redact(str(exc))[:500])
+        raise
+
+    return expected_url
 
 
 def post_pr_comment(config: WorkerConfig, report_url: str, counts: dict[str, Any]) -> None:

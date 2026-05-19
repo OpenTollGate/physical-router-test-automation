@@ -330,6 +330,10 @@ def submit_run(
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     short = (target.sut_commit or target.branch)[:7]
+    # Sanitize slashes from branch names (e.g. fix/v2-keyset-ids → fix-v2-)
+    # Slashes in run_id create nested directory paths that break results
+    # collection and gh-pages publish.
+    short = short.replace("/", "-")
     run_id = f"{timestamp}-{short}"
     vm_name = _sanitize_vm_name(run_id)
     suite_ref = _suite_ref()
