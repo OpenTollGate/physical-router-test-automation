@@ -105,20 +105,40 @@ def resolve_target(
     branch: str | None = None,
     commit: str | None = None,
     backend: str = "go",
+    repo_override: str | None = None,
 ) -> RunTarget:
-    """Resolve exactly one of pr, branch, or commit into a RunTarget."""
+    """Resolve exactly one of pr, branch, or commit into a RunTarget.
+
+    *repo_override* forces the artifact repo (e.g. a fork) instead of
+    deriving it from the backend config.  Useful for testing branches
+    that only exist on a fork.
+    """
     provided = sum(1 for x in (pr, branch, commit) if x)
     if provided != 1:
         raise ValueError("Specify exactly one of --pr, --branch, or --commit")
 
     if pr:
-        return _resolve_pr(pr, backend)
+        target = _resolve_pr(pr, backend)
+        if repo_override:
+            target = RunTarget(
+                repo=repo_override, branch=target.branch,
+                sut_commit=target.sut_commit, pr=target.pr,
+                backend=target.backend,
+            )
+        return target
     if commit:
-        return _resolve_commit(commit, backend, branch)
+        target = _resolve_commit(commit, backend, branch)
+        if repo_override:
+            target = RunTarget(
+                repo=repo_override, branch=target.branch,
+                sut_commit=target.sut_commit, pr=target.pr,
+                backend=target.backend,
+            )
+        return target
     assert branch is not None
     backend_cfg = BackendConfig(backend)
     return RunTarget(
-        repo=backend_cfg.repo,
+        repo=repo_override or backend_cfg.repo,
         branch=branch,
         sut_commit="",
         pr=None,

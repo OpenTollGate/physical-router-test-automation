@@ -99,6 +99,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         branch=cast(str | None, args.branch),
         commit=cast(str | None, args.commit),
         backend=cast(str, args.backend),
+        repo_override=cast(str | None, args.repo),
     )
     info = submit_run(
         target,
@@ -178,6 +179,8 @@ def build_parser() -> argparse.ArgumentParser:
         g.add_argument("--branch", default=None)
         g.add_argument("--commit", default=None)
         p.add_argument("--backend", default="go", choices=["go", "rust"])
+        p.add_argument("--repo", default=None,
+                        help="Override the artifact repo (e.g. Amperstrand/tollgate-module-basic-go for fork branches)")
 
     up = sub.add_parser("up", help="Create/start GCP VM from snapshot")
     common(up)
