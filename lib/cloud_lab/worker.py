@@ -195,7 +195,7 @@ def ensure_github_cli(token: str) -> None:
         "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gh >/dev/null; fi",
         timeout=180,
     )
-    _run(f"printf %s {shlex.quote(token)} | gh auth login --with-token >/dev/null 2>&1", timeout=30)
+    _run(f"printf '%s\\n' {shlex.quote(token)} | gh auth login --with-token >/dev/null 2>&1", timeout=30)
     r = _run("gh auth status >/dev/null 2>&1 && echo GH_OK", timeout=15, check=False)
     if "GH_OK" not in r.stdout:
         raise RuntimeError("gh auth failed on worker VM")

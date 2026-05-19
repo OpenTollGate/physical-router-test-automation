@@ -230,10 +230,11 @@ def _build_startup_script() -> str:
         if [ -d /opt/tollgate-venv ]; then
             /opt/tollgate-venv/bin/pip install -q -r requirements.txt 2>/dev/null || true
         else
-            python3 -m venv /opt/tollgate-venv
-            /opt/tollgate-venv/bin/pip install -q -r requirements.txt
+            python3 -m venv /opt/tollgate-venv || true
+            /opt/tollgate-venv/bin/pip install -q -r requirements.txt || true
         fi
-        exec /opt/tollgate-venv/bin/python3 -m lib.cloud_lab.worker --from-metadata
+        /opt/tollgate-venv/bin/python3 -m lib.cloud_lab.worker --from-metadata
+        echo "=== Worker exited with code $? ==="
     """)
 
 
@@ -293,6 +294,7 @@ def submit_run(
         "--min-cpu-platform=Intel Cascade Lake",
         "--tags=tollgate-runner,tollgate-run",
         "--labels=tollgate_run=true",
+        "--scopes=compute-rw,storage-rw",
         f"--metadata={metadata_payload}",
         f"--metadata-from-file=startup-script={script_path}",
     ], timeout=300)
