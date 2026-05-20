@@ -64,10 +64,11 @@ def _run_gcloud(args: list[str], timeout: int = 120) -> subprocess.CompletedProc
 
 
 def _gcloud_ssh(vm_name: str, remote_cmd: str, zone: str, project: str, timeout: int = 300) -> subprocess.CompletedProcess[str]:
+    wrapped = f"sudo -E bash -c {shlex.quote(remote_cmd)}"
     cmd = [
         "gcloud", "compute", "ssh", vm_name,
         f"--project={project}", f"--zone={zone}",
-        "--command", f"sudo bash -c {shlex.quote(remote_cmd)}",
+        "--command", wrapped,
         "--ssh-flag=-o StrictHostKeyChecking=no",
         "--ssh-flag=-o UserKnownHostsFile=/dev/null",
         "--ssh-flag=-o ConnectTimeout=10",
@@ -410,6 +411,27 @@ def cmd_bake(args: argparse.Namespace) -> int:
             print(f"ERROR: Base image replacement failed: {r.stderr[:300]}", file=sys.stderr)
             return 1
         print(f"  Base image replaced in {time.monotonic() - t0:.1f}s")
+
+        # Fix ownership: bake ran as root via sudo, but worker runs as SSH user
+        # Files at /root/tollgate-virtual-lab need to be at $HOME/tollgate-virtual-lab
+        _fixup_cmd = (
+            "sudo mv /root/tollgate-virtual-lab $HOME/tollgate-virtual-lab 2>/dev/null; "
+            "sudo chown -R $(id -u):$(id -g) $HOME/tollgate-virtual-lab /opt/tollgate-venv /tmp/cashu-venv 2>/dev/null; "
+            "ls $HOME/tollgate-virtual-lab/images/ && echo FIXUP_OK"
+        )
+        _fixup = [
+            "gcloud", "compute", "ssh", vm_name,
+            f"--project={project}", f"--zone={zone}",
+            "--command", _fixup_cmd,
+            "--ssh-flag=-o StrictHostKeyChecking=no",
+            "--ssh-flag=-o UserKnownHostsFile=/dev/null",
+            "--quiet",
+        ]
+        r = subprocess.run(_fixup, capture_output=True, text=True, timeout=30, check=False)
+        if "FIXUP_OK" in (r.stdout or ""):
+            print(f"  Ownership fixed (moved from /root to $HOME)")
+        else:
+            print(f"  WARNING: Fixup may have issues: {r.stderr[:200]}", file=sys.stderr)
 
         # Step 10: Stop VM and create snapshot
         _step(10, total_steps, "Stopping VM and creating snapshot")
