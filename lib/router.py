@@ -656,3 +656,70 @@ class Router:
                     f.write(adb.shell("logcat -d -t 200"))
             except Exception:
                 pass
+
+    # -- Migration helpers (promoted from scenario tests) --
+
+    def ssh_bool(self, cmd: str, timeout: int = 30) -> bool:
+        """Run a remote shell predicate and return True only when it exits 0."""
+        return self.ssh(f"( {cmd} ) >/dev/null 2>&1 && echo YES || echo NO", timeout=timeout).strip() == "YES"
+
+    def file_mode(self, path: str) -> str:
+        """Return the remote file's symbolic mode string, e.g. ``-rw-------``."""
+        quoted = shlex.quote(path)
+        return self.ssh(f"ls -l {quoted} 2>/dev/null | awk '{{print $1}}'").strip()
+
+    def file_octal_mode(self, path: str) -> str:
+        """Return the remote file's octal permission bits when stat supports it."""
+        quoted = shlex.quote(path)
+        return self.ssh(
+            f"stat -c '%a' {quoted} 2>/dev/null || stat -f '%Lp' {quoted} 2>/dev/null || true"
+        ).strip()
+
+    def uci_get(self, path: str) -> str:
+        return self.ssh(f"uci -q get {path} 2>/dev/null || true").strip()
+
+    def uci_set(self, path: str, value: str) -> None:
+        self.ssh(f"uci set {path}={shlex.quote(value)}")
+
+    def uci_commit(self, *configs: str) -> None:
+        if configs:
+            self.ssh("uci commit " + " ".join(configs))
+        else:
+            self.ssh("uci commit")
+
+    def block_mint(self, mint_url: str | None = None) -> None:
+        """Block mint hostname via /etc/hosts (same as Makefile block-mint)."""
+        url = mint_url or os.environ.get("TOLLGATE_TEST_MINT_URL", TEST_MINT_URL)
+        from urllib.parse import urlparse
+        host = urlparse(url).hostname or url
+        quoted_host = shlex.quote(host)
+        quoted_entry = shlex.quote(f"0.0.0.0 {host}")
+        self.ssh(
+            f"grep -qF -- {quoted_host} /etc/hosts || printf '%s\n' {quoted_entry} >> /etc/hosts"
+        )
+        log.info("Blocked mint host %s via /etc/hosts", host)
+
+    def unblock_mint(self, mint_url: str | None = None) -> None:
+        url = mint_url or os.environ.get("TOLLGATE_TEST_MINT_URL", TEST_MINT_URL)
+        from urllib.parse import urlparse
+        host = urlparse(url).hostname or url
+        quoted_host = shlex.quote(host)
+        self.ssh(
+            f"tmp=/tmp/hosts.$$; grep -vF -- {quoted_host} /etc/hosts > $tmp || true; mv $tmp /etc/hosts"
+        )
+        log.info("Unblocked mint host %s", host)
+
+    def get_hosts_entries(self) -> list[str]:
+        return self.ssh("cat /etc/hosts").splitlines()
+
+    def upstream_connect(self, ssid: str, password: str | None = None) -> dict[str, object]:
+        args = ["connect", ssid]
+        if password:
+            args.append(password)
+        return self.cli_command("upstream", args=args)
+
+    def upstream_remove(self, ssid: str) -> dict[str, object]:
+        return self.cli_command("upstream", args=["remove", ssid])
+
+    def upstream_list(self) -> dict[str, object]:
+        return self.cli_command("upstream", args=["list"])
