@@ -21,7 +21,11 @@ include boards.env
         arch-test-cleanup arch-test-api-quick \
         relay-build relay-flash-b relay-connect-b \
         relay-test-smoke relay-test-nip11 relay-test-pubsub \
-        relay-test-sync relay-test-full
+        relay-test-sync relay-test-full \
+        pytest-smoke-a pytest-smoke-c pytest-api-a pytest-api-c \
+        pytest-portal-a pytest-portal-c pytest-multimint-a pytest-multimint-c \
+        pytest-fund-a pytest-fund-c pytest-spend-a pytest-spend-c \
+        pytest-all-a pytest-all-c pytest-smoke pytest-help
 
 define require_lock_a
 	@if [ ! -f "$(LOCK_DIR)/board-a.lock" ]; then \
@@ -1063,3 +1067,61 @@ arch-test-cleanup: ## Disconnect WiFi + reset auth state
 arch-test-full: ## Run all arch E2E tests sequentially (~4min)
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(BOLD)  Full Arch E2E
+# ===========================================================================
+#  Pytest wrapper targets
+# ===========================================================================
+
+PYTEST := cd /home/c03rad0r/physical-router-test-automation/esp32 && pytest
+
+pytest-smoke-a: ## Pytest: Board A smoke tests
+	@$(PYTEST) tests/test_smoke.py --board=a -m smoke
+
+pytest-smoke-c: ## Pytest: Board C smoke tests
+	@$(PYTEST) tests/test_smoke.py --board=c -m smoke
+
+pytest-api-a: ## Pytest: Board A API tests
+	@$(PYTEST) tests/test_api.py --board=a
+
+pytest-api-c: ## Pytest: Board C API tests
+	@$(PYTEST) tests/test_api.py --board=c
+
+pytest-portal-a: ## Pytest: Board A captive portal tests
+	@$(PYTEST) tests/test_captive_portal.py --board=a
+
+pytest-portal-c: ## Pytest: Board C captive portal tests
+	@$(PYTEST) tests/test_captive_portal.py --board=c
+
+pytest-multimint-a: ## Pytest: Board A multi-mint tests
+	@$(PYTEST) tests/test_multi_mint.py --board=a
+
+pytest-multimint-c: ## Pytest: Board C multi-mint tests
+	@$(PYTEST) tests/test_multi_mint.py --board=c
+
+pytest-fund-a: ## Pytest: Fund Board A wallet (upstream → board → reconnect)
+	@$(PYTEST) tests/test_wallet_funding.py --board=a -k "test_fund_wallet"
+
+pytest-fund-c: ## Pytest: Fund Board C wallet (upstream → board → reconnect)
+	@$(PYTEST) tests/test_wallet_funding.py --board=c -k "test_fund_wallet"
+
+pytest-spend-a: ## Pytest: Spend from Board A funded wallet
+	@$(PYTEST) tests/test_wallet_funding.py --board=a -k "test_spend"
+
+pytest-spend-c: ## Pytest: Spend from Board C funded wallet
+	@$(PYTEST) tests/test_wallet_funding.py --board=c -k "test_spend"
+
+pytest-all-a: ## Pytest: All Board A tests
+	@$(PYTEST) tests/ --board=a
+
+pytest-all-c: ## Pytest: All Board C tests
+	@$(PYTEST) tests/ --board=c
+
+pytest-smoke: ## Pytest: Smoke tests on selected board (use --board=a|b|c)
+	@$(PYTEST) tests/test_smoke.py --board=$(or $(BOARD),c) -m smoke
+
+pytest-help: ## Show pytest markers and options
+	@$(PYTEST) --markers
+	@echo ""
+	@echo "Usage: make pytest-all-c          # All Board C tests"
+	@echo "       make pytest-smoke-a        # Board A smoke only"
+	@echo "       make pytest-fund-c         # Fund Board C wallet"
+	@echo "       pytest tests/ --board=c    # Direct pytest"
