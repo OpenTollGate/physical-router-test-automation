@@ -403,7 +403,8 @@ def cmd_bake(args: argparse.Namespace) -> int:
             "killall -9 qemu-system-x86_64 2>/dev/null || true; sleep 2; "
             f"cd {workdir} && "
             "OWRT_BASE=$(readlink -f images/openwrt-base.qcow2 2>/dev/null || echo images/openwrt-base.qcow2); "
-            "cp overlays/tollgate-poc.qcow2 \"$OWRT_BASE\" && "
+            "qemu-img convert -f qcow2 -O qcow2 overlays/tollgate-poc.qcow2 \"$OWRT_BASE\" && "
+            "rm -f overlays/tollgate-poc.qcow2 overlays/tollgate-seller.qcow2 overlays/debian-client.qcow2 && "
             "echo BASE_REPLACED_OK"
         )
         r = _gcloud_ssh(vm_name, replace_cmd, zone, project, timeout=60)
