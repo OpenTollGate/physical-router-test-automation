@@ -275,6 +275,8 @@ def test_cold_boot_via_serial(router):
     Marked destructive because it reboots the router.
     Marked slow because boot takes 60-180 seconds.
     """
+    from lib.serial_console import SerialConsole
+
     serial_port = os.environ.get("TOLLGATE_SERIAL_PORT", "").strip()
     if not serial_port:
         pytest.skip("TOLLGATE_SERIAL_PORT not set — skipping serial boot test")
@@ -282,42 +284,12 @@ def test_cold_boot_via_serial(router):
     if not os.path.exists(serial_port):
         pytest.skip(f"Serial port {serial_port} not found on this host")
 
-    # Verify router-serial.py exists
-    script_dir = os.path.join(os.path.dirname(__file__), "..", "..", "scripts")
-    serial_script = os.path.join(script_dir, "router-serial.py")
-    if not os.path.isfile(serial_script):
-        pytest.skip(f"scripts/router-serial.py not found at {serial_script}")
-
-    python_bin = os.environ.get("TOLLGATE_PYTHON_VENV", "")
-    if python_bin:
-        python_bin = os.path.join(os.path.expanduser(python_bin), "bin", "python3")
-    else:
-        python_bin = "python3"
-
+    console = SerialConsole(serial_port)
     try:
-        # Step 1: Trigger reboot via serial exec
-        reboot_result = subprocess.run(
-            [python_bin, serial_script, "exec", "--port", serial_port, "reboot"],
-            capture_output=True, text=True, timeout=15,
-        )
-        log.info(f"Serial reboot command sent (rc={reboot_result.returncode})")
-
-        # Step 2: Capture boot log
-        boot_result = subprocess.run(
-            [
-                python_bin, serial_script, "bootlog",
-                "--port", serial_port,
-                "--timeout", "180",
-                "--end-pattern", "login:",
-            ],
-            capture_output=True, text=True, timeout=200,
-        )
-
-    except subprocess.TimeoutExpired:
-        pytest.fail("Serial boot log capture timed out (200s)")
+        boot_output = console.reboot_and_bootlog(timeout=180)
+    except (subprocess.TimeoutExpired, RuntimeError) as exc:
+        pytest.fail(f"Serial boot log capture failed: {exc}")
         return  # unreachable
-
-    boot_output = boot_result.stdout
     assert boot_output.strip(), "Empty boot log captured via serial"
 
     boot_lines = boot_output.strip().split("\n")

@@ -516,6 +516,16 @@ def test_first_boot_offline(router):
 # Test h: no configured mints
 # ---------------------------------------------------------------------------
 
+def test_default_mints_configured(router):
+    """Verify default mint config (ported from r-test-default-mints)."""
+    raw = router.ssh("cat /etc/tollgate/config.json")
+    config = json.loads(raw)
+    mints = config.get("accepted_mints", [])
+    assert len(mints) >= 2, f"Expected at least 2 mints, got {len(mints)}"
+    urls = json.dumps(mints)
+    assert "nofee.testnut.cashu.space" in urls or "testnut" in urls, urls
+
+
 @pytest.mark.destructive
 def test_no_configured_mints(router):
     """Set an empty mint list, restart, verify service stays up.

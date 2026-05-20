@@ -198,6 +198,52 @@ class TestDegradedUpstreamRenewal:
             pass
 
 
+class TestDegradedConnectWhileDegraded:
+    """Connect upstream while already degraded (RISKY — mirrors r-smoke-degraded-connect)."""
+
+    def test_connect_while_degraded(self, router, backend):
+        if os.environ.get("TOLLGATE_ALLOW_RISKY", "").lower() not in ("1", "true", "yes"):
+            pytest.skip("Set TOLLGATE_ALLOW_RISKY=1 to run this risky scenario")
+
+        router_b = _get_secondary_router(backend)
+        _skip_if_no_secondary(router_b)
+        _skip_if_no_upstream_wifi(router)
+
+        beta_ssid = os.environ.get("TOLLGATE_SECONDARY_ROUTER_SSID", "")
+        if not beta_ssid:
+            pytest.skip("TOLLGATE_SECONDARY_ROUTER_SSID not set")
+
+        mint_host = "nofee.testnut.cashu.space"
+        prev_ssid = ""
+        try:
+            result = router.cli_command("upstream", ["list"])
+            for line in str(result.get("raw", "")).splitlines():
+                if "ACTIVE" in line:
+                    prev_ssid = line.split()[0]
+                    break
+
+            router.block_mint(f"https://{mint_host}")
+            router.ssh("service tollgate-wrt restart", timeout=20)
+            time.sleep(15)
+
+            status = router.get_tollgate_status()
+            raw = json.dumps(status).lower()
+            assert any(k in raw for k in ("degraded", "unreachable")), raw
+
+            router.cli_command("upstream", ["connect", beta_ssid])
+            time.sleep(30)
+
+            list_out = router.cli_command("upstream", ["list"])
+            assert beta_ssid in str(list_out.get("raw", "")), list_out
+        finally:
+            router.unblock_mint(f"https://{mint_host}")
+            if prev_ssid:
+                try:
+                    router.cli_command("upstream", ["connect", prev_ssid])
+                except Exception:
+                    pass
+
+
 class TestRouterLockCoordination:
     """Multi-router lock coordination tests."""
 

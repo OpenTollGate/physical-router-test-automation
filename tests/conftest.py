@@ -69,6 +69,8 @@ _INVENTORY_ENV_MAP = {
 
 
 def _load_router_inventory():
+    if os.environ.get("TOLLGATE_SKIP_ROUTER_INVENTORY"):
+        return
     if os.environ.get("TOLLGATE_VIRTUAL_LAB"):
         return
     router_id = os.environ.get("TOLLGATE_ROUTER_ID")
@@ -563,7 +565,7 @@ def pytest_runtest_setup(item):
             )
 
 
-def pytest_collection_modifyitems(items):
+def pytest_collection_modifyitems(config, items):
     # Tier hierarchy: smoke ⊂ critical ⊂ extended
     for item in items:
         if "smoke" in item.keywords:
@@ -571,6 +573,16 @@ def pytest_collection_modifyitems(items):
             item.add_marker(pytest.mark.extended)
         elif "critical" in item.keywords:
             item.add_marker(pytest.mark.extended)
+
+    scenarios_skip = pytest.mark.skip(
+        reason="hardware scenarios not run in virtual lab / cloud worker"
+    )
+    for item in items:
+        fspath = str(item.fspath).replace(os.sep, "/")
+        if "/tests/scenarios/" in fspath:
+            item.add_marker(pytest.mark.hardware)
+        if os.environ.get("TOLLGATE_VIRTUAL_LAB") and "hardware" in item.keywords:
+            item.add_marker(scenarios_skip)
 
     for item in items:
         if "phone" in item.keywords:
@@ -825,11 +837,38 @@ def pytest_runtest_makereport(item, call):
 
 
 _session_lock: RouterLock | None = None
+_hardware_lock_acquired: bool = False
+
+
+@pytest.fixture(scope="session")
+def serial_console(router):
+    """Serial console for the current router when TOLLGATE_SERIAL_PORT is set."""
+    port = os.environ.get("TOLLGATE_SERIAL_PORT", "").strip()
+    if not port:
+        pytest.skip("TOLLGATE_SERIAL_PORT not set")
+    from lib.serial_console import SerialConsole
+    return SerialConsole(port)
 
 
 def pytest_sessionstart(session):
-    global _session_lock
+    global _session_lock, _hardware_lock_acquired
     lock_phase = session.config.getoption("--lock-phase", default=None)
+    use_hardware = (
+        lock_phase
+        or os.environ.get("TOLLGATE_USE_HARDWARE_LOCK", "").lower() in ("1", "true", "yes")
+    )
+    if use_hardware:
+        from lib.hardware_lock import acquire_hardware_lock, require_hardware_lock
+        try:
+            if lock_phase:
+                acquire_hardware_lock(lock_phase)
+                _hardware_lock_acquired = True
+            else:
+                require_hardware_lock()
+        except RuntimeError as exc:
+            pytest.exit(f"Cannot use hardware lock: {exc}", returncode=1)
+        return
+
     if not lock_phase:
         return
     from lib.router_lock import RouterLock
@@ -844,7 +883,11 @@ def pytest_sessionstart(session):
 
 
 def pytest_sessionfinish(session, exitstatus):
-    global _session_lock
+    global _session_lock, _hardware_lock_acquired
+    if _hardware_lock_acquired:
+        from lib.hardware_lock import release_hardware_lock
+        release_hardware_lock()
+        _hardware_lock_acquired = False
     if _session_lock is not None:
         _session_lock.release()
         _session_lock = None
