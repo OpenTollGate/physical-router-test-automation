@@ -33,7 +33,8 @@ function mintToken(url, amount, retries = MINT_RETRIES) {
 
 const ROUTER_IP = process.env.TOLLGATE_CAPTIVE_PORTAL_HOST || '192.168.41.1';
 const API_BASE = `http://${ROUTER_IP}:2121`;
-const PORTAL_BASE = `http://${ROUTER_IP}:2050`;
+const PORTAL_PORT = process.env.TOLLGATE_CAPTIVE_PORTAL_PORT || '80';
+const PORTAL_BASE = `http://${ROUTER_IP}:${PORTAL_PORT}`;
 
 async function hasBareZeroLiterals(page) {
 	const content = await page.locator('.tollgate-captive-portal-method-content').innerText();
