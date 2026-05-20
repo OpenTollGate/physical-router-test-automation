@@ -67,7 +67,7 @@ def _gcloud_ssh(vm_name: str, remote_cmd: str, zone: str, project: str, timeout:
     cmd = [
         "gcloud", "compute", "ssh", vm_name,
         f"--project={project}", f"--zone={zone}",
-        "--command", remote_cmd,
+        "--command", f"sudo bash -c {shlex.quote(remote_cmd)}",
         "--ssh-flag=-o StrictHostKeyChecking=no",
         "--ssh-flag=-o UserKnownHostsFile=/dev/null",
         "--ssh-flag=-o ConnectTimeout=10",
