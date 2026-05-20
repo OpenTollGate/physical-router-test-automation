@@ -178,25 +178,31 @@ def cmd_bake(args: argparse.Namespace) -> int:
             return 1
         print(f"  Images ready in {time.monotonic() - t0:.1f}s")
 
-        # Step 4: Install gh CLI
-        _step(4, total_steps, "Installing GitHub CLI")
+        # Step 4: Install GitHub and Google Cloud CLIs
+        _step(4, total_steps, "Installing GitHub and Google Cloud CLIs")
         t0 = time.monotonic()
         gh_install_cmd = (
-            "if command -v gh >/dev/null 2>&1; then echo 'gh already installed'; exit 0; fi; "
             "apt-get update -qq && "
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wget >/dev/null && "
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wget curl apt-transport-https ca-certificates gnupg >/dev/null && "
             "mkdir -p -m 755 /etc/apt/keyrings && "
-            "wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg > /etc/apt/keyrings/githubcli-archive-keyring.gpg && "
-            "chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && "
-            'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] '
-            'https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list && '
+            "if ! command -v gh >/dev/null 2>&1; then "
+            "  wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg > /etc/apt/keyrings/githubcli-archive-keyring.gpg && "
+            "  chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && "
+            '  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] '
+            'https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list; '
+            "fi && "
+            "if ! command -v gcloud >/dev/null 2>&1; then "
+            "  curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg && "
+            '  echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" '
+            "> /etc/apt/sources.list.d/google-cloud-sdk.list; "
+            "fi && "
             "apt-get update -qq && "
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gh >/dev/null && "
-            "echo GH_INSTALLED_OK"
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gh google-cloud-cli >/dev/null && "
+            "command -v gh >/dev/null && command -v gcloud >/dev/null && echo CLI_INSTALLED_OK"
         )
         r = _gcloud_ssh(vm_name, gh_install_cmd, zone, project, timeout=180)
-        if r.returncode != 0:
-            print(f"WARNING: gh install may have failed: {r.stderr[:300]}", file=sys.stderr)
+        if r.returncode != 0 or "CLI_INSTALLED_OK" not in (r.stdout or ""):
+            print(f"WARNING: CLI install may have failed: {r.stderr[:300]}", file=sys.stderr)
         print(f"  Done in {time.monotonic() - t0:.1f}s")
 
         # Step 5: Clone repo and create Python venv
@@ -223,15 +229,15 @@ def cmd_bake(args: argparse.Namespace) -> int:
         _step(6, total_steps, "Creating cashu CLI venv")
         t0 = time.monotonic()
         cashu_cmd = (
-            "if [ -x /tmp/cashu-venv/bin/cashu ] && /tmp/cashu-venv/bin/cashu --version >/dev/null 2>&1; then "
+            "if [ -x /opt/cashu-venv/bin/cashu ] && /opt/cashu-venv/bin/cashu --version >/dev/null 2>&1; then "
             "echo 'Cashu already present'; exit 0; fi; "
-            "rm -rf /tmp/cashu-venv && "
-            "python3 -m venv /tmp/cashu-venv && "
-            "/tmp/cashu-venv/bin/pip install -q --upgrade pip && "
-            "/tmp/cashu-venv/bin/pip install -q cashu 'marshmallow<4' && "
+            "rm -rf /opt/cashu-venv && "
+            "python3 -m venv /opt/cashu-venv && "
+            "/opt/cashu-venv/bin/pip install -q --upgrade pip && "
+            "/opt/cashu-venv/bin/pip install -q cashu 'marshmallow<4' && "
             "sed -i 's/    active: bool$/    active: bool = True/' "
-            "$(/tmp/cashu-venv/bin/python3 -c 'import cashu.core.models; print(cashu.core.models.__file__)') && "
-            "test -x /tmp/cashu-venv/bin/cashu && echo CASHU_OK"
+            "$(/opt/cashu-venv/bin/python3 -c 'import cashu.core.models; print(cashu.core.models.__file__)') && "
+            "test -x /opt/cashu-venv/bin/cashu && echo CASHU_OK"
         )
         r = _gcloud_ssh(vm_name, cashu_cmd, zone, project, timeout=300)
         if r.returncode != 0 or "CASHU_OK" not in (r.stdout or ""):
@@ -336,8 +342,9 @@ def cmd_bake(args: argparse.Namespace) -> int:
             "deadline = time.time() + TIMEOUT\n"
             "booted = False\n"
             "while time.time() < deadline:\n"
+            "    s.sendall(b'\\n')\n"
             "    data = recv_all(s, timeout=2)\n"
-            "    if 'Please press Enter' in data:\n"
+            "    if 'Please press Enter' in data or 'root@OpenWrt' in data or ':/#' in data or 'OpenWrt' in data:\n"
             "        booted = True\n"
             "        break\n"
             "    time.sleep(1)\n"
@@ -349,15 +356,15 @@ def cmd_bake(args: argparse.Namespace) -> int:
             "send_and_wait(s, '', wait=2)\n"
             "commands = [\n"
             f"    \"printf '%s\\\\\\n%s\\\\\\n' {password} {password} | passwd root\",\n"
-            "    \"uci set dropbear.@dropbear[0].PasswordAuth='on']\",\n"
+            "    \"uci set dropbear.@dropbear[0].PasswordAuth='on'\",\n"
             "    'uci commit dropbear',\n"
             "    '/etc/init.d/dropbear restart',\n"
             "    'uci add firewall rule',\n"
-            "    \"uci set firewall.@rule[-1].name='Allow-SSH-WAN']\",\n"
-            "    \"uci set firewall.@rule[-1].src='wan']\",\n"
-            "    \"uci set firewall.@rule[-1].dest_port='22']\",\n"
-            "    \"uci set firewall.@rule[-1].proto='tcp']\",\n"
-            "    \"uci set firewall.@rule[-1].target='ACCEPT']\",\n"
+            "    \"uci set firewall.@rule[-1].name='Allow-SSH-WAN'\",\n"
+            "    \"uci set firewall.@rule[-1].src='wan'\",\n"
+            "    \"uci set firewall.@rule[-1].dest_port='22'\",\n"
+            "    \"uci set firewall.@rule[-1].proto='tcp'\",\n"
+            "    \"uci set firewall.@rule[-1].target='ACCEPT'\",\n"
             "    'uci commit firewall',\n"
             "    'fw4 restart',\n"
             "    \"uci set network.lan.ipaddr='\" + OPENWRT_IP + \"'\",\n"
@@ -366,6 +373,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
             "    \"uci set network.lan.dns='8.8.8.8'\",\n"
             "    'uci commit network',\n"
             "    '/etc/init.d/network restart',\n"
+            "    'sync',\n"
             "]\n"
             "for cmd in commands:\n"
             "    send_and_wait(s, cmd, wait=2)\n"
@@ -395,11 +403,20 @@ def cmd_bake(args: argparse.Namespace) -> int:
             print(f"WARNING: OpenWrt SSH wait returned {r.returncode}", file=sys.stderr)
         print(f"  Serial provisioning done in {time.monotonic() - t0:.1f}s")
 
+        shutdown_cmd = (
+            f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
+            "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+            f"-o ConnectTimeout=3 root@{OPENWRT_IP} 'sync; poweroff' 2>/dev/null || true; "
+            "sleep 8"
+        )
+        _gcloud_ssh(vm_name, shutdown_cmd, zone, project, timeout=30)
+
         # Step 9: Stop QEMU and copy overlay as new base
         _step(9, total_steps, "Stopping QEMU and replacing base image with provisioned overlay")
         t0 = time.monotonic()
         replace_cmd = (
-            "killall -9 qemu-system-x86_64 2>/dev/null || true; sleep 3; "
+            "killall -TERM qemu-system-x86_64 2>/dev/null || true; sleep 5; "
+            "killall -9 qemu-system-x86_64 2>/dev/null || true; sleep 2; "
             f"cd {workdir} && "
             "OWRT_BASE=$(readlink -f images/openwrt-base.qcow2 2>/dev/null || echo images/openwrt-base.qcow2); "
             "echo \"Replacing base at $OWRT_BASE\"; "
@@ -407,7 +424,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
             "qemu-img convert -f qcow2 -O qcow2 overlays/tollgate-poc.qcow2 /tmp/openwrt-base-flat.qcow2 && "
             "mv /tmp/openwrt-base-flat.qcow2 \"$OWRT_BASE\" && "
             "ls -la \"$OWRT_BASE\" && "
-            "rm -f overlays/tollgate-poc.qcow2 overlays/tollgate-seller.qcow2 overlays/debian-client.qcow2 && "
+            "rm -f overlays/tollgate-poc.qcow2 overlays/tollgate-seller.qcow2 && "
             "echo BASE_REPLACED_OK"
         )
         r = _gcloud_ssh(vm_name, replace_cmd, zone, project, timeout=120)

@@ -244,8 +244,9 @@ def _provision_openwrt_serial(name: str, ip: str, timeout: int = 90) -> None:
         conn.sendall(b"\n")
         booted = False
         while time.time() < deadline:
+            conn.sendall(b"\n")
             data = _recv_serial(conn, timeout=2.0)
-            if "Please press Enter" in data:
+            if "Please press Enter" in data or "root@OpenWrt" in data or ":/#" in data or "OpenWrt" in data:
                 booted = True
                 break
             time.sleep(1)
@@ -332,6 +333,7 @@ def write_env_file(config: WorkerConfig) -> None:
         f"TOLLGATE_BACKEND={backend}\n"
         f"TOLLGATE_VIEWPORT=desktop\n"
         f"TOLLGATE_DISABLE_ARTIFACT_RERUN=1\n"
+        f"TOLLGATE_CASHU_VENV=/opt/cashu-venv\n"
         f"TOLLGATE_ENABLE_RESELLER_SCENARIOS={reseller_scenarios}\n"
         f"TOLLGATE_SECONDARY_ROUTER_HOST={secondary_host}\n"
         f"TOLLGATE_SECONDARY_ROUTER_PORT={config.secondary_router_port}\n"
@@ -357,15 +359,15 @@ def ensure_outer_deps() -> None:
             timeout=180,
         )
 
-    r = _run("test -x /tmp/cashu-venv/bin/cashu && echo CASHU_OK", timeout=10, check=False)
+    r = _run("test -x /opt/cashu-venv/bin/cashu && echo CASHU_OK", timeout=10, check=False)
     if "CASHU_OK" not in r.stdout:
         log.info("Setting up cashu CLI venv...")
         r = _run(
             "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv >/dev/null && "
-            "rm -rf /tmp/cashu-venv && python3 -m venv /tmp/cashu-venv && "
-            "/tmp/cashu-venv/bin/pip install -q --upgrade pip && "
-            "/tmp/cashu-venv/bin/pip install -q cashu 'marshmallow<4' && "
-            "/tmp/cashu-venv/bin/python - <<'PY'\n"
+            "rm -rf /opt/cashu-venv && python3 -m venv /opt/cashu-venv && "
+            "/opt/cashu-venv/bin/pip install -q --upgrade pip && "
+            "/opt/cashu-venv/bin/pip install -q cashu 'marshmallow<4' && "
+            "/opt/cashu-venv/bin/python - <<'PY'\n"
             "from pathlib import Path\n"
             "import cashu.core.models\n"
             "models=Path(cashu.core.models.__file__)\n"
@@ -373,7 +375,7 @@ def ensure_outer_deps() -> None:
             "text=text.replace('    active: bool\\n','    active: bool = True\\n')\n"
             "models.write_text(text)\n"
             "PY\n"
-            "test -x /tmp/cashu-venv/bin/cashu && echo CASHU_OK",
+            "test -x /opt/cashu-venv/bin/cashu && echo CASHU_OK",
             timeout=240,
             check=False,
         )
