@@ -163,7 +163,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
             f"mkdir -p {workdir}/images && cd {workdir}/images && "
             f"if [ ! -f openwrt-base.qcow2 ]; then "
             f"  [ -f {owrt_gz} ] || curl -fL -o {owrt_gz} {owrt_url} && "
-            f"  [ -f {owrt_img} ] || (gzip -d < {owrt_gz} > {owrt_img}) && "
+            f"  [ -f {owrt_img} ] || (gzip -d < {owrt_gz} > {owrt_img} || [ -f {owrt_img} ]) && "
             f"  qemu-img convert -f raw -O qcow2 {owrt_img} openwrt-base.qcow2 && "
             f"  qemu-img resize openwrt-base.qcow2 2G; "
             f"fi && "
