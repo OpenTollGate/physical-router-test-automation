@@ -52,6 +52,8 @@ RESET  := \033[0m
 
 HARDWARE_LOCK := hardware.lock
 
+include make/migration.mk
+
 define require_hardware_lock
 	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
 		echo "$(RED)$(BOLD)Hardware not locked — run 'make lock PHASE=\"description\"' first$(RESET)"; \
@@ -160,42 +162,42 @@ help: ## Show this help
         smoke-dynamic-rebuild smoke-offline smoke-recovery \
         smoke-degraded-recovery smoke-degraded-connect
 
-smoke-degraded: ## Single-router degraded mode lifecycle (~3 min)
+smoke-degraded: ## Single-router degraded mode lifecycle (~3 min) [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-smoke-degraded ROUTER=$(ROUTER) MINT="$(MINT)"
+	$(call migrated_target,smoke-degraded)
 
-smoke-upstream: ## Two-router degraded upstream payment (~5 min)
+smoke-upstream: ## Two-router degraded upstream payment (~5 min) [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-smoke-degraded-upstream ROUTER=$(ROUTER) MINT="$(MINT)"
+	$(call migrated_target,smoke-upstream)
 
-smoke-upstream-full: ## Full upstream WiFi smoke test (requires SSID+PASS)
+smoke-upstream-full: ## Full upstream WiFi smoke test (requires SSID+PASS) [pytest]
 	$(call require_hardware_lock)
 	@if [ -z "$(SSID)" ]; then echo "$(RED)Error: SSID required. make smoke-upstream-full SSID=MyNet PASS=secret$(RESET)"; exit 1; fi
-	@$(MAKE) -C upstream-wifi r-smoke SSID="$(SSID)" PASS="$(PASS)" ROUTER=$(ROUTER)
+	$(call migrated_target,smoke-upstream-full)
 
-smoke-pin-upstream: ## Two-router: verify upstream pin prevents scan-away
+smoke-pin-upstream: ## Two-router: verify upstream pin prevents scan-away [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-smoke-pin-upstream ROUTER=$(ROUTER) MINT="$(MINT)"
+	$(call migrated_target,smoke-pin-upstream)
 
-smoke-dynamic-rebuild: ## Full→degraded→full lifecycle (tests onReachableSetChanged)
+smoke-dynamic-rebuild: ## Full→degraded→full lifecycle [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-smoke-dynamic-rebuild ROUTER=$(ROUTER) MINT="$(MINT)"
+	$(call migrated_target,smoke-dynamic-rebuild)
 
-smoke-offline: ## Block mint + restart + verify degraded (~2 min)
+smoke-offline: ## Block mint + restart + verify degraded (~2 min) [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-smoke-offline ROUTER=$(ROUTER) MINT="$(MINT)"
+	$(call migrated_target,smoke-offline)
 
-smoke-recovery: ## Unblock mint + wait for recovery (~15 min)
+smoke-recovery: ## Unblock mint + wait for recovery (~15 min) [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-smoke-recovery ROUTER=$(ROUTER) MINT="$(MINT)"
+	$(call migrated_target,smoke-recovery)
 
-smoke-degraded-recovery: ## Degraded→recovery without restart (tests in-process recovery)
+smoke-degraded-recovery: ## Degraded→recovery without restart [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-smoke-degraded-recovery ROUTER=$(ROUTER) MINT="$(MINT)"
+	$(call migrated_target,smoke-degraded-recovery)
 
-smoke-degraded-connect: ## WARNING: connect to upstream while degraded (may strand router)
+smoke-degraded-connect: ## WARNING: connect while degraded (RISKY) [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-smoke-degraded-connect ROUTER=$(ROUTER) MINT="$(MINT)"
+	$(call migrated_target,smoke-degraded-connect)
 
 # ===========================================================================
 #  STARTUP HYGIENE TESTS
@@ -203,13 +205,13 @@ smoke-degraded-connect: ## WARNING: connect to upstream while degraded (may stra
 
 .PHONY: test-startup-hygiene test-startup-hygiene-dead-only
 
-test-startup-hygiene: ## Boot with dead STA, verify auto-switch (~2 min)
+test-startup-hygiene: ## Boot with dead STA, verify auto-switch (~2 min) [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-startup-hygiene ROUTER=$(ROUTER)
+	$(call migrated_target,test-startup-hygiene)
 
-test-startup-hygiene-dead-only: ## Boot with ONLY dead STA, emergency scan recovery (~3 min)
+test-startup-hygiene-dead-only: ## Boot with ONLY dead STA, emergency scan recovery (~3 min) [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-startup-hygiene-dead-only ROUTER=$(ROUTER)
+	$(call migrated_target,test-startup-hygiene-dead-only)
 
 # ===========================================================================
 #  PLAYWRIGHT TESTS
@@ -221,17 +223,17 @@ test-playwright: ## Run Playwright LuCI admin UI tests (requires TOLLGATE_LUCI_P
 	@if [ ! -d node_modules ]; then echo "$(YELLOW)Run npm install first$(RESET)"; exit 1; fi
 	@cd tests && npx playwright test --config=playwright.config.mjs
 
-test-captive-portal: ## Run Playwright captive portal tests against router
+test-captive-portal: ## Run Playwright captive portal tests against router [playwright]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-captive-portal ROUTER=$(ROUTER)
+	$(call migrated_target,test-captive-portal)
 
-test-captive-portal-happy: ## Run only happy-path captive portal tests
+test-captive-portal-happy: ## Run only happy-path captive portal tests [playwright]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-captive-portal-happy ROUTER=$(ROUTER)
+	$(call migrated_target,test-captive-portal-happy)
 
-test-cashu-payment: ## Run cashu e2e payment Playwright test
+test-cashu-payment: ## Run cashu e2e payment Playwright test [playwright]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-cashu-payment ROUTER=$(ROUTER)
+	$(call migrated_target,test-cashu-payment)
 
 # ===========================================================================
 #  FULL TEST SUITES
@@ -239,9 +241,9 @@ test-cashu-payment: ## Run cashu e2e payment Playwright test
 
 .PHONY: full-degraded full-upstream full-all
 
-full-degraded: ## Full mint health test suite (~20 min)
+full-degraded: ## Full mint health test suite (~20 min) [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-full ROUTER=$(ROUTER) MINT="$(MINT)"
+	$(call migrated_target,full-degraded)
 
 full-upstream: ## Full upstream WiFi test suite (requires SSID+PASS, ~30 min)
 	$(call require_hardware_lock)
@@ -279,7 +281,7 @@ full-all: ## Run all test suites (lint + playwright + degraded + upstream)
         ssl-status ssl-remove-force \
         test-ssl-setup-verify test-ssl-self-signed-yes test-ssl-reapply \
         test-ssl-remove-no-backup test-ssl-verify-cert test-ssl-verify-nds \
-         test-ssl-verify-no-dns test-ssl-idempotent \
+        test-ssl-verify-no-dns test-ssl-idempotent \
         test-ssl-comprehensive \
         test-ssl-real-cert test-ssl-real-cert-remove test-ssl-real-cert-full \
         test-ssl-all \
@@ -485,18 +487,18 @@ serial-watch: ## Watch serial output (Ctrl+C to stop)
 	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health s-watch ROUTER=$(ROUTER)
 
-serial-cold-boot: ## Full cold boot test with serial monitoring
+serial-cold-boot: ## Full cold boot test with serial monitoring [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health s-cold-boot-test ROUTER=$(ROUTER)
+	$(call migrated_target,serial-cold-boot)
 
 serial-boot-log: ## Capture full boot output
 	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health s-boot-log ROUTER=$(ROUTER)
 
-serial-recovery: ## Emergency recovery via serial (CMD='...')
+serial-recovery: ## Emergency recovery via serial (CMD='...') [pymake]
 	$(call require_hardware_lock)
 	@if [ -z "$(CMD)" ]; then echo "$(RED)Error: CMD required. make serial-recovery ROUTER=alpha CMD='wifi reload'$(RESET)"; exit 1; fi
-	@$(MAKE) -C mint-health s-recovery ROUTER=$(ROUTER) CMD="$(CMD)"
+	$(call migrated_target,serial-recovery)
 
 serial-cleanup: ## Cleanup mint blocks via serial
 	$(call require_hardware_lock)
@@ -594,25 +596,25 @@ force-unlock: ## Force-release router hardware lock (use with caution)
 #  These targets remain available as manual/reference hardware commands.
 # ===========================================================================
 
-test-hostname: ## Verify hostname setup on router (not OpenWrt default)
+test-hostname: ## Verify hostname setup on router [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-hostname ROUTER=$(ROUTER)
+	$(call migrated_target,test-hostname)
 
-test-ssl-self-signed: ## Test self-signed SSL apply on router
+test-ssl-self-signed: ## Test self-signed SSL apply on router [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-self-signed ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-self-signed)
 
-test-ssl-remove: ## Test SSL remove on router
+test-ssl-remove: ## Test SSL remove on router [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-remove ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-remove)
 
-test-ssl-status: ## Test tollgate ssl status command on router
+test-ssl-status: ## Test tollgate ssl status command on router [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-status ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-status)
 
-test-ssl-full: ## Full SSL lifecycle: apply → verify → remove → verify cleanup
+test-ssl-full: ## Full SSL lifecycle [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-full ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-full)
 
 ssl-status: ## Show current SSL status on router (read-only, no lock)
 	@$(MAKE) -C mint-health r-ssl-status ROUTER=$(ROUTER)
@@ -621,57 +623,57 @@ ssl-remove-force: ## Force-remove SSL config on router (cleanup)
 	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-ssl-remove-force ROUTER=$(ROUTER)
 
-test-ssl-setup-verify: ## Verify router is in clean SSL state
+test-ssl-setup-verify: ## Verify router is in clean SSL state [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-setup-verify ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-setup-verify)
 
-test-ssl-self-signed-yes: ## Test self-signed apply with --yes flag
+test-ssl-self-signed-yes: ## Test self-signed apply with --yes flag [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-self-signed-yes ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-self-signed-yes)
 
-test-ssl-reapply: ## Test re-apply with existing backup (overwrite warning)
+test-ssl-reapply: ## Test re-apply with existing backup [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-reapply ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-reapply)
 
-test-ssl-remove-no-backup: ## Test remove when no backup exists (error path)
+test-ssl-remove-no-backup: ## Test remove when no backup exists [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-remove-no-backup ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-remove-no-backup)
 
-test-ssl-verify-cert: ## Deep cert validation: SAN, CN, expiry, permissions
+test-ssl-verify-cert: ## Deep cert validation [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-verify-cert ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-verify-cert)
 
-test-ssl-verify-nds: ## Verify nodogsplash allows port 443
+test-ssl-verify-nds: ## Verify nodogsplash allows port 443 [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-verify-nds ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-verify-nds)
 
-test-ssl-verify-no-dns: ## Verify no dnsmasq domain for self-signed
+test-ssl-verify-no-dns: ## Verify no dnsmasq domain for self-signed [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-verify-no-dns ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-verify-no-dns)
 
-test-ssl-idempotent: ## Test apply twice — verify state consistent
+test-ssl-idempotent: ## Test apply twice [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-idempotent ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-idempotent)
 
-test-ssl-comprehensive: ## All self-signed SSL tests in sequence (~10 min)
+test-ssl-comprehensive: ## All self-signed SSL tests [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-comprehensive ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-comprehensive)
 
-test-ssl-real-cert: ## Test real cert via LE staging + Cloudflare DNS-01
+test-ssl-real-cert: ## Real cert via LE staging + Cloudflare [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-real-cert ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-real-cert)
 
-test-ssl-real-cert-remove: ## Test real cert removal (dnsmasq + NDS revert)
+test-ssl-real-cert-remove: ## Real cert removal [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-real-cert-remove ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-real-cert-remove)
 
-test-ssl-real-cert-full: ## Full real cert lifecycle (~5 min)
+test-ssl-real-cert-full: ## Full real cert lifecycle [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-real-cert-full ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-real-cert-full)
 
-test-ssl-all: ## Run ALL SSL tests: comprehensive + real cert (~20 min)
+test-ssl-all: ## ALL SSL tests [pytest]
 	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-all ROUTER=$(ROUTER)
+	$(call migrated_target,test-ssl-all)
 
 # ===========================================================================
 #  SETUP
@@ -923,7 +925,7 @@ arch-test-full: ## Run all arch E2E tests (~4min)
 # ===========================================================================
 
 .PHONY: pytest-smoke pytest-critical pytest-extended pytest-api pytest-phone \
-        pytest-test \
+        pytest-test pytest-scenarios pytest-hardware-smoke pymake-help \
         pytest-smoke-mac pytest-critical-mac pytest-api-mac pytest-test-mac \
         pytest-smoke-linux pytest-api-linux pytest-test-linux \
         pytest-smoke-rust pytest-api-rust pytest-test-rust pytest-critical-rust \
@@ -950,6 +952,17 @@ pytest-phone:
 
 pytest-test:
 	pytest
+
+pytest-scenarios: ## Hardware scenario tests (requires lock + routers.env)
+	$(call require_hardware_lock)
+	@TOLLGATE_USE_HARDWARE_LOCK=1 pytest tests/scenarios/ -m hardware -v --tb=short
+
+pytest-hardware-smoke: ## Migrated smoke-* scenario subset
+	$(call require_hardware_lock)
+	@TOLLGATE_USE_HARDWARE_LOCK=1 ./scripts/pymake.py smoke-degraded --router $(ROUTER)
+
+pymake-help: ## List targets available via ./scripts/pymake.py
+	@./scripts/pymake.py help
 
 # --- macOS client (no phone) ---
 
