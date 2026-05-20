@@ -30,6 +30,10 @@ from lib.cloud_lab.constants import (
     VIRT_LAB_PASSWORD,
     VIRT_LAB_WORKDIR,
 )
+
+_OPENWRT_VERSION = "24.10.1"
+_DEBIAN_IMAGE = "debian-12-nocloud-amd64.qcow2"
+_DEBIAN_IMAGE_URL = f"https://cloud.debian.org/images/cloud/bookworm/latest/{_DEBIAN_IMAGE}"
 from lib.cloud_lab.gcp import (
     ensure_firewall_rules,
     get_project,
@@ -109,7 +113,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
     disk_size_gb = cast(int, args.disk_size)
     project = get_project()
 
-    total_steps = 9
+    total_steps = 10
     vm_name = f"tollgate-bake-{int(time.time())}"
 
     print(f"Bake configuration:")
@@ -148,8 +152,34 @@ def cmd_bake(args: argparse.Namespace) -> int:
             return 1
         print(f"  SSH ready in {time.monotonic() - t0:.1f}s")
 
-        # Step 3: Install gh CLI
-        _step(3, total_steps, "Installing GitHub CLI")
+        # Step 3: Download base images (OpenWrt + Debian)
+        _step(3, total_steps, "Downloading OpenWrt and Debian base images")
+        t0 = time.monotonic()
+        workdir = VIRT_LAB_WORKDIR
+        owrt_img = f"openwrt-{_OPENWRT_VERSION}-x86-64-generic-ext4-combined.img"
+        owrt_gz = f"{owrt_img}.gz"
+        owrt_url = f"https://downloads.openwrt.org/releases/{_OPENWRT_VERSION}/targets/x86/64/{owrt_gz}"
+        images_cmd = (
+            f"mkdir -p {workdir}/images && cd {workdir}/images && "
+            f"if [ ! -f openwrt-base.qcow2 ]; then "
+            f"  [ -f {owrt_gz} ] || curl -fL -o {owrt_gz} {owrt_url} && "
+            f"  [ -f {owrt_img} ] || gzip -dk {owrt_gz} && "
+            f"  qemu-img convert -f raw -O qcow2 {owrt_img} openwrt-base.qcow2 && "
+            f"  qemu-img resize openwrt-base.qcow2 2G; "
+            f"fi && "
+            f"if [ ! -f {_DEBIAN_IMAGE} ]; then "
+            f"  curl -fL -o {_DEBIAN_IMAGE} {_DEBIAN_IMAGE_URL}; "
+            f"fi && "
+            "echo IMAGES_OK"
+        )
+        r = _gcloud_ssh(vm_name, images_cmd, zone, project, timeout=600)
+        if r.returncode != 0 or "IMAGES_OK" not in (r.stdout or ""):
+            print(f"ERROR: Image download failed: {r.stderr[:500]}", file=sys.stderr)
+            return 1
+        print(f"  Images ready in {time.monotonic() - t0:.1f}s")
+
+        # Step 4: Install gh CLI
+        _step(4, total_steps, "Installing GitHub CLI")
         t0 = time.monotonic()
         gh_install_cmd = (
             "if command -v gh >/dev/null 2>&1; then echo 'gh already installed'; exit 0; fi; "
@@ -169,8 +199,8 @@ def cmd_bake(args: argparse.Namespace) -> int:
             print(f"WARNING: gh install may have failed: {r.stderr[:300]}", file=sys.stderr)
         print(f"  Done in {time.monotonic() - t0:.1f}s")
 
-        # Step 4: Clone repo and create Python venv
-        _step(4, total_steps, "Creating Python venv with test dependencies")
+        # Step 5: Clone repo and create Python venv
+        _step(5, total_steps, "Creating Python venv with test dependencies")
         t0 = time.monotonic()
         venv_cmd = (
             "apt-get update -qq && "
@@ -189,8 +219,8 @@ def cmd_bake(args: argparse.Namespace) -> int:
             print(f"WARNING: Python venv creation may have failed: {r.stderr[:300]}", file=sys.stderr)
         print(f"  Done in {time.monotonic() - t0:.1f}s")
 
-        # Step 5: Create cashu venv
-        _step(5, total_steps, "Creating cashu CLI venv")
+        # Step 6: Create cashu venv
+        _step(6, total_steps, "Creating cashu CLI venv")
         t0 = time.monotonic()
         cashu_cmd = (
             "if [ -x /tmp/cashu-venv/bin/cashu ] && /tmp/cashu-venv/bin/cashu --version >/dev/null 2>&1; then "
@@ -215,8 +245,8 @@ def cmd_bake(args: argparse.Namespace) -> int:
             print(f"WARNING: Cashu CLI install may have failed: {r.stderr[:300]}", file=sys.stderr)
         print(f"  Done in {time.monotonic() - t0:.1f}s")
 
-        # Step 6: Setup bridge and prepare OpenWrt overlay
-        _step(6, total_steps, "Setting up network bridge and OpenWrt overlay")
+        # Step 7: Setup bridge and prepare OpenWrt overlay
+        _step(7, total_steps, "Setting up network bridge and OpenWrt overlay")
         t0 = time.monotonic()
         workdir = VIRT_LAB_WORKDIR
         bridge_cmd = (
@@ -244,8 +274,8 @@ def cmd_bake(args: argparse.Namespace) -> int:
             return 1
         print(f"  Done in {time.monotonic() - t0:.1f}s")
 
-        # Step 7: Boot QEMU with OpenWrt overlay and provision via serial
-        _step(7, total_steps, "Booting OpenWrt QEMU and provisioning via serial")
+        # Step 8: Boot QEMU with OpenWrt overlay and provision via serial
+        _step(8, total_steps, "Booting OpenWrt QEMU and provisioning via serial")
         t0 = time.monotonic()
         qemu_boot_cmd = (
             f"cd {workdir} && "
@@ -373,8 +403,8 @@ def cmd_bake(args: argparse.Namespace) -> int:
             print(f"WARNING: OpenWrt SSH wait returned {r.returncode}", file=sys.stderr)
         print(f"  Serial provisioning done in {time.monotonic() - t0:.1f}s")
 
-        # Step 8: Stop QEMU and copy overlay as new base
-        _step(8, total_steps, "Stopping QEMU and replacing base image with provisioned overlay")
+        # Step 9: Stop QEMU and copy overlay as new base
+        _step(9, total_steps, "Stopping QEMU and replacing base image with provisioned overlay")
         t0 = time.monotonic()
         replace_cmd = (
             "killall -9 qemu-system-x86_64 2>/dev/null || true; sleep 2; "
@@ -389,8 +419,8 @@ def cmd_bake(args: argparse.Namespace) -> int:
             return 1
         print(f"  Base image replaced in {time.monotonic() - t0:.1f}s")
 
-        # Step 9: Stop VM and create snapshot
-        _step(9, total_steps, "Stopping VM and creating snapshot")
+        # Step 10: Stop VM and create snapshot
+        _step(10, total_steps, "Stopping VM and creating snapshot")
         t0 = time.monotonic()
         r = _run_gcloud([
             "compute", "instances", "stop", vm_name,
