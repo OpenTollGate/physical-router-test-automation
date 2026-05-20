@@ -162,12 +162,11 @@ def cmd_bake(args: argparse.Namespace) -> int:
         owrt_url = f"https://downloads.openwrt.org/releases/{_OPENWRT_VERSION}/targets/x86/64/{owrt_gz}"
         images_cmd = (
             f"mkdir -p {workdir}/images && cd {workdir}/images && "
-            f"if [ ! -f openwrt-base.qcow2 ]; then "
-            f"  [ -f {owrt_gz} ] || curl -fL -o {owrt_gz} {owrt_url} && "
-            f"  [ -f {owrt_img} ] || (gzip -d < {owrt_gz} > {owrt_img} || [ -f {owrt_img} ]) && "
-            f"  qemu-img convert -f raw -O qcow2 {owrt_img} openwrt-base.qcow2 && "
-            f"  qemu-img resize openwrt-base.qcow2 2G; "
-            f"fi && "
+            f"rm -f openwrt-base.qcow2 && "
+            f"[ -f {owrt_gz} ] || curl -fL -o {owrt_gz} {owrt_url} && "
+            f"[ -f {owrt_img} ] || (gzip -d < {owrt_gz} > {owrt_img} || [ -f {owrt_img} ]) && "
+            f"qemu-img convert -f raw -O qcow2 {owrt_img} openwrt-base.qcow2 && "
+            f"qemu-img resize openwrt-base.qcow2 2G && "
             f"if [ ! -f {_DEBIAN_IMAGE} ]; then "
             f"  curl -fL -o {_DEBIAN_IMAGE} {_DEBIAN_IMAGE_URL}; "
             f"fi && "
@@ -403,12 +402,15 @@ def cmd_bake(args: argparse.Namespace) -> int:
             "killall -9 qemu-system-x86_64 2>/dev/null || true; sleep 3; "
             f"cd {workdir} && "
             "OWRT_BASE=$(readlink -f images/openwrt-base.qcow2 2>/dev/null || echo images/openwrt-base.qcow2); "
+            "echo \"Replacing base at $OWRT_BASE\"; "
+            "ls -la \"$OWRT_BASE\"; "
             "qemu-img convert -f qcow2 -O qcow2 overlays/tollgate-poc.qcow2 /tmp/openwrt-base-flat.qcow2 && "
             "mv /tmp/openwrt-base-flat.qcow2 \"$OWRT_BASE\" && "
+            "ls -la \"$OWRT_BASE\" && "
             "rm -f overlays/tollgate-poc.qcow2 overlays/tollgate-seller.qcow2 overlays/debian-client.qcow2 && "
             "echo BASE_REPLACED_OK"
         )
-        r = _gcloud_ssh(vm_name, replace_cmd, zone, project, timeout=60)
+        r = _gcloud_ssh(vm_name, replace_cmd, zone, project, timeout=120)
         if r.returncode != 0 or "BASE_REPLACED_OK" not in (r.stdout or ""):
             print(f"ERROR: Base image replacement failed: {r.stderr[:300]}", file=sys.stderr)
             return 1
