@@ -309,24 +309,41 @@ fi
 
 # ── Commit and push ──────────────────────────────────────────────────
 
-git add -A
-git commit -m "report: ${COMMIT_SHORT} ${DIR_TIMESTAMP}" || true
+random_publish_sleep() {
+  python3 - <<'PY'
+import random
+print(random.randint(0, 60))
+PY
+}
 
-echo "==> Pushing to gh-pages..."
+echo "==> Committing and pushing to gh-pages..."
 PUSH_OK=0
-for attempt in 1 2 3; do
-  if git push -f origin gh-pages 2>&1; then
+for attempt in $(seq 1 10); do
+  if [ "$attempt" -gt 1 ]; then
+    delay="$(random_publish_sleep)"
+    echo "==> gh-pages retry ${attempt}/10 after ${delay}s random backoff..."
+    sleep "$delay"
+  fi
+
+  git fetch origin gh-pages 2>/dev/null || true
+  git pull --ff-only origin gh-pages 2>/dev/null || git pull --rebase origin gh-pages 2>/dev/null || true
+
+  git add -A
+  if git diff --cached --quiet; then
+    echo "==> No gh-pages changes to commit"
+  else
+    git commit -m "report: ${COMMIT_SHORT} ${DIR_TIMESTAMP}" || true
+  fi
+
+  if git push origin gh-pages 2>&1; then
     PUSH_OK=1
     break
   fi
-  if [ "$attempt" -lt 3 ]; then
-  echo "WARNING: gh-pages push failed (attempt ${attempt}/3), rebasing and retrying in $((attempt * 5))s..."
-  git pull --rebase origin gh-pages 2>/dev/null || true
-  sleep $((attempt * 5))
-  fi
+
+  echo "WARNING: gh-pages push failed (attempt ${attempt}/10)"
 done
 if [ "$PUSH_OK" -ne 1 ]; then
-  echo "ERROR: gh-pages push failed after 3 attempts" >&2
+  echo "ERROR: gh-pages push failed after 10 attempts" >&2
   exit 1
 fi
 
