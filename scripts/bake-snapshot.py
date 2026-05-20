@@ -64,7 +64,7 @@ def _run_gcloud(args: list[str], timeout: int = 120) -> subprocess.CompletedProc
 
 
 def _gcloud_ssh(vm_name: str, remote_cmd: str, zone: str, project: str, timeout: int = 300) -> subprocess.CompletedProcess[str]:
-    wrapped = f"sudo -E bash -c {shlex.quote(remote_cmd)}"
+    wrapped = f"sudo HOME=/root bash -c {shlex.quote(remote_cmd)}"
     cmd = [
         "gcloud", "compute", "ssh", vm_name,
         f"--project={project}", f"--zone={zone}",
