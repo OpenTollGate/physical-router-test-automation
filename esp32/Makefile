@@ -1,7 +1,8 @@
 include boards.env
 
 .PHONY: help flash-a flash-b flash-c monitor-a monitor-b monitor-c \
-        connect-a connect-b disconnect \
+        connect-a connect-b connect-c disconnect \
+        fund-wallet-a fund-wallet-c \
         reset-a reset-b reset-c \
         wait-ready-a wait-ready-b wait-ready-c \
         provision-a provision-b provision-c \
@@ -359,12 +360,12 @@ reset-c: ## Reset Board C (no reflash)
 
 wait-ready-a: ## Wait for Board A HTTP server to be ready (auto-connects to AP)
 	@echo "$(CYAN)Disconnecting current WiFi and connecting to $(BOARD_A_SSID)...$(RESET)"
-	@sudo nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
+	@echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
 	@sleep 2
-	@sudo nmcli device wifi rescan 2>/dev/null || true
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi rescan 2>/dev/null || true
 	@sleep 3
-	@sudo nmcli device wifi connect "$(BOARD_A_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
-		sudo nmcli connection up "$(BOARD_A_UUID)" 2>/dev/null || true
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_A_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
+		echo "$(SUDO_PW)" | sudo -S nmcli connection up "$(BOARD_A_UUID)" 2>/dev/null || true
 	@sleep 3
 	@echo "$(CYAN)Waiting for Board A at $(BOARD_A_IP):2121 to be ready...$(RESET)"
 	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
@@ -383,12 +384,12 @@ wait-ready-a: ## Wait for Board A HTTP server to be ready (auto-connects to AP)
 
 wait-ready-b: ## Wait for Board B HTTP server to be ready (auto-connects to AP)
 	@echo "$(CYAN)Disconnecting current WiFi and connecting to $(BOARD_B_SSID)...$(RESET)"
-	@sudo nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
+	@echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
 	@sleep 2
-	@sudo nmcli device wifi rescan 2>/dev/null || true
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi rescan 2>/dev/null || true
 	@sleep 3
-	@sudo nmcli device wifi connect "$(BOARD_B_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
-		sudo nmcli connection up "$(BOARD_B_UUID)" 2>/dev/null || true
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_B_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
+		echo "$(SUDO_PW)" | sudo -S nmcli connection up "$(BOARD_B_UUID)" 2>/dev/null || true
 	@sleep 3
 	@echo "$(CYAN)Waiting for Board B at $(BOARD_B_IP):2121 to be ready...$(RESET)"
 	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
@@ -407,11 +408,11 @@ wait-ready-b: ## Wait for Board B HTTP server to be ready (auto-connects to AP)
 
 wait-ready-c: ## Wait for Board C HTTP server to be ready (auto-connects to AP)
 	@echo "$(CYAN)Disconnecting current WiFi and connecting to $(BOARD_C_SSID)...$(RESET)"
-	@sudo nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
+	@echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
 	@sleep 2
-	@sudo nmcli device wifi rescan 2>/dev/null || true
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi rescan 2>/dev/null || true
 	@sleep 3
-	@sudo nmcli device wifi connect "$(BOARD_C_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || true
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_C_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || true
 	@sleep 3
 	@echo "$(CYAN)Waiting for Board C at $(BOARD_C_IP):2121 to be ready...$(RESET)"
 	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
@@ -491,8 +492,8 @@ WIFI_IFACE := $(shell iw dev | awk '/Interface/{print $$2}' | head -1)
 connect-a: ## Connect laptop to Board A AP
 	$(call require_lock_a)
 	@echo "$(CYAN)Connecting to $(BOARD_A_SSID)...$(RESET)"
-	@nmcli device wifi connect "$(BOARD_A_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
-	nmcli connection up "$(BOARD_A_UUID)" 2>/dev/null || \
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_A_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
+	echo "$(SUDO_PW)" | sudo -S nmcli connection up "$(BOARD_A_UUID)" 2>/dev/null || \
 	echo "$(YELLOW)Failed to connect$(RESET)"
 	@sleep 3
 	@echo "$(GREEN)Connected — Board A AP IP: $(BOARD_A_IP)$(RESET)"
@@ -500,17 +501,71 @@ connect-a: ## Connect laptop to Board A AP
 connect-b: ## Connect laptop to Board B AP
 	$(call require_lock_b)
 	@echo "$(CYAN)Connecting to $(BOARD_B_SSID)...$(RESET)"
-	@nmcli device wifi connect "$(BOARD_B_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
-	nmcli connection up "$(BOARD_B_UUID)" 2>/dev/null || \
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_B_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
+	echo "$(SUDO_PW)" | sudo -S nmcli connection up "$(BOARD_B_UUID)" 2>/dev/null || \
 	echo "$(YELLOW)Failed to connect$(RESET)"
 	@sleep 3
 	@echo "$(GREEN)Connected — Board B AP IP: $(BOARD_B_IP)$(RESET)"
 
+connect-c: ## Connect laptop to Board C AP
+	$(call require_lock_c)
+	@echo "$(CYAN)Connecting to $(BOARD_C_SSID)...$(RESET)"
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_C_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
+	echo "$(YELLOW)Failed to connect$(RESET)"
+	@sleep 3
+	@echo "$(GREEN)Connected — Board C AP IP: $(BOARD_C_IP)$(RESET)"
+
 disconnect: ## Disconnect from board AP
-	@nmcli connection show --active | grep -q TollGate && \
-		nmcli connection down $$(nmcli -t -f NAME connection show --active | grep TollGate | head -1) || \
-		echo "Not connected to any TollGate AP"
+	@echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
 	@echo "$(GREEN)Disconnected$(RESET)"
+
+FUND_AMOUNT ?= 42
+MINT_URL ?= https://testnut.cashu.space
+UPSTREAM_SSID ?= EnterSSID-2.4GHz
+
+fund-wallet-a: ## Fund Board A wallet: create token on upstream, send to board (requires lock-a)
+	$(call require_lock_a)
+	@echo "$(CYAN)Connecting to upstream WiFi to create token...$(RESET)"
+	@echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 2
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(UPSTREAM_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 3
+	@echo "$(CYAN)Creating $(FUND_AMOUNT) sat token from $(MINT_URL)...$(RESET)"
+	@TOKEN=$$(cashu -h $(MINT_URL) send --legacy $(FUND_AMOUNT) 2>&1 | grep '^cashu') && \
+		echo "$(CYAN)Token created$(RESET)" && \
+		echo "$(CYAN)Reconnecting to $(BOARD_A_SSID)...$(RESET)" && \
+		echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true && \
+		sleep 2 && \
+		echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_A_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || true && \
+		sleep 3 && \
+		echo "$(CYAN)Sending token to Board A...$(RESET)" && \
+		RESP=$$(curl -s --connect-timeout 5 --max-time 10 -X POST "http://$(BOARD_A_IP):2121/" -d "$$TOKEN" 2>/dev/null) && \
+		echo "$$RESP" && \
+		echo "" && \
+		WALLET=$$(curl -s --connect-timeout 5 "http://$(BOARD_A_IP):2121/wallet" 2>/dev/null) && \
+		echo "$(GREEN)Wallet: $$WALLET$(RESET)"
+
+fund-wallet-c: ## Fund Board C wallet: create token on upstream, send to board (requires lock-c)
+	$(call require_lock_c)
+	@echo "$(CYAN)Connecting to upstream WiFi to create token...$(RESET)"
+	@echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 2
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(UPSTREAM_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 3
+	@echo "$(CYAN)Creating $(FUND_AMOUNT) sat token from $(MINT_URL)...$(RESET)"
+	@TOKEN=$$(cashu -h $(MINT_URL) send --legacy $(FUND_AMOUNT) 2>&1 | grep '^cashu') && \
+		echo "$(CYAN)Token created$(RESET)" && \
+		echo "$(CYAN)Reconnecting to $(BOARD_C_SSID)...$(RESET)" && \
+		echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true && \
+		sleep 2 && \
+		echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_C_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || true && \
+		sleep 3 && \
+		echo "$(CYAN)Sending token to Board C...$(RESET)" && \
+		RESP=$$(curl -s --connect-timeout 5 --max-time 10 -X POST "http://$(BOARD_C_IP):2121/" -d "$$TOKEN" 2>/dev/null) && \
+		echo "$$RESP" && \
+		echo "" && \
+		WALLET=$$(curl -s --connect-timeout 5 "http://$(BOARD_C_IP):2121/wallet" 2>/dev/null) && \
+		echo "$(GREEN)Wallet: $$WALLET$(RESET)"
 
 _connect-a-if-needed:
 	@if ! ping -c 1 -W 2 $(BOARD_A_IP) >/dev/null 2>&1; then \
@@ -1007,29 +1062,4 @@ arch-test-cleanup: ## Disconnect WiFi + reset auth state
 
 arch-test-full: ## Run all arch E2E tests sequentially (~4min)
 	@echo "$(BOLD)=======================================$(RESET)"
-	@echo "$(BOLD)  Full Arch E2E Test Suite             $(RESET)"
-	@echo "$(BOLD)=======================================$(RESET)"
-	@echo ""
-	@FAILED=0; \
-	echo "$(CYAN)--- 0/7: Wait Ready ---$(RESET)"; \
-	$(MAKE) arch-wait-ready || exit 1; echo ""; \
-	echo "$(CYAN)--- 1/7: Smoke Test ---$(RESET)"; \
-	$(MAKE) arch-test-smoke || FAILED=$$((FAILED + 1)); echo ""; \
-	echo "$(CYAN)--- 2/7: Network Test ---$(RESET)"; \
-	$(MAKE) arch-test-network || FAILED=$$((FAILED + 1)); echo ""; \
-	echo "$(CYAN)--- 3/7: API Test ---$(RESET)"; \
-	$(MAKE) arch-test-api || FAILED=$$((FAILED + 1)); echo ""; \
-	echo "$(CYAN)--- 4/7: DNS + Firewall Test ---$(RESET)"; \
-	$(MAKE) arch-test-dns-fw || FAILED=$$((FAILED + 1)); echo ""; \
-	echo "$(CYAN)--- 5/7: Reset Auth Test ---$(RESET)"; \
-	$(MAKE) arch-test-reset || FAILED=$$((FAILED + 1)); echo ""; \
-	echo "$(CYAN)--- 6/7: Session Expiry Test ---$(RESET)"; \
-	$(MAKE) arch-test-session || FAILED=$$((FAILED + 1)); echo ""; \
-	echo "$(CYAN)--- 7/7: Phase 2 API Test ---$(RESET)"; \
-	$(MAKE) arch-test-phase2 || FAILED=$$((FAILED + 1)); echo ""; \
-	echo ""; \
-	if [ $$FAILED -eq 0 ]; then \
-		echo "$(GREEN)=== ALL 7 ARCH E2E TESTS PASSED ===$(RESET)"; \
-	else \
-		echo "$(RED)=== $$FAILED/7 ARCH E2E TESTS FAILED ===$(RESET)"; \
-	fi
+	@echo "$(BOLD)  Full Arch E2E
