@@ -229,15 +229,8 @@ def cmd_bake(args: argparse.Namespace) -> int:
             "python3 -m venv /tmp/cashu-venv && "
             "/tmp/cashu-venv/bin/pip install -q --upgrade pip && "
             "/tmp/cashu-venv/bin/pip install -q cashu 'marshmallow<4' && "
-            "/tmp/cashu-venv/bin/python3 -c \""
-            "from pathlib import Path\\n"
-            "import cashu.core.models\\n"
-            "models=Path(cashu.core.models.__file__)\\n"
-            "text=models.read_text()\\n"
-            "text=text.replace('    active: bool\\\\n','    active: bool = True\\\\n')\\n"
-            "models.write_text(text)\\n"
-            "print('CASHU_PATCHED')\\n"
-            "\" && "
+            "sed -i 's/    active: bool$/    active: bool = True/' "
+            "$(/tmp/cashu-venv/bin/python3 -c 'import cashu.core.models; print(cashu.core.models.__file__)') && "
             "test -x /tmp/cashu-venv/bin/cashu && echo CASHU_OK"
         )
         r = _gcloud_ssh(vm_name, cashu_cmd, zone, project, timeout=300)
@@ -288,8 +281,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
             "-netdev tap,id=net0,ifname=tg-poc-tap,script=no,downscript=no "
             "-device virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56 "
             "-pidfile run/openwrt.pid "
-            ">/tmp/openwrt-qemu.log 2>&1; "
-            "echo QEMU_STARTED"
+            ">/tmp/openwrt-qemu.log 2>&1 &"
         )
         r = _gcloud_ssh(vm_name, qemu_boot_cmd, zone, project, timeout=30)
         # nohup returns immediately, but gcloud ssh may block
