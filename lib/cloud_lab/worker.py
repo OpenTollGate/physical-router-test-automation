@@ -497,7 +497,10 @@ def start_inner_vms(config: WorkerConfig) -> None:
             tap_name="tg-poc-tap3",
             mac=SELLER_OPENWRT_MAC,
         )
-        _provision_openwrt_serial("openwrt-seller", SELLER_OPENWRT_IP)
+        if _wait_inner_ssh(SELLER_OPENWRT_IP, timeout=15):
+            log.info("Seller OpenWrt base pre-provisioned, skipping serial")
+        else:
+            _provision_openwrt_serial("openwrt-seller", SELLER_OPENWRT_IP)
         if seller_proc.poll() is not None:
             raise RuntimeError(f"Seller OpenWrt VM exited during provisioning with rc={seller_proc.returncode}")
         if not _wait_inner_ssh(SELLER_OPENWRT_IP):
@@ -514,7 +517,10 @@ def start_inner_vms(config: WorkerConfig) -> None:
         tap_name="tg-poc-tap",
         mac="52:54:00:12:34:56",
     )
-    _provision_openwrt_serial("openwrt", OPENWRT_IP)
+    if _wait_inner_ssh(OPENWRT_IP, timeout=15):
+        log.info("OpenWrt base pre-provisioned, skipping serial")
+    else:
+        _provision_openwrt_serial("openwrt", OPENWRT_IP)
     if reseller_proc.poll() is not None:
         raise RuntimeError(f"Reseller OpenWrt VM exited during provisioning with rc={reseller_proc.returncode}")
     if not _wait_inner_ssh(OPENWRT_IP):

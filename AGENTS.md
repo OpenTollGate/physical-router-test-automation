@@ -237,7 +237,25 @@ After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check tha
 
 - **Debian qcow2 overlay** (Playwright + Chromium) lives on the baked snapshot — do **not** reset it per run.
 - **OpenWrt overlay** is recreated from base each run for a clean TollGate install.
-- Re-bake snapshot `tollgate-runner-baked-v2` when Debian packages or Playwright versions change.
+- Re-bake snapshot when Debian packages, Playwright versions, gh CLI, Python deps, or cashu change.
+
+### Snapshot baking
+
+Use `scripts/bake-snapshot.py` to create a new snapshot with all deps pre-installed and the OpenWrt base image pre-provisioned (SSH, password, firewall, network already configured).
+
+```bash
+./scripts/bake-snapshot.py bake
+```
+
+What it bakes into the snapshot:
+- `gh` CLI (GitHub apt repo)
+- `/opt/tollgate-venv` (Python venv with pytest, playwright, etc.)
+- `/tmp/cashu-venv` (cashu CLI with active-field patch)
+- Pre-provisioned `openwrt-base.qcow2` (SSH enabled, password set, firewall rule added, network configured to 10.99.99.1)
+
+After baking, update `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py` to the new snapshot name (auto-incremented, e.g. `tollgate-runner-baked-v3`).
+
+The worker (`lib/cloud_lab/worker.py`) detects pre-provisioned OpenWrt bases automatically — if SSH works within 15s of boot, serial provisioning is skipped. Falls back to serial provisioning for old snapshots without pre-provisioned bases.
 
 ### Commands
 
@@ -245,7 +263,21 @@ After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check tha
 ./scripts/cloud-lab.py submit --pr 42 --publish
 ./scripts/cloud-lab.py status-run --run-id <id>
 ./scripts/cloud-lab.py cleanup-stale   # delete RUNNING tollgate VMs >2h old
+./scripts/cloud-lab.py cleanup-all      # delete ALL tollgate VMs
+./scripts/bake-snapshot.py bake         # create new snapshot with deps pre-installed
 ```
+
+### Timing (post-bake optimizations)
+
+| Phase | Duration | Notes |
+|---|---|---|
+| VM boot + startup | ~2m | GCP startup script overhead |
+| gh + venv + cashu | 0s (baked) | Pre-installed in snapshot |
+| Boot OpenWrt + Debian VMs | ~30s | OpenWrt SSH-first detection, no serial |
+| Deploy TollGate | ~50s | Download + install .ipk |
+| Run tests | ~7m | Visual=101s, API=~5m |
+| Collect + publish | ~30s | |
+| **Total** | **~10-11min** | Down from ~15min pre-optimization |
 
 ### Out of scope for cloud
 

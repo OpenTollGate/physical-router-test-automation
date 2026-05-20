@@ -152,11 +152,20 @@ def parse_pytest_log(log_path, runner_name):
     if counts["failed"] > 0:
         runner_status = "failed"
 
+    duration_ms = 0
+    dur_match = re.search(r'in\s+([\d.]+)s', content)
+    if dur_match:
+        duration_ms = round(float(dur_match.group(1)) * 1000)
+
+    per_test_ms = round(duration_ms / max(counts["total"], 1)) if duration_ms > 0 else 0
+    for t in tests:
+        t["duration_ms"] = per_test_ms
+
     runner = {
         "name": runner_name,
         "framework": "pytest",
         "status": runner_status,
-        "duration_ms": 0,
+        "duration_ms": duration_ms,
         "counts": counts,
     }
     return runner, tests
