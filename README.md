@@ -63,7 +63,7 @@ source ~/.tollgate-test-venv/bin/activate
 
 Run API + container E2E tests in a nested-virt GCP VM (OpenWrt + Debian client). No physical router required.
 
-**Prerequisites:** `gcloud` CLI (authenticated), `gh` CLI (authenticated), `GH_TOKEN` or `gh auth login`, GCP snapshot `tollgate-runner-baked-v2`.
+**Prerequisites:** `gcloud` CLI (authenticated), `gh` CLI (authenticated), `GH_TOKEN` or `gh auth login`, and a GCP runner snapshot. `tollgate-runner-baked-v2` is the safe baseline; newer baked snapshots should only become the default after verification.
 
 ```bash
 # Wait for upstream CI x86_64 artifact, spawn autonomous VM, exit immediately
@@ -88,6 +88,18 @@ Run API + container E2E tests in a nested-virt GCP VM (OpenWrt + Debian client).
 The VM clones this test framework, resets only the OpenWrt overlay (Debian/Playwright overlay is cached in the snapshot), deploys the TollGate `.ipk`, runs pytest, publishes to [tests.tollgate.me](https://tests.tollgate.me/), posts a PR comment, and deletes itself.
 
 `submit` waits for an **in-progress or completed** upstream CI build with a downloadable `x86_64` artifact. It does not trigger new CI builds.
+
+Cloud runs are designed to be fire-and-forget and parallelizable: each run gets its own GCP VM, run directory, and report URL. Publishing to `gh-pages` retries up to 10 times without force-push, pulling/rebasing and waiting a random 0-60 seconds between attempts to avoid races between concurrent runs.
+
+### Baking a faster GCP runner snapshot
+
+Use the baker when dependencies change or when you want faster startup than the v2 baseline:
+
+```bash
+./scripts/bake-snapshot.py bake --base-snapshot tollgate-runner-baked-v2 --snapshot-name tollgate-runner-baked-v<N>
+```
+
+The baker installs `gh`, `gcloud`, `/opt/tollgate-venv`, `/opt/cashu-venv`, Debian/OpenWrt base images, and a pre-provisioned OpenWrt base. It runs with `HOME=/root`, matching the GCP startup worker. After baking, verify the snapshot with a throwaway run before updating `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py`.
 
 ## Deploy to Router
 
@@ -183,7 +195,10 @@ Runner subdirectories that weren't run are simply absent. The unified `report/in
 | `make pytest-extended` | Full suite including edge cases (~10min) |
 | `make pytest-api` | All API-marked tests |
 | `make pytest-phone` | All phone-marked tests |
-| `make pytest-test` | All pytest tests |
+| `make pytest-test` | All pytest tests (api + phone + scenarios) |
+| `make pytest-scenarios` | Hardware scenario tests only (`-m hardware`) |
+| `make pymake-help` | List targets migrated to pytest |
+| `./scripts/pymake.py <target> --router alpha` | Run a migrated Makefile target via pytest |
 | `make luci` | Playwright LuCI UI tests |
 | `make run-api` | Run API tier with canonical run dir |
 | `make run-phone` | Run phone tier with canonical run dir |
@@ -546,9 +561,9 @@ TOLLGATE_ROUTER_ID=lab-router-a ./scripts/run-tests.sh <tollgate-commit>
 
 ---
 
-## Physical Hardware Test Suites (Makefile-driven)
+## Physical Hardware Test Suites (pytest + pymake)
 
-A top-level **Makefile** provides convenient targets for physical hardware testing with hardware mutex protection. These complement the pytest-based tests above. Run `make help` for the full list.
+Hardware lab tests are **pytest-first**. Root Makefile targets (`make smoke-degraded`, etc.) are thin stubs that print a migration notice and run [`scripts/pymake.py`](scripts/pymake.py). Mapping lives in [`config/make-pytest-map.yaml`](config/make-pytest-map.yaml).
 
 All hardware test targets require a hardware lock (`make lock PHASE="description"`) to prevent concurrent access by multiple sessions.
 
@@ -565,16 +580,19 @@ cp upstream-wifi/routers.env.example upstream-wifi/routers.env
 # 3. Acquire hardware lock
 make lock PHASE="testing degraded mode"
 
-# 4. Run tests
-make smoke-degraded ROUTER=alpha           # single-router degraded lifecycle (~3 min)
-make smoke-upstream                        # two-router payment test (~5 min)
-make test-captive-portal ROUTER=alpha      # Playwright captive portal tests
-make test-cashu-payment ROUTER=alpha       # e2e cashu payment test
-make full-all ROUTER=alpha                 # everything combined
+# 4. Run tests (equivalent: make smoke-degraded ROUTER=alpha)
+./scripts/pymake.py smoke-degraded --router alpha
+./scripts/pymake.py smoke-upstream --router alpha    # needs two routers in routers.env
+make pytest-scenarios ROUTER=alpha                   # all hardware scenarios
+
+# Playwright (still JS, orchestrated by pymake)
+./scripts/pymake.py test-captive-portal --router alpha
 
 # 5. Release lock when done
 make unlock
 ```
+
+Legacy `mint-health/Makefile` shell implementations remain for unmigrated targets; see [`docs/make-to-pytest-migration.md`](docs/make-to-pytest-migration.md).
 
 ### Hardware Directory Structure
 

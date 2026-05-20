@@ -116,11 +116,24 @@ When connected directly to the TollGate router's LAN port, the test machine gets
 
 ## Primary Test Workflow
 
+**PR / CI (no physical hardware):**
+
 ```bash
 ./scripts/test-pr.sh --pr <N> [--reset] [--test api|all] [--publish]
 ```
 
-This is the main entry point for testing a PR. It resolves the PR to a branch/commit, deploys to the router, runs tests, and generates reports. See README.md for full usage.
+**Physical lab (pytest-first, Make stubs forward to pymake):**
+
+```bash
+make lock PHASE='smoke-degraded'
+./scripts/pymake.py smoke-degraded --router alpha
+# equivalent: make smoke-degraded ROUTER=alpha
+make pytest-scenarios   # all tests/scenarios/ with -m hardware
+```
+
+Registry: `config/make-pytest-map.yaml`. Migration notes: `docs/make-to-pytest-migration.md`.
+
+`test-pr.sh` resolves the PR to a branch/commit, deploys to the router, runs tests, and generates reports. See README.md for full usage.
 
 ## Firmware Build + Flash Workflow
 
@@ -217,12 +230,13 @@ After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check tha
 
 ## GCP cloud lab (fire-and-forget)
 
-`scripts/cloud-lab.py submit` runs TollGate API tests in nested KVM on a GCP VM (`n2-standard-2` + snapshot `tollgate-runner-baked-v2`).
+`scripts/cloud-lab.py submit` runs TollGate API tests in nested KVM on a GCP VM (`n2-standard-2` + the `SNAPSHOT_NAME` configured in `lib/cloud_lab/constants.py`). `tollgate-runner-baked-v2` is the safe baseline; newer baked snapshots must be verified before becoming the default.
 
 ### Flow
 
 1. **Local (blocking):** `ensure_artifact()` waits for upstream CI to finish and expose an `x86_64` `.ipk` (never triggers new builds).
 2. **GCP VM (async):** startup script clones this repo, runs `lib.cloud_lab.worker`, publishes to gh-pages, self-deletes.
+3. **Publishing:** `publish-report.sh` uses non-force pushes with up to 10 pull/rebase/push retries and random 0-60s backoff so multiple cloud runs can publish concurrently.
 
 ### Secrets
 
@@ -237,7 +251,8 @@ After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check tha
 
 - **Debian qcow2 overlay** (Playwright + Chromium) lives on the baked snapshot — do **not** reset it per run.
 - **OpenWrt overlay** is recreated from base each run for a clean TollGate install.
-- Re-bake snapshot when Debian packages, Playwright versions, gh CLI, Python deps, or cashu change.
+- **Persistent caches** live under `/opt` (`/opt/tollgate-venv`, `/opt/cashu-venv`). Avoid `/tmp` for baked caches because it may be empty after boot.
+- Re-bake snapshot when Debian packages, Playwright versions, gh/gcloud CLI, Python deps, cashu, or OpenWrt provisioning logic change.
 
 ### Snapshot baking
 
@@ -249,11 +264,14 @@ Use `scripts/bake-snapshot.py` to create a new snapshot with all deps pre-instal
 
 What it bakes into the snapshot:
 - `gh` CLI (GitHub apt repo)
+- `gcloud` CLI (Google Cloud apt repo, for VM self-delete)
 - `/opt/tollgate-venv` (Python venv with pytest, playwright, etc.)
-- `/tmp/cashu-venv` (cashu CLI with active-field patch)
+- `/opt/cashu-venv` (cashu CLI with active-field patch)
 - Pre-provisioned `openwrt-base.qcow2` (SSH enabled, password set, firewall rule added, network configured to 10.99.99.1)
 
-After baking, update `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py` to the new snapshot name (auto-incremented, e.g. `tollgate-runner-baked-v3`).
+The baker must run remote setup with `HOME=/root`, because the GCP startup worker also exports `HOME=/root`. If bake commands accidentally write to `/home/<ssh-user>/tollgate-virtual-lab`, the worker will read stale images from `/root/tollgate-virtual-lab`.
+
+After baking, verify the snapshot with a throwaway cloud run or `cloud-lab.py up` before updating `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py` to the new snapshot name (auto-incremented, e.g. `tollgate-runner-baked-v7`).
 
 The worker (`lib/cloud_lab/worker.py`) detects pre-provisioned OpenWrt bases automatically — if SSH works within 15s of boot, serial provisioning is skipped. Falls back to serial provisioning for old snapshots without pre-provisioned bases.
 

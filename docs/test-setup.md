@@ -63,16 +63,27 @@ Or via `--router` CLI option on test scripts.
 
 ### pytest (primary)
 
+Set the router via environment or pymake (loads `mint-health/routers.env`):
+
 ```bash
-# API tests against the upstream router
-pytest tests/api/ --router upstream
+export TOLLGATE_ROUTER_ID=upstream
+# or: ./scripts/pymake.py smoke-degraded --router alpha
+
+# API tests
+pytest tests/api/ -m api
 
 # Phone tests (requires ADB device)
-pytest tests/phone/ --router upstream
+pytest tests/phone/ -m phone
 
-# Scenario tests (mint health, upstream WiFi, recovery)
-pytest tests/scenarios/ --router upstream
+# Hardware scenario tests (mint health, upstream WiFi, recovery)
+make lock PHASE='scenario run'
+TOLLGATE_USE_HARDWARE_LOCK=1 pytest tests/scenarios/ -m hardware
+
+# Familiar Make aliases (forward to pymake → pytest)
+make smoke-degraded ROUTER=alpha
 ```
+
+See [`config/make-pytest-map.yaml`](../config/make-pytest-map.yaml) for the full Make → pytest mapping.
 
 ### Test categories
 
