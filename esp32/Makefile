@@ -269,7 +269,6 @@ detect-wpa-security: ## Scan WiFi and detect WPA security mode for configured SS
 	fi
 
 SPIFFS_BOARD   ?= a
-SPIFFS_NSEC    := $(shell grep "BOARD_$$(echo $(SPIFFS_BOARD) | tr '[:lower:]' '[:upper]')_NSEC\s*=" $(FIRMWARE_DIR)/.env 2>/dev/null | sed 's/.*=//')
 
 generate-spiffs: ## Generate SPIFFS image with auto-detected WPA mode and board nsec (SPIFFS_BOARD=a|b|c)
 	@echo "$(CYAN)Generating SPIFFS image for board $(SPIFFS_BOARD)...$(RESET)"
@@ -281,13 +280,14 @@ generate-spiffs: ## Generate SPIFFS image with auto-detected WPA mode and board 
 	else \
 		echo '{}' > "$(SPIFFS_DIR)/config.json"; \
 	fi; \
-	NSEC="$(SPIFFS_NSEC)"; \
+	BOARD_UPPER=$$(echo "$(SPIFFS_BOARD)" | tr '[:lower:]' '[:upper:]'); \
+	NSEC=$$(grep "BOARD_$${BOARD_UPPER}_NSEC\s*=" $(FIRMWARE_DIR)/.env 2>/dev/null | sed 's/.*=//'); \
 	if [ -z "$$NSEC" ]; then \
 		echo "$(YELLOW)WARN: no nsec found for board $(SPIFFS_BOARD) in .env, using config.json as-is$(RESET)"; \
 	else \
-		echo "$(CYAN)Injecting nsec for board $(SPIFFS_BOARD) ($${NSEC:0:8}...)$(RESET)"; \
+		echo "$(CYAN)Injecting nsec for board $(SPIFFS_BOARD) ($${NSEC%% *})$(RESET)"; \
 	fi; \
-	python3 -c "import json,sys; d=json.load(open('$(SPIFFS_DIR)/config.json')); d['wifi_auth_mode']='$$WPA_MODE'; nsec='$$NSEC'; exec('if nsec: d.update({\"nsec\": nsec})'); json.dump(d,open('$(SPIFFS_DIR)/config.json','w'),indent=2)"
+	python3 -c "import json; d=json.load(open('$(SPIFFS_DIR)/config.json')); d['wifi_auth_mode']='$$WPA_MODE'; nsec='$$NSEC'; d.update({'nsec':nsec}) if nsec else None; json.dump(d,open('$(SPIFFS_DIR)/config.json','w'),indent=2)"
 	@bash -c '$(ESP_IDF_SH) && python3 $$IDF_PATH/components/spiffs/spiffsgen.py $(SPIFFS_SIZE) $(SPIFFS_DIR) $(SPIFFS_BIN)'
 	@echo "$(GREEN)SPIFFS image generated: $(SPIFFS_BIN)$(RESET)"
 	@echo "$(CYAN)Contents:$(RESET)"
@@ -357,43 +357,72 @@ reset-c: ## Reset Board C (no reflash)
 
 # --- Wait for board to become ready (polls :2121/usage) ---
 
-wait-ready-a: ## Wait for Board A HTTP server to be ready
+wait-ready-a: ## Wait for Board A HTTP server to be ready (auto-connects to AP)
+	@echo "$(CYAN)Disconnecting current WiFi and connecting to $(BOARD_A_SSID)...$(RESET)"
+	@sudo nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 2
+	@sudo nmcli device wifi rescan 2>/dev/null || true
+	@sleep 3
+	@sudo nmcli device wifi connect "$(BOARD_A_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
+		sudo nmcli connection up "$(BOARD_A_UUID)" 2>/dev/null || true
+	@sleep 3
 	@echo "$(CYAN)Waiting for Board A at $(BOARD_A_IP):2121 to be ready...$(RESET)"
 	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
-		if curl -s --connect-timeout 3 --max-time 5 "http://$(BOARD_A_IP):2121/usage" 2>/dev/null | grep -q "owner"; then \
+		resp=$$(curl -s --connect-timeout 3 --max-time 5 -o /dev/null -w "%{http_code}" "http://$(BOARD_A_IP):2121/usage" 2>/dev/null); \
+		if [ "$$resp" = "200" ]; then \
 			echo "$(GREEN)Board A ready! (attempt $$i)$(RESET)"; \
-			curl -s --max-time 5 "http://$(BOARD_A_IP):2121/usage" | python3 -m json.tool 2>/dev/null; \
+			curl -s --max-time 5 "http://$(BOARD_A_IP):2121/usage" 2>/dev/null; echo; \
+			curl -s --max-time 5 "http://$(BOARD_A_IP):2121/wallet" 2>/dev/null; echo; \
 			exit 0; \
 		fi; \
-		echo "  attempt $$i/15 — not ready, waiting 5s..."; \
+		echo "  attempt $$i/15 — HTTP $$resp, waiting 5s..."; \
 		sleep 5; \
 	done; \
 	echo "$(RED)Board A did not become ready after 75s$(RESET)"; \
 	exit 1
 
-wait-ready-b: ## Wait for Board B HTTP server to be ready
+wait-ready-b: ## Wait for Board B HTTP server to be ready (auto-connects to AP)
+	@echo "$(CYAN)Disconnecting current WiFi and connecting to $(BOARD_B_SSID)...$(RESET)"
+	@sudo nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 2
+	@sudo nmcli device wifi rescan 2>/dev/null || true
+	@sleep 3
+	@sudo nmcli device wifi connect "$(BOARD_B_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
+		sudo nmcli connection up "$(BOARD_B_UUID)" 2>/dev/null || true
+	@sleep 3
 	@echo "$(CYAN)Waiting for Board B at $(BOARD_B_IP):2121 to be ready...$(RESET)"
 	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
-		if curl -s --connect-timeout 3 --max-time 5 "http://$(BOARD_B_IP):2121/usage" 2>/dev/null | grep -q "owner"; then \
+		resp=$$(curl -s --connect-timeout 3 --max-time 5 -o /dev/null -w "%{http_code}" "http://$(BOARD_B_IP):2121/usage" 2>/dev/null); \
+		if [ "$$resp" = "200" ]; then \
 			echo "$(GREEN)Board B ready! (attempt $$i)$(RESET)"; \
-			curl -s --max-time 5 "http://$(BOARD_B_IP):2121/usage" | python3 -m json.tool 2>/dev/null; \
+			curl -s --max-time 5 "http://$(BOARD_B_IP):2121/usage" 2>/dev/null; echo; \
+			curl -s --max-time 5 "http://$(BOARD_B_IP):2121/wallet" 2>/dev/null; echo; \
 			exit 0; \
 		fi; \
-		echo "  attempt $$i/15 — not ready, waiting 5s..."; \
+		echo "  attempt $$i/15 — HTTP $$resp, waiting 5s..."; \
 		sleep 5; \
 	done; \
 	echo "$(RED)Board B did not become ready after 75s$(RESET)"; \
 	exit 1
 
-wait-ready-c: ## Wait for Board C HTTP server to be ready
+wait-ready-c: ## Wait for Board C HTTP server to be ready (auto-connects to AP)
+	@echo "$(CYAN)Disconnecting current WiFi and connecting to $(BOARD_C_SSID)...$(RESET)"
+	@sudo nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 2
+	@sudo nmcli device wifi rescan 2>/dev/null || true
+	@sleep 3
+	@sudo nmcli device wifi connect "$(BOARD_C_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 3
 	@echo "$(CYAN)Waiting for Board C at $(BOARD_C_IP):2121 to be ready...$(RESET)"
 	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
-		if curl -s --connect-timeout 3 --max-time 5 "http://$(BOARD_C_IP):2121/usage" 2>/dev/null | grep -q "owner"; then \
+		resp=$$(curl -s --connect-timeout 3 --max-time 5 -o /dev/null -w "%{http_code}" "http://$(BOARD_C_IP):2121/usage" 2>/dev/null); \
+		if [ "$$resp" = "200" ]; then \
 			echo "$(GREEN)Board C ready! (attempt $$i)$(RESET)"; \
-			curl -s --max-time 5 "http://$(BOARD_C_IP):2121/usage" | python3 -m json.tool 2>/dev/null; \
+			curl -s --max-time 5 "http://$(BOARD_C_IP):2121/usage" 2>/dev/null; echo; \
+			curl -s --max-time 5 "http://$(BOARD_C_IP):2121/wallet" 2>/dev/null; echo; \
 			exit 0; \
 		fi; \
-		echo "  attempt $$i/15 — not ready, waiting 5s..."; \
+		echo "  attempt $$i/15 — HTTP $$resp, waiting 5s..."; \
 		sleep 5; \
 	done; \
 	echo "$(RED)Board C did not become ready after 75s$(RESET)"; \
