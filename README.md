@@ -522,7 +522,7 @@ Session-scoped fixtures: `router` (SSH), `adb` (phone or desktop client), `cashu
 | `TOLLGATE_SYSUPGRADE_WIPE_CONFIG` | No | `false` | Add `sysupgrade -n`; dangerous, wipes SSH/network/LuCI config |
 | `TOLLGATE_FIRMWARE_PASSWORD` | No | random | Override firmware root password in `build-firmware.py` |
 | `TOLLGATE_EXPECTED_MAC` | No | - | Expected router MAC for factory reset guard |
-| `TOLLGATE_CASHU_VENV` | No | `/tmp/cashu-venv` | Path to cashu CLI venv |
+| `TOLLGATE_CASHU_VENV` | No | `/opt/cashu-venv` | Path to cashu CLI venv |
 | `TOLLGATE_PYTHON_VENV` | No | `~/.tollgate-test-venv` | Path to Python test venv |
 | `PHONE_SERIAL` | No | - | Android device serial for ADB (required for phone tests) |
 | `PHONE_PIN` | No | - | Android device PIN for unlock |
