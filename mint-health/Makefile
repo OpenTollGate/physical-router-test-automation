@@ -70,7 +70,7 @@ r-test-startup-hygiene r-test-startup-hygiene-setup r-test-startup-hygiene-verif
         r-test-ssl-full r-ssl-status r-ssl-remove-force \
         r-test-ssl-setup-verify r-test-ssl-self-signed-yes r-test-ssl-reapply \
         r-test-ssl-remove-no-backup r-test-ssl-verify-cert r-test-ssl-verify-nds \
-        r-test-ssl-verify-no-dns r-test-ssl-wrappers r-test-ssl-idempotent \
+        r-test-ssl-verify-no-dns r-test-ssl-idempotent \
         r-test-ssl-comprehensive \
         r-test-ssl-real-cert r-test-ssl-real-cert-remove r-test-ssl-real-cert-full \
         r-test-ssl-all \
@@ -2584,6 +2584,11 @@ r-test-ssl-full: ## [remote] Full SSL lifecycle test: apply self-signed → veri
 
 # ---------------------------------------------------------------------------
 #  Enhanced SSL Tests (bug-fix verification + real cert + error paths)
+#
+#  NOTE: This Makefile coverage has been migrated to pytest for routine PR
+#  validation. See tests/api/test_ssl_go_cli.py (PR #123-gated). Keep these
+#  targets as manual/reference hardware commands and for parity checks while
+#  the Python suite becomes the source of truth.
 # ---------------------------------------------------------------------------
 
 SSL_REAL_CERT_DOMAIN ?= tollgate-test.orangesync.tech
@@ -2822,39 +2827,6 @@ r-test-ssl-verify-no-dns: ## [remote] Verify no dnsmasq domain for self-signed m
 	echo ""; \
 	echo "$(GREEN)$(BOLD)SSL no-DNS verify PASSED [$(ROUTER)]$(RESET)"
 
-r-test-ssl-wrappers: ## [remote] Test tollgate-apply-ssl and tollgate-remove-ssl wrapper scripts
-	@$(CHECK_LOCK)
-	@$(RESOLVE_ROUTER); \
-	echo "$(BOLD)=== SSL Wrapper Scripts Test [$(ROUTER)] ===$(RESET)"; \
-	echo ""; \
-	echo "$(CYAN)1/5 — Verify wrapper scripts exist...$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -x /usr/bin/tollgate-apply-ssl" \
-		|| { echo "$(RED)FAIL: tollgate-apply-ssl missing$(RESET)"; exit 1; }; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -x /usr/bin/tollgate-remove-ssl" \
-		|| { echo "$(RED)FAIL: tollgate-remove-ssl missing$(RESET)"; exit 1; }; \
-	echo "$(GREEN)OK$(RESET)"; \
-	echo ""; \
-	echo "$(CYAN)2/5 — Apply via wrapper --yes...$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate-apply-ssl --yes 2>&1"; \
-	if [ $$? -ne 0 ]; then echo "$(RED)FAIL$(RESET)"; exit 1; fi; \
-	echo ""; \
-	echo "$(CYAN)3/5 — Verify cert installed...$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -f /etc/tollgate/ssl/server.crt" \
-		|| { echo "$(RED)FAIL$(RESET)"; exit 1; }; \
-	echo "$(GREEN)OK$(RESET)"; \
-	echo ""; \
-	echo "$(CYAN)4/5 — Remove via wrapper --yes...$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "tollgate-remove-ssl --yes 2>&1"; \
-	if [ $$? -ne 0 ]; then echo "$(RED)FAIL$(RESET)"; exit 1; fi; \
-	echo ""; \
-	echo "$(CYAN)5/5 — Verify cert removed...$(RESET)"; \
-	cert=$$(ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "test -f /etc/tollgate/ssl/server.crt && echo yes || echo no"); \
-	if [ "$$cert" = "yes" ]; then \
-		echo "$(RED)FAIL: cert still exists$(RESET)"; exit 1; \
-	fi; \
-	echo "$(GREEN)OK: cert removed$(RESET)"; \
-	echo ""; \
-	echo "$(GREEN)$(BOLD)SSL wrapper test PASSED [$(ROUTER)]$(RESET)"
 
 r-test-ssl-idempotent: ## [remote] Apply twice — verify state consistent after second apply
 	@$(CHECK_LOCK)
@@ -2923,13 +2895,10 @@ r-test-ssl-comprehensive: ## [remote] All self-signed SSL tests in sequence (com
 	@echo "$(CYAN)Phase 10: Remove no-backup error path...$(RESET)"
 	@$(MAKE) -f Makefile r-test-ssl-remove-no-backup ROUTER=$(ROUTER)
 	@echo ""
-	@echo "$(CYAN)Phase 11: Wrapper scripts test...$(RESET)"
-	@$(MAKE) -f Makefile r-test-ssl-wrappers ROUTER=$(ROUTER)
-	@echo ""
-	@echo "$(CYAN)Phase 12: Idempotent apply test...$(RESET)"
+	@echo "$(CYAN)Phase 11: Idempotent apply test...$(RESET)"
 	@$(MAKE) -f Makefile r-test-ssl-idempotent ROUTER=$(ROUTER)
 	@echo ""
-	@echo "$(CYAN)Phase 13: Final cleanup...$(RESET)"
+	@echo "$(CYAN)Phase 12: Final cleanup...$(RESET)"
 	@$(MAKE) -f Makefile r-ssl-remove-force ROUTER=$(ROUTER)
 	@echo ""
 	@echo "$(BOLD)=======================================$(RESET)"

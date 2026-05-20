@@ -1,4 +1,4 @@
-"""Tests for PR #117: Set hostname to TollGate (HTTPS is opt-in).
+"""Legacy tests for PR #117: shell-script hostname + SSL setup.
 
 API-tier tests: pure SSH/config checks verifying the router plumbing
 is set up correctly. No phone required.
@@ -6,6 +6,10 @@ is set up correctly. No phone required.
 - Hostname is always set to TollGate on first boot (when default is OpenWrt).
 - HTTPS is NOT enabled by default — must be activated via ``tollgate-setup-ssl``.
 - After opt-in, self-signed cert is generated and uhttpd listens on 443.
+
+These tests intentionally remain PR #117-gated because PR #123 replaced the
+shell-script SSL interface with the Go CLI (`tollgate ssl apply/remove/status`).
+PR #123 coverage lives in `test_ssl_go_cli.py`.
 
 Requires a fresh deploy (factory reset) for the "not enabled by default"
 tests to pass.

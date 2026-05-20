@@ -279,7 +279,7 @@ full-all: ## Run all test suites (lint + playwright + degraded + upstream)
         ssl-status ssl-remove-force \
         test-ssl-setup-verify test-ssl-self-signed-yes test-ssl-reapply \
         test-ssl-remove-no-backup test-ssl-verify-cert test-ssl-verify-nds \
-        test-ssl-verify-no-dns test-ssl-wrappers test-ssl-idempotent \
+         test-ssl-verify-no-dns test-ssl-idempotent \
         test-ssl-comprehensive \
         test-ssl-real-cert test-ssl-real-cert-remove test-ssl-real-cert-full \
         test-ssl-all \
@@ -587,7 +587,11 @@ force-unlock: ## Force-release router hardware lock (use with caution)
 	echo "$(GREEN)Hardware lock force-released.$(RESET)"
 
 # ===========================================================================
-#  HOSTNAME & SSL TESTS (feat/set-hostname)
+#  HOSTNAME & SSL TESTS (legacy Makefile reference)
+#
+#  Routine PR validation for the Go SSL CLI has moved to pytest:
+#    tests/api/test_ssl_go_cli.py  (PR #123-gated)
+#  These targets remain available as manual/reference hardware commands.
 # ===========================================================================
 
 test-hostname: ## Verify hostname setup on router (not OpenWrt default)
@@ -644,10 +648,6 @@ test-ssl-verify-nds: ## Verify nodogsplash allows port 443
 test-ssl-verify-no-dns: ## Verify no dnsmasq domain for self-signed
 	$(call require_hardware_lock)
 	@$(MAKE) -C mint-health r-test-ssl-verify-no-dns ROUTER=$(ROUTER)
-
-test-ssl-wrappers: ## Test tollgate-apply-ssl and tollgate-remove-ssl wrappers
-	$(call require_hardware_lock)
-	@$(MAKE) -C mint-health r-test-ssl-wrappers ROUTER=$(ROUTER)
 
 test-ssl-idempotent: ## Test apply twice — verify state consistent
 	$(call require_hardware_lock)

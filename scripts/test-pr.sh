@@ -247,14 +247,21 @@ echo "==> Running $TEST_TYPE tests..."
 cd "$REPO_DIR/tests"
 
 exit_code=0
+PYTEST_PR_ARGS=()
+if [[ -n "${TOLLGATE_PR:-}" ]]; then
+  PYTEST_PR_ARGS=(--expected-pr "$TOLLGATE_PR")
+fi
+
 if [[ "$TEST_TYPE" == "api" ]]; then
   python3 -m pytest api/ -v --tb=short --backend="$BACKEND" \
+    "${PYTEST_PR_ARGS[@]}" \
     --junitxml="$RESULTS_DIR/raw/api/junit.xml" \
     --html="$RESULTS_DIR/raw/api/report.html" \
     --self-contained-html \
     2>&1 | tee "$RESULTS_DIR/raw/api/output.log" || exit_code=$?
 else
   python3 -m pytest -v --tb=short --backend="$BACKEND" \
+    "${PYTEST_PR_ARGS[@]}" \
     --junitxml="$RESULTS_DIR/raw/api/junit.xml" \
     --html="$RESULTS_DIR/raw/api/report.html" \
     --self-contained-html \
