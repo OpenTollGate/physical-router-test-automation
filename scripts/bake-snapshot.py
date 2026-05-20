@@ -400,10 +400,11 @@ def cmd_bake(args: argparse.Namespace) -> int:
         _step(9, total_steps, "Stopping QEMU and replacing base image with provisioned overlay")
         t0 = time.monotonic()
         replace_cmd = (
-            "killall -9 qemu-system-x86_64 2>/dev/null || true; sleep 2; "
+            "killall -9 qemu-system-x86_64 2>/dev/null || true; sleep 3; "
             f"cd {workdir} && "
             "OWRT_BASE=$(readlink -f images/openwrt-base.qcow2 2>/dev/null || echo images/openwrt-base.qcow2); "
-            "qemu-img convert -f qcow2 -O qcow2 overlays/tollgate-poc.qcow2 \"$OWRT_BASE\" && "
+            "qemu-img convert -f qcow2 -O qcow2 overlays/tollgate-poc.qcow2 /tmp/openwrt-base-flat.qcow2 && "
+            "mv /tmp/openwrt-base-flat.qcow2 \"$OWRT_BASE\" && "
             "rm -f overlays/tollgate-poc.qcow2 overlays/tollgate-seller.qcow2 overlays/debian-client.qcow2 && "
             "echo BASE_REPLACED_OK"
         )
