@@ -1,0 +1,312 @@
+# Makefile target → pytest / runner mapping for gradual migration.
+# status: migrated | partial | make-only | ops
+# lock: hardware | none
+# runner: pytest | playwright | make-delegate
+
+smoke-degraded:
+  pytest: tests/scenarios/test_mint_health.py::test_full_degraded_lifecycle
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  timeout: 900
+
+smoke-offline:
+  pytest: tests/scenarios/test_mint_health.py::test_restart_into_degraded_mode
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  timeout: 600
+
+smoke-recovery:
+  pytest: tests/scenarios/test_mint_health.py::test_recovery_to_full_merchant
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  timeout: 1200
+
+smoke-degraded-recovery:
+  pytest: tests/scenarios/test_boot_hygiene.py::test_degraded_recovery_no_restart
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  timeout: 1200
+
+smoke-dynamic-rebuild:
+  pytest: tests/scenarios/test_boot_hygiene.py::test_dynamic_merchant_rebuild
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  timeout: 1200
+  requires: cashu
+
+smoke-upstream:
+  pytest: tests/scenarios/test_two_router.py::TestDegradedUpstreamRenewal::test_offline_renewal_via_lan
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  requires: secondary_router
+  timeout: 900
+
+smoke-pin-upstream:
+  pytest: tests/scenarios/test_two_router.py::TestPinUpstream::test_pin_prevents_scan_away
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  requires: secondary_router
+  timeout: 900
+
+smoke-degraded-connect:
+  pytest: tests/scenarios/test_two_router.py::TestDegradedConnectWhileDegraded::test_connect_while_degraded
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  requires: secondary_router,risky
+  timeout: 900
+
+smoke-upstream-full:
+  pytest: tests/scenarios/test_upstream_wifi.py
+  status: migrated
+  lock: hardware
+  router_env: upstream-wifi
+  requires: SSID,PASS
+  timeout: 1800
+
+test-startup-hygiene:
+  pytest: tests/scenarios/test_boot_hygiene.py::test_startup_hygiene_auto_switch
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  timeout: 600
+
+test-startup-hygiene-dead-only:
+  pytest: tests/scenarios/test_boot_hygiene.py::test_startup_hygiene_dead_only
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  timeout: 900
+
+full-degraded:
+  pytest: tests/scenarios/test_mint_health.py
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  timeout: 2400
+
+test-hostname:
+  pytest: tests/api/test_hostname.py
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended
+  timeout: 600
+
+test-ssl-self-signed:
+  pytest: tests/api/test_ssl_go_cli.py::test_ssl_go_cli_apply_self_signed_interactive_prompt_accepts_yes
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  timeout: 300
+
+test-ssl-remove:
+  pytest: tests/api/test_ssl_go_cli.py::test_ssl_go_cli_remove_reverts_self_signed_state
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  timeout: 300
+
+test-ssl-status:
+  pytest: tests/api/test_ssl_go_cli.py::test_ssl_go_cli_status_reports_unconfigured
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  timeout: 120
+
+test-ssl-full:
+  pytest: tests/api/test_ssl_go_cli.py
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  timeout: 1200
+
+test-ssl-setup-verify:
+  pytest: tests/api/test_ssl_go_cli.py::test_ssl_go_cli_initial_clean_state
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  timeout: 120
+
+test-ssl-self-signed-yes:
+  pytest: tests/api/test_ssl_go_cli.py::test_ssl_go_cli_apply_self_signed_configures_uhttpd
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  timeout: 300
+
+test-ssl-reapply:
+  pytest: tests/api/test_ssl_go_cli.py::test_ssl_go_cli_reapply_keeps_valid_state
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  timeout: 300
+
+test-ssl-remove-no-backup:
+  pytest: tests/api/test_ssl_go_cli.py::test_ssl_go_cli_remove_without_backup_fails_cleanly
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  timeout: 300
+
+test-ssl-verify-cert:
+  pytest: tests/api/test_ssl_go_cli.py::test_ssl_go_cli_generated_cert_has_expected_cn_san_and_key_permissions
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  timeout: 300
+
+test-ssl-verify-nds:
+  pytest: tests/api/test_ssl_go_cli.py::test_ssl_go_cli_allows_https_through_nodogsplash_without_self_signed_dns
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  timeout: 300
+
+test-ssl-verify-no-dns:
+  pytest: tests/api/test_ssl_go_cli.py::test_ssl_go_cli_allows_https_through_nodogsplash_without_self_signed_dns
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  timeout: 300
+
+test-ssl-idempotent:
+  pytest: tests/api/test_ssl_go_cli.py::test_ssl_go_cli_reapply_keeps_valid_state
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  timeout: 300
+
+test-ssl-comprehensive:
+  pytest: tests/api/test_ssl_go_cli.py
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  timeout: 1200
+
+test-ssl-real-cert:
+  pytest: tests/api/test_ssl_real_cert.py::test_ssl_real_cert_apply_via_acme
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  requires: SSL_CF_TOKEN
+  timeout: 1800
+
+test-ssl-real-cert-remove:
+  pytest: tests/api/test_ssl_real_cert.py::test_ssl_real_cert_remove_cleans_state
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  timeout: 600
+
+test-ssl-real-cert-full:
+  pytest: tests/api/test_ssl_real_cert.py
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  requires: SSL_CF_TOKEN
+  timeout: 2400
+
+test-ssl-all:
+  pytest: tests/api/test_ssl_go_cli.py tests/api/test_ssl_real_cert.py
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  markers: extended and go_only
+  requires: SSL_CF_TOKEN
+  timeout: 3600
+
+r-test-default-mints:
+  pytest: tests/scenarios/test_mint_health.py::test_default_mints_configured
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  timeout: 120
+
+r-test-edge-cases:
+  pytest: tests/scenarios/test_upstream_wifi.py::test_connect_to_unknown_ssid_fails
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  timeout: 300
+
+test-captive-portal:
+  runner: playwright
+  pytest: tests/protocol/captive-portal.spec.mjs
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  timeout: 600
+
+test-captive-portal-happy:
+  runner: playwright
+  pytest: tests/protocol/captive-portal.spec.mjs
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  timeout: 600
+
+test-cashu-payment:
+  runner: playwright
+  pytest: tests/protocol/payment-lifecycle.spec.mjs
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  timeout: 900
+
+serial-recovery:
+  status: ops
+  runner: ops
+  lock: hardware
+  router_env: mint-health
+  notes: "pymake serial-recovery --cmd '...'"
+
+serial-shell:
+  status: ops
+  runner: ops
+  lock: none
+  router_env: mint-health
+
+serial-status:
+  status: ops
+  runner: ops
+  lock: none
+  router_env: mint-health
+
+serial-cold-boot:
+  pytest: tests/scenarios/test_recovery.py::test_cold_boot_via_serial
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  requires: TOLLGATE_SERIAL_PORT
+  timeout: 600
+
+arch-test-full:
+  status: ops
+  runner: make-delegate
+  delegate: esp32 arch-test-full
+  lock: hardware
+  notes: Delegates to esp32 Makefile (Node tests)
