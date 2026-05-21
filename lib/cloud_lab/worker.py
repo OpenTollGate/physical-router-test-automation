@@ -699,7 +699,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         f"if [ \"${{scenario_exit:-0}}\" -ne 0 ]; then exit \"$scenario_exit\"; fi; "
         "exit \"$api_exit\""
     )
-    r = _run(test_cmd, timeout=1200, check=False)
+    r = _run(test_cmd, timeout=1500, check=False)
     log.info("Test stdout (%d bytes): %s", len(r.stdout), _redact(r.stdout[-2000:]))
     return r.returncode
 
