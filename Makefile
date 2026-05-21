@@ -1146,6 +1146,19 @@ publish:
 pr-smoke:
 	@echo "Usage: ./scripts/test-pr.sh --pr <N> [--reset] [--test api|all] [--publish]"
 
+# --- PR #120: Mint resilience test suite ---
+
+smoke-pr120: ## Quick smoke for PR #120 features (try-all-mints + CLI degraded ops)
+	pytest tests/api/test_try_all_mints.py tests/api/test_cli_degraded_operations.py -v --timeout=120
+
+full-pr120: ## Full PR #120 test suite (includes recovery lifecycle ~10 min)
+	pytest tests/api/test_try_all_mints.py tests/api/test_merchant_provider.py \
+		tests/api/test_recovery_lifecycle.py tests/api/test_cli_degraded_operations.py \
+		-v --timeout=600
+
+pr120-recovery: ## Recovery lifecycle tests only
+	pytest tests/api/test_recovery_lifecycle.py -v --timeout=600
+
 # --- Clean ---
 
 clean:

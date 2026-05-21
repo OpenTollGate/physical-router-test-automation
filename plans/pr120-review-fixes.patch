@@ -1,0 +1,92 @@
+From 222c710c165582d99f9dc94a25ffd2cab61c91fe Mon Sep 17 00:00:00 2001
+From: Your Name <you@example.com>
+Date: Thu, 21 May 2026 14:41:59 +0530
+Subject: [PATCH] fix: add Shutdown() to MerchantInterface, use net.Error for
+ mint fallback
+
+- Add Shutdown() error to MerchantInterface so callers can invoke it
+  polymorphically through the provider (no type assertions needed)
+- Add no-op Shutdown() to MerchantDegraded
+- Add Shutdown() to stubMerchant in tests
+- Replace brittle strings.Contains matching on error messages with
+  errors.As(err, &netErr) for network error detection in tollwallet,
+  keeping string fallback for connection refused and DNS errors
+---
+ src/merchant/merchant.go               |  2 ++
+ src/merchant/merchant_degraded.go      |  1 +
+ src/merchant/merchant_provider_test.go |  1 +
+ src/tollwallet/tollwallet.go           | 11 ++++++++++-
+ 4 files changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/src/merchant/merchant.go b/src/merchant/merchant.go
+index 10bf6e7..9a43163 100644
+--- a/src/merchant/merchant.go
++++ b/src/merchant/merchant.go
+@@ -51,6 +51,8 @@ type MerchantInterface interface {
+ 	GetUsage(macAddress string) (string, error)
+ 	// Wallet funding methods
+ 	Fund(cashuToken string) (uint64, error)
++	// Lifecycle
++	Shutdown() error
+ }
+ 
+ // Merchant represents the financial decision maker for the tollgate
+diff --git a/src/merchant/merchant_degraded.go b/src/merchant/merchant_degraded.go
+index 8167df0..9c58a1a 100644
+--- a/src/merchant/merchant_degraded.go
++++ b/src/merchant/merchant_degraded.go
+@@ -94,3 +94,4 @@ func (m *MerchantDegraded) AddAllotment(string, string, uint64) (*CustomerSessio
+ }
+ func (m *MerchantDegraded) GetUsage(string) (string, error) { return "", errDegraded }
+ func (m *MerchantDegraded) Fund(string) (uint64, error)     { return 0, errDegraded }
++func (m *MerchantDegraded) Shutdown() error                  { return nil }
+diff --git a/src/merchant/merchant_provider_test.go b/src/merchant/merchant_provider_test.go
+index 487a0a8..0b0e514 100644
+--- a/src/merchant/merchant_provider_test.go
++++ b/src/merchant/merchant_provider_test.go
+@@ -54,6 +54,7 @@ func (s *stubMerchant) GetUsage(string) (string, error) {
+ func (s *stubMerchant) Fund(string) (uint64, error) {
+ 	return 0, fmt.Errorf("stub: %s", s.label)
+ }
++func (s *stubMerchant) Shutdown() error { return nil }
+ 
+ // TestMutexMerchantProviderSatisfiesInterface verifies the compile-time
+ // interface assertion in merchant_provider.go is valid.
+diff --git a/src/tollwallet/tollwallet.go b/src/tollwallet/tollwallet.go
+index e0e1430..a7d6e71 100644
+--- a/src/tollwallet/tollwallet.go
++++ b/src/tollwallet/tollwallet.go
+@@ -1,8 +1,10 @@
+ package tollwallet
+ 
+ import (
++	"errors"
+ 	"fmt"
+ 	"log"
++	"net"
+ 	"strings"
+ 	"sync"
+ 
+@@ -41,7 +43,8 @@ func New(walletPath string, acceptedMints []string, allowAndSwapUntrustedMints b
+ 
+ 		w, err := wallet.LoadWallet(config)
+ 		if err != nil {
+-			if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "connection refused") || strings.Contains(err.Error(), "no such host") {
++			var netErr net.Error
++			if errors.As(err, &netErr) || isNetworkError(err) {
+ 				log.Printf("TollWallet.New: Mint %s unreachable: %v", mintURL, err)
+ 				lastErr = err
+ 				continue
+@@ -333,3 +336,9 @@ func (w *TollWallet) Shutdown() error {
+ 	})
+ 	return err
+ }
++
++func isNetworkError(err error) bool {
++	msg := err.Error()
++	return strings.Contains(msg, "connection refused") ||
++		strings.Contains(msg, "no such host")
++}
+-- 
+2.51.0
+

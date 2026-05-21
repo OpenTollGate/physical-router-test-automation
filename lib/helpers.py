@@ -170,3 +170,61 @@ def skip_if_no_sessions_json(router):
             pytest.skip("No /etc/tollgate/sessions.json (backend uses in-memory sessions)")
     except Exception:
         pytest.skip("Cannot check sessions.json")
+
+
+def is_full_merchant(router) -> bool:
+    code = router.api_status("/")
+    if code != 200:
+        return False
+    body = router.api_body("/")
+    try:
+        data = json.loads(body)
+        if data.get("kind") != 10021:
+            return False
+        tags = data.get("tags", [])
+        return any(
+            isinstance(t, list) and len(t) > 0 and t[0] == "price_per_step"
+            for t in tags
+        )
+    except json.JSONDecodeError:
+        return False
+
+
+def is_degraded(router) -> bool:
+    body = router.api_body("/")
+    try:
+        data = json.loads(body)
+        return data.get("kind") == 21023
+    except json.JSONDecodeError:
+        return False
+
+
+def wait_for_full_merchant(router, timeout=120, interval=5):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if is_full_merchant(router):
+            return True
+        time.sleep(interval)
+    return False
+
+
+def wait_for_degraded(router, timeout=120, interval=5):
+    import re
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if is_degraded(router):
+            return True
+        logs = router.get_tollgate_logs(lines=500)
+        if re.search(r"(degraded|no reachable mints|all mints unreachable)", logs, re.IGNORECASE):
+            return True
+        time.sleep(interval)
+    return False
+
+
+def skip_if_no_degraded_support(router):
+    resp = router.get_tollgate_status()
+    if resp.get("success") is not True:
+        pytest.skip("tollgate status command not available (version predates PR #118)")
+    raw = json.dumps(resp).lower()
+    if not any(kw in raw for kw in ["degraded", "reachable", "mint_health"]):
+        pytest.skip("No mint health tracking in status output (version predates PR #118)")
