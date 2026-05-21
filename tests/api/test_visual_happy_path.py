@@ -7,8 +7,11 @@ from typing import Any
 import pytest
 
 from lib.constants import NDS_PORTAL_PORT, TOKEN_DEFAULT
+from lib.helpers import assert_deauthenticated, metering_test_setup, wait_expiry_and_verify_cutoff
 
-pytestmark = [pytest.mark.api, pytest.mark.smoke, pytest.mark.virtual_lab, pytest.mark.publish_screenshot, pytest.mark.timeout(180)]
+pytestmark = [pytest.mark.api, pytest.mark.virtual_lab, pytest.mark.publish_screenshot]
+
+DATA_DOWNLOAD_URL = "http://cachefly.cachefly.net/1mb.test"
 
 try:
     from pytest_html import extras as html_extras
@@ -57,6 +60,18 @@ def _embed_video(path: str, request):
         request.node._screenshot_extras = extras_list
 
 
+def _capture_visual_checkpoint(adb, results_dir: str, request, name: str):
+    output_dir = os.path.join(results_dir, "raw", "visual")
+    report_dir = os.path.join(results_dir, "report")
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, name)
+    if adb.screenshot_portal(path, report_dir=report_dir):
+        _embed_screenshot(path, os.path.basename(path).replace(".png", ""), request)
+    return path
+
+
+@pytest.mark.smoke
+@pytest.mark.timeout(180)
 def test_visual_happy_path(adb, cashu, router, results_dir, request):
     _skip_unless_virtual_lab()
 
@@ -141,3 +156,74 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
         print(f"[visual] standalone screenshot skipped: {exc}")
 
     assert authenticated, "client should be authenticated after ndsctl auth"
+
+
+@pytest.mark.critical
+@pytest.mark.config
+@pytest.mark.timeout(180)
+def test_visual_time_metering_expiry(adb, cashu, router, wifi, test_pricing, results_dir, request):
+    _skip_unless_virtual_lab()
+
+    client = request.config.getoption("--client", default="adb")
+    if client != "container":
+        pytest.skip("visual metering test requires --client=container")
+
+    amount = TOKEN_DEFAULT
+    step_ms = 10_000
+    expected_sec = ((amount - 1) * step_ms) // 1000
+
+    try:
+        session, _ = metering_test_setup(router, adb, wifi, cashu, test_pricing,
+                                         amount, step_ms, "milliseconds")
+        assert session.get("metric") == "milliseconds"
+        _capture_visual_checkpoint(adb, results_dir, request, "05-time-authed.png")
+
+        elapsed = wait_expiry_and_verify_cutoff(router, adb)
+        _capture_visual_checkpoint(adb, results_dir, request, "06-time-expired.png")
+
+        drift = abs(elapsed - expected_sec)
+        assert drift <= 12, \
+            f"Session duration {elapsed}s too far from expected {expected_sec}s (drift={drift}s)"
+    finally:
+        router.reset_state(adb=adb)
+
+
+@pytest.mark.critical
+@pytest.mark.config
+@pytest.mark.timeout(180)
+def test_visual_data_metering_cutoff(adb, cashu, router, wifi, test_pricing, results_dir, request):
+    _skip_unless_virtual_lab()
+
+    client = request.config.getoption("--client", default="adb")
+    if client != "container":
+        pytest.skip("visual metering test requires --client=container")
+
+    amount = TOKEN_DEFAULT
+    step_bytes = 256 * 1024
+    expected_bytes = amount * step_bytes
+
+    try:
+        session, _ = metering_test_setup(router, adb, wifi, cashu, test_pricing,
+                                         amount, step_bytes, "bytes")
+        assert session.get("metric") == "bytes", \
+            f"Session metric is '{session.get('metric')}', expected 'bytes'"
+        _capture_visual_checkpoint(adb, results_dir, request, "07-data-authed.png")
+
+        cutoff_at = None
+        start = time.time()
+        while time.time() - start < 45:
+            adb.curl(DATA_DOWNLOAD_URL, timeout=5, L=True, o="/dev/null", s=True)
+            state = router.get_nds_state()
+            if state != "Authenticated":
+                cutoff_at = int(time.time() - start)
+                break
+            time.sleep(1)
+
+        if cutoff_at is None:
+            pytest.fail(f"Data cutoff not detected within 45s after consuming ~{expected_bytes}B")
+
+        time.sleep(2)
+        assert_deauthenticated(router)
+        _capture_visual_checkpoint(adb, results_dir, request, "08-data-exhausted.png")
+    finally:
+        router.reset_state(adb=adb)
