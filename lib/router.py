@@ -336,15 +336,14 @@ class Router:
 
     def pay_direct(self, token: str, ip: str | None = None) -> dict:
         ip = ip or self.phone_ip
-        tmpf = "/tmp/tg-pay-token.txt"
-        self.ssh_stdin(f"cat > {tmpf}", token)
-        resp = self.ssh(
-            f"curl -s -m 20 -X POST '{self.backend_url('/')}' "
-            f"-H 'Content-Type: text/plain' "
-            f"-H 'X-Forwarded-For: {ip}' "
-            f"-d @{tmpf}; rm -f {tmpf}",
-            timeout=60,
+        cmd = (
+            f"curl -s -m 20 -X POST {shlex.quote(self.backend_url('/'))} "
+            f"-H {shlex.quote('Content-Type: text/plain')} "
+            f"-H {shlex.quote(f'X-Forwarded-For: {ip}')} "
+            "--data-binary @-"
         )
+        result = self.ssh_stdin(cmd, token, timeout=60)
+        resp = result.stdout.strip()
         try:
             return json.loads(resp)
         except json.JSONDecodeError:

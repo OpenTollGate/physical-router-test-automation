@@ -10,6 +10,8 @@ log = logging.getLogger("tollgate.helpers")
 
 
 def is_session_event(resp: dict) -> bool:
+    if not isinstance(resp, dict):
+        return False
     tags = resp.get("tags", [])
     return resp.get("kind") == 1022 or any(
         isinstance(t, list) and len(t) > 0 and t[0] == "allotment" for t in tags

@@ -1,6 +1,6 @@
 # Make-to-Pytest Migration Analysis
 
-**Date**: 2026-05-20 (updated with live registry)
+**Date**: 2026-05-21 (aligned with live registry)
 **Scope**: Which Makefile test targets have no pytest equivalent, and what's needed to migrate them.
 
 ## Live registry and runners
@@ -9,7 +9,6 @@
 |----------|---------|
 | [`config/make-pytest-map.yaml`](../config/make-pytest-map.yaml) | Source of truth: Make target → pytest node / runner |
 | [`scripts/pymake.py`](../scripts/pymake.py) | CLI: `./scripts/pymake.py smoke-degraded --router alpha` |
-| [`./pymake`](../pymake) | Shell wrapper (same as pymake.py) |
 | [`make/migration.mk`](../make/migration.mk) | Root Makefile stubs forward to pymake |
 
 Migrated root Makefile targets print a deprecation banner and invoke pymake (no dual-run of old shell tests).
@@ -27,13 +26,13 @@ make pytest-scenarios ROUTER=alpha        # all hardware scenarios
 
 | Metric | Count |
 |---|---|
-| Total make test targets (leaf) | ~45 |
-| Already covered by pytest | ~25 |
-| **Makefile-only (uncovered)** | **~20** |
-| New `router.py` methods needed | 6-8 |
-| Estimated effort | 3-4 days |
+| Total registered migrated/ops targets | 44 |
+| Covered by pytest / Playwright runner | 40 |
+| Ops-only / delegated targets | 4 |
+| Functional make-test gaps in live registry | 0 |
+| Main remaining work | ESP32/relay/arch normalization |
 
-The pytest framework already covers most functional areas through `tests/scenarios/`. The remaining gaps are: **real cert SSL** (needs Cloudflare DNS-01), **first-boot-offline** (needs serial console), **dynamic rebuild** (long-running state machine), and **captive portal / cashu payment** (needs Playwright or ADB, already covered by `.spec.mjs`).
+The live registry now maps the router hardware test targets to pytest or Playwright runners. The remaining non-pytest areas are operational/delegated flows: serial shell/status/recovery and ESP32/relay/arch targets that still delegate to the ESP32 Makefile.
 
 ---
 
@@ -56,12 +55,12 @@ The pytest framework already covers most functional areas through `tests/scenari
 | `r-test-ssl-idempotent` | Apply twice, verify consistent | `test_ssl_go_cli.py::test_ssl_idempotent_apply` | ✅ Covered |
 | `r-test-ssl-full` | Full lifecycle (apply→verify→remove→verify) | Covered by individual tests above | ✅ Covered |
 | `r-test-ssl-comprehensive` | All self-signed tests in sequence (12 phases) | Covered by individual tests above | ✅ Covered |
-| `r-test-ssl-real-cert` | Real cert via LE staging + Cloudflare DNS-01 | — | ❌ **Make-only** |
-| `r-test-ssl-real-cert-remove` | Remove real cert (dnsmasq + NDS revert) | — | ❌ **Make-only** |
-| `r-test-ssl-real-cert-full` | Full real cert lifecycle | — | ❌ **Make-only** |
-| `r-test-ssl-all` | Comprehensive + real cert | — | ❌ **Make-only** (real cert part) |
+| `r-test-ssl-real-cert` | Real cert via LE staging + Cloudflare DNS-01 | `tests/api/test_ssl_real_cert.py::test_ssl_real_cert_apply_via_acme` | ✅ Covered, env-gated |
+| `r-test-ssl-real-cert-remove` | Remove real cert (dnsmasq + NDS revert) | `tests/api/test_ssl_real_cert.py::test_ssl_real_cert_remove_cleans_state` | ✅ Covered |
+| `r-test-ssl-real-cert-full` | Full real cert lifecycle | `tests/api/test_ssl_real_cert.py` | ✅ Covered, env-gated |
+| `r-test-ssl-all` | Comprehensive + real cert | `tests/api/test_ssl_go_cli.py tests/api/test_ssl_real_cert.py` | ✅ Covered, real cert env-gated |
 
-**Real cert tests need**: Cloudflare DNS-01 credentials, a domain pointing to the router. This is infrastructure, not code — could be ported as `tests/api/test_ssl_real_cert.py` gated behind `TOLLGATE_CLOUDFLARE_TOKEN` env var.
+**Real cert tests need**: Cloudflare DNS-01 credentials and a domain pointing to the router. They are implemented in `tests/api/test_ssl_real_cert.py` and remain opt-in through the `SSL_CF_TOKEN`/domain environment requirements tracked in `config/make-pytest-map.yaml`.
 
 ### Hostname (PR #117)
 
@@ -78,7 +77,7 @@ The pytest framework already covers most functional areas through `tests/scenari
 | `r-smoke-recovery` | Unblock + wait for recovery | `test_mint_health.py::test_recovery_to_full_merchant` | ✅ Covered |
 | `r-smoke-degraded-recovery` | Degraded→recovery WITHOUT restart (BoltDB lock) | `test_boot_hygiene.py::test_degraded_recovery_no_restart` | ✅ Covered |
 | `r-smoke-dynamic-rebuild` | Full→degraded→full rebuild (~10 min) | `test_boot_hygiene.py::test_dynamic_merchant_rebuild` | ✅ Covered |
-| `r-smoke-degraded-connect` | Connect upstream while already degraded (RISKY) | — | ❌ **Make-only** |
+| `r-smoke-degraded-connect` | Connect upstream while already degraded (RISKY) | `test_two_router.py::TestDegradedConnectWhileDegraded::test_connect_while_degraded` | ✅ Covered, risky-gated |
 | `r-test-offline-ops` | Verify wallet balance + status offline | `test_mint_health.py::test_offline_wallet_operations` | ✅ Covered |
 | `r-test-first-boot-offline` | First boot with unreachable mint | `test_mint_health.py::test_first_boot_offline` | ✅ Covered |
 | `r-test-no-mints` | No configured mints scenario | `test_mint_health.py::test_no_configured_mints` | ✅ Covered |
@@ -124,77 +123,37 @@ These are JavaScript Playwright tests called from make. Not candidates for Pytho
 
 ---
 
-## Make-Only Targets (Uncovered by Pytest)
+## Remaining Non-Pytest / Delegated Targets
 
-### Priority 1: Worth Migrating
+These are not functional router Make-test gaps in the live registry; they are operational commands or component-specific suites that still intentionally delegate outside pytest.
 
-| Target | Effort | What's Needed |
-|---|---|---|
-| `r-test-ssl-real-cert` | 1 day | `router.py`: `ssl_apply_real(cert, key)`, Cloudflare env vars |
-| `r-test-ssl-real-cert-remove` | 0.5 day | Same as above |
-| `r-test-ssl-real-cert-full` | 0.5 day | Orchestrates the two above |
-| `r-smoke-degraded-connect` | 0.5 day | `router.py`: `wait_for_upstream_connect()`, risk warning fixture |
-| `r-test-default-mints` | 0.5 day | `router.py`: `get_mint_config()` |
-| `r-test-edge-cases` | 0.5 day | Depends on what "edge cases" covers — needs investigation |
-
-### Priority 2: Helpers / Low Value
-
-| Target | Notes |
+| Target / Area | Status | Notes |
 |---|---|
-| `r-check-degraded` | State checker, could be a pytest fixture |
-| `r-check-merchant` | State checker, could be a pytest fixture |
-| `r-test-ssl-all` | Just orchestrates comprehensive + real cert |
-| `r-test-cleanup` | Handled by pytest fixtures |
-
-### Skip (Not Worth Migrating)
-
-| Target | Reason |
-|---|---|
-| `r-test-captive-portal` / `r-test-captive-portal-happy` | Already Playwright `.spec.mjs`, not Python |
-| `r-test-cashu-payment` | Already Playwright `.spec.mjs` |
-| Serial console tests (`s-*`) | Different transport, niche use case |
-| U-Boot recovery tests | Firmware upload, not worth it |
+| `serial-recovery` | ops | Emergency command path; tracked in registry as `runner: ops` |
+| `serial-shell` / `serial-status` | ops | Interactive/read-only serial operations, not tests |
+| `arch-test-full` | delegated | Delegates to `esp32/Makefile` Node/firmware E2E suite |
+| ESP32 multi-mint/CVM/relay targets | delegated/manual | Root Makefile forwards to `esp32/Makefile`; good next normalization target if a unified pytest surface is desired |
 
 ---
 
-## `router.py` Methods Needed for Migration
+## Utility Cleanup Still Worth Doing
 
-Currently missing, all trivial wrappers over `self.ssh()`:
+The target migration is effectively complete for the router test registry, but there is still cleanup value in promoting repeated shell snippets to `router.py` helpers:
 
-```python
-# SSL (for real cert tests)
-def ssl_apply_real(self, cert_path: str, key_path: str) -> dict
-def ssl_status_parsed(self) -> dict          # Parse `tollgate ssl status` into dict
-
-# UCI helpers (used by many tests)
-def uci_get(self, path: str) -> str
-def uci_set(self, path: str, value: str) -> None
-def uci_commit(self, *configs: str) -> None
-
-# DNS / hosts
-def get_hosts_entries(self) -> list[str]
-def add_hosts_block(self, hostname: str) -> None
-def remove_hosts_block(self, hostname: str) -> None
-
-# Upstream WiFi
-def upstream_connect(self, ssid: str, password: str = None) -> None
-def upstream_remove(self, ssid: str) -> None
-def upstream_status(self) -> dict
-```
-
-Most of these are 3-5 lines each. The `_block_mint_via_hosts` helper already exists in `test_mint_health.py` and `test_boot_hygiene.py` as a local function — it should be promoted to `router.py`.
+- UCI helpers: `uci_get`, `uci_set`, `uci_commit`.
+- Hosts/mint blocking helpers used by mint-health and boot-hygiene scenarios.
+- Upstream WiFi helpers for status/connect/remove flows.
+- Parsed SSL status helper for clearer assertions in SSL tests.
 
 ---
 
 ## Recommended Migration Order
 
-1. **Promote `_block_mint_via_hosts` to `router.py`** as `block_mint()` / `unblock_mint()` (0.5 day)
-2. **Add `uci_get`/`uci_set`/`uci_commit` to `router.py`** (0.5 day)
-3. **Port real cert SSL tests** (`test_ssl_real_cert.py`) — biggest functional gap (1-2 days)
-4. **Port `r-test-default-mints` and `r-test-edge-cases`** — small, quick wins (0.5 day)
-5. **Port `r-smoke-degraded-connect`** — interesting scenario, needs care (0.5 day)
+1. **Normalize ESP32/relay/arch targets** if they should appear in unified pytest/reporting instead of Make delegation.
+2. **Promote common router helpers** (`uci_*`, mint block/unblock, upstream WiFi helpers) to reduce duplicated SSH snippets.
+3. **Keep the registry authoritative**: update `config/make-pytest-map.yaml` first, then reflect any changes here.
 
-Total: ~3-4 days for complete pytest parity.
+Router hardware pytest/Playwright parity is complete in the live registry; remaining work is consistency and reporting ergonomics.
 
 After migration, the Makefile targets remain as convenience aliases (`make smoke-degraded` still works) but the source of truth is pytest. Implementation status is tracked in `config/make-pytest-map.yaml` (`status: migrated`).
 

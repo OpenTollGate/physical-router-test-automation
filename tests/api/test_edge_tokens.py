@@ -40,11 +40,11 @@ def test_duplicate_token_immediate_reuse(router, cashu):
     token = cashu.mint(1)
 
     # First payment should succeed
-    resp1 = router.pay_via_header(token)
+    resp1 = router.pay_direct(token)
     assert is_session_event(resp1), \
         f"First payment failed: {str(resp1)[:200]}"
 
     # Second payment with same token should fail (double-spend protection)
-    resp2 = router.pay_via_header(token)
-    assert '"success":true' not in resp2, \
+    resp2 = router.pay_direct(token)
+    assert not is_session_event(resp2), \
         f"Duplicate token was ACCEPTED (expected double-spend rejection)"

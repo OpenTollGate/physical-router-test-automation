@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from lib.constants import NDS_PORTAL_PORT
+from lib.constants import NDS_PORTAL_PORT, TOKEN_DEFAULT
 
 pytestmark = [pytest.mark.api, pytest.mark.smoke, pytest.mark.virtual_lab, pytest.mark.publish_screenshot, pytest.mark.timeout(180)]
 
@@ -19,6 +19,15 @@ except ImportError:
 def _skip_unless_virtual_lab():
     if not (os.environ.get("TOLLGATE_SSH_JUMP_HOST") or os.environ.get("TOLLGATE_VIRTUAL_HOST") or os.environ.get("TOLLGATE_VIRTUAL_LAB")):
         pytest.skip("set TOLLGATE_VIRTUAL_LAB=1 and run scripts/virtual-lab.py start-poc")
+
+
+def _wait_for_auth_state(router, mac: str | None, timeout: int = 45) -> bool:
+    start = time.time()
+    while time.time() - start < timeout:
+        if router.get_nds_state(mac) == "Authenticated":
+            return True
+        time.sleep(1)
+    return router.get_nds_state(mac) == "Authenticated"
 
 
 def _embed_screenshot(path: str, name: str, request):
@@ -48,7 +57,7 @@ def _embed_video(path: str, request):
         request.node._screenshot_extras = extras_list
 
 
-def test_visual_happy_path(adb, router, results_dir, request):
+def test_visual_happy_path(adb, cashu, router, results_dir, request):
     _skip_unless_virtual_lab()
 
     client = request.config.getoption("--client", default="adb")
@@ -94,20 +103,15 @@ def test_visual_happy_path(adb, router, results_dir, request):
     assert adb.wait_for_portal_ready(timeout=60), "Playwright did not load portal in time"
     print("[visual] portal loaded, unpaid screenshot taken by recording thread")
 
-    # Step 3: authenticate via ndsctl (bypass cashu)
-    assert client_mac, "TOLLGATE_CLIENT_MAC required for ndsctl auth"
-    print(f"[visual] authenticating {client_mac} via ndsctl...")
-    router.ssh(f"ndsctl auth {client_mac} 2>&1", timeout=10)
+    # Step 3: mint a token and let the recorded browser paste + submit it
+    print("[visual] minting Cashu token for browser payment...")
+    token = cashu.mint(TOKEN_DEFAULT)
+    assert token, "cashu mint failed"
+    adb.signal_token(token)
 
-    # Step 4: wait for authentication to take effect
-    authenticated = router.wait_for_auth(timeout=15, mac=client_mac)
-    if not authenticated:
-        router.ssh(f"ndsctl auth {client_mac} 2>&1", timeout=10)
-        authenticated = router.wait_for_auth(timeout=10, mac=client_mac)
+    # Step 4: wait for browser payment authentication to take effect
+    authenticated = _wait_for_auth_state(router, client_mac or None, timeout=45)
     print(f"[visual] authenticated={authenticated}")
-
-    # Step 5: signal paid so recording thread continues to paid screenshots
-    adb.signal_paid()
 
     # Step 6: wait for recording to finish
     recording_thread.join(timeout=120)

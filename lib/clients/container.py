@@ -1,3 +1,4 @@
+import base64
 import os
 import re
 import shlex
@@ -337,21 +338,18 @@ class ContainerClient:
     def start_portal_recording(self) -> None:
         """Start a Playwright session recording video of the portal flow.
 
-        The script runs on the VM and blocks until completion. It:
-        1. Navigates to portal URL (bypassing external trigger)
-        2. Screenshots the unpaid portal
-        3. Writes /tmp/tg-portal-ready (signals test to proceed with payment)
-        4. Polls for /tmp/tg-paid (test creates this after payment)
-        5. Reloads the portal (now in paid/authenticated state)
-        6. Screenshots the paid portal
-        7. Navigates to http://1.1.1.1 (verifies internet)
-        8. Screenshots internet access
-        9. Closes context (saves video)
+        The script runs on the VM and blocks until completion. It supports two
+        synchronization modes:
+
+        * Browser-driven payment: the test writes /tmp/tg-token, then Playwright
+          pastes the Cashu token into the portal and submits it.
+        * Legacy state recording: the test writes /tmp/tg-paid after out-of-band
+          payment, then Playwright reloads the portal to capture the paid state.
         """
         portal_url = f"http://{POC_GATEWAY}:{NDS_PORTAL_PORT}/"
         script = (
             "from playwright.sync_api import sync_playwright\n"
-            "import time, os, shutil\n"
+            "import os, re, shutil, time\n"
             "p = None; browser = None; ctx = None; page = None\n"
             "try:\n"
             "    p = sync_playwright().start()\n"
@@ -360,37 +358,96 @@ class ContainerClient:
             "    page = ctx.new_page()\n"
             "    steps_ok = []\n"
             "    errors = []\n"
+            "    def screenshot(path, step):\n"
+            "        try:\n"
+            "            page.screenshot(path=path)\n"
+            "            steps_ok.append(step)\n"
+            "        except Exception as e:\n"
+            "            errors.append(f'{step}: {e}')\n"
+            "    def first_visible_locator(selectors):\n"
+            "        for selector in selectors:\n"
+            "            locator = page.locator(selector).first\n"
+            "            try:\n"
+            "                if locator.count() > 0 and locator.is_visible(timeout=1000):\n"
+            "                    return locator\n"
+            "            except Exception:\n"
+            "                continue\n"
+            "        return None\n"
+            "    def submit_token(token):\n"
+            "        page.goto('" + portal_url + "', timeout=30000, wait_until='domcontentloaded')\n"
+            "        time.sleep(2)\n"
+            "        token_input = first_visible_locator([\n"
+            "            'textarea',\n"
+            "            'input[name*=token]',\n"
+            "            'input[id*=token]',\n"
+            "            'input[name*=cashu]',\n"
+            "            'input[id*=cashu]',\n"
+            "            'input[placeholder*=Cashu]',\n"
+            "            'input[placeholder*=cashu]',\n"
+            "            'input[type=text]',\n"
+            "            'input:not([type])',\n"
+            "        ])\n"
+            "        if token_input is None:\n"
+            "            raise RuntimeError('no visible Cashu token input found')\n"
+            "        token_input.fill(token)\n"
+            "        screenshot('/tmp/tg-e2e/02-token-filled.png', 'token-filled-screenshot')\n"
+            "        submitted = False\n"
+            "        button = page.get_by_role('button', name=re.compile('purchase|submit|pay|connect|go', re.I)).first\n"
+            "        try:\n"
+            "            if button.count() > 0 and button.is_visible(timeout=1000):\n"
+            "                button.click()\n"
+            "                submitted = True\n"
+            "        except Exception as e:\n"
+            "            errors.append(f'role-submit-click: {e}')\n"
+            "        if not submitted:\n"
+            "            submit = first_visible_locator(['input[type=submit]', 'button', '[role=button]'])\n"
+            "            if submit is not None:\n"
+            "                submit.click()\n"
+            "                submitted = True\n"
+            "        if not submitted:\n"
+            "            token_input.press('Enter')\n"
+            "        for _ in range(40):\n"
+            "            time.sleep(0.5)\n"
+            "            content = page.content().lower()\n"
+            "            if any(marker in content for marker in ['data-sm=\"authed\"', 'data-sm=\"countdown\"', 'data-sm=\"usage_dashboard\"', 'remaining', 'connected']):\n"
+            "                return\n"
+            "        page.wait_for_load_state('domcontentloaded', timeout=5000)\n"
             "    try:\n"
             f"        page.goto('{portal_url}', timeout=30000, wait_until='domcontentloaded')\n"
             "        time.sleep(2)\n"
-            "        try:\n"
-            "            page.screenshot(path='/tmp/tg-e2e/01-portal-unpaid.png')\n"
-            "            steps_ok.append('unpaid-screenshot')\n"
-            "        except Exception as e:\n"
-            "            errors.append(f'unpaid-screenshot: {e}')\n"
+            "        screenshot('/tmp/tg-e2e/01-portal-unpaid.png', 'unpaid-screenshot')\n"
             "    except Exception as e:\n"
             "        errors.append(f'goto-portal: {e}')\n"
+            "    open('/tmp/tg-portal-ready', 'w').close()\n"
             "    for _ in range(120):\n"
-            "        if os.path.exists('/tmp/tg-paid'):\n"
+            "        if os.path.exists('/tmp/tg-token') or os.path.exists('/tmp/tg-paid'):\n"
             "            break\n"
             "        time.sleep(0.5)\n"
             "    else:\n"
-            "        errors.append('timeout waiting for payment signal')\n"
-            "    try:\n"
-            f"        page.reload(timeout=15000, wait_until='domcontentloaded')\n"
-            "        time.sleep(1)\n"
-            "        page.screenshot(path='/tmp/tg-e2e/02-portal-paid.png')\n"
-            "        steps_ok.append('paid-screenshot')\n"
-            "    except Exception as e:\n"
-            "        errors.append(f'paid-screenshot: {e}')\n"
+            "        errors.append('timeout waiting for token or payment signal')\n"
+            "    if os.path.exists('/tmp/tg-token'):\n"
+            "        try:\n"
+            "            with open('/tmp/tg-token') as token_file:\n"
+            "                token = token_file.read().strip()\n"
+            "            submit_token(token)\n"
+            "            screenshot('/tmp/tg-e2e/03-portal-paid.png', 'paid-screenshot')\n"
+            "        except Exception as e:\n"
+            "            errors.append(f'browser-token-payment: {e}')\n"
+            "            screenshot('/tmp/tg-e2e/99-error.png', 'error-screenshot')\n"
+            "    elif os.path.exists('/tmp/tg-paid'):\n"
+            "        try:\n"
+            f"            page.reload(timeout=15000, wait_until='domcontentloaded')\n"
+            "            time.sleep(1)\n"
+            "            screenshot('/tmp/tg-e2e/03-portal-paid.png', 'paid-screenshot')\n"
+            "        except Exception as e:\n"
+            "            errors.append(f'paid-screenshot: {e}')\n"
             "    try:\n"
             "        page.goto('http://1.1.1.1', timeout=15000, wait_until='domcontentloaded')\n"
             "        time.sleep(1)\n"
-            "        page.screenshot(path='/tmp/tg-e2e/03-internet-access.png')\n"
-            "        steps_ok.append('internet-access-screenshot')\n"
+            "        screenshot('/tmp/tg-e2e/04-internet-access.png', 'internet-access-screenshot')\n"
             "    except Exception as e:\n"
             "        errors.append(f'internet-access-screenshot: {e}')\n"
-            "    if 'unpaid-screenshot' in steps_ok:\n"
+            "    if 'unpaid-screenshot' in steps_ok and 'paid-screenshot' in steps_ok:\n"
             "        print('RECORD_OK')\n"
             "    else:\n"
             "        print('RECORD_ERROR: ' + ', '.join(errors))\n"
@@ -425,7 +482,7 @@ class ContainerClient:
             "            pass\n"
         )
         self._exec(
-            "rm -f /tmp/tg-portal-ready /tmp/tg-paid && "
+            "rm -f /tmp/tg-portal-ready /tmp/tg-paid /tmp/tg-token && "
             "rm -rf /tmp/tg-e2e /tmp/tg-video && "
             "mkdir -p /tmp/tg-e2e /tmp/tg-video && "
             f"cat > /tmp/tg-record.py << 'PYEOF'\n{script}\nPYEOF",
@@ -456,6 +513,13 @@ class ContainerClient:
     def signal_paid(self) -> None:
         self._exec("touch /tmp/tg-paid")
 
+    def signal_token(self, token: str) -> None:
+        token_b64 = base64.b64encode(token.encode()).decode()
+        self._exec(
+            f"printf %s {shlex.quote(token_b64)} | base64 -d > /tmp/tg-token",
+            timeout=10,
+        )
+
     def finish_portal_recording(self, output_dir: str, timeout: int = 90) -> dict[str, object]:
         """Wait for the recording script to finish and collect artifacts.
 
@@ -476,7 +540,13 @@ class ContainerClient:
         log.info("portal recording result: %s", result)
 
         screenshots = []
-        for name in ["01-portal-unpaid", "02-portal-paid", "03-internet-access", "99-error"]:
+        for name in [
+            "01-portal-unpaid",
+            "02-token-filled",
+            "03-portal-paid",
+            "04-internet-access",
+            "99-error",
+        ]:
             remote = f"/tmp/tg-e2e/{name}.png"
             local = os.path.join(output_dir, f"{name}.png")
             self._scp_from(remote, local)

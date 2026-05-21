@@ -20,8 +20,8 @@ TOKEN_LONG = 10
 DEFAULT_STEP_SIZE_MS = 5000
 PRODUCTION_STEP_SIZE_MS = 5000
 
-POC_GATEWAY = "10.99.99.1"
-NDS_PORTAL_PORT = 2050
+POC_GATEWAY = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "10.99.99.1")
+NDS_PORTAL_PORT = int(os.environ.get("TOLLGATE_NDS_PORTAL_PORT", "2050"))
 
 ANDROID_CAPTIVE_PORTAL = "com.android.captiveportallogin"
 ANDROID_CAPTIVE_PORTAL_ACTIVITY = "com.android.captiveportallogin/.CaptivePortalLoginActivity"

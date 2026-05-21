@@ -1,13 +1,12 @@
 import base64
 import os
-import subprocess
 import threading
+import time
 from typing import Any
 
 import pytest
 
 from lib.constants import TOKEN_DEFAULT
-from lib.helpers import is_session_event
 
 pytestmark = [pytest.mark.api, pytest.mark.smoke, pytest.mark.virtual_lab, pytest.mark.timeout(180)]
 
@@ -22,13 +21,22 @@ def _skip_unless_virtual_lab():
         pytest.skip("set TOLLGATE_VIRTUAL_LAB=1 and run scripts/virtual-lab.py start-poc")
 
 
+def _wait_for_auth_state(router, timeout: int = 45) -> bool:
+    start = time.time()
+    while time.time() - start < timeout:
+        if router.get_nds_state() == "Authenticated":
+            return True
+        time.sleep(1)
+    return router.get_nds_state() == "Authenticated"
+
+
 def test_e2e_portal_payment(adb, cashu, router, results_dir, request):
     """Full e2e with video: portal loads → payment → session active → internet.
 
     A Playwright session on the Debian VM records video of the entire flow.
     Signal files synchronize: Playwright loads portal and signals readiness,
-    the test pays via backend API, then tells Playwright to continue recording
-    the authenticated portal and internet access.
+    the test mints a token, then Playwright pastes it into the portal, submits
+    it, and records the authenticated portal plus internet access.
     """
     _skip_unless_virtual_lab()
 
@@ -52,22 +60,20 @@ def test_e2e_portal_payment(adb, cashu, router, results_dir, request):
     recording_thread = threading.Thread(target=run_recording, daemon=True)
     recording_thread.start()
 
-    assert adb.wait_for_portal_ready(timeout=30), "Playwright did not load portal in time"
+    assert adb.wait_for_portal_ready(timeout=60), "Playwright did not load portal in time"
 
     token = cashu.mint(TOKEN_DEFAULT)
     assert token, "cashu mint failed"
 
-    resp = router.pay_direct_mac(token)
-    assert is_session_event(resp), f"payment failed: {str(resp)[:200]}"
+    adb.signal_token(token)
 
-    assert router.wait_for_auth(timeout=30), "not authenticated after payment"
-
-    adb.signal_paid()
+    authenticated = _wait_for_auth_state(router, timeout=45)
 
     recording_thread.join(timeout=120)
     assert recording_result[0] is not None, "recording thread did not complete"
     artifacts: dict[str, Any] = recording_result[0]
     assert artifacts["ok"], f"portal recording failed: {artifacts}"
+    assert authenticated, "not authenticated after browser payment"
 
     extras_list = getattr(request.node, "_screenshot_extras", [])
 

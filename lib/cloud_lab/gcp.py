@@ -186,14 +186,20 @@ def _gh_token() -> str:
 
 _OVERLAY_ALLOWLIST = {
     "docs/virtual-lab.md",
+    "lib/constants.py",
     "lib/cloud_lab/constants.py",
     "lib/cloud_lab/gcp.py",
     "lib/cloud_lab/worker.py",
+    "lib/helpers.py",
+    "lib/router.py",
     "lib/reseller_mode.py",
     "pytest.ini",
     "scripts/cloud-lab.py",
     "scripts/virtual-lab.py",
     "tests/conftest.py",
+    "tests/api/test_concurrent_payments.py",
+    "tests/api/test_edge_tokens.py",
+    "tests/api/test_e2e_portal_payment.py",
     "tests/scenarios/test_reseller_mode.py",
 }
 

@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import re
+import shlex
 import socket
 import subprocess
 import time
@@ -21,7 +22,7 @@ from lib.clients.adb import ADBDevice
 from lib.clients.wifi import WiFi
 from lib.clients.desktop import MacWiFiClient, MacAdapter, LinuxWiFiClient, LinuxAdapter
 from lib.clients.container import ContainerClient
-from lib.constants import DEFAULT_STEP_SIZE_MS
+from lib.constants import DEFAULT_STEP_SIZE_MS, NDS_PORTAL_PORT
 from lib.backend import BackendConfig
 
 logging.basicConfig(
@@ -117,6 +118,78 @@ def _is_publish_mode(config):
 
 def _is_container_client(config):
     return config.getoption("--client", default="adb") == "container"
+
+
+def _container_password() -> str:
+    return os.environ.get(
+        "TOLLGATE_SSH_PASSWORD",
+        os.environ.get("TOLLGATE_LUCI_PASSWORD", "tollgate"),
+    )
+
+
+def _container_ssh_target() -> tuple[str, str | None] | None:
+    client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
+    container_host = os.environ.get("TOLLGATE_CONTAINER_HOST", client_ip)
+    if not container_host:
+        return None
+    jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", container_host or "")
+    if jump_host in {client_ip, "localhost", "127.0.0.1", "::1"}:
+        jump_host = ""
+    return container_host, jump_host or None
+
+
+def _run_container_ssh(command: str, timeout: int = 15) -> subprocess.CompletedProcess[str] | None:
+    target = _container_ssh_target()
+    if target is None:
+        return None
+    container_host, jump_host = target
+    cmd = [
+        "sshpass", "-p", _container_password(), "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "LogLevel=ERROR",
+    ]
+    if jump_host:
+        cmd += ["-J", jump_host]
+    cmd += [f"root@{container_host}", command]
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def _prepare_container_nds_client(router, *, deauth: bool = True) -> None:
+    """Register the cloud container client with NDS before isolated tests.
+
+    The Debian VM can retain NDS auth/preauth state across tests. Touching the
+    portal from the VM after an optional deauth makes NDS recreate client state
+    for the configured MAC/IP without relying on cross-test leftovers.
+    """
+    if not os.environ.get("TOLLGATE_VIRTUAL_LAB"):
+        return
+    client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
+    if not client_mac:
+        return
+    client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
+    quoted_mac = shlex.quote(client_mac)
+    lease_pattern = shlex.quote(f" {client_mac} {client_ip} ")
+    lease_line = shlex.quote(f"4102444800 {client_mac} {client_ip} gcp-client 01:{client_mac}")
+    if deauth:
+        router.ssh(f"ndsctl deauth {quoted_mac} 2>/dev/null || true", timeout=10)
+    router.ssh(
+        f"grep -qi {lease_pattern} /tmp/dhcp.leases 2>/dev/null || "
+        f"echo {lease_line} >> /tmp/dhcp.leases",
+        timeout=10,
+    )
+    portal_url = f"http://{router.host}:{NDS_PORTAL_PORT}/"
+    quoted_url = shlex.quote(portal_url)
+    _run_container_ssh(
+        f"curl -s --connect-timeout 3 --max-time 5 -o /dev/null {quoted_url} || true",
+        timeout=15,
+    )
 
 
 @pytest.hookimpl(optionalhook=True)
@@ -336,13 +409,7 @@ def deploy_session(request, router, backend):
             pytest.exit(f"Backend not reachable after test mint setup at {router.host}:2121", returncode=1)
 
         if _is_container_client(request.config) and os.environ.get("TOLLGATE_CLIENT_MAC"):
-            client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
-            client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
-            router.ssh(
-                f"grep -qi ' {client_mac} {client_ip} ' /tmp/dhcp.leases 2>/dev/null || "
-                f"echo '4102444800 {client_mac} {client_ip} gcp-client 01:{client_mac}' >> /tmp/dhcp.leases",
-                timeout=10,
-            )
+            _prepare_container_nds_client(router)
 
     if _is_container_client(request.config) and os.environ.get("TOLLGATE_VIRTUAL_LAB"):
         container_host = os.environ.get("TOLLGATE_CONTAINER_HOST", "")
@@ -351,8 +418,7 @@ def deploy_session(request, router, backend):
         jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", container_host or "")
         if jump_host == client_ip:
             jump_host = ""
-        password = os.environ.get("TOLLGATE_SSH_PASSWORD",
-                                  os.environ.get("TOLLGATE_LUCI_PASSWORD", "tollgate"))
+        password = _container_password()
         request.session._tollgate_adb = ContainerClient(
             host=container_host or None,
             jump_host=jump_host or None,
@@ -389,8 +455,7 @@ def adb(request, router):
         jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", container_host or "")
         if jump_host == client_ip:
             jump_host = ""
-        password = os.environ.get("TOLLGATE_SSH_PASSWORD",
-                                  os.environ.get("TOLLGATE_LUCI_PASSWORD", "tollgate"))
+        password = _container_password()
         client = ContainerClient(
             host=container_host or None,
             jump_host=jump_host or None,
@@ -453,6 +518,18 @@ def wifi(adb, router):
 @pytest.fixture(autouse=True)
 def attach_results(request, results_dir):
     request.node._results_dir = results_dir
+
+
+@pytest.fixture(autouse=True)
+def container_nds_preflight(request):
+    if not _is_container_client(request.config):
+        return
+    if not os.environ.get("TOLLGATE_VIRTUAL_LAB"):
+        return
+    if "api" not in request.node.keywords:
+        return
+    router = request.getfixturevalue("router")
+    _prepare_container_nds_client(router)
 
 
 def _get_pay_via_marker(item):
@@ -543,6 +620,14 @@ def pytest_runtest_setup(item):
     ):
         pytest.skip("set TOLLGATE_ENABLE_RESELLER_SCENARIOS=1 to run reseller scenarios")
 
+    expected_pr = item.config.getoption("--expected-pr")
+    if expected_pr:
+        pr_num = _get_pr_marker(item)
+        if pr_num is not None and pr_num != expected_pr:
+            pytest.skip(
+                f"PR-specific test for #{pr_num} (testing #{expected_pr})"
+            )
+
     client_mode = item.config.getoption("--client")
     if client_mode in ("mac", "linux", "container"):
         if "android_only" in item.keywords:
@@ -555,14 +640,6 @@ def pytest_runtest_setup(item):
         serial = os.environ.get("PHONE_SERIAL", "")
         if not serial:
             pytest.skip("PHONE_SERIAL not set, phone tests require ADB device")
-
-    expected_pr = item.config.getoption("--expected-pr")
-    if expected_pr:
-        pr_num = _get_pr_marker(item)
-        if pr_num is not None and pr_num != expected_pr:
-            pytest.skip(
-                f"PR-specific test for #{pr_num} (testing #{expected_pr})"
-            )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -610,11 +687,10 @@ def _pr_label_for_item(item):
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_call(item):
-    yield
-    if hasattr(item, "_excinfo") and item._excinfo:
-        exc_info = item._excinfo[-1]
-        if exc_info and issubclass(exc_info[0], MintUnavailableError):
-            pytest.skip(f"cashu mint unavailable: {exc_info[1]}")
+    outcome = yield
+    exc_info = outcome.excinfo
+    if exc_info and issubclass(exc_info[0], MintUnavailableError):
+        outcome.force_exception(pytest.skip.Exception(f"cashu mint unavailable: {exc_info[1]}"))
 
 
 def pytest_runtest_logreport(report):

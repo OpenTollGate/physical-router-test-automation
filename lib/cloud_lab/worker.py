@@ -325,6 +325,8 @@ def write_env_file(config: WorkerConfig) -> None:
         f"TOLLGATE_CLIENT_TYPE=container\n"
         f"TOLLGATE_VIRTUAL_LAB=1\n"
         f"TOLLGATE_VIRTUAL_GATEWAY={OPENWRT_IP}\n"
+        f"TOLLGATE_NDS_PORTAL_PORT=80\n"
+        f"TOLLGATE_TEST_MINT_URL=https://nofee.testnut.cashu.space\n"
         f"TOLLGATE_CLIENT_IP={DEBIAN_IP}\n"
         f"TOLLGATE_CLIENT_MAC={DEBIAN_MAC}\n"
         f"TOLLGATE_CONTAINER_HOST={DEBIAN_IP}\n"
@@ -662,7 +664,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         f"--junitxml={results_dir}/raw/visual/junit.xml "
         f"--html={results_dir}/raw/visual/report.html --self-contained-html "
         f">{results_dir}/raw/visual/output.log 2>&1; visual_exit=$?; "
-        f"python3 -m pytest tests/api/ -v --tb=short --backend={backend} "
+        f"python3 -m pytest tests/api/ -v --tb=short --timeout=300 --backend={backend} "
         f"{expected_pr}--client=container --results {results_dir} "
         f"--ignore=tests/api/test_visual_happy_path.py "
         f"--junitxml={results_dir}/raw/api/junit.xml "
@@ -839,10 +841,11 @@ def run_worker(config: WorkerConfig) -> int:
         log.error("Pipeline failed at step: %s (%.1fs elapsed)", _redact(str(exc))[:200], time.monotonic() - wall_t0)
         raise
     finally:
-        stop_inner_vms()
-        if config.keep_vm_on_failure and test_exit != 0:
-            log.error("Keeping VM alive for debugging (keep_vm_on_failure=true)")
+        keep_failed_vm = config.keep_vm_on_failure and test_exit != 0
+        if keep_failed_vm:
+            log.error("Keeping VM and inner QEMU VMs alive for debugging (keep_vm_on_failure=true)")
         else:
+            stop_inner_vms()
             log.info("Self-deleting VM %s", config.vm_name)
             delete_self(config)
 
