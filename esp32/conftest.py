@@ -247,6 +247,12 @@ def funded_board(board_config, board_lock, wifi, http):
     wifi.connect_to_board(board_config)
     time.sleep(3)
 
+    for _ in range(30):
+        mints = http.get_json(f"{board_config.api_url}/mints")
+        if mints and any(m.get("reachable") for m in mints):
+            break
+        time.sleep(2)
+
     token = _create_cashu_token(wifi.config.mint_url, wifi.config.fund_amount)
 
     rc, body = http.post(f"{board_config.api_url}/", token)
