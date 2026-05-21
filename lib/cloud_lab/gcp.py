@@ -301,6 +301,7 @@ def _build_startup_script(suite_overlay_b64: str = "") -> str:
         git config --global --add safe.directory /opt/tollgate-test
         SUITE_REF=$(curl -sf -H "Metadata-Flavor: Google" \\
             http://metadata.google.internal/computeMetadata/v1/instance/attributes/tollgate-suite-ref)
+        git fetch --depth 1 origin "$SUITE_REF" 2>/dev/null || true
         git checkout "$SUITE_REF"
         {overlay_step}
 

@@ -557,17 +557,19 @@ def main():
         "runners": runners,
     }
 
-    e2e_dir = os.path.join(run_dir, "raw", "e2e")
-    if os.path.isdir(e2e_dir):
-        e2e_artifacts = {"screenshots": [], "video": None}
-        for name in sorted(os.listdir(e2e_dir)):
-            rel = os.path.join("raw", "e2e", name)
-            if name.endswith(".webm"):
+    e2e_artifacts = {"screenshots": [], "video": None}
+    for media_dir in ("visual", "e2e"):
+        full_media_dir = os.path.join(run_dir, "raw", media_dir)
+        if not os.path.isdir(full_media_dir):
+            continue
+        for name in sorted(os.listdir(full_media_dir)):
+            rel = os.path.join("raw", media_dir, name)
+            if name.endswith(".webm") and not e2e_artifacts["video"]:
                 e2e_artifacts["video"] = rel
             elif name.endswith(".png"):
                 e2e_artifacts["screenshots"].append(rel)
-        if e2e_artifacts["video"] or e2e_artifacts["screenshots"]:
-            run_json["e2e_artifacts"] = e2e_artifacts
+    if e2e_artifacts["video"] or e2e_artifacts["screenshots"]:
+        run_json["e2e_artifacts"] = e2e_artifacts
 
     failed_tests = [t for t in all_tests if t["outcome"] in ("failed", "error")]
     skipped_tests = [t for t in all_tests if t["outcome"] == "skipped"]

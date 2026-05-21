@@ -303,10 +303,20 @@ def ensure_suite_checkout(config: WorkerConfig) -> None:
     test_dir = Path(TEST_DIR)
     if test_dir.exists() and (test_dir / ".git").exists():
         log.info("Suite checkout: re-fetching %s at %s", SUITE_REPO_URL, config.suite_ref[:7])
-        _run(f"cd {TEST_DIR} && git fetch --depth 1 origin && git checkout {shlex.quote(config.suite_ref)}", timeout=120)
+        _run(
+            f"cd {TEST_DIR} && git fetch --depth 1 origin {shlex.quote(config.suite_ref)}",
+            timeout=120, check=False,
+        )
+        _run(f"cd {TEST_DIR} && git checkout {shlex.quote(config.suite_ref)}", timeout=60)
     else:
         log.info("Suite checkout: cloning %s at %s", SUITE_REPO_URL, config.suite_ref[:7])
         _run(f"rm -rf {TEST_DIR} && git clone --depth 50 {SUITE_REPO_URL} {TEST_DIR}", timeout=180)
+        # Fetch the specific commit directly — it may be on a feature branch
+        # not included in the default-branch shallow clone.
+        _run(
+            f"cd {TEST_DIR} && git fetch --depth 1 origin {shlex.quote(config.suite_ref)}",
+            timeout=60, check=False,
+        )
         _run(f"cd {TEST_DIR} && git checkout {shlex.quote(config.suite_ref)}", timeout=60)
 
 
