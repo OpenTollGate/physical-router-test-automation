@@ -85,9 +85,14 @@ All 13 existing Go tests pass. Code compiles clean.
 - **Recovery lifecycle tests**: Marked `extended` (not `destructive`) since teardown restores state
 - **Code fixes**: Separate PR targeting `fix/degraded-mode-minimal` branch
 
+## PRs Created
+
+- **Go fixes**: [OpenTollGate/tollgate-module-basic-go#127](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/127) — Shutdown on interface + net.Error check
+- **Test coverage**: [OpenTollGate/physical-router-test-automation#19](https://github.com/OpenTollGate/physical-router-test-automation/pull/19) — 16 tests + Makefile targets + shared helpers
+
 ## Next Steps
 
-1. Run `gh auth refresh -h github.com -s workflow` to get workflow scope
-2. Push `fix/pr120-review-fixes` to fork: `git push c03rad0r fix/pr120-review-fixes`
-3. Create PR targeting `Amperstrand:fix/degraded-mode-minimal`
-4. Run `make full-pr120` on hardware to validate all 16 tests
+1. Cherry-pick the fix commit (`9d5c364`) into PR #120, or merge PR #127 after #120
+2. Resolve `build-package.yml` conflict in PR #120 (trivial — both added x86_64)
+3. Run `make full-pr120` on hardware to validate all 16 tests
+4. Get maintainer review on PR #120 + merge
