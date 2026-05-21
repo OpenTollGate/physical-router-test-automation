@@ -403,8 +403,11 @@ def render_skipped(run, summary):
 
 def render_native_links(run):
     runners = run.get("runners", [])
-    if not runners:
+    e2e = run.get("e2e_artifacts", {})
+    has_media = e2e.get("video") or e2e.get("screenshots")
+    if not runners and not has_media:
         return ""
+
     links = []
     for r in runners:
         artifacts = r.get("artifacts", {})
@@ -418,19 +421,39 @@ def render_native_links(run):
         if "log" in artifacts:
             links.append(f'<li><a href="../{esc(artifacts["log"])}">{esc(name)} Output Log</a></li>')
 
-    e2e = run.get("e2e_artifacts", {})
+    links_html = ""
+    if links:
+        links_html = f'<ul class="native-links">{"".join(links)}</ul>'
+
+    media_html = ""
+    media_items = []
     if e2e.get("video"):
-        links.append(f'<li><a href="../{esc(e2e["video"])}">Portal Flow Video (WebM)</a></li>')
+        vid_path = esc(e2e["video"])
+        onclick = f"openLightbox('../{vid_path}','video','Portal Flow Video')"
+        media_items.append(
+            f'<div class="media-item video-item" onclick="{onclick}">'
+            f'<video src="../{vid_path}" muted preload="metadata"></video>'
+            f'<span class="media-label">Portal Flow</span></div>'
+        )
     for i, ss in enumerate(e2e.get("screenshots", [])):
         label = Path(ss).stem.replace("-", " ").title() if ss else f"Screenshot {i+1}"
-        links.append(f'<li><a href="../{esc(ss)}">{esc(label)}</a></li>')
+        img_path = esc(ss)
+        onclick = f"openLightbox('../{img_path}','image','{esc(label)}')"
+        media_items.append(
+            f'<div class="media-item" onclick="{onclick}">'
+            f'<img src="../{img_path}" alt="{esc(label)}" loading="lazy">'
+            f'<span class="media-label">{esc(label)}</span></div>'
+        )
+    if media_items:
+        media_html = f'<div class="media-gallery">{"".join(media_items)}</div>'
 
-    if not links:
+    if not links_html and not media_html:
         return ""
     return f"""\
 <div class="card">
   <div class="section-title">Native Reports</div>
-  <ul class="native-links">{"".join(links)}</ul>
+  {media_html}
+  {links_html}
 </div>"""
 
 
