@@ -118,15 +118,15 @@ class CashuMint:
             [self._cashu, "-h", self.mint_url, "-t", "-y", "invoice", str(amount)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self._env(),
         )
-        time.sleep(4)
+        time.sleep(5)
         proc.kill()
         proc.communicate()
 
-        for _ in range(5):
+        for _ in range(8):
             after = self._count_invoices()
             if after > before:
                 break
-            time.sleep(2)
+            time.sleep(3)
 
         quote_id = self._find_latest_quote_id()
         if not quote_id:
@@ -138,21 +138,28 @@ class CashuMint:
     def _timeout_handler(self, signum, frame):
         raise _MintTimeoutError()
 
-    def mint(self, amount: int = 4, legacy: bool = True, timeout: int = 60) -> str:
+    def mint(self, amount: int = 4, legacy: bool = True, timeout: int = 60, retries: int = 2) -> str:
         if not self.is_available():
             raise RuntimeError(f"cashu venv not found at {self.venv_path}")
 
         old_handler = signal.signal(signal.SIGALRM, self._timeout_handler)
-        signal.alarm(timeout)
-        try:
-            return self._mint_inner(amount, legacy)
-        except _MintTimeoutError:
-            raise MintUnavailableError(
-                f"mint() timed out after {timeout}s"
-            )
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
+        last_err: RuntimeError = RuntimeError("mint failed with no specific error")
+        for attempt in range(1 + retries):
+            signal.alarm(timeout)
+            try:
+                return self._mint_inner(amount, legacy)
+            except _MintTimeoutError:
+                raise MintUnavailableError(
+                    f"mint() timed out after {timeout}s"
+                )
+            except RuntimeError as exc:
+                last_err = exc
+                if attempt < retries:
+                    time.sleep(5 * (attempt + 1))
+            finally:
+                signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+        raise last_err  # type: ignore[misc]
 
     def _mint_inner(self, amount: int, legacy: bool = True) -> str:
         env = self._env()

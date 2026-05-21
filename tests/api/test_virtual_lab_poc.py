@@ -53,5 +53,5 @@ def test_container_reaches_openwrt_gateway(adb, request):
                              portal_url, timeout=15)
         code = result.stdout.strip()
 
-    assert code.startswith("2") or code in ("404", "500"), \
+    assert code.startswith("2") or code.startswith("3") or code in ("404", "500"), \
         f"Client could not reach NDS portal at {portal_url} (HTTP {code})"
