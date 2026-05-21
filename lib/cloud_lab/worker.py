@@ -385,6 +385,19 @@ def ensure_outer_deps() -> None:
             log.warning("Cashu CLI install failed (non-fatal, some tests will skip)")
 
 
+def wait_for_dpkg_lock(timeout: int = 300) -> None:
+    """Wait for unattended-upgrades to release the dpkg lock at boot."""
+    for attempt in range(timeout // 5):
+        r = _run("fuser /var/lib/dpkg/lock-frontend 2>/dev/null", timeout=5, check=False)
+        if r.returncode != 0:
+            log.info("dpkg lock is free")
+            return
+        if attempt == 0:
+            log.info("Waiting for unattended-upgrades to release dpkg lock...")
+        time.sleep(5)
+    log.warning("dpkg lock still held after %ds, proceeding anyway", timeout)
+
+
 def ensure_github_cli(token: str) -> None:
     os.environ["GH_TOKEN"] = token
     _run("git config --global --add safe.directory '*'", timeout=10, check=False)
@@ -394,6 +407,7 @@ def ensure_github_cli(token: str) -> None:
         _run("git config --global user.email 'test@localhost'", timeout=10, check=False)
         _run("git config --global user.name 'CI'", timeout=10, check=False)
         return
+    wait_for_dpkg_lock()
     log.info("Installing GitHub CLI...")
     _run(
         "if ! command -v gh >/dev/null; then "
