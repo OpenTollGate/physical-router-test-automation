@@ -272,7 +272,10 @@ def ensure_artifact(
                         pass
 
             if status == "completed" and conclusion not in ("", "success"):
-                log.info("Skipping run %s (conclusion=%s)", run_id, conclusion)
+                log.info("Run %s has conclusion=%s — checking for usable artifacts anyway", run_id, conclusion)
+                if _run_has_arch_artifact(repo, run_id, arch):
+                    log.info("Artifact ready: run %s has %s .ipk (despite overall failure)", run_id, arch)
+                    return run_id
                 continue
 
             if status == "completed" or conclusion == "success":
