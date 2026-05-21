@@ -48,7 +48,7 @@ class Config:
             "LOCK_DIR",
             "/home/c03rad0r/physical-router-test-automation/locks",
         )
-        cfg.mint_url = os.environ.get("MINT_URL", "https://testnut.cashu.space")
+        cfg.mint_url = os.environ.get("MINT_URL", "https://testnut-nutshell.mints.orangesync.tech")
         cfg.fund_amount = int(os.environ.get("FUND_AMOUNT", "42"))
         cfg.firmware_dir = os.environ.get(
             "FIRMWARE_DIR", "/home/c03rad0r/esp32-tollgate"

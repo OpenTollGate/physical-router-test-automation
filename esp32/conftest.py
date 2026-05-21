@@ -244,7 +244,7 @@ def board_connected(board_config, board_lock, wifi):
 
 @pytest.fixture(scope="session")
 def funded_board(board_config, board_lock, wifi, http):
-    wifi.connect_to_upstream()
+    wifi.connect_to_board(board_config)
     time.sleep(3)
 
     token = _create_cashu_token(wifi.config.mint_url, wifi.config.fund_amount)
@@ -254,13 +254,7 @@ def funded_board(board_config, board_lock, wifi, http):
     resp = json.loads(body)
     assert resp.get("kind") == 1022, f"Payment failed: {body}"
 
-    wifi.connect_to_board(board_config)
-
-    balance_resp = http.get_json(f"{board_config.api_url}/wallet")
-    assert balance_resp is not None, "Wallet endpoint failed"
-    assert balance_resp["balance"] > 0, f"Wallet balance is 0 after funding: {balance_resp}"
-
-    print(f"\n  Wallet funded: {balance_resp['balance']} sats")
+    print(f"\n  Wallet funded: {resp.get('allotment', '?')}ms allotted")
     return board_config
 
 

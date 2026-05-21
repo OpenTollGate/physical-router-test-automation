@@ -33,7 +33,7 @@ class TestCaptivePortal:
             assert placeholder not in portal_html, f"Unresolved placeholder: {placeholder}"
 
     def test_mint_url_embedded_no_js_fetch(self, portal_html):
-        assert "testnut.cashu.space" in portal_html, "Mint URL not embedded in portal HTML"
+        assert "testnut-nutshell.mints.orangesync.tech" in portal_html, "Mint URL not embedded in portal HTML"
         assert "Loading..." not in portal_html, "Portal shows loading state (JS fetch needed?)"
         assert "Error loading" not in portal_html, "Portal shows error loading mint URL"
 

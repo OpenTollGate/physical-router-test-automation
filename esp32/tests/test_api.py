@@ -46,6 +46,9 @@ class TestApiEndpoints:
         assert "mac=" in body, f"Expected 'mac=...', got: {body}"
 
     def test_usage_endpoint_no_session(self, board_connected, http):
+        http.get(f"{board_connected.portal_url}/reset_authentication")
+        import time
+        time.sleep(1)
         body = http.get(f"{board_connected.api_url}/usage")
         assert body is not None, "/usage returned no response"
         assert body.strip() == "-1/-1", f"Expected '-1/-1' before payment, got: {body}"
