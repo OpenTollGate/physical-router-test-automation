@@ -201,6 +201,7 @@ _OVERLAY_ALLOWLIST = {
     "tests/api/test_edge_tokens.py",
     "tests/api/test_e2e_portal_payment.py",
     "tests/scenarios/test_reseller_mode.py",
+    "tests/scenarios/test_two_router_cloud.py",
 }
 
 
@@ -325,6 +326,7 @@ def submit_run(
     machine_type: str = DEFAULT_MACHINE_TYPE,
     disk_size_gb: int = DEFAULT_DISK_SIZE_GB,
     reseller_scenarios: bool = False,
+    two_router: bool = False,
     secondary_router_host: str = "",
     secondary_router_port: str = "",
     keep_vm_on_failure: bool = False,
@@ -365,6 +367,7 @@ def submit_run(
         "tollgate-vm-name": vm_name,
         "tollgate-gh-token": token,
         "tollgate-reseller-scenarios": "true" if reseller_scenarios else "false",
+        "tollgate-two-router": "true" if two_router else "false",
         "tollgate-secondary-router-host": secondary_router_host,
         "tollgate-secondary-router-port": secondary_router_port,
         "tollgate-keep-vm-on-failure": "true" if keep_vm_on_failure else "false",

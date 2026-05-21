@@ -659,7 +659,8 @@ def pytest_collection_modifyitems(config, items):
         if "/tests/scenarios/" in fspath:
             item.add_marker(pytest.mark.hardware)
         if os.environ.get("TOLLGATE_VIRTUAL_LAB") and "hardware" in item.keywords:
-            item.add_marker(scenarios_skip)
+            if "virtual_lab" not in item.keywords:
+                item.add_marker(scenarios_skip)
 
     for item in items:
         if "phone" in item.keywords:

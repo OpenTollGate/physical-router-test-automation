@@ -25,3 +25,11 @@ SUITE_REPO_URL = "https://github.com/OpenTollGate/physical-router-test-automatio
 RESULTS_ROOT = "/tmp/tollgate-results"
 WORKER_LOG = "/var/log/tollgate-run.log"
 STALE_VM_HOURS = 2
+
+# Two-router upstream bridge
+UPSTREAM_BRIDGE = "tg-upstream-br"
+UPSTREAM_TAP_ALPHA = "tg-upstream-tap"
+UPSTREAM_TAP_BETA = "tg-upstream-tap2"
+BETA_WAN_IP = "10.99.98.1"
+ALPHA_WAN_MAC = "52:54:00:aa:bb:02"
+BETA_WAN_MAC = "52:54:00:aa:bb:01"

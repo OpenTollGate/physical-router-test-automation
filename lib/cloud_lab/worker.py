@@ -16,6 +16,9 @@ from pathlib import Path
 from typing import Any
 
 from lib.cloud_lab.constants import (
+    ALPHA_WAN_MAC,
+    BETA_WAN_IP,
+    BETA_WAN_MAC,
     CLOUD_ARCH,
     DEBIAN_IP,
     DEBIAN_MAC,
@@ -25,6 +28,9 @@ from lib.cloud_lab.constants import (
     SELLER_OPENWRT_MAC,
     SUITE_REPO_URL,
     TEST_DIR,
+    UPSTREAM_BRIDGE,
+    UPSTREAM_TAP_ALPHA,
+    UPSTREAM_TAP_BETA,
     VIRT_LAB_PASSWORD,
     VIRT_LAB_WORKDIR,
 )
@@ -59,6 +65,7 @@ class WorkerConfig:
     suite_ref: str
     backend: str
     reseller_scenarios: bool
+    two_router: bool
     secondary_router_host: str
     secondary_router_port: str
     keep_vm_on_failure: bool
@@ -96,6 +103,7 @@ def load_config_from_metadata() -> WorkerConfig:
         suite_ref=_metadata_get("tollgate-suite-ref"),
         backend=_metadata_get("tollgate-backend"),
         reseller_scenarios=_metadata_get_optional("tollgate-reseller-scenarios").lower() in ("true", "1", "yes"),
+        two_router=_metadata_get_optional("tollgate-two-router").lower() in ("true", "1", "yes"),
         secondary_router_host=_metadata_get_optional("tollgate-secondary-router-host"),
         secondary_router_port=_metadata_get_optional("tollgate-secondary-router-port"),
         keep_vm_on_failure=_metadata_get_optional("tollgate-keep-vm-on-failure").lower() in ("true", "1", "yes"),
@@ -151,6 +159,8 @@ def _launch_qemu(
     disk_name: str,
     tap_name: str,
     mac: str,
+    wan_tap: str | None = None,
+    wan_mac: str | None = None,
 ) -> subprocess.Popen[str]:
     workdir = _virt_lab_workdir()
     run_dir = workdir / "run"
@@ -186,6 +196,11 @@ def _launch_qemu(
         "-pidfile",
         str(pidfile),
     ]
+    if wan_tap:
+        cmd += [
+            "-netdev", f"tap,id=net1,ifname={wan_tap},script=no,downscript=no",
+            "-device", f"virtio-net-pci,netdev=net1,mac={wan_mac}",
+        ]
     log.info("Launching %s QEMU: disk=%s tap=%s mac=%s", name, disk_name, tap_name, mac)
     with qemu_log.open("w") as log_file:
         proc = subprocess.Popen(
@@ -325,6 +340,8 @@ def write_env_file(config: WorkerConfig) -> None:
     backend = config.backend
     secondary_host = config.secondary_router_host
     if config.reseller_scenarios and not secondary_host:
+        secondary_host = SELLER_OPENWRT_IP
+    if config.two_router and not secondary_host:
         secondary_host = SELLER_OPENWRT_IP
     env_content = (
         f"TOLLGATE_LUCI_PASSWORD={VIRT_LAB_PASSWORD}\n"
@@ -506,7 +523,16 @@ def setup_bridge() -> None:
         "ip link set tg-poc-tap3 up; "
         "iptables -t nat -C POSTROUTING -s 10.99.99.0/24 ! -o tg-poc-br -j MASQUERADE 2>/dev/null || "
         "iptables -t nat -A POSTROUTING -s 10.99.99.0/24 ! -o tg-poc-br -j MASQUERADE; "
-        f"mkdir -p {VIRT_LAB_WORKDIR}/run",
+        f"mkdir -p {VIRT_LAB_WORKDIR}/run; "
+        # Two-router upstream bridge
+        "ip link add name tg-upstream-br type bridge 2>/dev/null || true; "
+        "ip link set tg-upstream-br up; "
+        "ip tuntap add dev tg-upstream-tap mode tap user root 2>/dev/null || true; "
+        "ip link set tg-upstream-tap master tg-upstream-br 2>/dev/null || true; "
+        "ip link set tg-upstream-tap up; "
+        "ip tuntap add dev tg-upstream-tap2 mode tap user root 2>/dev/null || true; "
+        "ip link set tg-upstream-tap2 master tg-upstream-br 2>/dev/null || true; "
+        "ip link set tg-upstream-tap2 up",
         timeout=20,
     )
 
@@ -514,6 +540,32 @@ def setup_bridge() -> None:
 def start_inner_vms(config: WorkerConfig) -> None:
     setup_bridge()
     reset_openwrt_overlay_only()
+
+    if config.two_router:
+        log.info("Starting Beta OpenWrt VM (upstream router)...")
+        beta_proc = _launch_qemu(
+            name="openwrt-beta",
+            memory_mb=256,
+            cpus=1,
+            disk_name="tollgate-seller.qcow2",
+            tap_name="tg-poc-tap3",
+            mac=SELLER_OPENWRT_MAC,
+            wan_tap=UPSTREAM_TAP_BETA,
+            wan_mac=BETA_WAN_MAC,
+        )
+        if _wait_inner_ssh(SELLER_OPENWRT_IP, timeout=15):
+            log.info("Beta OpenWrt base pre-provisioned, skipping serial")
+        else:
+            _provision_openwrt_serial("openwrt-beta", SELLER_OPENWRT_IP)
+        if beta_proc.poll() is not None:
+            raise RuntimeError(f"Beta OpenWrt VM exited during provisioning with rc={beta_proc.returncode}")
+        if not _wait_inner_ssh(SELLER_OPENWRT_IP):
+            raise RuntimeError("Beta OpenWrt VM did not become reachable")
+
+        _configure_beta_upstream(SELLER_OPENWRT_IP)
+
+        config.secondary_router_host = SELLER_OPENWRT_IP
+        log.info("Beta OpenWrt VM SSH OK at %s", SELLER_OPENWRT_IP)
 
     if config.reseller_scenarios and not config.secondary_router_host:
         log.info("Starting managed seller OpenWrt VM for reseller scenarios...")
@@ -536,7 +588,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
         config.secondary_router_host = SELLER_OPENWRT_IP
         log.info("Seller OpenWrt VM SSH OK at %s", SELLER_OPENWRT_IP)
 
-    log.info("Starting reseller OpenWrt VM...")
+    log.info("Starting Alpha OpenWrt VM...")
     reseller_proc = _launch_qemu(
         name="openwrt",
         memory_mb=256,
@@ -544,16 +596,22 @@ def start_inner_vms(config: WorkerConfig) -> None:
         disk_name="tollgate-poc.qcow2",
         tap_name="tg-poc-tap",
         mac="52:54:00:12:34:56",
+        wan_tap=UPSTREAM_TAP_ALPHA if config.two_router else None,
+        wan_mac=ALPHA_WAN_MAC if config.two_router else None,
     )
     if _wait_inner_ssh(OPENWRT_IP, timeout=15):
         log.info("OpenWrt base pre-provisioned, skipping serial")
     else:
         _provision_openwrt_serial("openwrt", OPENWRT_IP)
     if reseller_proc.poll() is not None:
-        raise RuntimeError(f"Reseller OpenWrt VM exited during provisioning with rc={reseller_proc.returncode}")
+        raise RuntimeError(f"Alpha OpenWrt VM exited during provisioning with rc={reseller_proc.returncode}")
     if not _wait_inner_ssh(OPENWRT_IP):
         raise RuntimeError("OpenWrt VM did not become reachable")
-    log.info("Reseller OpenWrt VM SSH OK")
+
+    if config.two_router:
+        _configure_alpha_wan(OPENWRT_IP)
+
+    log.info("Alpha OpenWrt VM SSH OK")
 
     _run(
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
@@ -578,6 +636,53 @@ def start_inner_vms(config: WorkerConfig) -> None:
     if not _wait_inner_ssh(DEBIAN_IP):
         raise RuntimeError("Debian VM did not become reachable")
     log.info("Debian VM SSH OK")
+
+
+def _configure_beta_upstream(beta_ip: str) -> None:
+    log.info("Configuring Beta as upstream DHCP server + NAT gateway")
+    _inner_ssh(beta_ip, """
+        uci set network.upstream=interface
+        uci set network.upstream.proto='static'
+        uci set network.upstream.device='eth1'
+        uci set network.upstream.ipaddr='10.99.98.1'
+        uci set network.upstream.netmask='255.255.255.0'
+        uci commit network
+
+        uci set dhcp.upstream=dhcp
+        uci set dhcp.upstream.interface='upstream'
+        uci set dhcp.upstream.start='10'
+        uci set dhcp.upstream.limit='50'
+        uci set dhcp.upstream.leasetime='2m'
+        uci commit dhcp
+
+        iptables -t nat -A POSTROUTING -s 10.99.98.0/24 -o br-lan -j MASQUERADE
+        iptables -A FORWARD -i eth1 -o br-lan -j ACCEPT
+        iptables -A FORWARD -i br-lan -o eth1 -m state --state RELATED,ESTABLISHED -j ACCEPT
+
+        /etc/init.d/network restart
+        /etc/init.d/dnsmasq restart
+    """, timeout=30)
+    time.sleep(5)
+    r = _inner_ssh(beta_ip, "cat /var/run/dnsmasq.pid 2>/dev/null && echo DHCP_OK", timeout=10)
+    if "DHCP_OK" not in r.stdout:
+        log.warning("Beta DHCP server may not be running")
+
+
+def _configure_alpha_wan(alpha_ip: str) -> None:
+    log.info("Configuring Alpha eth1 as WAN (DHCP from Beta)")
+    _inner_ssh(alpha_ip, """
+        uci set network.wan=interface
+        uci set network.wan.proto='dhcp'
+        uci set network.wan.device='eth1'
+        uci commit network
+        /etc/init.d/network restart
+    """, timeout=30)
+    time.sleep(10)
+    r = _inner_ssh(alpha_ip, "ip addr show eth1 2>/dev/null | grep 'inet '", timeout=10)
+    if "10.99.98" in r.stdout:
+        log.info("Alpha WAN got DHCP lease from Beta")
+    else:
+        log.warning("Alpha may not have received DHCP lease: %s", r.stdout.strip()[-200:])
 
 
 def ensure_debian_client_deps() -> bool:
@@ -679,9 +784,20 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
             f"--html={results_dir}/raw/scenarios/report.html --self-contained-html "
             f">{results_dir}/raw/scenarios/output.log 2>&1; scenario_exit=$?; "
         )
+    two_router_cmd = ""
+    if config.two_router:
+        two_router_cmd = (
+            f"two_router_exit=0; "
+            f"python3 -m pytest tests/scenarios/test_two_router_cloud.py -v --tb=short --backend={backend} "
+            f"{expected_pr}--client=container --results {results_dir} "
+            f"--junitxml={results_dir}/raw/two-router/junit.xml "
+            f"--html={results_dir}/raw/two-router/report.html --self-contained-html "
+            f">{results_dir}/raw/two-router/output.log 2>&1; two_router_exit=$?; "
+        )
     test_cmd = (
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
-        f"mkdir -p {results_dir}/raw/api {results_dir}/raw/visual {results_dir}/raw/scenarios {results_dir}/report && "
+        f"mkdir -p {results_dir}/raw/api {results_dir}/raw/visual {results_dir}/raw/scenarios "
+        f"{results_dir}/raw/two-router {results_dir}/report && "
         "visual_exit=0; api_exit=0; "
         f"python3 -m pytest tests/api/test_visual_happy_path.py -v --tb=short --backend={backend} "
         f"{expected_pr}--client=container --results {results_dir} "
@@ -695,8 +811,10 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         f"--html={results_dir}/raw/api/report.html --self-contained-html "
         f">{results_dir}/raw/api/output.log 2>&1; api_exit=$?; "
         f"{scenario_cmd}"
+        f"{two_router_cmd}"
         f"if [ \"$visual_exit\" -ne 0 ]; then exit \"$visual_exit\"; fi; "
         f"if [ \"${{scenario_exit:-0}}\" -ne 0 ]; then exit \"$scenario_exit\"; fi; "
+        f"if [ \"${{two_router_exit:-0}}\" -ne 0 ]; then exit \"$two_router_exit\"; fi; "
         "exit \"$api_exit\""
     )
     r = _run(test_cmd, timeout=1500, check=False)
@@ -710,10 +828,13 @@ def collect_and_render(config: WorkerConfig, results_dir: str, started_at: str, 
     scenario_pytest = ""
     if config.reseller_scenarios:
         scenario_pytest = "--pytest scenarios=raw/scenarios/junit.xml "
+    two_router_pytest = ""
+    if config.two_router:
+        two_router_pytest = "--pytest two-router=raw/two-router/junit.xml "
     _run(
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
         f"python3 scripts/collect-results.py --run-dir {results_dir} "
-        f"--pytest visual=raw/visual/junit.xml --pytest api=raw/api/junit.xml {scenario_pytest}"
+        f"--pytest visual=raw/visual/junit.xml --pytest api=raw/api/junit.xml {scenario_pytest}{two_router_pytest}"
         f"--run-id {config.run_id} "
         f"--sut-repo {config.artifact_repo} --sut-branch {shlex.quote(config.sut_branch)} "
         f"{commit_arg}{pr_arg}--sut-backend {config.backend} "

@@ -110,6 +110,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         machine_type=cast(str, args.machine_type),
         disk_size_gb=cast(int, args.disk_size),
         reseller_scenarios=cast(bool, args.reseller_scenarios),
+        two_router=cast(bool, args.two_router),
         secondary_router_host=cast(str, args.secondary_router_host or ""),
         secondary_router_port=cast(str, args.secondary_router_port or ""),
         keep_vm_on_failure=cast(bool, args.keep_vm_on_failure),
@@ -213,6 +214,7 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--publish", action="store_true", help="Publish report to gh-pages when done")
     submit.add_argument("--wait", action="store_true", help="Block until VM self-deletes")
     submit.add_argument("--reseller-scenarios", action="store_true", help="Run virtualizable reseller-mode scenario tests")
+    submit.add_argument("--two-router", action="store_true", help="Boot second OpenWrt VM for two-router degraded-mode tests")
     submit.add_argument("--secondary-router-host", default="", help="Seller/secondary router IP or host for reseller scenarios")
     submit.add_argument("--secondary-router-port", default="", help="Optional SSH port for the seller/secondary router")
     submit.add_argument("--keep-vm-on-failure", action="store_true", help="Do not self-delete failed worker VMs; useful for debugging")
@@ -241,6 +243,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--publish", action="store_true", help="Publish to gh-pages (default)")
     run.add_argument("--no-publish", action="store_true", help="Skip gh-pages publish")
     run.add_argument("--reseller-scenarios", action="store_true", help="Run virtualizable reseller-mode scenario tests")
+    run.add_argument("--two-router", action="store_true", help="Boot second OpenWrt VM for two-router degraded-mode tests")
     run.add_argument("--secondary-router-host", default="", help="Seller/secondary router IP or host for reseller scenarios")
     run.add_argument("--secondary-router-port", default="", help="Optional SSH port for the seller/secondary router")
     run.add_argument("--keep-vm-on-failure", action="store_true", help="Do not self-delete failed worker VMs; useful for debugging")
