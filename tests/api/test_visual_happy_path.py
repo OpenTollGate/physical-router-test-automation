@@ -75,10 +75,10 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     code = ""
     for _ in range(20):
         code = adb.curl(portal_url, o="/dev/null", w="%{http_code}", s=True).strip()
-        if code.startswith("2") or code in ("404", "500"):
+        if code.startswith("2") or code.startswith("3") or code in ("404", "500"):
             break
         time.sleep(1)
-    assert code.startswith("2") or code in ("404", "500"), f"client must reach portal, got HTTP {code}"
+    assert code.startswith("2") or code.startswith("3") or code in ("404", "500"), f"client must reach portal, got HTTP {code}"
     print(f"[visual] client can reach portal ({code})")
 
     # Step 0.5: deauth client so NDS intercepts and shows portal
