@@ -558,7 +558,7 @@ def main():
     }
 
     e2e_artifacts = {"screenshots": [], "video": None}
-    for media_dir in ("e2e", "visual"):
+    for media_dir in ("visual", "e2e"):
         full_media_dir = os.path.join(run_dir, "raw", media_dir)
         if not os.path.isdir(full_media_dir):
             continue

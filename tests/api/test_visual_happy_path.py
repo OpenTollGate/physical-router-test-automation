@@ -11,7 +11,10 @@ from lib.helpers import assert_deauthenticated, metering_test_setup, wait_expiry
 
 pytestmark = [pytest.mark.api, pytest.mark.virtual_lab, pytest.mark.publish_screenshot]
 
-DATA_DOWNLOAD_URL = "http://cachefly.cachefly.net/1mb.test"
+DATA_DOWNLOAD_URL = os.environ.get(
+    "TOLLGATE_VISUAL_DATA_TEST_URL",
+    "http://cachefly.cachefly.net/1mb.test",
+)
 
 try:
     from pytest_html import extras as html_extras
