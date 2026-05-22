@@ -930,7 +930,7 @@ arch-test-full: ## Run all arch E2E tests (~4min)
         pytest-smoke-linux pytest-api-linux pytest-test-linux \
         pytest-smoke-rust pytest-api-rust pytest-test-rust pytest-critical-rust \
         luci deploy-ci deploy-ci-rust setup-python \
-        run-api run-phone run-luci run-all \
+        run-api run-api-quick run-phone run-captive-portal run-luci run-all run-profile \
         collect render-report sanitize publish pr-smoke clean
 
 # --- Pytest test tiers (raw pytest, no canonical run dir) ---
@@ -1005,17 +1005,26 @@ pytest-critical-rust:
 
 # --- Canonical run dir targets ---
 
+run-profile:
+	./scripts/run-profile.sh --profile "$(PROFILE)"
+
 run-api:
-	./scripts/run-api.sh
+	PROFILE="${PROFILE:-virtual-lab-api}" ./scripts/run-api.sh
+
+run-api-quick:
+	./scripts/run-profile.sh --profile virtual-lab-api-quick
 
 run-phone:
-	./scripts/run-phone.sh
+	PROFILE="${PROFILE:-physical-phone-captive-portal}" ./scripts/run-phone.sh
+
+run-captive-portal:
+	./scripts/run-profile.sh --profile virtual-lab-captive-portal
 
 run-luci:
-	./scripts/run-tests.sh
+	PROFILE="${PROFILE:-virtual-lab-luci}" ./scripts/run-tests.sh
 
 run-all:
-	./scripts/run-all.sh
+	PROFILE="${PROFILE:-virtual-lab-api}" ./scripts/run-all.sh
 
 # --- Playwright LuCI tests (legacy) ---
 
