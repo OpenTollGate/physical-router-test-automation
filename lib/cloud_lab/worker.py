@@ -353,7 +353,7 @@ def write_env_file(config: WorkerConfig) -> None:
         f"TOLLGATE_VIRTUAL_LAB=1\n"
         f"TOLLGATE_VIRTUAL_GATEWAY={OPENWRT_IP}\n"
         f"TOLLGATE_NDS_PORTAL_PORT=80\n"
-        f"TOLLGATE_TEST_MINT_URL=https://nofee.testnut.cashu.space\n"
+        f"TOLLGATE_TEST_MINT_URL=https://testnut.cashu.space\n"
         f"TOLLGATE_CLIENT_IP={DEBIAN_IP}\n"
         f"TOLLGATE_CLIENT_MAC={DEBIAN_MAC}\n"
         f"TOLLGATE_CONTAINER_HOST={DEBIAN_IP}\n"
@@ -980,13 +980,13 @@ def run_worker(config: WorkerConfig) -> int:
 
         report_url = ""
         total_run = sum(counts.get(k, 0) for k in ("passed", "failed", "skipped", "error"))
-        if config.publish and run_json.exists() and test_exit == 0 and total_run > 0:
+        if config.publish and run_json.exists() and total_run > 0:
             log.info("Publishing results to gh-pages...")
             report_url = publish_results(config, results_dir)
             log.info("Published: %s", report_url)
             post_pr_comment(config, report_url, counts)
-        elif config.publish and (test_exit != 0 or total_run == 0):
-            log.warning("Skipping publish: exit=%d total_tests=%d", test_exit, total_run)
+        elif config.publish and total_run == 0:
+            log.warning("Skipping publish: total_tests=%d (no tests collected)", total_run)
 
         log.info(
             "=== Pipeline complete: passed=%s failed=%s skipped=%s exit=%d (%.1fs) ===",
