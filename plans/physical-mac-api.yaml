@@ -1,0 +1,13 @@
+name: physical-mac-api
+description: "Full API test suite on physical macOS client lab"
+matrix:
+  lab: physical-mac
+  tier: api
+  scope: full
+runner: pytest
+pytest:
+  markers: "api and extended"
+  testpaths: "tests/api"
+playwright: null
+env:
+  TOLLGATE_CLIENT_TYPE: mac

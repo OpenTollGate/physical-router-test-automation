@@ -1,0 +1,12 @@
+name: physical-phone-captive-portal
+description: "Full captive portal suite on physical phone lab"
+matrix:
+  lab: physical-phone
+  tier: captive-portal
+  scope: full
+runner: pytest
+pytest:
+  markers: "phone and extended"
+  testpaths: "tests/phone"
+playwright: null
+env: {}

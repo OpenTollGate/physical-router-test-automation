@@ -1,0 +1,14 @@
+name: virtual-lab-captive-portal
+description: "Full captive portal tests against virtual lab"
+matrix:
+  lab: virtual-lab
+  tier: captive-portal
+  scope: full
+runner: pytest
+pytest:
+  markers: "phone and extended"
+  testpaths: "tests/phone"
+playwright: null
+env:
+  TOLLGATE_VIRTUAL_LAB: "true"
+  TOLLGATE_CLIENT_TYPE: container

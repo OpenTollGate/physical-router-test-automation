@@ -1,0 +1,13 @@
+name: physical-linux-api
+description: "Full API test suite on physical Linux client lab"
+matrix:
+  lab: physical-linux
+  tier: api
+  scope: full
+runner: pytest
+pytest:
+  markers: "api and extended"
+  testpaths: "tests/api"
+playwright: null
+env:
+  TOLLGATE_CLIENT_TYPE: linux
