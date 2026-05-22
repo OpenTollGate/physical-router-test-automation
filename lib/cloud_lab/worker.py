@@ -525,14 +525,14 @@ def setup_bridge() -> None:
         "iptables -t nat -A POSTROUTING -s 10.99.99.0/24 ! -o tg-poc-br -j MASQUERADE; "
         f"mkdir -p {VIRT_LAB_WORKDIR}/run; "
         # Two-router upstream bridge
-        "ip link add name tg-upstream-br type bridge 2>/dev/null || true; "
-        "ip link set tg-upstream-br up; "
-        "ip tuntap add dev tg-upstream-tap mode tap user root 2>/dev/null || true; "
-        "ip link set tg-upstream-tap master tg-upstream-br 2>/dev/null || true; "
-        "ip link set tg-upstream-tap up; "
-        "ip tuntap add dev tg-upstream-tap2 mode tap user root 2>/dev/null || true; "
-        "ip link set tg-upstream-tap2 master tg-upstream-br 2>/dev/null || true; "
-        "ip link set tg-upstream-tap2 up",
+        f"ip link add name {UPSTREAM_BRIDGE} type bridge 2>/dev/null || true; "
+        f"ip link set {UPSTREAM_BRIDGE} up; "
+        f"ip tuntap add dev {UPSTREAM_TAP_ALPHA} mode tap user root 2>/dev/null || true; "
+        f"ip link set {UPSTREAM_TAP_ALPHA} master {UPSTREAM_BRIDGE} 2>/dev/null || true; "
+        f"ip link set {UPSTREAM_TAP_ALPHA} up; "
+        f"ip tuntap add dev {UPSTREAM_TAP_BETA} mode tap user root 2>/dev/null || true; "
+        f"ip link set {UPSTREAM_TAP_BETA} master {UPSTREAM_BRIDGE} 2>/dev/null || true; "
+        f"ip link set {UPSTREAM_TAP_BETA} up",
         timeout=20,
     )
 
