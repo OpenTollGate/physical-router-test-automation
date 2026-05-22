@@ -107,7 +107,7 @@ def vm_up(vm_name: str, zone: str = DEFAULT_ZONE, machine_type: str = DEFAULT_MA
         f"--source-snapshot={SNAPSHOT_NAME}",
         f"--boot-disk-size={disk_size_gb}GB",
         "--enable-nested-virtualization",
-        "--min-cpu-platform=Intel Cascade Lake",
+        *([] if machine_type.startswith("e2-") else ["--min-cpu-platform=Intel Cascade Lake"]),
         "--tags=tollgate-runner",
     ], timeout=300)
     if r.returncode != 0 and vm_status(project, zone, vm_name) != "RUNNING":
@@ -384,7 +384,7 @@ def submit_run(
         f"--source-snapshot={SNAPSHOT_NAME}",
         f"--boot-disk-size={disk_size_gb}GB",
         "--enable-nested-virtualization",
-        "--min-cpu-platform=Intel Cascade Lake",
+        *([] if machine_type.startswith("e2-") else ["--min-cpu-platform=Intel Cascade Lake"]),
         "--tags=tollgate-runner,tollgate-run",
         "--labels=tollgate_run=true",
         "--scopes=compute-rw,storage-rw",
