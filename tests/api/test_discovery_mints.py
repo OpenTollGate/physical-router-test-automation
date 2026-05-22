@@ -75,7 +75,6 @@ def test_configured_mints_subset_in_discovery(discovery, config):
         f"Discovery has unknown mints: {discovery_mint_urls - config_urls}"
 
 
-@pytest.mark.pr(118)
 def test_unreachable_mint_not_in_discovery(discovery, backend_logs):
     unreachable = re.findall(
         r"mint (\S+) (?:unreachable|marked.*unreachable)",

@@ -10,7 +10,7 @@ import pytest
 
 from lib.helpers import parse_json_or_fail
 
-pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.pr(104)]
+pytestmark = [pytest.mark.api, pytest.mark.extended]
 
 
 def _get_config_mint_urls(router):

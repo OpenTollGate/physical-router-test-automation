@@ -26,7 +26,7 @@ from lib.constants import DEFAULT_STEP_SIZE_MS
 
 log = logging.getLogger("tollgate.session_expiry_scan")
 
-pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.pr(106)]
+pytestmark = [pytest.mark.api, pytest.mark.extended]
 
 
 # ---------------------------------------------------------------------------
