@@ -824,10 +824,10 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         f">{results_dir}/raw/api/output.log 2>&1; api_exit=$?; "
         f"{scenario_cmd}"
         f"{two_router_cmd}"
-        f"if [ \"$visual_exit\" -ne 0 ]; then exit \"$visual_exit\"; fi; "
-        f"if [ \"${{scenario_exit:-0}}\" -ne 0 ]; then exit \"$scenario_exit\"; fi; "
-        f"if [ \"${{two_router_exit:-0}}\" -ne 0 ]; then exit \"$two_router_exit\"; fi; "
-        "exit \"$api_exit\""
+        "worst_exit=0; "
+        "for e in \"$visual_exit\" \"$api_exit\" \"${scenario_exit:-0}\" \"${two_router_exit:-0}\"; do "
+        "  if [ \"$e\" -ne 0 ] && [ \"$e\" -gt \"$worst_exit\" ]; then worst_exit=$e; fi; done; "
+        "exit \"$worst_exit\""
     )
     r = _run(test_cmd, timeout=1500, check=False)
     log.info("Test stdout (%d bytes): %s", len(r.stdout), _redact(r.stdout[-2000:]))
