@@ -20,9 +20,18 @@ from lib.cloud_lab.constants import (
     ALPHA_WAN_MAC,
     BETA_WAN_IP,
     BETA_WAN_MAC,
+    CDK_MINT_DIR,
+    CDK_MINT_PORT,
+    CDK_MINT_URL,
+    CDK_VERSION,
     CLOUD_ARCH,
     DEBIAN_IP,
     DEBIAN_MAC,
+    LOCAL_MINT_HOST,
+    NUTSHELL_V1_MINT_PORT,
+    NUTSHELL_V1_MINT_URL,
+    NUTSHELL_V2_MINT_PORT,
+    NUTSHELL_V2_MINT_URL,
     OPENWRT_IP,
     RESULTS_ROOT,
     SELLER_OPENWRT_IP,
@@ -147,45 +156,6 @@ def _run(cmd: str, timeout: int = 120, check: bool = True) -> subprocess.Complet
         log.debug("cmd ok (%.1fs): %s", elapsed, redacted[:120])
     return r
 
-
-def _run_streaming(cmd: str, timeout: int = 120, check: bool = True) -> subprocess.CompletedProcess[str]:
-    """Run *cmd* via bash, streaming stdout line-by-line to the logger in real time."""
-    redacted = _redact(cmd[:300])
-    log.debug("run_streaming: %s", redacted)
-    t0 = time.monotonic()
-    proc = subprocess.Popen(
-        ["bash", "-c", cmd],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    lines: list[str] = []
-    assert proc.stdout is not None  # guaranteed by PIPE
-    try:
-        for raw_line in proc.stdout:
-            lines.append(raw_line)
-            log.info("[test] %s", _redact(raw_line.rstrip("\n")))
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        log.warning("run_streaming: killing process after %ds timeout", timeout)
-        proc.kill()
-        proc.wait(timeout=10)
-    elapsed = time.monotonic() - t0
-    stdout_text = "".join(lines)
-    rc = proc.returncode
-    if rc != 0:
-        err = _redact(stdout_text.strip()[-500:])
-        log.info("cmd failed (%.1fs, rc=%d): %s | tail: %s", elapsed, rc, redacted[:120], err[:300])
-        if check:
-            raise RuntimeError(f"Command failed ({rc}): {cmd[:120]}\n{err}")
-    else:
-        log.debug("cmd ok (%.1fs): %s", elapsed, redacted[:120])
-    return subprocess.CompletedProcess(
-        args=["bash", "-c", cmd],
-        returncode=rc,
-        stdout=stdout_text,
-        stderr="",
-    )
 
 
 def _virt_lab_workdir() -> Path:
@@ -394,7 +364,10 @@ def write_env_file(config: WorkerConfig) -> None:
         f"TOLLGATE_VIRTUAL_LAB=1\n"
         f"TOLLGATE_VIRTUAL_GATEWAY={OPENWRT_IP}\n"
         f"TOLLGATE_NDS_PORTAL_PORT=80\n"
-        f"TOLLGATE_TEST_MINT_URL=https://nofee.testnut.cashu.space\n"
+        f"TOLLGATE_TEST_MINT_URL={CDK_MINT_URL}\n"
+        f"TOLLGATE_CDK_MINT_URL={CDK_MINT_URL}\n"
+        f"TOLLGATE_NUTSHELL_V2_MINT_URL={NUTSHELL_V2_MINT_URL}\n"
+        f"TOLLGATE_NUTSHELL_V1_MINT_URL={NUTSHELL_V1_MINT_URL}\n"
         f"TOLLGATE_CLIENT_IP={DEBIAN_IP}\n"
         f"TOLLGATE_CLIENT_MAC={DEBIAN_MAC}\n"
         f"TOLLGATE_CONTAINER_HOST={DEBIAN_IP}\n"
@@ -451,6 +424,133 @@ def ensure_outer_deps() -> None:
         )
         if "CASHU_OK" not in (r.stdout or ""):
             log.warning("Cashu CLI install failed (non-fatal, some tests will skip)")
+
+    ensure_cdk_binary()
+
+
+def ensure_cdk_binary() -> None:
+    binary = f"{CDK_MINT_DIR}/cdk-mintd"
+    r = _run(f"test -x {binary} && echo CDK_BINARY_OK", timeout=10, check=False)
+    if "CDK_BINARY_OK" in r.stdout:
+        log.info("CDK mintd binary already cached")
+        return
+    log.info("Downloading CDK mintd v%s...", CDK_VERSION)
+    _run(f"mkdir -p {CDK_MINT_DIR}", timeout=10)
+    _run(
+        f"wget -q -O {binary} "
+        f"https://github.com/cashubtc/cdk/releases/download/v{CDK_VERSION}/cdk-mintd-{CDK_VERSION}-x86_64",
+        timeout=120,
+    )
+    _run(f"chmod +x {binary}", timeout=10)
+    r = _run(f"{binary} --version 2>&1 || {binary} --help 2>&1 | head -1", timeout=10, check=False)
+    log.info("CDK binary verified: %s", (r.stdout or "").strip()[:80])
+
+
+def start_local_mints(config: WorkerConfig) -> dict[str, subprocess.Popen[str]]:
+    mints: dict[str, subprocess.Popen[str]] = {}
+
+    # --- CDK V2 Mint (port 8383) ---
+    cdk_config = f"""\
+[info]
+url = "http://{LOCAL_MINT_HOST}:{CDK_MINT_PORT}/"
+listen_host = "{LOCAL_MINT_HOST}"
+listen_port = {CDK_MINT_PORT}
+mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+
+[database]
+engine = "sqlite"
+
+[ln]
+ln_backend = "fakewallet"
+
+[fake_wallet]
+supported_units = ["sat"]
+fee_percent = 0
+reserve_fee_min = 0
+min_delay_time = 0
+max_delay_time = 0
+"""
+    _run(f"mkdir -p {CDK_MINT_DIR}", timeout=10)
+    Path(f"{CDK_MINT_DIR}/config.toml").write_text(cdk_config)
+
+    cdk_log = Path("/tmp/cdk-mintd.log")
+    cdk_proc = subprocess.Popen(
+        [f"{CDK_MINT_DIR}/cdk-mintd", "-c", f"{CDK_MINT_DIR}/config.toml"],
+        cwd=CDK_MINT_DIR,
+        stdout=cdk_log.open("w"),
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    mints["cdk-v2"] = cdk_proc
+    log.info("Started CDK V2 mint (pid=%d, port=%d)", cdk_proc.pid, CDK_MINT_PORT)
+
+    # --- Nutshell V2 Mint (port 8384) ---
+    _run("rm -rf /tmp/nutshell-v2-mint-data && mkdir -p /tmp/nutshell-v2-mint-data", timeout=10)
+    ns_v2_log = Path("/tmp/nutshell-v2-mint.log")
+    ns_v2_env = {**os.environ, "CASHU_MINT_DATABASE": "/tmp/nutshell-v2-mint-data"}
+    ns_v2_proc = subprocess.Popen(
+        ["/opt/cashu-venv/bin/python", "-m", "cashu.mint", "--port", str(NUTSHELL_V2_MINT_PORT), "--host", LOCAL_MINT_HOST],
+        stdout=ns_v2_log.open("w"),
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+        env=ns_v2_env,
+    )
+    mints["nutshell-v2"] = ns_v2_proc
+    log.info("Started Nutshell V2 mint (pid=%d, port=%d)", ns_v2_proc.pid, NUTSHELL_V2_MINT_PORT)
+
+    # --- Nutshell V1 Mint (port 8385) ---
+    _run("rm -rf /tmp/nutshell-v1-mint-data && mkdir -p /tmp/nutshell-v1-mint-data", timeout=10)
+    ns_v1_log = Path("/tmp/nutshell-v1-mint.log")
+    ns_v1_env = {**os.environ, "CASHU_MINT_DATABASE": "/tmp/nutshell-v1-mint-data"}
+    ns_v1_proc = subprocess.Popen(
+        ["/opt/cashu-venv/bin/python", "-m", "cashu.mint", "--port", str(NUTSHELL_V1_MINT_PORT), "--host", LOCAL_MINT_HOST],
+        stdout=ns_v1_log.open("w"),
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+        env=ns_v1_env,
+    )
+    mints["nutshell-v1"] = ns_v1_proc
+    log.info("Started Nutshell V1 mint (pid=%d, port=%d)", ns_v1_proc.pid, NUTSHELL_V1_MINT_PORT)
+
+    # /etc/hosts entries for SSH debugging
+    _run(
+        "grep -q 'testnut.cdk.lan' /etc/hosts || "
+        "echo '10.99.99.2 testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan' >> /etc/hosts",
+        check=False,
+    )
+
+    # Health checks
+    for name, url in [("cdk-v2", CDK_MINT_URL), ("nutshell-v2", NUTSHELL_V2_MINT_URL), ("nutshell-v1", NUTSHELL_V1_MINT_URL)]:
+        for attempt in range(15):
+            try:
+                req = urllib.request.Request(f"{url}/v1/keys")
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    if resp.status == 200:
+                        log.info("Local mint %s healthy at %s", name, url)
+                        break
+            except Exception:
+                pass
+            time.sleep(2)
+        else:
+            log.warning("Local mint %s not healthy after 30s, continuing anyway", name)
+
+    return mints
+
+
+def stop_local_mints(mints: dict[str, subprocess.Popen[str]]) -> None:
+    for name, proc in mints.items():
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        log.info("Stopped local mint: %s", name)
 
 
 def wait_for_dpkg_lock(timeout: int = 300) -> None:
@@ -823,6 +923,57 @@ def wait_for_backend() -> None:
     raise RuntimeError("TollGate backend did not become healthy after 60s")
 
 
+def select_test_mint() -> str:
+    """Probe the backend with CDK V2 keysets. Return the mint URL to use.
+
+    Strategy: start with CDK (V2). If the backend crashes after being configured
+    with it (V2-incompatible Go/gonuts), fall back to Nutshell V1 (V1 keysets).
+    """
+    cdk_ok = False
+    try:
+        r = _run(
+            f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
+            f"python3 -c \""
+            f"from lib.router import Router; "
+            f"from lib.backend import BackendConfig; "
+            f"import os, json, time; "
+            f"r = Router(host=os.environ['TOLLGATE_SSH_HOST'], phone_ip='', phone_mac='', domain='', backend=BackendConfig(os.environ.get('TOLLGATE_BACKEND','go'))); "
+            f"r.ssh('cat /etc/tollgate/config.json > /tmp/config.json.bak'); "
+            f"r.replace_mints(['{CDK_MINT_URL}']); "
+            f"time.sleep(5); "
+            f"code = r.api_status('/'); "
+            f"print(f'v2_probe={{code}}'); "
+            f"\" 2>&1",
+            timeout=120,
+            check=False,
+        )
+        if "v2_probe=200" in r.stdout:
+            cdk_ok = True
+            log.info("Backend supports V2 keysets — using CDK mint")
+    except Exception as exc:
+        log.warning("V2 probe failed: %s", exc)
+
+    if cdk_ok:
+        return CDK_MINT_URL
+
+    log.info("Backend does not support V2 keysets — falling back to Nutshell V1 mint")
+    _run(
+        f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
+        f"python3 -c \""
+        f"from lib.router import Router; "
+        f"from lib.backend import BackendConfig; "
+        f"import os; "
+        f"r = Router(host=os.environ['TOLLGATE_SSH_HOST'], phone_ip='', phone_mac='', domain='', backend=BackendConfig(os.environ.get('TOLLGATE_BACKEND','go'))); "
+        f"r.ssh('cp /tmp/config.json.bak /etc/tollgate/config.json 2>/dev/null || true'); "
+        f"r.replace_mints(['{NUTSHELL_V1_MINT_URL}']); "
+        f"\" 2>&1",
+        timeout=120,
+        check=False,
+    )
+    wait_for_backend()
+    return NUTSHELL_V1_MINT_URL
+
+
 def run_tests(config: WorkerConfig, results_dir: str) -> int:
     expected_pr = f"--expected-pr={config.sut_pr} " if config.sut_pr else ""
     backend = config.backend
@@ -835,7 +986,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
             f"{expected_pr}--client=container --results {results_dir} "
             f"--junitxml={results_dir}/raw/scenarios/junit.xml "
             f"--html={results_dir}/raw/scenarios/report.html --self-contained-html "
-            f"2>&1 | tee {results_dir}/raw/scenarios/output.log; scenario_exit=${{PIPESTATUS[0]}}; "
+            f">{results_dir}/raw/scenarios/output.log 2>&1; scenario_exit=$?; "
         )
     two_router_cmd = ""
     if config.two_router:
@@ -845,7 +996,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
             f"{expected_pr}--client=container --results {results_dir} "
             f"--junitxml={results_dir}/raw/two-router/junit.xml "
             f"--html={results_dir}/raw/two-router/report.html --self-contained-html "
-            f"2>&1 | tee {results_dir}/raw/two-router/output.log; two_router_exit=${{PIPESTATUS[0]}}; "
+            f">{results_dir}/raw/two-router/output.log 2>&1; two_router_exit=$?; "
         )
     test_cmd = (
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
@@ -856,13 +1007,13 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         f"{expected_pr}--client=container --results {results_dir} "
         f"--junitxml={results_dir}/raw/visual/junit.xml "
         f"--html={results_dir}/raw/visual/report.html --self-contained-html "
-        f"2>&1 | tee {results_dir}/raw/visual/output.log; visual_exit=${{PIPESTATUS[0]}}; "
+        f">{results_dir}/raw/visual/output.log 2>&1; visual_exit=$?; "
         f"python3 -m pytest tests/api/ -v --tb=short --timeout=300 --backend={backend} "
         f"{expected_pr}--client=container --results {results_dir} "
         f"--ignore=tests/api/test_visual_happy_path.py "
         f"--junitxml={results_dir}/raw/api/junit.xml "
         f"--html={results_dir}/raw/api/report.html --self-contained-html "
-        f"2>&1 | tee {results_dir}/raw/api/output.log; api_exit=${{PIPESTATUS[0]}}; "
+        f">{results_dir}/raw/api/output.log 2>&1; api_exit=$?; "
         f"{scenario_cmd}"
         f"{two_router_cmd}"
         "worst_exit=0; "
@@ -870,7 +1021,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         "  if [ \"$e\" -ne 0 ] && [ \"$e\" -gt \"$worst_exit\" ]; then worst_exit=$e; fi; done; "
         "exit \"$worst_exit\""
     )
-    r = _run_streaming(test_cmd, timeout=3600, check=False)
+    r = _run(test_cmd, timeout=3600, check=False)
     log.info("Test stdout (%d bytes): %s", len(r.stdout), _redact(r.stdout[-2000:]))
     return r.returncode
 
@@ -1033,34 +1184,48 @@ def run_worker(config: WorkerConfig) -> int:
     started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     test_exit = 1
     wall_t0 = time.monotonic()
+    vm_streams: list[tuple[threading.Thread, subprocess.Popen[str]]] = []
+    local_mints: dict[str, subprocess.Popen[str]] = {}
 
     try:
         log.info("=== Pipeline start ===")
 
         os.environ["GH_TOKEN"] = config.gh_token
-        log.info("[1/9] Suite checkout (ref=%s)", config.suite_ref[:7])
+        log.info("[1/10] Suite checkout (ref=%s)", config.suite_ref[:7])
         ensure_suite_checkout(config)
 
-        log.info("[2/9] Outer deps (venv + cashu)")
+        log.info("[2/10] Outer deps (venv + cashu)")
         ensure_outer_deps()
 
-        log.info("[3/9] GitHub CLI auth (token=***%s)", config.gh_token[-4:] if len(config.gh_token) > 8 else "***")
+        log.info("[3/10] GitHub CLI auth (token=***%s)", config.gh_token[-4:] if len(config.gh_token) > 8 else "***")
         ensure_github_cli(config.gh_token)
 
-        log.info("[4/9] Inner VMs (OpenWrt + Debian)")
+        log.info("[4/10] Inner VMs (OpenWrt + Debian)")
         start_inner_vms(config)
 
-        log.info("[5/9] Write .env + Debian client deps")
+        log.info("[5/10] Start local mints (CDK + Nutshell)")
+        local_mints = start_local_mints(config)
+
+        log.info("[6/10] Write .env + Debian client deps")
         write_env_file(config)
         ensure_debian_client_deps()
 
-        log.info("[6/9] Deploy TollGate (branch=%s, artifact_run=%s)", config.sut_branch, config.artifact_run_id)
+        log.info("[7/10] Deploy TollGate (branch=%s, artifact_run=%s)", config.sut_branch, config.artifact_run_id)
         deploy_tollgate(config)
 
-        log.info("[7/9] Wait for backend health")
+        log.info("[8/10] Wait for backend health")
         wait_for_backend()
 
-        log.info("[8/9] Run tests (results_dir=%s)", results_dir)
+        log.info("[8.5/10] Select test mint (V2 if supported, else V1)")
+        chosen_mint = select_test_mint()
+        env_path = Path(f"{TEST_DIR}/.env")
+        if env_path.exists():
+            env_text = env_path.read_text()
+            env_text = env_text.replace(f"TOLLGATE_TEST_MINT_URL={CDK_MINT_URL}", f"TOLLGATE_TEST_MINT_URL={chosen_mint}")
+            env_path.write_text(env_text)
+            log.info("Updated .env TOLLGATE_TEST_MINT_URL=%s", chosen_mint)
+
+        log.info("[9/10] Run tests (results_dir=%s)", results_dir)
         vm_streams = _start_vm_log_streaming(config)
         try:
             test_exit = run_tests(config, results_dir)
@@ -1069,7 +1234,7 @@ def run_worker(config: WorkerConfig) -> int:
         log.info("Tests finished with exit=%d (%.1fs elapsed)", test_exit, time.monotonic() - wall_t0)
 
         finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        log.info("[9/9] Collect + render results")
+        log.info("[10/10] Collect + render results")
         collect_and_render(config, results_dir, started_at, finished_at)
 
         counts: dict[str, Any] = {}
@@ -1100,6 +1265,7 @@ def run_worker(config: WorkerConfig) -> int:
         log.error("Pipeline failed at step: %s (%.1fs elapsed)", _redact(str(exc))[:200], time.monotonic() - wall_t0)
         raise
     finally:
+        stop_local_mints(local_mints)
         keep_failed_vm = config.keep_vm_on_failure and test_exit != 0
         if keep_failed_vm:
             log.error("Keeping VM and inner QEMU VMs alive for debugging (keep_vm_on_failure=true)")
