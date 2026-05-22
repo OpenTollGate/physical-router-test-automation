@@ -1,0 +1,14 @@
+name: virtual-lab-api-quick
+description: "Quick API smoke subset against virtual lab"
+matrix:
+  lab: virtual-lab
+  tier: api
+  scope: quick
+runner: pytest
+pytest:
+  markers: "api and critical"
+  testpaths: "tests/api"
+playwright: null
+env:
+  TOLLGATE_VIRTUAL_LAB: "true"
+  TOLLGATE_CLIENT_TYPE: container

@@ -15,6 +15,29 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 DEFAULT_REPO = "OpenTollGate/tollgate-module-basic-go"
 
+LAB_ORDER = ["virtual-lab", "gcloud", "physical-phone", "physical-mac", "physical-linux", "physical", "unknown"]
+TIER_ORDER = ["api", "captive-portal", "luci-ui"]
+
+LAB_DISPLAY = {
+    "virtual-lab": "Virtual Lab",
+    "gcloud": "GCloud",
+    "physical-phone": "Physical (Phone)",
+    "physical-mac": "Physical (Mac)",
+    "physical-linux": "Physical (Linux)",
+    "physical": "Physical",
+    "unknown": "Unknown",
+}
+
+LAB_DOT_COLOR = {
+    "virtual-lab": "#16a34a",
+    "gcloud": "#ea580c",
+    "physical-phone": "#2563eb",
+    "physical-mac": "#2563eb",
+    "physical-linux": "#2563eb",
+    "physical": "#2563eb",
+    "unknown": "#6b7280",
+}
+
 
 def get(d: Any, path: str, default: Any = "") -> Any:
     """Get nested dict value with dot notation."""
@@ -28,6 +51,23 @@ def get(d: Any, path: str, default: Any = "") -> Any:
     if value is None:
         return default
     return value
+
+
+def is_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def derive_lab_type(data: dict[str, Any], schema_version: int) -> str:
+    if schema_version >= 1:
+        lab_type = get(data, "lab.type", "")
+        if lab_type:
+            return str(lab_type)
+        return "virtual-lab" if is_truthy(get(data, "lab.virtual_lab", False)) else "physical"
+    return "virtual-lab" if is_truthy(data.get("virtual_lab", False)) else "physical"
 
 
 def read_run(path):
@@ -87,6 +127,31 @@ def read_run(path):
         go_version = ""
         virtual_lab = False
 
+    lab_type = derive_lab_type(d, sv)
+
+    tier = get(d, "tier", "")
+    scope = get(d, "scope", "")
+    if not tier:
+        tp = test_plan.lower()
+        if tp.startswith("api"):
+            tier = "api"
+        elif tp.startswith("captive") or tp.startswith("phone"):
+            tier = "captive-portal"
+        elif tp.startswith("luci"):
+            tier = "luci-ui"
+        elif tp == "e2e":
+            tier = "api"
+
+    matrix_lab = lab_type
+    if lab_type == "physical":
+        ct = client_type.lower() if client_type else ""
+        if ct == "adb":
+            matrix_lab = "physical-phone"
+        elif ct == "mac":
+            matrix_lab = "physical-mac"
+        elif ct == "linux":
+            matrix_lab = "physical-linux"
+
     return {
         "commit": commit,
         "commit_short": commit_short,
@@ -108,6 +173,10 @@ def read_run(path):
         "openwrt_version": openwrt_version,
         "go_version": go_version,
         "virtual_lab": virtual_lab,
+        "lab_type": lab_type,
+        "matrix_lab": matrix_lab,
+        "tier": tier,
+        "scope": scope,
     }
 
 
@@ -234,7 +303,56 @@ def build_commit_groups(runs):
                 "runs": [],
             }
         groups[group_key]["runs"].append(run)
-    return list(groups.values())
+
+        # Track lab types per group
+        if "_lab_type_set" not in groups[group_key]:
+            groups[group_key]["_lab_type_set"] = set()
+        groups[group_key]["_lab_type_set"].add(run.get("lab_type", "") or "unknown")
+
+    # Build matrix per group
+    commit_groups = []
+    for group in groups.values():
+        lab_types = sorted(group.pop("_lab_type_set", set()))
+        group["lab_types"] = lab_types
+        if len(lab_types) > 1:
+            group["lab_type"] = "mixed"
+        elif lab_types:
+            group["lab_type"] = lab_types[0]
+        else:
+            group["lab_type"] = "unknown"
+
+        matrix = {}
+        seen_tiers = set()
+        seen_labs = set()
+        for run in group["runs"]:
+            lab = run.get("matrix_lab", "unknown")
+            tier = run.get("tier", "")
+            if not tier:
+                continue
+            scope = run.get("scope", "")
+            key = "%s|%s" % (lab, tier)
+            seen_tiers.add(tier)
+            seen_labs.add(lab)
+            existing = matrix.get(key)
+            if not existing:
+                matrix[key] = run
+            elif scope == "full" and existing.get("scope") == "quick":
+                matrix[key] = run
+            elif scope == existing.get("scope") and run.get("started_at", "") > existing.get("started_at", ""):
+                matrix[key] = run
+
+        ordered_tiers = [t for t in TIER_ORDER if t in seen_tiers]
+        ordered_tiers.extend(sorted(seen_tiers - set(TIER_ORDER)))
+        ordered_labs = [l for l in LAB_ORDER if l in seen_labs]
+        ordered_labs.extend(sorted(seen_labs - set(LAB_ORDER)))
+
+        group["matrix"] = matrix
+        group["tiers"] = ordered_tiers
+        group["labs"] = ordered_labs
+
+        commit_groups.append(group)
+
+    return commit_groups
 
 
 def build_environment(templates_dir):
@@ -252,6 +370,7 @@ def build_environment(templates_dir):
     env.filters["format_duration"] = format_duration
     env.filters["esc"] = esc
     cast(dict[str, Any], env.globals)["get"] = get
+    cast(dict[str, Any], env.globals)["matrix_get"] = lambda m, l, t: m.get("%s|%s" % (l, t))
     return env
 
 
@@ -285,6 +404,8 @@ def main():
         total_runs=total_runs,
         total_commits=total_commits,
         commit_groups=commit_groups,
+        lab_display=LAB_DISPLAY,
+        lab_dot_color=LAB_DOT_COLOR,
     )
 
     output_path = Path(args.output)

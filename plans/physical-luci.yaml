@@ -1,0 +1,11 @@
+name: physical-luci
+description: "LuCI Playwright suite against physical router lab"
+matrix:
+  lab: physical
+  tier: luci-ui
+  scope: full
+runner: playwright
+pytest: null
+playwright:
+  test_glob: "tests/web/*.spec.mjs"
+env: {}

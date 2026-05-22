@@ -28,6 +28,7 @@ PUBLISH=false
 ROUTER_ID=""
 ARTIFACT_REPO=""
 BACKEND="${TOLLGATE_BACKEND:-go}"
+TOLLGATE_PROFILE=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -71,6 +72,10 @@ while [[ $# -gt 0 ]]; do
       fi
       shift 2
       ;;
+    --profile)
+      TOLLGATE_PROFILE="$2"
+      shift 2
+      ;;
     *)
       echo "ERROR: Unknown option: $1" >&2
       echo "Usage: $0 --pr <N> | --branch <NAME> [--reset] [--test api|all] [--publish] [--backend go|rust] [--router ID]" >&2
@@ -81,6 +86,10 @@ done
 
 export TOLLGATE_BACKEND="$BACKEND"
 
+# ── Load environment variables ───────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 # ── Validate required args ───────────────────────────────────────────────
 if [[ -z "$PR_NUM" && -z "$BRANCH" ]]; then
   echo "ERROR: Either --pr or --branch is required" >&2
@@ -88,9 +97,25 @@ if [[ -z "$PR_NUM" && -z "$BRANCH" ]]; then
   exit 1
 fi
 
-# ── Load environment variables ───────────────────────────────────────────
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# ── Profile mode ─────────────────────────────────────────────────────────
+if [[ -n "${TOLLGATE_PROFILE:-}" ]]; then
+  echo "==> Profile mode: $TOLLGATE_PROFILE"
+  profile_args=(--profile "$TOLLGATE_PROFILE")
+  if [[ -n "${TOLLGATE_SUT_COMMIT:-}" ]]; then
+    profile_args+=(--sut-commit "$TOLLGATE_SUT_COMMIT")
+  fi
+  if [[ -n "${TOLLGATE_PR:-${PR_NUM:-}}" ]]; then
+    profile_args+=(--sut-pr "${TOLLGATE_PR:-$PR_NUM}")
+  fi
+  if [[ -n "${TOLLGATE_BRANCH:-${BRANCH:-}}" ]]; then
+    profile_args+=(--sut-branch "${TOLLGATE_BRANCH:-$BRANCH}")
+  fi
+  if [[ "$PUBLISH" == "true" ]]; then
+    profile_args+=(--publish)
+  fi
+  "$SCRIPT_DIR/run-profile.sh" "${profile_args[@]}"
+  exit $?
+fi
 
 if [[ ! -f "$REPO_DIR/.env" ]]; then
   echo "ERROR: .env file not found at $REPO_DIR/.env" >&2

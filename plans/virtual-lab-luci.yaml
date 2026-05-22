@@ -1,0 +1,12 @@
+name: virtual-lab-luci
+description: "LuCI Playwright suite against virtual lab"
+matrix:
+  lab: virtual-lab
+  tier: luci-ui
+  scope: full
+runner: playwright
+pytest: null
+playwright:
+  test_glob: "tests/web/*.spec.mjs"
+env:
+  TOLLGATE_VIRTUAL_LAB: "true"

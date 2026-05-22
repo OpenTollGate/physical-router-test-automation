@@ -12,10 +12,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
 .header h1{font-size:1.5rem;font-weight:600;letter-spacing:.5px}
 .header .updated{font-size:.85rem;opacity:.8}
 .container{max-width:1400px;margin:2rem auto;padding:0 1rem}
-.summary{display:flex;gap:1rem;margin-bottom:2rem;flex-wrap:wrap}
+.summary{display:flex;gap:1rem;margin-bottom:1rem;flex-wrap:wrap}
 .summary-card{background:#fff;border-radius:8px;padding:1rem 1.5rem;flex:1;min-width:160px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
 .summary-card .label{font-size:.8rem;text-transform:uppercase;letter-spacing:.5px;color:#666;margin-bottom:.25rem}
 .summary-card .value{font-size:1.75rem;font-weight:700;color:#1a1a2e}
+.filter-banner{display:none;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:8px;padding:.8rem 1rem;margin-bottom:1rem;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.filter-banner.show{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.filter-banner a{color:#c2410c;font-weight:600;text-decoration:none}
+.filter-banner a:hover{text-decoration:underline}
 .commit-group{background:#fff;border-radius:8px;margin-bottom:1.5rem;box-shadow:0 1px 3px rgba(0,0,0,.08);overflow:hidden}
 .commit-header{padding:1rem 1.5rem;border-bottom:1px solid #eee;display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
 .commit-header .hash{font-family:"SF Mono",SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace;font-size:1rem;font-weight:600}
@@ -32,8 +36,37 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
 .badge-partial{background:#fce8b2;color:#b06000}
 .badge-version{background:#f1f3f4;color:#5f6368}
 .badge-vlab{background:#f3e8fd;color:#6a1b9a}
-.runs{padding:.5rem 0}
-.run-row{display:grid;grid-template-columns:155px 50px 75px 55px 180px 65px 1fr 50px 55px;align-items:center;padding:.65rem 1.5rem;border-bottom:1px solid #f5f5f5;font-size:.875rem;gap:.5rem}
+.badge-scope{background:#eef2ff;color:#4338ca}
+.badge-lab{background:#eff6ff;color:#1d4ed8}
+.matrix-wrap{padding:1rem 1.5rem 1.25rem}
+.matrix-table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden}
+.matrix-table th,.matrix-table td{border-right:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb;vertical-align:top}
+.matrix-table tr:last-child td{border-bottom:none}
+.matrix-table tr:last-child th{border-bottom:none}
+.matrix-table th:last-child,.matrix-table td:last-child{border-right:none}
+.matrix-table thead th{background:#f8fafc;color:#475569;font-size:.75rem;text-transform:uppercase;letter-spacing:.5px;padding:.8rem;text-align:left}
+.matrix-table .row-label{width:220px;background:#fafbfc;padding:.85rem .9rem;font-size:.9rem;font-weight:600;color:#1f2937}
+.lab-label{display:flex;align-items:center;gap:.6rem}
+.lab-dot{width:10px;height:10px;border-radius:50%;flex:0 0 10px}
+.matrix-cell{padding:.8rem;min-height:110px}
+.cell-passed{background:#f0fdf4}
+.cell-failed{background:#fef2f2}
+.cell-empty{background:#f9fafb;color:#9ca3af;text-align:center;font-size:1.1rem;vertical-align:middle}
+.cell-status{display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.45rem;flex-wrap:wrap}
+.cell-counts{font-variant-numeric:tabular-nums;font-weight:600;font-size:.95rem}
+.cell-counts .pass{color:#137333}
+.cell-counts .fail{color:#d93025}
+.cell-counts .skip{color:#6b7280}
+.cell-meta{display:flex;gap:.5rem;flex-wrap:wrap;font-size:.78rem;color:#475569;margin-bottom:.45rem}
+.cell-link a{color:#1a73e8;text-decoration:none;font-weight:600;font-size:.85rem}
+.cell-link a:hover{text-decoration:underline}
+.runs-details{border-top:1px solid #eee;background:#fcfcfd}
+.runs-details summary{list-style:none;cursor:pointer;padding:.9rem 1.5rem;font-weight:600;color:#374151}
+.runs-details summary::-webkit-details-marker{display:none}
+.runs-details summary:hover{background:#f8fafc}
+.run-header{display:grid;grid-template-columns:155px 70px 80px 60px 180px 70px 1fr 55px 55px;padding:.5rem 1.5rem;background:#fafbfc;font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#666;border-top:1px solid #eee;border-bottom:1px solid #eee;gap:.5rem}
+.runs{padding:.25rem 0}
+.run-row{display:grid;grid-template-columns:155px 70px 80px 60px 180px 70px 1fr 55px 55px;align-items:center;padding:.65rem 1.5rem;border-bottom:1px solid #f5f5f5;font-size:.875rem;gap:.5rem}
 .run-row:last-child{border-bottom:none}
 .run-row:hover{background:#fafbfc}
 .run-time{color:#555;font-variant-numeric:tabular-nums}
@@ -46,12 +79,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
 .runner-summary .rf{color:#d93025}
 .runner-summary .rs{color:#80868b}
 .run-dur{font-variant-numeric:tabular-nums;color:#555;font-size:.8rem}
-/* biome-ignore lint/style/noDescendingSpecificity: extracted dashboard CSS preserved verbatim */
 .run-link a{color:#1a73e8;text-decoration:none;font-weight:500;font-size:.8rem}
-/* biome-ignore lint/style/noDescendingSpecificity: extracted dashboard CSS preserved verbatim */
 .run-link a:hover{text-decoration:underline}
-.run-header{display:grid;grid-template-columns:155px 50px 75px 55px 180px 65px 1fr 50px 55px;padding:.5rem 1.5rem;background:#fafbfc;font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#666;border-bottom:1px solid #eee;gap:.5rem}
 .empty{padding:3rem;text-align:center;color:#888;font-size:1rem}
+@media (max-width: 960px){
+  .header{padding:1.25rem;align-items:flex-start;flex-direction:column;gap:.4rem}
+  .matrix-wrap{overflow-x:auto}
+  .matrix-table{min-width:760px}
+  .run-header,.run-row{min-width:930px}
+  .runs-details{overflow-x:auto}
+}
 </style>
 </head>
 <body>
@@ -64,59 +101,149 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
 <div class="summary-card"><div class="label">Total Runs</div><div class="value">[[ total_runs ]]</div></div>
 <div class="summary-card"><div class="label">Commits Tested</div><div class="value">[[ total_commits ]]</div></div>
 </div>
+<div class="filter-banner" id="filter-banner">
+  <span>Showing only lab: <strong id="filter-lab-name"></strong></span>
+  <a href="./" id="clear-filter-link">Clear filter</a>
+</div>
 [% if not commit_groups %]
 <div class="empty">No test reports found.</div>
 [% else %]
 [% for group in commit_groups %]
-<div class="commit-group">
-<div class="commit-header">
-[% if group.commit and group.commit != 'unknown' and group.commit_url %]
-<span class="hash"><a href="[[ group.commit_url ]]">[[ group.short ]]</a></span>
-[% else %]
-<span class="hash">[[ group.short ]]</span>
-[% endif %]
-[% if group.version and group.version != 'unknown' %]
-<span class="badge badge-version" title="OpenWrt: [[ group.openwrt_version ]] | Built: [[ group.build_time ]]">[[ group.version ]]</span>
-[% endif %]
-[% if group.branch and group.branch != 'unknown' %]
-<a class="badge badge-branch" href="[[ group.branch_url ]]">[[ group.branch ]]</a>
-[% endif %]
-[% if group.pr %]
-<a class="badge badge-pr" href="[[ group.pr_url ]]">#[[ group.pr ]]</a>
-[% endif %]
-[% if group.virtual_lab %]
-<span class="badge badge-vlab" title="Virtual Lab">Virtual Lab</span>
-[% endif %]
-</div>
-<div class="run-header">
-<span>Timestamp</span>
-<span>Plan</span>
-<span>Status</span>
-<span>Backend</span>
-<span>Router</span>
-<span>Client</span>
-<span>Runners</span>
-<span>Dur.</span>
-<span>Report</span>
-</div>
-<div class="runs">
-[% for run in group.runs %]
-<div class="run-row">
-<span class="run-time">[[ run.started_at|format_ts ]]</span>
-<span class="run-plan">[[ run.test_plan or '-' ]]</span>
-<span><span class="badge badge-[[ run.badge_status ]]">[[ run.badge_status ]]</span></span>
-<span class="run-client">[[ run.backend ]]</span>
-<span class="run-router" title="[% if run.installed_version %]Version: [[ run.installed_version ]]&#10;OpenWrt: [[ run.openwrt_version ]][% endif %]">[% if run.router_id == 'unknown' and run.installed_version and run.installed_version != 'unknown' %][[ run.installed_version ]][% elif run.router_id != 'unknown' %][[ run.router_id ]][% else %]-[% endif %]</span>
-<span class="run-client">[[ run.client_type ]]</span>
-<span class="runner-summary">[% if run.runners %][% for runner in run.runners %]<span class="rname">[[ runner.name ]]</span> <span class="rcount"><span class="rp">[[ get(runner, 'counts.passed', 0) ]]✓</span><span class="rf">[[ get(runner, 'counts.failed', 0) + get(runner, 'counts.errors', 0) ]]✗</span><span class="rs">[[ get(runner, 'counts.skipped', 0) ]]○</span></span>[% if not loop.last %] &nbsp;/ [% endif %][% endfor %][% else %]<span class="rcount"><span class="rp">[[ get(run, 'counts.passed', 0) ]]✓</span> <span class="rf">[[ get(run, 'counts.failed', 0) ]]✗</span> <span class="rs">[[ get(run, 'counts.skipped', 0) ]]○</span></span>[% endif %]</span>
-<span class="run-dur">[[ run.duration_ms|format_duration ]]</span>
-<span class="run-link"><a href="[[ run.report_path ]]">View</a></span>
+<div class="commit-group" data-labs="[[ group.lab_types|join(' ') ]]">
+  <div class="commit-header">
+  [% if group.commit and group.commit != 'unknown' and group.commit_url %]
+    <span class="hash"><a href="[[ group.commit_url ]]">[[ group.short ]]</a></span>
+  [% else %]
+    <span class="hash">[[ group.short ]]</span>
+  [% endif %]
+  [% if group.version and group.version != 'unknown' %]
+    <span class="badge badge-version" title="OpenWrt: [[ group.openwrt_version ]] | Built: [[ group.build_time ]]">[[ group.version ]]</span>
+  [% endif %]
+  [% if group.branch and group.branch != 'unknown' %]
+    <a class="badge badge-branch" href="[[ group.branch_url ]]">[[ group.branch ]]</a>
+  [% endif %]
+  [% if group.pr %]
+    <a class="badge badge-pr" href="[[ group.pr_url ]]">#[[ group.pr ]]</a>
+  [% endif %]
+  [% for lab in group.lab_types %]
+    <span class="badge badge-lab">[[ lab_display[lab] ]]</span>
+  [% endfor %]
+  </div>
+
+  <div class="matrix-wrap">
+    <table class="matrix-table">
+      <thead>
+        <tr>
+          <th>Lab</th>
+          [% for tier in group.tiers %]
+          <th>[[ tier|replace('-', ' ') ]]</th>
+          [% endfor %]
+        </tr>
+      </thead>
+      <tbody>
+        [% for lab in group.labs %]
+        <tr>
+          <th class="row-label">
+            <div class="lab-label">
+              <span class="lab-dot" style="background:[[ lab_dot_color[lab] ]];"></span>
+              <span>[[ lab_display[lab] ]]</span>
+            </div>
+          </th>
+          [% for tier in group.tiers %]
+          [% set cell = matrix_get(group.matrix, lab, tier) %]
+          [% if cell %]
+          <td class="matrix-cell [% if cell.badge_status == 'passed' %]cell-passed[% else %]cell-failed[% endif %]">
+            <div class="cell-status">
+              <span class="badge badge-[[ cell.badge_status ]]">[[ cell.badge_status ]]</span>
+              <span class="cell-counts"><span class="pass">[[ get(cell, 'counts.passed', 0) ]] passed</span> · <span class="fail">[[ get(cell, 'counts.failed', 0) + get(cell, 'counts.errors', 0) ]] failed</span> · <span class="skip">[[ get(cell, 'counts.skipped', 0) ]] skipped</span></span>
+            </div>
+            <div class="cell-meta">
+              [% if cell.scope %]<span class="badge badge-scope">[[ cell.scope ]]</span>[% endif %]
+              <span>[[ cell.duration_ms|format_duration ]]</span>
+              [% if cell.started_at %]<span>[[ cell.started_at|format_ts ]]</span>[% endif %]
+            </div>
+            <div class="cell-link"><a href="[[ cell.report_path ]]">View report</a></div>
+          </td>
+          [% else %]
+          <td class="matrix-cell cell-empty">&mdash;</td>
+          [% endif %]
+          [% endfor %]
+        </tr>
+        [% endfor %]
+      </tbody>
+    </table>
+  </div>
+
+  <details class="runs-details">
+    <summary>All runs ([[ group.runs|length ]])</summary>
+    <div class="run-header">
+      <span>Timestamp</span>
+      <span>Plan</span>
+      <span>Status</span>
+      <span>Scope</span>
+      <span>Router</span>
+      <span>Client</span>
+      <span>Runners</span>
+      <span>Dur.</span>
+      <span>Report</span>
+    </div>
+    <div class="runs">
+    [% for run in group.runs %]
+      <div class="run-row">
+        <span class="run-time">[[ run.started_at|format_ts ]]</span>
+        <span class="run-plan">[[ run.test_plan or '-' ]]</span>
+        <span><span class="badge badge-[[ run.badge_status ]]">[[ run.badge_status ]]</span></span>
+        <span class="run-client">[[ run.scope or '-' ]]</span>
+        <span class="run-router" title="[% if run.installed_version %]Version: [[ run.installed_version ]]&#10;OpenWrt: [[ run.openwrt_version ]][% endif %]">[% if run.router_id == 'unknown' and run.installed_version and run.installed_version != 'unknown' %][[ run.installed_version ]][% elif run.router_id != 'unknown' %][[ run.router_id ]][% else %]-[% endif %]</span>
+        <span class="run-client">[[ run.client_type ]]</span>
+        <span class="runner-summary">[% if run.runners %][% for runner in run.runners %]<span class="rname">[[ runner.name ]]</span> <span class="rcount"><span class="rp">[[ get(runner, 'counts.passed', 0) ]]✓</span><span class="rf">[[ get(runner, 'counts.failed', 0) + get(runner, 'counts.errors', 0) ]]✗</span><span class="rs">[[ get(runner, 'counts.skipped', 0) ]]○</span></span>[% if not loop.last %] &nbsp;/ [% endif %][% endfor %][% else %]<span class="rcount"><span class="rp">[[ get(run, 'counts.passed', 0) ]]✓</span> <span class="rf">[[ get(run, 'counts.failed', 0) + get(run, 'counts.errors', 0) ]]✗</span> <span class="rs">[[ get(run, 'counts.skipped', 0) ]]○</span></span>[% endif %]</span>
+        <span class="run-dur">[[ run.duration_ms|format_duration ]]</span>
+        <span class="run-link"><a href="[[ run.report_path ]]">View</a></span>
+      </div>
+    [% endfor %]
+    </div>
+  </details>
 </div>
 [% endfor %]
-</div>
-</div>
-[% endfor %]
 [% endif %]
 </div>
+<script>
+(() => {
+  const params = new URLSearchParams(window.location.search);
+  const lab = params.get('lab');
+  const groups = document.querySelectorAll('.commit-group');
+  const banner = document.getElementById('filter-banner');
+  const label = document.getElementById('filter-lab-name');
+  const clearLink = document.getElementById('clear-filter-link');
+  const container = document.querySelector('.container');
+  const empty = document.createElement('div');
+  let visible = 0;
+  if(!lab){
+    return;
+  }
+  groups.forEach((group) => {
+    const labs = (group.getAttribute('data-labs') || '').split(/\s+/).filter(Boolean);
+    const match = labs.indexOf(lab) !== -1;
+    group.style.display = match ? '' : 'none';
+    if(match){
+      visible += 1;
+    }
+  });
+  if(label){
+    label.textContent = lab;
+  }
+  if(clearLink){
+    clearLink.href = window.location.pathname;
+  }
+  if(banner){
+    banner.classList.add('show');
+  }
+  if(!visible){
+    empty.className = 'empty';
+    empty.textContent = 'No commit groups match the selected lab filter.';
+    container.appendChild(empty);
+  }
+})();
+</script>
 </body>
 </html>

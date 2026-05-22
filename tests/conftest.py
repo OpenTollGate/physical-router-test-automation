@@ -236,6 +236,20 @@ def pytest_addoption(parser):
     parser.addoption("--lock-phase", default=None,
                      help="Auto-acquire router lock with this phase description. "
                           "Prevents concurrent sessions on the same router.")
+    parser.addoption("--lab-type", default=None,
+                     choices=["virtual-lab", "gcloud", "physical", "browserstack"],
+                     help="Lab environment type. Default: TOLLGATE_LAB_TYPE env or 'physical'")
+
+
+def pytest_configure(config):
+    lab_type_opt = config.getoption("--lab-type", default=None)
+    if lab_type_opt:
+        os.environ["TOLLGATE_LAB_TYPE"] = lab_type_opt
+    elif not os.environ.get("TOLLGATE_LAB_TYPE"):
+        if os.environ.get("TOLLGATE_VIRTUAL_LAB"):
+            os.environ["TOLLGATE_LAB_TYPE"] = "virtual-lab"
+        else:
+            os.environ["TOLLGATE_LAB_TYPE"] = "physical"
 
 
 @pytest.fixture(scope="session")
@@ -627,6 +641,22 @@ def pytest_runtest_setup(item):
             pytest.skip(
                 f"PR-specific test for #{pr_num} (testing #{expected_pr})"
             )
+
+    # Lab type filtering
+    lab_type = os.environ.get("TOLLGATE_LAB_TYPE", "")
+    if not lab_type and os.environ.get("TOLLGATE_VIRTUAL_LAB"):
+        lab_type = "virtual-lab"
+    if not lab_type:
+        lab_type = "physical"
+
+    if "physical_only" in item.keywords and lab_type != "physical":
+        pytest.skip(f"Physical-only test (current lab: {lab_type})")
+
+    if "virtual_lab_only" in item.keywords and lab_type != "virtual-lab":
+        pytest.skip(f"Virtual-lab-only test (current lab: {lab_type})")
+
+    if "gcloud_only" in item.keywords and lab_type != "gcloud":
+        pytest.skip(f"GCloud-only test (current lab: {lab_type})")
 
     client_mode = item.config.getoption("--client")
     if client_mode in ("mac", "linux", "container"):

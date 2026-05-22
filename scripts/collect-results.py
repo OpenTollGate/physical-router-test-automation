@@ -389,6 +389,14 @@ def main():
     parser.add_argument("--allow-failures", action="store_true", default=False)
     parser.add_argument("--started-at", default=None)
     parser.add_argument("--finished-at", default=None)
+    parser.add_argument("--lab-type", default=None,
+                        help="Lab environment type (virtual-lab, gcloud, physical)")
+    parser.add_argument("--profile", default=None,
+                        help="Test profile name (e.g. virtual-lab-api)")
+    parser.add_argument("--tier", default=None,
+                        help="Test tier (api, captive-portal, luci-ui)")
+    parser.add_argument("--scope", default=None,
+                        help="Test scope (quick, full)")
     args = parser.parse_args()
 
     run_dir = os.path.abspath(args.run_dir)
@@ -533,6 +541,7 @@ def main():
     }
 
     lab = {
+        "type": args.lab_type or ("virtual-lab" if args.virtual_lab else "unknown"),
         "router_id": args.router_id or "unknown",
         "router_model": args.router_model or "unknown",
         "router_arch": args.router_arch or "unknown",
@@ -553,6 +562,9 @@ def main():
         "sut": sut,
         "test_suite": test_suite,
         "lab": lab,
+        "profile": args.profile or "",
+        "tier": args.tier or "",
+        "scope": args.scope or "",
         "counts": counts,
         "runners": runners,
     }

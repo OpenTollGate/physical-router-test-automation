@@ -1,0 +1,12 @@
+name: physical-phone-api
+description: "Full API test suite on physical phone lab"
+matrix:
+  lab: physical-phone
+  tier: api
+  scope: full
+runner: pytest
+pytest:
+  markers: "api and extended"
+  testpaths: "tests/api"
+playwright: null
+env: {}
