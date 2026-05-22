@@ -655,17 +655,24 @@ def _configure_beta_upstream(beta_ip: str) -> None:
         uci set dhcp.upstream.leasetime='2m'
         uci commit dhcp
 
+        # Assign upstream to lan zone so DHCP/DNS traffic is accepted
+        uci add_list firewall.@zone[0].network='upstream'
+        uci commit firewall
+
+        /etc/init.d/network restart
+        /etc/init.d/firewall restart
+        /etc/init.d/dnsmasq restart
+
         iptables -t nat -A POSTROUTING -s 10.99.98.0/24 -o br-lan -j MASQUERADE
         iptables -A FORWARD -i eth1 -o br-lan -j ACCEPT
         iptables -A FORWARD -i br-lan -o eth1 -m state --state RELATED,ESTABLISHED -j ACCEPT
-
-        /etc/init.d/network restart
-        /etc/init.d/dnsmasq restart
-    """, timeout=30)
-    time.sleep(5)
-    r = _inner_ssh(beta_ip, "cat /var/run/dnsmasq.pid 2>/dev/null && echo DHCP_OK", timeout=10)
+    """, timeout=45)
+    time.sleep(8)
+    r = _inner_ssh(beta_ip, "pgrep -f dnsmasq >/dev/null && echo DHCP_OK", timeout=10)
     if "DHCP_OK" not in r.stdout:
         log.warning("Beta DHCP server may not be running")
+    else:
+        log.info("Beta DHCP server confirmed running")
 
 
 def _configure_alpha_wan(alpha_ip: str) -> None:
@@ -677,7 +684,9 @@ def _configure_alpha_wan(alpha_ip: str) -> None:
         uci commit network
         /etc/init.d/network restart
     """, timeout=30)
-    time.sleep(10)
+    # Force DHCP renewal — the initial boot attempt may have timed out
+    _inner_ssh(alpha_ip, "ifdown wan 2>/dev/null; sleep 2; ifup wan", timeout=15)
+    time.sleep(12)
     r = _inner_ssh(alpha_ip, "ip addr show eth1 2>/dev/null | grep 'inet '", timeout=10)
     if "10.99.98" in r.stdout:
         log.info("Alpha WAN got DHCP lease from Beta")
