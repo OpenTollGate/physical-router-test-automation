@@ -350,6 +350,7 @@ def submit_run(
     keep_vm_on_failure: bool = False,
 ) -> dict[str, str]:
     """Pre-flight artifact check, then create fire-and-forget GCP VM. Returns run metadata."""
+    cleanup_stale(max_age_hours=2)
     project = get_project()
     print(f"Waiting for CI artifact ({target.repo}@{target.branch}, arch=x86_64)...")
     artifact_run_id = ensure_target_artifact(target, timeout_s=artifact_timeout_s)
