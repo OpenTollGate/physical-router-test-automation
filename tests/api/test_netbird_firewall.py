@@ -1,30 +1,23 @@
-"""Tests for PR #108: Netbird firewall zone (wt0).
+"""Netbird firewall zone tests for the wt0 interface.
 
-These tests verify that the uci-defaults setup creates a firewall zone for
-the netbird interface (wt0) with correct policies and forwarding rules, and
-that the broken fw4 include is disabled.
+Verifies that the firewall zone for Netbird's WireGuard tunnel (wt0) is
+configured correctly when present. Originally written for PR #108 (closed);
+the feature ships in non-main/development builds only. Feature-detected
+so tests run against any firmware with the netbird zone configured and
+skip cleanly otherwise.
 
-Key behaviors under test:
-- Firewall zone 'netbird' exists with device wt0
-- Zone policies: input=ACCEPT, output=ACCEPT, forward=REJECT
-- Forwardings: netbird->lan, netbird->private (but NOT netbird->wan)
-- fw4 include (firewall.tollgate_rules) is not broken
-- setup_netbird_zone function exists in uci-defaults and is called
-- Sentinel file /etc/tollgate/netbird-zone-enabled exists
-
-Tests skip cleanly when PR #108 is not installed (no netbird zone in UCI).
+See: https://github.com/OpenTollGate/tollgate-module-basic-go/pull/108
 """
 
 import pytest
 
-pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.pr(108)]
+pytestmark = [pytest.mark.api, pytest.mark.extended]
 
 
 def _skip_if_no_netbird_zone(router):
-    """Skip if the netbird firewall zone is not configured (pre-PR #108)."""
     out = router.ssh("uci show firewall | grep netbird 2>/dev/null || echo NOT_FOUND")
     if "NOT_FOUND" in out or not out.strip():
-        pytest.skip("PR #108 not installed (no netbird zone in firewall UCI)")
+        pytest.skip("Netbird firewall zone not configured (no netbird zone in firewall UCI)")
 
 
 def _get_netbird_zone_config(router):

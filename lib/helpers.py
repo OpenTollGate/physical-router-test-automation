@@ -165,6 +165,57 @@ def skip_if_no_luci(router):
         pytest.skip("Cannot check LuCI availability")
 
 
+INCIDENTS_URL = "https://github.com/OpenTollGate/tollgate-knowledgebase/tree/main/incidents"
+
+
+def gate_bug_fix(fix_present, *, bug_id="", fix_pr=""):
+    """Gate a test on the presence of a bug fix in the deployed firmware.
+
+    If ``fix_present`` is False, marks the test as xfail (appears as
+    "known issue" in reports).  If True, does nothing — the test runs
+    normally and any failure is a real regression.
+
+    Usage (inline probe)::
+
+        from lib.helpers import gate_bug_fix
+
+        def test_something(router):
+            gate_bug_fix(
+                _has_profit_share_validation(router),
+                bug_id="profit-share-no-validation",
+                fix_pr="PR #86",
+            )
+            # ... test body ...
+
+    Usage (session-scoped, avoids repeating the probe)::
+
+        @pytest.fixture(scope="session")
+        def _validation_available(router):
+            return _has_profit_share_validation(router)
+
+        @pytest.fixture(autouse=True)
+        def _gate(request, _validation_available):
+            if request.node.originalname in _MUTATING_TESTS and not _validation_available:
+                gate_bug_fix(
+                    _validation_available,
+                    bug_id="profit-share-no-validation",
+                    fix_pr="PR #86",
+                )
+
+    Incident cross-reference — link to reported bugs in the knowledgebase::
+
+        See: https://github.com/OpenTollGate/tollgate-knowledgebase/tree/main/incidents/2026-05-01-crypto-rand.md
+
+    Args:
+        fix_present: Boolean — True if the fix is confirmed in firmware.
+        bug_id: Human-readable identifier (e.g. "crypto-rand-passwords").
+        fix_pr: PR or commit that fixes the bug (e.g. "PR #111").
+    """
+    if not fix_present:
+        reason = f"{bug_id} not fixed — expected in {fix_pr}" if fix_pr else f"{bug_id} not fixed in this firmware"
+        pytest.xfail(reason=reason)
+
+
 def skip_if_no_sessions_json(router):
     try:
         out = router.ssh("ls /etc/tollgate/sessions.json 2>/dev/null", timeout=5)

@@ -4,11 +4,12 @@ import time
 
 import pytest
 
+from lib.helpers import gate_bug_fix
+
 log = logging.getLogger("tollgate.profit_share_validation")
 
 pytestmark = [pytest.mark.api, pytest.mark.extended]
 
-_KNOWN_ISSUE_PR = "PR #86"
 _MUTATING_VALIDATION_TESTS = frozenset({
     "test_profit_share_boot_with_invalid_config",
     "test_profit_share_boot_with_empty_list",
@@ -34,8 +35,10 @@ def _validation_available(router):
 @pytest.fixture(autouse=True)
 def _gate_validation_tests(request, _validation_available):
     if request.node.originalname in _MUTATING_VALIDATION_TESTS and not _validation_available:
-        pytest.xfail(
-            f"ValidateProfitShare() not in firmware — expected in {_KNOWN_ISSUE_PR}"
+        gate_bug_fix(
+            _validation_available,
+            bug_id="profit-share-no-validation",
+            fix_pr="PR #86",
         )
 
 SERVICE_RESTART_WAIT = 3
