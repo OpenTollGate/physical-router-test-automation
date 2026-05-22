@@ -663,9 +663,12 @@ def _configure_beta_upstream(beta_ip: str) -> None:
         /etc/init.d/firewall restart
         /etc/init.d/dnsmasq restart
 
-        iptables -t nat -A POSTROUTING -s 10.99.98.0/24 -o br-lan -j MASQUERADE
-        iptables -A FORWARD -i eth1 -o br-lan -j ACCEPT
-        iptables -A FORWARD -i br-lan -o eth1 -m state --state RELATED,ESTABLISHED -j ACCEPT
+        # NAT masquerading for Alpha's internet access through Beta
+        nft add table ip tollgate-nat 2>/dev/null || true
+        nft add chain ip tollgate-nat postrouting "{ type nat hook postrouting priority srcnat ; policy accept ; }" 2>/dev/null || true
+        nft add rule ip tollgate-nat postrouting ip saddr 10.99.98.0/24 oifname "br-lan" masquerade 2>/dev/null || true
+        nft add rule ip filter forward iifname "eth1" accept 2>/dev/null || true
+        nft add rule ip filter forward oifname "eth1" ct state established,related accept 2>/dev/null || true
     """, timeout=45)
     time.sleep(8)
     r = _inner_ssh(beta_ip, "pgrep -f dnsmasq >/dev/null && echo DHCP_OK", timeout=10)
