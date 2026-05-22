@@ -9,6 +9,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -145,6 +146,46 @@ def _run(cmd: str, timeout: int = 120, check: bool = True) -> subprocess.Complet
     else:
         log.debug("cmd ok (%.1fs): %s", elapsed, redacted[:120])
     return r
+
+
+def _run_streaming(cmd: str, timeout: int = 120, check: bool = True) -> subprocess.CompletedProcess[str]:
+    """Run *cmd* via bash, streaming stdout line-by-line to the logger in real time."""
+    redacted = _redact(cmd[:300])
+    log.debug("run_streaming: %s", redacted)
+    t0 = time.monotonic()
+    proc = subprocess.Popen(
+        ["bash", "-c", cmd],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    lines: list[str] = []
+    assert proc.stdout is not None  # guaranteed by PIPE
+    try:
+        for raw_line in proc.stdout:
+            lines.append(raw_line)
+            log.info("[test] %s", _redact(raw_line.rstrip("\n")))
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        log.warning("run_streaming: killing process after %ds timeout", timeout)
+        proc.kill()
+        proc.wait(timeout=10)
+    elapsed = time.monotonic() - t0
+    stdout_text = "".join(lines)
+    rc = proc.returncode
+    if rc != 0:
+        err = _redact(stdout_text.strip()[-500:])
+        log.info("cmd failed (%.1fs, rc=%d): %s | tail: %s", elapsed, rc, redacted[:120], err[:300])
+        if check:
+            raise RuntimeError(f"Command failed ({rc}): {cmd[:120]}\n{err}")
+    else:
+        log.debug("cmd ok (%.1fs): %s", elapsed, redacted[:120])
+    return subprocess.CompletedProcess(
+        args=["bash", "-c", cmd],
+        returncode=rc,
+        stdout=stdout_text,
+        stderr="",
+    )
 
 
 def _virt_lab_workdir() -> Path:
@@ -353,7 +394,7 @@ def write_env_file(config: WorkerConfig) -> None:
         f"TOLLGATE_VIRTUAL_LAB=1\n"
         f"TOLLGATE_VIRTUAL_GATEWAY={OPENWRT_IP}\n"
         f"TOLLGATE_NDS_PORTAL_PORT=80\n"
-        f"TOLLGATE_TEST_MINT_URL=https://testnut.cashu.space\n"
+        f"TOLLGATE_TEST_MINT_URL=https://nofee.testnut.cashu.space\n"
         f"TOLLGATE_CLIENT_IP={DEBIAN_IP}\n"
         f"TOLLGATE_CLIENT_MAC={DEBIAN_MAC}\n"
         f"TOLLGATE_CONTAINER_HOST={DEBIAN_IP}\n"
@@ -794,7 +835,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
             f"{expected_pr}--client=container --results {results_dir} "
             f"--junitxml={results_dir}/raw/scenarios/junit.xml "
             f"--html={results_dir}/raw/scenarios/report.html --self-contained-html "
-            f">{results_dir}/raw/scenarios/output.log 2>&1; scenario_exit=$?; "
+            f"2>&1 | tee {results_dir}/raw/scenarios/output.log; scenario_exit=${{PIPESTATUS[0]}}; "
         )
     two_router_cmd = ""
     if config.two_router:
@@ -804,7 +845,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
             f"{expected_pr}--client=container --results {results_dir} "
             f"--junitxml={results_dir}/raw/two-router/junit.xml "
             f"--html={results_dir}/raw/two-router/report.html --self-contained-html "
-            f">{results_dir}/raw/two-router/output.log 2>&1; two_router_exit=$?; "
+            f"2>&1 | tee {results_dir}/raw/two-router/output.log; two_router_exit=${{PIPESTATUS[0]}}; "
         )
     test_cmd = (
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
@@ -815,13 +856,13 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         f"{expected_pr}--client=container --results {results_dir} "
         f"--junitxml={results_dir}/raw/visual/junit.xml "
         f"--html={results_dir}/raw/visual/report.html --self-contained-html "
-        f">{results_dir}/raw/visual/output.log 2>&1; visual_exit=$?; "
+        f"2>&1 | tee {results_dir}/raw/visual/output.log; visual_exit=${{PIPESTATUS[0]}}; "
         f"python3 -m pytest tests/api/ -v --tb=short --timeout=300 --backend={backend} "
         f"{expected_pr}--client=container --results {results_dir} "
         f"--ignore=tests/api/test_visual_happy_path.py "
         f"--junitxml={results_dir}/raw/api/junit.xml "
         f"--html={results_dir}/raw/api/report.html --self-contained-html "
-        f">{results_dir}/raw/api/output.log 2>&1; api_exit=$?; "
+        f"2>&1 | tee {results_dir}/raw/api/output.log; api_exit=${{PIPESTATUS[0]}}; "
         f"{scenario_cmd}"
         f"{two_router_cmd}"
         "worst_exit=0; "
@@ -829,7 +870,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         "  if [ \"$e\" -ne 0 ] && [ \"$e\" -gt \"$worst_exit\" ]; then worst_exit=$e; fi; done; "
         "exit \"$worst_exit\""
     )
-    r = _run(test_cmd, timeout=1500, check=False)
+    r = _run_streaming(test_cmd, timeout=3600, check=False)
     log.info("Test stdout (%d bytes): %s", len(r.stdout), _redact(r.stdout[-2000:]))
     return r.returncode
 
@@ -878,6 +919,9 @@ def publish_results(config: WorkerConfig, results_dir: str) -> str:
 
     try:
         _run(
+            f"git config --global user.email 'tollgate-ci@users.noreply.github.com' && "
+            f"git config --global user.name 'TollGate CI' && "
+            f"git config --global --add safe.directory {TEST_DIR} && "
             f"cd {TEST_DIR} && TOLLGATE_GH_PAGES_CNAME=tests.tollgate.me "
             f"./scripts/publish-report.sh {shlex.quote(results_dir)}",
             timeout=300,
@@ -916,6 +960,57 @@ def post_pr_comment(config: WorkerConfig, report_url: str, counts: dict[str, Any
 
 def stop_inner_vms() -> None:
     _run("killall -9 qemu-system-x86_64 2>/dev/null || true", timeout=15, check=False)
+
+
+def _start_vm_log_streaming(config: WorkerConfig) -> list[tuple[threading.Thread, subprocess.Popen[str]]]:
+    streams: list[tuple[threading.Thread, subprocess.Popen[str]]] = []
+
+    def _stream_reader(prefix: str, proc: subprocess.Popen[str]) -> None:
+        assert proc.stdout is not None
+        try:
+            for raw_line in proc.stdout:
+                log.info("[%s] %s", prefix, _redact(raw_line.rstrip("\n")))
+        except Exception:
+            pass
+
+    targets = [
+        ("openwrt", OPENWRT_IP, f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
+         f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+         f"-o ConnectTimeout=5 root@{OPENWRT_IP} 'logread -f'"),
+        ("debian", DEBIAN_IP, f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
+         f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+         f"-o ConnectTimeout=5 root@{DEBIAN_IP} "
+         "'journalctl -f -u container-test.service 2>/dev/null || tail -f /var/log/syslog 2>/dev/null || echo NO_LOGS'"),
+    ]
+    if config.two_router or config.reseller_scenarios:
+        targets.append(
+            ("seller", SELLER_OPENWRT_IP, f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
+             f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+             f"-o ConnectTimeout=5 root@{SELLER_OPENWRT_IP} 'logread -f'"),
+        )
+
+    for prefix, _ip, ssh_cmd in targets:
+        proc = subprocess.Popen(
+            ["bash", "-c", ssh_cmd],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        t = threading.Thread(target=_stream_reader, args=(prefix, proc), daemon=True)
+        t.start()
+        streams.append((t, proc))
+
+    return streams
+
+
+def _stop_vm_log_streaming(streams: list[tuple[threading.Thread, subprocess.Popen[str]]]) -> None:
+    for t, proc in streams:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    for t, proc in streams:
+        t.join(timeout=5)
 
 
 def delete_self(config: WorkerConfig) -> None:
@@ -966,7 +1061,11 @@ def run_worker(config: WorkerConfig) -> int:
         wait_for_backend()
 
         log.info("[8/9] Run tests (results_dir=%s)", results_dir)
-        test_exit = run_tests(config, results_dir)
+        vm_streams = _start_vm_log_streaming(config)
+        try:
+            test_exit = run_tests(config, results_dir)
+        finally:
+            _stop_vm_log_streaming(vm_streams)
         log.info("Tests finished with exit=%d (%.1fs elapsed)", test_exit, time.monotonic() - wall_t0)
 
         finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
