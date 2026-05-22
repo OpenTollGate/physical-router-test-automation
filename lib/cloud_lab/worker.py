@@ -545,7 +545,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
         log.info("Starting Beta OpenWrt VM (upstream router)...")
         beta_proc = _launch_qemu(
             name="openwrt-beta",
-            memory_mb=256,
+            memory_mb=384,
             cpus=1,
             disk_name="tollgate-seller.qcow2",
             tap_name="tg-poc-tap3",
@@ -571,7 +571,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
         log.info("Starting managed seller OpenWrt VM for reseller scenarios...")
         seller_proc = _launch_qemu(
             name="openwrt-seller",
-            memory_mb=256,
+            memory_mb=384,
             cpus=1,
             disk_name="tollgate-seller.qcow2",
             tap_name="tg-poc-tap3",
@@ -591,7 +591,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
     log.info("Starting Alpha OpenWrt VM...")
     reseller_proc = _launch_qemu(
         name="openwrt",
-        memory_mb=256,
+        memory_mb=384,
         cpus=1,
         disk_name="tollgate-poc.qcow2",
         tap_name="tg-poc-tap",
