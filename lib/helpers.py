@@ -274,6 +274,46 @@ def wait_for_degraded(router, timeout=120, interval=5):
     return False
 
 
+def get_mint_ip_map(router):
+    """Resolve configured mint URLs to IPs via nslookup on the router.
+
+    Returns dict mapping mint URL -> resolved IP address.
+    """
+    import re
+    from urllib.parse import urlparse
+
+    cfg_raw = router.ssh("cat /etc/tollgate/config.json")
+    cfg = json.loads(cfg_raw)
+    urls = [m["url"] for m in cfg.get("accepted_mints", []) if "url" in m]
+    ip_map = {}
+    for url in urls:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        out = router.ssh(f"nslookup {hostname} 2>/dev/null || echo FAILED")
+        ips = re.findall(r"Address:\s*(\d+\.\d+\.\d+\.\d+)", out)
+        for ip in reversed(ips):
+            if not ip.startswith("127."):
+                ip_map[url] = ip
+                break
+    return ip_map
+
+
+def block_mints(router, mint_ip_map):
+    """Block all mint IPs via iptables OUTPUT REJECT. Returns list of (url, ip) rules."""
+    rules = []
+    for url, ip in mint_ip_map.items():
+        router.ssh(f"iptables -I OUTPUT -d {ip} -p tcp --dport 443 -j REJECT")
+        rules.append((url, ip))
+    return rules
+
+
+def unblock_mints(router, rules):
+    """Remove iptables OUTPUT REJECT rules created by block_mints()."""
+    for url, ip in rules:
+        router.ssh(f"iptables -D OUTPUT -d {ip} -p tcp --dport 443 -j REJECT"
+                   f" 2>/dev/null || true")
+
+
 def skip_if_no_degraded_support(router):
     resp = router.get_tollgate_status()
     if resp.get("success") is not True:

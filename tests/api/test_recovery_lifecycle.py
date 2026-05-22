@@ -13,7 +13,6 @@ import json
 import logging
 import re
 import time
-from urllib.parse import urlparse
 
 import pytest
 
@@ -23,6 +22,9 @@ from lib.helpers import (
     wait_for_full_merchant,
     wait_for_degraded,
     skip_if_no_degraded_support,
+    get_mint_ip_map,
+    block_mints,
+    unblock_mints,
 )
 
 log = logging.getLogger("tollgate.recovery_lifecycle")
@@ -33,40 +35,9 @@ HEALTH_POLL_INTERVAL = 5
 HEALTH_POLL_TIMEOUT = 180
 
 
-def _get_mint_ip_map(router):
-    cfg_raw = router.ssh("cat /etc/tollgate/config.json")
-    cfg = json.loads(cfg_raw)
-    urls = [m["url"] for m in cfg.get("accepted_mints", []) if "url" in m]
-    ip_map = {}
-    for url in urls:
-        parsed = urlparse(url)
-        hostname = parsed.hostname
-        out = router.ssh(f"nslookup {hostname} 2>/dev/null || echo FAILED")
-        ips = re.findall(r"Address:\s*(\d+\.\d+\.\d+\.\d+)", out)
-        for ip in reversed(ips):
-            if not ip.startswith("127."):
-                ip_map[url] = ip
-                break
-    return ip_map
-
-
-def _block_all_mints(router, mint_ip_map):
-    rules = []
-    for url, ip in mint_ip_map.items():
-        router.ssh(f"iptables -I OUTPUT -d {ip} -p tcp --dport 443 -j REJECT")
-        rules.append((url, ip))
-    return rules
-
-
-def _unblock_mints(router, rules):
-    for url, ip in rules:
-        router.ssh(f"iptables -D OUTPUT -d {ip} -p tcp --dport 443 -j REJECT"
-                   f" 2>/dev/null || true")
-
-
 @pytest.fixture(scope="module")
 def mint_ip_map(router):
-    ip_map = _get_mint_ip_map(router)
+    ip_map = get_mint_ip_map(router)
     if not ip_map:
         pytest.skip("Could not resolve any mint hostnames to IPs")
     return ip_map
@@ -100,7 +71,7 @@ def test_multiple_recovery_cycles(router, mint_ip_map):
     for cycle in range(2):
         log.info("=== Recovery cycle %d ===", cycle + 1)
 
-        rules = _block_all_mints(router, mint_ip_map)
+        rules = block_mints(router, mint_ip_map)
         try:
             degraded = wait_for_degraded(
                 router, timeout=HEALTH_POLL_TIMEOUT, interval=HEALTH_POLL_INTERVAL
@@ -110,7 +81,7 @@ def test_multiple_recovery_cycles(router, mint_ip_map):
             )
             log.info("Cycle %d: degraded", cycle + 1)
 
-            _unblock_mints(router, rules)
+            unblock_mints(router, rules)
             recovered = wait_for_full_merchant(
                 router, timeout=HEALTH_POLL_TIMEOUT, interval=HEALTH_POLL_INTERVAL
             )
@@ -119,7 +90,7 @@ def test_multiple_recovery_cycles(router, mint_ip_map):
             )
             log.info("Cycle %d: recovered", cycle + 1)
         finally:
-            _unblock_mints(router, rules)
+            unblock_mints(router, rules)
 
     log.info("Both recovery cycles completed successfully")
 
@@ -139,20 +110,20 @@ def test_health_tracker_alive_after_recovery(router, mint_ip_map):
         pytest.skip("Service not running as full merchant")
 
     # Phase 1: First degrade and recover
-    rules = _block_all_mints(router, mint_ip_map)
+    rules = block_mints(router, mint_ip_map)
     try:
         degraded = wait_for_degraded(router, timeout=HEALTH_POLL_TIMEOUT)
         assert degraded, "Service did not enter degraded mode (cycle 1)"
 
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
         recovered = wait_for_full_merchant(router, timeout=HEALTH_POLL_TIMEOUT)
         assert recovered, "Service did not recover (cycle 1)"
         log.info("Phase 1: First recovery complete")
     finally:
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
 
     # Phase 2: Block again and verify tracker detects it
-    rules2 = _block_all_mints(router, mint_ip_map)
+    rules2 = block_mints(router, mint_ip_map)
     try:
         degraded2 = wait_for_degraded(router, timeout=HEALTH_POLL_TIMEOUT)
         assert degraded2, (
@@ -167,7 +138,7 @@ def test_health_tracker_alive_after_recovery(router, mint_ip_map):
             "Expected 'became unreachable' or 'unreachable' in logs for second degradation"
         )
     finally:
-        _unblock_mints(router, rules2)
+        unblock_mints(router, rules2)
 
     # Restore
     wait_for_full_merchant(router, timeout=HEALTH_POLL_TIMEOUT)
@@ -191,7 +162,7 @@ def test_flapping_mint_hysteresis(router, mint_ip_map):
         pytest.skip("Service not running as full merchant")
 
     # Block to enter degraded
-    rules = _block_all_mints(router, mint_ip_map)
+    rules = block_mints(router, mint_ip_map)
     try:
         degraded = wait_for_degraded(router, timeout=HEALTH_POLL_TIMEOUT)
         if not degraded:
@@ -199,12 +170,12 @@ def test_flapping_mint_hysteresis(router, mint_ip_map):
         log.info("Degraded: starting flapping sequence")
 
         # Brief unblock — not enough for 3 consecutive probes
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
         log.info("Brief unblock (10s) — simulating flapping mint")
         time.sleep(10)
 
         # Re-block before hysteresis threshold
-        rules = _block_all_mints(router, mint_ip_map)
+        rules = block_mints(router, mint_ip_map)
         log.info("Re-blocked after brief unblock")
         time.sleep(5)
 
@@ -218,11 +189,11 @@ def test_flapping_mint_hysteresis(router, mint_ip_map):
             )
 
         # Full unblock for real recovery
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
         recovered = wait_for_full_merchant(router, timeout=HEALTH_POLL_TIMEOUT)
         assert recovered, (
             "Service did not recover after full unblock"
         )
         log.info("Full recovery after flapping sequence")
     finally:
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)

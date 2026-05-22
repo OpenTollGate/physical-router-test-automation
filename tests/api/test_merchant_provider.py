@@ -16,7 +16,6 @@ import logging
 import re
 import threading
 import time
-from urllib.parse import urlparse
 
 import pytest
 
@@ -27,6 +26,9 @@ from lib.helpers import (
     wait_for_degraded,
     skip_if_no_degraded_support,
     skip_if_no_cli_socket,
+    get_mint_ip_map,
+    block_mints,
+    unblock_mints,
 )
 
 log = logging.getLogger("tollgate.merchant_provider")
@@ -37,40 +39,9 @@ HEALTH_POLL_INTERVAL = 5
 HEALTH_POLL_TIMEOUT = 180
 
 
-def _get_mint_ip_map(router):
-    cfg_raw = router.ssh("cat /etc/tollgate/config.json")
-    cfg = json.loads(cfg_raw)
-    urls = [m["url"] for m in cfg.get("accepted_mints", []) if "url" in m]
-    ip_map = {}
-    for url in urls:
-        parsed = urlparse(url)
-        hostname = parsed.hostname
-        out = router.ssh(f"nslookup {hostname} 2>/dev/null || echo FAILED")
-        ips = re.findall(r"Address:\s*(\d+\.\d+\.\d+\.\d+)", out)
-        for ip in reversed(ips):
-            if not ip.startswith("127."):
-                ip_map[url] = ip
-                break
-    return ip_map
-
-
-def _block_all_mints(router, mint_ip_map):
-    rules = []
-    for url, ip in mint_ip_map.items():
-        router.ssh(f"iptables -I OUTPUT -d {ip} -p tcp --dport 443 -j REJECT")
-        rules.append((url, ip))
-    return rules
-
-
-def _unblock_mints(router, rules):
-    for url, ip in rules:
-        router.ssh(f"iptables -D OUTPUT -d {ip} -p tcp --dport 443 -j REJECT"
-                   f" 2>/dev/null || true")
-
-
 @pytest.fixture(scope="module")
 def mint_ip_map(router):
-    ip_map = _get_mint_ip_map(router)
+    ip_map = get_mint_ip_map(router)
     if not ip_map:
         pytest.skip("Could not resolve any mint hostnames to IPs")
     return ip_map
@@ -101,17 +72,17 @@ def degraded_from_full(router, mint_ip_map):
     balance_resp = router.get_wallet_balance()
     pre_balance = balance_resp.get("data", {}).get("balance_sats", 0)
 
-    rules = _block_all_mints(router, mint_ip_map)
+    rules = block_mints(router, mint_ip_map)
     log.info("Blocked %d mint IPs for degraded setup", len(rules))
 
     degraded = wait_for_degraded(router, timeout=HEALTH_POLL_TIMEOUT, interval=HEALTH_POLL_INTERVAL)
     if not degraded:
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
         pytest.skip(f"Service did not enter degraded mode within {HEALTH_POLL_TIMEOUT}s")
 
     yield rules, pre_balance
 
-    _unblock_mints(router, rules)
+    unblock_mints(router, rules)
     log.info("Cleaned up iptables rules")
 
 
@@ -127,13 +98,13 @@ def test_cli_balance_after_recovery(router, mint_ip_map):
     balance_before = router.get_wallet_balance()
     pre_balance = balance_before.get("data", {}).get("balance_sats", 0)
 
-    rules = _block_all_mints(router, mint_ip_map)
+    rules = block_mints(router, mint_ip_map)
     try:
         degraded = wait_for_degraded(router, timeout=HEALTH_POLL_TIMEOUT)
         if not degraded:
             pytest.skip("Service did not enter degraded mode")
 
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
         recovered = wait_for_full_merchant(router, timeout=HEALTH_POLL_TIMEOUT)
         assert recovered, "Service did not recover after unblocking mints"
 
@@ -147,7 +118,7 @@ def test_cli_balance_after_recovery(router, mint_ip_map):
             "CLI may be reading from stale merchant."
         )
     finally:
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
 
 
 def test_cli_wallet_info_after_recovery(router, mint_ip_map):
@@ -158,7 +129,7 @@ def test_cli_wallet_info_after_recovery(router, mint_ip_map):
     if not is_full_merchant(router):
         pytest.skip("Service not running as full merchant")
 
-    rules = _block_all_mints(router, mint_ip_map)
+    rules = block_mints(router, mint_ip_map)
     try:
         degraded = wait_for_degraded(router, timeout=HEALTH_POLL_TIMEOUT)
         if not degraded:
@@ -169,7 +140,7 @@ def test_cli_wallet_info_after_recovery(router, mint_ip_map):
             f"wallet info failed in degraded mode: {info_degraded}"
         )
 
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
         recovered = wait_for_full_merchant(router, timeout=HEALTH_POLL_TIMEOUT)
         assert recovered, "Service did not recover"
 
@@ -183,7 +154,7 @@ def test_cli_wallet_info_after_recovery(router, mint_ip_map):
             f"mint_count should be >0 after recovery, got {data['mint_count']}"
         )
     finally:
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
 
 
 def test_http_endpoints_degraded_responses(router, mint_ip_map):
@@ -191,7 +162,7 @@ def test_http_endpoints_degraded_responses(router, mint_ip_map):
     response (not 500 or panic)."""
     skip_if_no_degraded_support(router)
 
-    rules = _block_all_mints(router, mint_ip_map)
+    rules = block_mints(router, mint_ip_map)
     try:
         degraded = wait_for_degraded(router, timeout=HEALTH_POLL_TIMEOUT)
         if not degraded:
@@ -215,7 +186,7 @@ def test_http_endpoints_degraded_responses(router, mint_ip_map):
             f"/balance returned {code_balance} in degraded mode"
         )
     finally:
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
 
 
 def test_http_endpoints_work_after_recovery(router, mint_ip_map):
@@ -225,13 +196,13 @@ def test_http_endpoints_work_after_recovery(router, mint_ip_map):
     if not is_full_merchant(router):
         pytest.skip("Service not running as full merchant")
 
-    rules = _block_all_mints(router, mint_ip_map)
+    rules = block_mints(router, mint_ip_map)
     try:
         degraded = wait_for_degraded(router, timeout=HEALTH_POLL_TIMEOUT)
         if not degraded:
             pytest.skip("Service did not enter degraded mode")
 
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
         recovered = wait_for_full_merchant(router, timeout=HEALTH_POLL_TIMEOUT)
         assert recovered, "Service did not recover"
 
@@ -246,7 +217,7 @@ def test_http_endpoints_work_after_recovery(router, mint_ip_map):
         code_health = router.api_status("/health")
         assert code_health == 200, f"/health returned {code_health} after recovery"
     finally:
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
 
 
 def test_concurrent_requests_during_swap(router, mint_ip_map):
@@ -257,7 +228,7 @@ def test_concurrent_requests_during_swap(router, mint_ip_map):
     if not is_full_merchant(router):
         pytest.skip("Service not running as full merchant")
 
-    rules = _block_all_mints(router, mint_ip_map)
+    rules = block_mints(router, mint_ip_map)
     try:
         degraded = wait_for_degraded(router, timeout=HEALTH_POLL_TIMEOUT)
         if not degraded:
@@ -279,7 +250,7 @@ def test_concurrent_requests_during_swap(router, mint_ip_map):
         t = threading.Thread(target=requester, daemon=True)
         t.start()
 
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
         log.info("Unblocked mints, concurrent requests running during recovery")
 
         recovered = wait_for_full_merchant(router, timeout=HEALTH_POLL_TIMEOUT)
@@ -291,7 +262,7 @@ def test_concurrent_requests_during_swap(router, mint_ip_map):
         )
         assert recovered, "Service did not recover during concurrent test"
     finally:
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
 
 
 def test_cli_status_reflects_provider_state(router, mint_ip_map):
@@ -312,7 +283,7 @@ def test_cli_status_reflects_provider_state(router, mint_ip_map):
             f"wallet_ok should be True for full merchant, got {wallet_ok_before}"
         )
 
-    rules = _block_all_mints(router, mint_ip_map)
+    rules = block_mints(router, mint_ip_map)
     try:
         degraded = wait_for_degraded(router, timeout=HEALTH_POLL_TIMEOUT)
         if not degraded:
@@ -326,7 +297,7 @@ def test_cli_status_reflects_provider_state(router, mint_ip_map):
                 f"wallet_ok should be False in degraded mode, got {wallet_ok_degraded}"
             )
 
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
         recovered = wait_for_full_merchant(router, timeout=HEALTH_POLL_TIMEOUT)
         assert recovered, "Service did not recover"
 
@@ -338,4 +309,4 @@ def test_cli_status_reflects_provider_state(router, mint_ip_map):
                 f"wallet_ok should be True after recovery, got {wallet_ok_after}"
             )
     finally:
-        _unblock_mints(router, rules)
+        unblock_mints(router, rules)
