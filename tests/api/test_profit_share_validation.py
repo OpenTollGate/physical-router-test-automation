@@ -1,14 +1,3 @@
-"""Tests for PR #86: profit_share sum validation.
-
-Verifies that Config.ValidateProfitShare() enforces profit_share factors
-sum to 1.0 (±1e-6), rejects empty lists and negative factors, and that
-EnsureDefaultConfig routes invalid profit_share through backup-and-recreate.
-
-Read-only tests inspect the current config. Mutating tests write a bad
-config, restart the service, and verify the backend stays up (doesn't
-crash) — either resetting to defaults or logging a warning.
-"""
-
 import json
 import logging
 import time
@@ -17,7 +6,37 @@ import pytest
 
 log = logging.getLogger("tollgate.profit_share_validation")
 
-pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.pr(86)]
+pytestmark = [pytest.mark.api, pytest.mark.extended]
+
+_KNOWN_ISSUE_PR = "PR #86"
+_MUTATING_VALIDATION_TESTS = frozenset({
+    "test_profit_share_boot_with_invalid_config",
+    "test_profit_share_boot_with_empty_list",
+    "test_profit_share_boot_with_negative_factor",
+})
+
+
+def _has_profit_share_validation(router) -> bool:
+    try:
+        out = router.ssh(
+            "grep -ac 'ValidateProfitShare' /usr/bin/tollgate-wrt 2>/dev/null || echo 0"
+        )
+        return int(out.strip()) > 0
+    except Exception:
+        return False
+
+
+@pytest.fixture(scope="session")
+def _validation_available(router):
+    return _has_profit_share_validation(router)
+
+
+@pytest.fixture(autouse=True)
+def _gate_validation_tests(request, _validation_available):
+    if request.node.originalname in _MUTATING_VALIDATION_TESTS and not _validation_available:
+        pytest.xfail(
+            f"ValidateProfitShare() not in firmware — expected in {_KNOWN_ISSUE_PR}"
+        )
 
 SERVICE_RESTART_WAIT = 3
 
