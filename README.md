@@ -238,21 +238,11 @@ Phone-marked tests automatically get `flaky(reruns=1)` and `timeout(300s)`.
 
 ### Test gating strategies
 
-Tests use one of two strategies to decide whether they should run against the deployed firmware:
+Tests use runtime feature detection to decide whether they should run against the deployed firmware. The `pr(N)` marker mechanism still exists in `conftest.py` for CI use, but **all test files use feature detection or unconditional execution**.
 
-#### 1. PR-gated (`@pytest.mark.pr(N)`)
+#### 1. Feature-detected (skip if feature absent)
 
-Use when a test verifies behavior that **only exists in a specific PR**. When `--expected-pr=N` is passed, only tests marked `pr(N)` (and tests with no `pr()` marker at all) will run. Tests marked `pr(M)` where `M != N` are skipped.
-
-```python
-pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.pr(117)]
-```
-
-Example: `test_hostname.py` is marked `pr(117)` because hostname setup only exists in PR #117.
-
-#### 2. Feature-detected (no `pr()` marker)
-
-Use when a test verifies behavior that **may exist in multiple PRs or versions**. The test calls a skip function at runtime that probes the router for the required capability:
+Use when a test verifies behavior that **may or may not exist** in the deployed firmware. The test calls a skip helper at runtime that probes the router for the required capability:
 
 ```python
 def _skip_if_no_degraded_support(router):
@@ -264,18 +254,41 @@ def _skip_if_no_degraded_support(router):
         pytest.skip("no degraded mode support detected")
 ```
 
-These tests run against **any** PR or version that implements the feature — no `--expected-pr` needed. They skip cleanly when the feature is absent.
+These tests run against **any** firmware that implements the feature. They skip cleanly when the feature is absent.
 
-Example: `test_degraded_mode.py` uses feature detection because degraded mode exists in both PR #118 (full health tracking) and PR #120 (mint resilience). Both PRs should pass the same degraded mode tests without duplicating them.
+#### 2. Bug regression (xfail if fix absent)
+
+Use `gate_bug_fix()` from `lib/helpers` for tests that verify a **known bug has been fixed**. When the fix is absent, the test is marked xfail ("known issue" in reports). When the fix is present, the test runs normally — a failure means the fix doesn't work (regression).
+
+```python
+from lib.helpers import gate_bug_fix
+
+def test_profit_share_boot_with_invalid_config(router, profit_share_config_guard):
+    gate_bug_fix(
+        _has_profit_share_validation(router),
+        bug_id="profit-share-no-validation",
+        fix_pr="PR #86",
+    )
+    # ... test body runs only if fix is present ...
+```
+
+For bug cross-references, link to the incident in the knowledgebase:
+
+```
+See: https://github.com/OpenTollGate/tollgate-knowledgebase/tree/main/incidents/YYYY-MM-DD_slug.md
+```
+
+#### 3. Unconditional (baseline behavior)
+
+No gating at all. Runs against every firmware. Use for baseline API tests (health endpoints, config format, etc.).
 
 #### When to use which
 
 | Situation | Strategy |
 |---|---|
-| Test for a feature unique to one PR | `@pytest.mark.pr(N)` |
-| Test for a feature shared across PRs | Feature detection (`_skip_if_no_*_support`) |
-| Test for baseline behavior that always works | No marker, no skip — runs unconditionally |
-| Module has some tests for PR-only features and some shared | Remove `pr(N)` from module marker, add `pr(N)` per-test on the PR-only tests |
+| Feature may or may not be present | Feature detection (`_skip_if_no_*`) |
+| Known bug, fix in flight | `gate_bug_fix()` (xfail = warning, fail = regression) |
+| Baseline behavior that always works | No gating — runs unconditionally |
 
 ## Project Structure
 

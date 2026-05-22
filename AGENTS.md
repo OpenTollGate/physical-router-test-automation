@@ -2,6 +2,265 @@
 
 This file contains hard-won operational knowledge for agents and humans working with physical OpenWrt routers (D-Link COVR-X1860, GL.iNet GL-MT3000). Read this before touching a router.
 
+## What This Repository Does
+
+This is a **multi-tier test framework** for [tollgate-module-basic-go](https://github.com/OpenTollGate/tollgate-module-basic-go) (Go v1) and [tollgate-rs](https://github.com/OpenTollGate/tollgate-rs) (Rust v1) running on physical OpenWrt routers. It tests the TollGate WiFi payment system — Cashu ecash tokens for metered internet access through captive portals.
+
+**Three test tiers:**
+- **API** (`tests/api/`) — SSH to router, hit HTTP endpoints. No phone needed. Fast.
+- **Phone** (`tests/phone/`) — Android device via ADB through captive portal. E2E.
+- **LuCI** (`tests/web/`) — Playwright browser tests against LuCI admin UI.
+
+**Where tests run:**
+- **Physical lab** — real routers on LAN, real phones, real WiFi.
+- **Cloud lab** — GCP nested-KVM (OpenWrt + Debian QEMU). API tests only, fire-and-forget.
+- **Virtual lab** — local QEMU + network namespaces. For development.
+
+## Architecture Overview
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    Test Machine (macOS/Linux)                │
+│                                                              │
+│  pytest ─── Router.ssh() ──── sshpass/sshkey ──────────┐   │
+│       │                                                  │   │
+│       ├── lib/router.py ──────────── SSH to router ─────┤   │
+│       ├── lib/cashu.py ──────────── Token minting       │   │
+│       ├── lib/helpers.py ────────── gate_bug_fix, etc   │   │
+│       ├── lib/deploy.py ─────────── CI artifact deploy  │   │
+│       └── lib/clients/adb.py ────── Phone control        │   │
+│                              │                            │   │
+│                              ▼                            │   │
+│              ┌──────────────────────────┐                 │   │
+│              │  TollGate Router (OpenWrt)│◄───────────────┘   │
+│              │  - nodogsplash (captive)  │                     │
+│              │  - tollgate-wrt (Go/Rust) │                     │
+│              │  - Port 2121 (backend)    │                     │
+│              │  - Port 2050 (NDS portal) │                     │
+│              └──────────────────────────┘                     │
+│                     │ LAN WiFi                               │
+│                     ▼                                        │
+│              ┌──────────────────┐                            │
+│              │  Android Phone   │                            │
+│              │  (ADB connected)  │                            │
+│              └──────────────────┘                            │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Key ports on the router:**
+- `2121` — TollGate backend API (GET /, POST /, GET /usage, GET /balance, GET /whoami, ln-invoice)
+- `2050` — Nodogsplash captive portal gateway port (CGI scripts)
+- `8080` — LuCI admin UI (Go v1 only)
+- `22` — SSH (WAN firewall rule required for remote access)
+
+## Test Gating Strategies
+
+Tests decide at runtime whether they can run against the deployed firmware. There are three strategies. **The `pr(N)` marker mechanism still exists in `conftest.py` but NO test file uses it.** All tests use one of these three approaches:
+
+### 1. Feature Detection (skip if absent)
+
+Tests probe the router for a specific capability. If absent, `pytest.skip()`. These tests run against any firmware that has the feature.
+
+```python
+def _skip_if_no_degraded_support(router):
+    resp = router.get_tollgate_status()
+    if resp.get("success") is not True:
+        pytest.skip("status command not available")
+    raw = json.dumps(resp).lower()
+    if not any(kw in raw for kw in ["degraded", "reachable", "mint_health"]):
+        pytest.skip("no degraded mode support detected")
+```
+
+Existing skip helpers in `lib/helpers.py`:
+- `skip_if_no_cli_socket(router)` — checks `/var/run/tollgate.sock`
+- `skip_if_no_luci(router)` — checks port 8080
+- `skip_if_no_sessions_json(router)` — checks `/etc/tollgate/sessions.json`
+
+### 2. Bug Regression via `gate_bug_fix()`
+
+For tests that verify a **known bug has been fixed**. When the fix is absent → xfail ("known issue"). When present → runs normally. Failure = regression.
+
+```python
+from lib.helpers import gate_bug_fix
+
+def test_profit_share_boot_with_invalid_config(router):
+    gate_bug_fix(
+        _has_profit_share_validation(router),
+        bug_id="profit-share-no-validation",
+        fix_pr="PR #86",
+    )
+    # test body only runs if fix is present
+```
+
+Cross-reference incidents: link to `https://github.com/OpenTollGate/tollgate-knowledgebase/tree/main/incidents/YYYY-MM-DD_slug.md` in docstrings.
+
+### 3. Unconditional
+
+No gating. Runs against every firmware. Use for baseline API tests (health, config format, etc.).
+
+### Backend-Aware Skipping
+
+Tests marked `@pytest.mark.go_only` skip when `--backend=rust`. Tests marked `@pytest.mark.rust_only` skip when `--backend=go`. This is handled in `conftest.py` `pytest_collection_modifyitems`.
+
+`BackendConfig` (`lib/backend.py`) provides feature flags that differ between backends:
+- `has_luci` — True for Go, False for Rust
+- `has_cli_socket` — True for Go, False for Rust
+- `has_sessions_json` — True for Go, False for Rust
+
+| Situation | Strategy |
+|---|---|
+| Feature may or may not be present | Feature detection (`_skip_if_no_*`) |
+| Known bug, fix in flight | `gate_bug_fix()` (xfail = warning, fail = regression) |
+| Baseline behavior that always works | No gating — runs unconditionally |
+| Feature only in one backend | `@pytest.mark.go_only` or `@pytest.mark.rust_only` |
+
+## Dual-Backend Testing (Go v1 + Rust v1)
+
+The framework supports testing both the Go and Rust TollGate backends interchangeably. Both produce the same `.ipk` package name (`tollgate-wrt`) and install to the same paths.
+
+**Architecture reference:**
+
+| | Go v1 | Rust v1 |
+|---|---|---|
+| Repo | `OpenTollGate/tollgate-module-basic-go` | `Amperstrand/tollgate-rs-ai-research-and-experiments` |
+| Branch | `main` | `experimental` |
+| CI workflow | "Build and Publish" | "Build and Package" |
+| Config path | `/etc/tollgate/config.json` | `/etc/tollgate/config.json` |
+| Service name | `tollgate-wrt` | `tollgate-wrt` |
+| LuCI UI | Yes | No |
+| CLI socket | `/var/run/tollgate.sock` | Not implemented |
+| Session persistence | `/etc/tollgate/sessions.json` | In-memory only |
+| API endpoints | 7 (all) | 7 (all) — v1 parity complete |
+| Mint keyset support | V1 only (gonuts) | V1 + V2 (cdk) |
+
+**Switching backends:**
+
+```bash
+# Deploy Rust
+TOLLGATE_BACKEND=rust ./scripts/deploy-rust-ci.sh experimental '' 192.168.13.112
+
+# Deploy Go
+TOLLGATE_BACKEND=go ./scripts/deploy-ci.sh main '' 192.168.13.112
+
+# Run Rust tests
+TOLLGATE_BACKEND=rust make pytest-smoke-rust
+
+# Run Go tests
+TOLLGATE_BACKEND=go make pytest-smoke
+```
+
+Full Rust testing guide: `docs/testing-rust-v1.md`.
+
+## Make-to-Pytest Migration Status
+
+**Hardware lab tests are pytest-first.** Root Makefile targets (`make smoke-degraded`, etc.) are thin stubs that invoke `scripts/pymake.py`. The mapping lives in `config/make-pytest-map.yaml`.
+
+- **44 targets registered** in the live registry
+- **40 covered** by pytest/Playwright
+- **4 ops-only** (serial shell/status/recovery, arch-test-full delegation)
+- **Legacy `mint-health/Makefile`** (~3000 lines) remains for unmigrated targets
+
+The migration is effectively complete for router hardware tests. See `docs/make-to-pytest-migration.md` for the full coverage matrix.
+
+## Key Library Modules
+
+### `lib/router.py` — Router SSH Interaction
+
+The `Router` class is the primary interface to the router. Key methods:
+
+| Method | What it does |
+|---|---|
+| `ssh(cmd)` | Execute command via SSH, return stdout |
+| `scp_to(local, remote)` | Copy file to router (uses `scp -O`) |
+| `write_remote_text(path, content)` | Write text file on router via stdin |
+| `write_remote_json(path, payload)` | Write JSON file on router |
+| `backend_url(path)` | Build URL `http://[::1]:2121{path}` |
+| `api_status(path)` | HTTP GET to backend, return status code |
+| `pay_direct(token)` | POST Cashu token to `http://[::1]:2121/` |
+| `get_session(ip)` | GET `/usage` or `/balance` for client |
+| `get_nds_state(mac)` | `ndsctl status` — Authenticated/Preauthenticated/etc |
+| `get_tollgate_status()` | `tollgate status` via CLI socket (Go only) |
+| `reset_state(mac, adb)` | Deauth client, reset NDS, clear logs |
+| `ensure_test_mint()` | Verify `testnut.cashu.exchange` is in config |
+| `replace_mints(urls)` | Replace mint URLs in config and restart |
+| `fix_nodogsplash_dhcp()` | Patch ndsRTR chain to allow DHCP through |
+| `disable_ipv6_on_lan()` | Prevent captive portal bypass via IPv6 RA |
+
+**SSH connection**: Uses control master (`ControlPersist=60`) for reuse. Supports password auth (`sshpass`) and key auth. Jump hosts (`-J`) for virtual lab and offline routers.
+
+### `lib/helpers.py` — Shared Test Utilities
+
+| Function | Purpose |
+|---|---|
+| `gate_bug_fix(fix_present, *, bug_id, fix_pr)` | Bug regression gate (xfail when fix absent) |
+| `pay_and_wait(router, adb, token)` | Pay + wait for auth + verify |
+| `assert_session_active(router, ip)` | Assert client has active session |
+| `assert_deauthenticated(router, mac)` | Assert client is disconnected |
+| `skip_if_no_cli_socket(router)` | Skip if no `/var/run/tollgate.sock` |
+| `skip_if_no_luci(router)` | Skip if no LuCI on port 8080 |
+| `skip_if_no_sessions_json(router)` | Skip if no persistent sessions |
+| `require_client_identity(router)` | Skip if no client IP/MAC |
+
+### `lib/cashu.py` — Token Minting
+
+Wraps the `cashu` CLI for testnet token operations against `testnut.cashu.exchange` (FakeWallet mint that auto-pays invoices). The `setup-cashu.sh` script patches cashu's `models.py` for a version mismatch (missing `active` field on keysets).
+
+### `lib/deploy.py` — CI Artifact Deployment
+
+Downloads `.ipk` from GitHub Actions and deploys to router. Auto-detects architecture via `opkg print-architecture`. Handles factory reset, service restart, and health verification. Backend-aware — uses `BackendConfig` to select the correct repo/workflow.
+
+### `lib/backend.py` — Backend Configuration
+
+`BackendConfig` encapsulates Go vs Rust differences:
+
+```python
+backend = BackendConfig("rust")
+backend.repo        # → "Amperstrand/tollgate-rs-ai-research-and-experiments"
+backend.workflow    # → "Build and Package"
+backend.has_luci    # → False
+backend.has_cli_socket  # → False
+```
+
+## conftest.py Fixtures
+
+Session-scoped (created once per test run):
+
+| Fixture | Purpose |
+|---|---|
+| `router` | SSH connection to TollGate router (`Router` instance) |
+| `secondary_router` | Optional second router for two-router tests |
+| `adb` | Phone control — ADB, MacWiFiClient, LinuxWiFiClient, or ContainerClient |
+| `cashu` | `CashuMint` helper for minting/burning testnet tokens |
+| `deploy_session` | Auto-deploy (autouse) — deploys branch/binary before tests |
+| `results_dir` | Canonical results directory under `results/` |
+| `backend` | `BackendConfig` from `--backend` flag or env |
+
+Per-test fixtures: `connected_wifi`, `test_pricing`, `screenshot_portal`, `screenshot_raw`.
+
+**Auto-deploy behavior** (`deploy_session`, autouse): If `--tollgate-branch` or `--binary` is specified, the fixture deploys before tests run. Skips for unit tests and `--no-deploy`.
+
+## pytest Configuration
+
+Defined in `pytest.ini`. Key markers:
+
+| Marker | Description |
+|---|---|
+| `smoke` | Quick sanity check (~15s) |
+| `critical` | Core functionality (~2min) |
+| `extended` | Full suite including edge cases (~10min) |
+| `api` | No phone needed |
+| `phone` | Requires ADB device |
+| `config` | Modifies router config (pricing/metric) |
+| `slow` | >30s |
+| `go_only` | Skip when `--backend=rust` |
+| `rust_only` | Skip when `--backend=go` |
+| `hardware` | Physical router scenario, skipped in virtual lab |
+| `destructive` | Mutates state beyond normal config toggles |
+
+**Tier hierarchy**: `smoke` ⊂ `critical` ⊂ `extended`. Phone tests auto-get `flaky(reruns=1)` and `timeout(300s)`.
+
+**Timeouts**: Default 60s per test. Phone tests 300s. Hardware scenarios up to 1500s.
+
 ## Lessons Learned
 
 ### `chpasswd` does not exist on OpenWrt BusyBox
@@ -40,6 +299,14 @@ V2 spec (NUT-02 PR #182, merged Jan 2026): `01` + SHA256(`amount:pubkey_hex` pai
 
 **Fix path**: `Amperstrand/gonuts-tollgate` fork at `feature/v2-keyset-ids` branch adds `DeriveKeysetIdV2()` and `IsKeysetIdV2()` following NUT-02. The fix updates `wallet/keyset.go:GetKeysetKeys()` to use V2 derivation when the keyset ID starts with `01`. To apply: update `src/tollwallet/go.mod` in `tollgate-module-basic-go` to pin `github.com/Amperstrand/gonuts-tollgate` at the V2 branch, then rebuild the `.ipk`.
 
+### Nodogsplash DHCP bypass required
+
+Nodogsplash's `ndsRTR` iptables chain drops ALL unauthenticated packets (mark 0x10000) at rule 1, which silently kills DHCP DISCOVER from clients. Without the bypass fix (in `Router.fix_nodogsplash_dhcp()`), phones can associate at L2 but never get an IP — Android shows "Connection failed" and auto-reconnects to a known-good network.
+
+### IPv6 captive portal bypass
+
+Nodogsplash only manages IPv4 iptables. If IPv6 Router Advertisements are active on LAN, WiFi clients get global IPv6 addresses and Android validates connectivity over IPv6, completely bypassing the captive portal. `Router.disable_ipv6_on_lan()` disables RA, DHCPv6, and removes the LAN IPv6 prefix.
+
 ### Offline router deployment (no internet, no opkg update)
 
 When a router has no internet (e.g., downstream/reseller behind a jump host), `opkg update` and `opkg install` will fail. You must manually SCP all packages and their dependencies.
@@ -50,7 +317,7 @@ When a router has no internet (e.g., downstream/reseller behind a jump host), `o
 **Test framework dependencies** (from `lib/deploy.py` `TEST_DEPS`):
 - `curl`, `socat`, `nodogsplash`, `jq`, `luci`, `px5g-mbedtls`
 
-Combined, these require ~52 packages (including transitive deps like `iptables-nft`, `kmod-*`, `rpcd`, `uhttpd`, `liblucihttp0`, etc.).
+Combined, these require ~52 packages (including transitive deps like `iptables-nft`, `kmod-*`, `rpcd`, `uhttpd`, `libluciheader0`, etc.).
 
 **Procedure:**
 
@@ -230,7 +497,7 @@ After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check tha
 
 ## GCP cloud lab (fire-and-forget)
 
-`scripts/cloud-lab.py submit` runs TollGate API tests in nested KVM on a GCP VM (`n2-standard-2` + the `SNAPSHOT_NAME` configured in `lib/cloud_lab/constants.py`). `tollgate-runner-baked-v2` is the safe baseline; newer baked snapshots must be verified before becoming the default.
+`scripts/cloud-lab.py submit` runs TollGate API tests in nested KVM on a GCP VM (`n2-standard-2` + the `SNAPSHOT_NAME` configured in `lib/cloud_lab/constants.py`). `tollgate-runner-baked-v7` is the current snapshot; newer baked snapshots must be verified before becoming the default.
 
 ### Flow
 
@@ -415,3 +682,22 @@ The arch test suite validates the `tollgate_core` firmware on ESP32 (Board A):
 5. `arch-test-full` - Run all E2E tests (~4min): smoke, network, API, DNS/firewall, auth reset, session expiry
 
 Tests are ordered by dependency and run sequentially. The full suite validates WiFi AP, captive portal, DNS resolution, payment flow, and session management.
+
+## Writing New Tests — Quick Reference
+
+1. **API test** (no phone): Create `tests/api/test_<feature>.py`. Use `@pytest.mark.api` and at least one tier marker (`smoke`, `critical`, or `extended`). Use the `router` fixture.
+
+2. **Phone test** (needs ADB): Create `tests/phone/test_<feature>.py`. Use `@pytest.mark.phone`. Use `router`, `adb`, `cashu`, and `connected_wifi` fixtures.
+
+3. **Gate with feature detection**: Add a `_skip_if_no_<feature>(router)` helper at the top of the test file. Call it at the start of each test function.
+
+4. **Gate for bug regression**: Use `gate_bug_fix()` from `lib/helpers`. Pass a boolean indicating if the fix is present, plus `bug_id` and `fix_pr` for traceability.
+
+5. **Backend-specific**: Use `@pytest.mark.go_only` or `@pytest.mark.rust_only` if the test only applies to one backend.
+
+6. **Scenario test**: Create `tests/scenarios/test_<scenario>.py`. Use `@pytest.mark.hardware`. Register in `config/make-pytest-map.yaml`.
+
+7. **Reference format for bug cross-links**:
+   ```
+   See: https://github.com/OpenTollGate/tollgate-knowledgebase/tree/main/incidents/YYYY-MM-DD_slug.md
+   ```
