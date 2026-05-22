@@ -2,7 +2,8 @@ import { test, expect } from '@playwright/test';
 import { getRouter } from '../helpers/inventory.mjs';
 
 const router = getRouter();
-const PORTAL_BASE = `http://${router.sshHost}:2050`;
+const PORTAL_PORT = process.env.TOLLGATE_CAPTIVE_PORTAL_PORT || '80';
+const PORTAL_BASE = `http://${router.sshHost}:${PORTAL_PORT}`;
 const API_BASE = `http://${router.sshHost}:2121`;
 
 function portalUrl() { return `${PORTAL_BASE}/splash.html`; }

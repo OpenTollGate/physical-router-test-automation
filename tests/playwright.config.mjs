@@ -48,6 +48,11 @@ export default defineConfig({
 			use: { viewport: viewports[viewport] || viewports.desktop },
 		},
 		{
+			name: `${viewport}-portal`,
+			testMatch: 'captive-portal.spec.mjs',
+			use: { viewport: viewports[viewport] || viewports.desktop },
+		},
+		{
 			name: `${viewport}-protocol`,
 			testMatch: /protocol\/(?:payment-protocol|payment-lifecycle|data-allotment|router-network-config|tollgate-payment-protocol)\.spec\.mjs/,
 			dependencies: [`${viewport}-luci`],

@@ -1,7 +1,11 @@
 include boards.env
 
 .PHONY: help flash-a flash-b flash-c monitor-a monitor-b monitor-c \
-        connect-a connect-b disconnect \
+        connect-a connect-b connect-c disconnect \
+        fund-wallet-a fund-wallet-c \
+        reset-a reset-b reset-c \
+        wait-ready-a wait-ready-b wait-ready-c \
+        provision-a provision-b provision-c \
         test-discovery-a test-discovery-b test-mints-a test-mints-b \
         test-multi-mint-a test-multi-mint-b test-all-boards \
         test-cvm-a test-cvm-b test-cvm-mcp-a \
@@ -10,9 +14,18 @@ include boards.env
         lock-status force-unlock-a force-unlock-b force-unlock-c \
         build detect-wpa-security generate-spiffs \
         flash-spiffs-a flash-spiffs-b flash-spiffs-c \
+        arch-build arch-flash arch-generate-spiffs arch-flash-spiffs \
+        arch-wait-ready arch-connect arch-disconnect \
+        arch-test-smoke arch-test-network arch-test-api arch-test-dns-fw \
+        arch-test-reset arch-test-session arch-test-phase2 arch-test-full \
+        arch-test-cleanup arch-test-api-quick \
         relay-build relay-flash-b relay-connect-b \
         relay-test-smoke relay-test-nip11 relay-test-pubsub \
-        relay-test-sync relay-test-full
+        relay-test-sync relay-test-full \
+        pytest-smoke-a pytest-smoke-c pytest-api-a pytest-api-c \
+        pytest-portal-a pytest-portal-c pytest-multimint-a pytest-multimint-c \
+        pytest-fund-a pytest-fund-c pytest-spend-a pytest-spend-c \
+        pytest-all-a pytest-all-c pytest-smoke pytest-help
 
 define require_lock_a
 	@if [ ! -f "$(LOCK_DIR)/board-a.lock" ]; then \
@@ -84,9 +97,18 @@ help: ## Show ESP32 board test targets
 	@echo "  make lock-status        # Show all lock statuses"
 	@echo ""
 	@echo "$(CYAN)--- Flash & Monitor (requires board lock) ---$(RESET)"
-	@echo "  make flash-a            # Flash Board A ($(BOARD_A_PORT))"
-	@echo "  make flash-b            # Flash Board B ($(BOARD_B_PORT))"
-	@echo "  make flash-c            # Flash Board C ($(BOARD_C_PORT))"
+	@echo "  make flash-a            # Flash Board A firmware only ($(BOARD_A_PORT))"
+	@echo "  make flash-b            # Flash Board B firmware only ($(BOARD_B_PORT))"
+	@echo "  make flash-c            # Flash Board C firmware only ($(BOARD_C_PORT))"
+	@echo "  make provision-a        # Full provision Board A (erase + fw + SPIFFS + wait)"
+	@echo "  make provision-b        # Full provision Board B"
+	@echo "  make provision-c        # Full provision Board C"
+	@echo "  make reset-a            # Reset Board A (no reflash)"
+	@echo "  make reset-b            # Reset Board B (no reflash)"
+	@echo "  make reset-c            # Reset Board C (no reflash)"
+	@echo "  make wait-ready-a       # Poll Board A :2121 until ready"
+	@echo "  make wait-ready-b       # Poll Board B :2121 until ready"
+	@echo "  make wait-ready-c       # Poll Board C :2121 until ready"
 	@echo "  make monitor-a          # Serial monitor Board A"
 	@echo "  make monitor-b          # Serial monitor Board B"
 	@echo "  make monitor-c          # Serial monitor Board C"
@@ -121,6 +143,14 @@ help: ## Show ESP32 board test targets
 	@echo "  make flash-spiffs-a     # Flash SPIFFS to Board A"
 	@echo "  make flash-spiffs-b     # Flash SPIFFS to Board B"
 	@echo "  make flash-spiffs-c     # Flash SPIFFS to Board C"
+	@echo ""
+	@echo "$(CYAN)--- Arch (tollgate_core) tests (requires lock-b) ---$(RESET)"
+	@echo "  make arch-build           # Build arch firmware (no lock)"
+	@echo "  make arch-flash           # Flash arch firmware + SPIFFS (requires lock-b)"
+	@echo "  make arch-wait-ready      # Poll :2121/usage until board ready"
+	@echo "  make arch-connect         # WiFi connect to board AP"
+	@echo "  make arch-test-api-quick  # Quick 5-endpoint sanity check"
+	@echo "  make arch-test-full       # Full E2E test suite (~4min)"
 	@echo ""
 	@echo "$(CYAN)--- Local Relay tests (Board B, requires lock-b) ---$(RESET)"
 	@echo "  make relay-build        # Build relay firmware (no lock)"
@@ -243,8 +273,10 @@ detect-wpa-security: ## Scan WiFi and detect WPA security mode for configured SS
 		echo "WPA2"; \
 	fi
 
-generate-spiffs: ## Generate SPIFFS image with auto-detected WPA mode
-	@echo "$(CYAN)Generating SPIFFS image...$(RESET)"
+SPIFFS_BOARD   ?= a
+
+generate-spiffs: ## Generate SPIFFS image with auto-detected WPA mode and board nsec (SPIFFS_BOARD=a|b|c)
+	@echo "$(CYAN)Generating SPIFFS image for board $(SPIFFS_BOARD)...$(RESET)"
 	@rm -rf $(SPIFFS_DIR) && mkdir -p $(SPIFFS_DIR)
 	@WPA_MODE=$$(nmcli -t -f SSID,SECURITY dev wifi list 2>/dev/null | grep "^$(WIFI_SSID):" | head -1 | cut -d: -f2 | grep -qi "WPA3" && echo "WPA3" || echo "WPA2"); \
 	echo "$(CYAN)Detected WPA mode: $$WPA_MODE$(RESET)"; \
@@ -253,7 +285,14 @@ generate-spiffs: ## Generate SPIFFS image with auto-detected WPA mode
 	else \
 		echo '{}' > "$(SPIFFS_DIR)/config.json"; \
 	fi; \
-	python3 -c "import json; d=json.load(open('$(SPIFFS_DIR)/config.json')); d['wifi_auth_mode']='$$WPA_MODE'; json.dump(d,open('$(SPIFFS_DIR)/config.json','w'),indent=2)"
+	BOARD_UPPER=$$(echo "$(SPIFFS_BOARD)" | tr '[:lower:]' '[:upper:]'); \
+	NSEC=$$(grep "BOARD_$${BOARD_UPPER}_NSEC\s*=" $(FIRMWARE_DIR)/.env 2>/dev/null | sed 's/.*=//'); \
+	if [ -z "$$NSEC" ]; then \
+		echo "$(YELLOW)WARN: no nsec found for board $(SPIFFS_BOARD) in .env, using config.json as-is$(RESET)"; \
+	else \
+		echo "$(CYAN)Injecting nsec for board $(SPIFFS_BOARD) ($${NSEC%% *})$(RESET)"; \
+	fi; \
+	python3 -c "import json; d=json.load(open('$(SPIFFS_DIR)/config.json')); d['wifi_auth_mode']='$$WPA_MODE'; nsec='$$NSEC'; d.update({'nsec':nsec}) if nsec else None; json.dump(d,open('$(SPIFFS_DIR)/config.json','w'),indent=2)"
 	@bash -c '$(ESP_IDF_SH) && python3 $$IDF_PATH/components/spiffs/spiffsgen.py $(SPIFFS_SIZE) $(SPIFFS_DIR) $(SPIFFS_BIN)'
 	@echo "$(GREEN)SPIFFS image generated: $(SPIFFS_BIN)$(RESET)"
 	@echo "$(CYAN)Contents:$(RESET)"
@@ -261,21 +300,21 @@ generate-spiffs: ## Generate SPIFFS image with auto-detected WPA mode
 
 flash-spiffs-a: ## Flash SPIFFS to Board A
 	$(call require_lock_a)
-	@$(MAKE) generate-spiffs
+	@$(MAKE) generate-spiffs SPIFFS_BOARD=a
 	@echo "$(CYAN)Flashing SPIFFS to Board A ($(BOARD_A_PORT)) at offset $(SPIFFS_OFFSET)...$(RESET)"
 	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_A_PORT) -b 115200 --after no_reset write_flash $(SPIFFS_OFFSET) $(SPIFFS_BIN) 2>&1 | tail -5'
 	@echo "$(GREEN)SPIFFS flashed to Board A$(RESET)"
 
 flash-spiffs-b: ## Flash SPIFFS to Board B
 	$(call require_lock_b)
-	@$(MAKE) generate-spiffs
+	@$(MAKE) generate-spiffs SPIFFS_BOARD=b
 	@echo "$(CYAN)Flashing SPIFFS to Board B ($(BOARD_B_PORT)) at offset $(SPIFFS_OFFSET)...$(RESET)"
 	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_B_PORT) -b 115200 --after no_reset write_flash $(SPIFFS_OFFSET) $(SPIFFS_BIN) 2>&1 | tail -5'
 	@echo "$(GREEN)SPIFFS flashed to Board B$(RESET)"
 
 flash-spiffs-c: ## Flash SPIFFS to Board C
 	$(call require_lock_c)
-	@$(MAKE) generate-spiffs
+	@$(MAKE) generate-spiffs SPIFFS_BOARD=c
 	@echo "$(CYAN)Flashing SPIFFS to Board C ($(BOARD_C_PORT)) at offset $(SPIFFS_OFFSET)...$(RESET)"
 	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_C_PORT) -b 115200 --after no_reset write_flash $(SPIFFS_OFFSET) $(SPIFFS_BIN) 2>&1 | tail -5'
 	@echo "$(GREEN)SPIFFS flashed to Board C$(RESET)"
@@ -284,23 +323,153 @@ flash-spiffs-c: ## Flash SPIFFS to Board C
 #  FLASH (requires per-board lock)
 # ===========================================================================
 
-flash-a: ## Flash Board A
+FLASH_BOOT_WAIT := 50
+
+flash-a: ## Flash Board A (firmware only, no SPIFFS)
 	$(call require_lock_a)
 	@echo "$(CYAN)Flashing Board A ($(BOARD_A_PORT))...$(RESET)"
 	@bash -c '$(ESP_IDF_SH) && cd $(FIRMWARE_DIR) && idf.py -p $(BOARD_A_PORT) flash 2>&1 | tail -10'
 	@echo "$(GREEN)Board A flashed$(RESET)"
 
-flash-b: ## Flash Board B
+flash-b: ## Flash Board B (firmware only, no SPIFFS)
 	$(call require_lock_b)
 	@echo "$(CYAN)Flashing Board B ($(BOARD_B_PORT))...$(RESET)"
 	@bash -c '$(ESP_IDF_SH) && cd $(FIRMWARE_DIR) && idf.py -p $(BOARD_B_PORT) flash 2>&1 | tail -10'
 	@echo "$(GREEN)Board B flashed$(RESET)"
 
-flash-c: ## Flash Board C
+flash-c: ## Flash Board C (firmware only, no SPIFFS)
 	$(call require_lock_c)
 	@echo "$(CYAN)Flashing Board C ($(BOARD_C_PORT))...$(RESET)"
 	@bash -c '$(ESP_IDF_SH) && cd $(FIRMWARE_DIR) && idf.py -p $(BOARD_C_PORT) flash 2>&1 | tail -10'
 	@echo "$(GREEN)Board C flashed$(RESET)"
+
+# --- Reset board without reflashing (esptool run command) ---
+
+reset-a: ## Reset Board A (no reflash)
+	$(call require_lock_a)
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_A_PORT) --after hard_reset run 2>&1 | tail -3'
+	@echo "$(GREEN)Board A reset$(RESET)"
+
+reset-b: ## Reset Board B (no reflash)
+	$(call require_lock_b)
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_B_PORT) --after hard_reset run 2>&1 | tail -3'
+	@echo "$(GREEN)Board B reset$(RESET)"
+
+reset-c: ## Reset Board C (no reflash)
+	$(call require_lock_c)
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_C_PORT) --after hard_reset run 2>&1 | tail -3'
+	@echo "$(GREEN)Board C reset$(RESET)"
+
+# --- Wait for board to become ready (polls :2121/usage) ---
+
+wait-ready-a: ## Wait for Board A HTTP server to be ready (auto-connects to AP)
+	@echo "$(CYAN)Disconnecting current WiFi and connecting to $(BOARD_A_SSID)...$(RESET)"
+	@echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 2
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi rescan 2>/dev/null || true
+	@sleep 3
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_A_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
+		echo "$(SUDO_PW)" | sudo -S nmcli connection up "$(BOARD_A_UUID)" 2>/dev/null || true
+	@sleep 3
+	@echo "$(CYAN)Waiting for Board A at $(BOARD_A_IP):2121 to be ready...$(RESET)"
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+		resp=$$(curl -s --connect-timeout 3 --max-time 5 -o /dev/null -w "%{http_code}" "http://$(BOARD_A_IP):2121/usage" 2>/dev/null); \
+		if [ "$$resp" = "200" ]; then \
+			echo "$(GREEN)Board A ready! (attempt $$i)$(RESET)"; \
+			curl -s --max-time 5 "http://$(BOARD_A_IP):2121/usage" 2>/dev/null; echo; \
+			curl -s --max-time 5 "http://$(BOARD_A_IP):2121/wallet" 2>/dev/null; echo; \
+			exit 0; \
+		fi; \
+		echo "  attempt $$i/15 — HTTP $$resp, waiting 5s..."; \
+		sleep 5; \
+	done; \
+	echo "$(RED)Board A did not become ready after 75s$(RESET)"; \
+	exit 1
+
+wait-ready-b: ## Wait for Board B HTTP server to be ready (auto-connects to AP)
+	@echo "$(CYAN)Disconnecting current WiFi and connecting to $(BOARD_B_SSID)...$(RESET)"
+	@echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 2
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi rescan 2>/dev/null || true
+	@sleep 3
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_B_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
+		echo "$(SUDO_PW)" | sudo -S nmcli connection up "$(BOARD_B_UUID)" 2>/dev/null || true
+	@sleep 3
+	@echo "$(CYAN)Waiting for Board B at $(BOARD_B_IP):2121 to be ready...$(RESET)"
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+		resp=$$(curl -s --connect-timeout 3 --max-time 5 -o /dev/null -w "%{http_code}" "http://$(BOARD_B_IP):2121/usage" 2>/dev/null); \
+		if [ "$$resp" = "200" ]; then \
+			echo "$(GREEN)Board B ready! (attempt $$i)$(RESET)"; \
+			curl -s --max-time 5 "http://$(BOARD_B_IP):2121/usage" 2>/dev/null; echo; \
+			curl -s --max-time 5 "http://$(BOARD_B_IP):2121/wallet" 2>/dev/null; echo; \
+			exit 0; \
+		fi; \
+		echo "  attempt $$i/15 — HTTP $$resp, waiting 5s..."; \
+		sleep 5; \
+	done; \
+	echo "$(RED)Board B did not become ready after 75s$(RESET)"; \
+	exit 1
+
+wait-ready-c: ## Wait for Board C HTTP server to be ready (auto-connects to AP)
+	@echo "$(CYAN)Disconnecting current WiFi and connecting to $(BOARD_C_SSID)...$(RESET)"
+	@echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 2
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi rescan 2>/dev/null || true
+	@sleep 3
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_C_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 3
+	@echo "$(CYAN)Waiting for Board C at $(BOARD_C_IP):2121 to be ready...$(RESET)"
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+		resp=$$(curl -s --connect-timeout 3 --max-time 5 -o /dev/null -w "%{http_code}" "http://$(BOARD_C_IP):2121/usage" 2>/dev/null); \
+		if [ "$$resp" = "200" ]; then \
+			echo "$(GREEN)Board C ready! (attempt $$i)$(RESET)"; \
+			curl -s --max-time 5 "http://$(BOARD_C_IP):2121/usage" 2>/dev/null; echo; \
+			curl -s --max-time 5 "http://$(BOARD_C_IP):2121/wallet" 2>/dev/null; echo; \
+			exit 0; \
+		fi; \
+		echo "  attempt $$i/15 — HTTP $$resp, waiting 5s..."; \
+		sleep 5; \
+	done; \
+	echo "$(RED)Board C did not become ready after 75s$(RESET)"; \
+	exit 1
+
+# --- Full provision: erase → firmware + SPIFFS → reset → wait ready ---
+
+provision-a: ## Full provision Board A: erase + flash firmware + SPIFFS + wait (requires lock-a)
+	$(call require_lock_a)
+	@$(MAKE) generate-spiffs SPIFFS_BOARD=a
+	@echo "$(CYAN)Erasing flash on $(BOARD_A_PORT)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_A_PORT) -b 115200 erase_flash 2>&1 | tail -3'
+	@echo "$(CYAN)Flashing firmware + SPIFFS to $(BOARD_A_PORT)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_A_PORT) -b 115200 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 $(FIRMWARE_DIR)/build/bootloader/bootloader.bin 0x8000 $(FIRMWARE_DIR)/build/partition_table/partition-table.bin 0x10000 $(FIRMWARE_DIR)/build/esp32-tollgate.bin $(SPIFFS_OFFSET) $(SPIFFS_BIN) 2>&1 | tail -8'
+	@echo "$(GREEN)Firmware + SPIFFS flashed to Board A$(RESET)"
+	@echo "$(CYAN)Waiting $(FLASH_BOOT_WAIT)s for boot...$(RESET)"
+	@sleep $(FLASH_BOOT_WAIT)
+	@$(MAKE) wait-ready-a
+
+provision-b: ## Full provision Board B: erase + flash firmware + SPIFFS + wait (requires lock-b)
+	$(call require_lock_b)
+	@$(MAKE) generate-spiffs SPIFFS_BOARD=b
+	@echo "$(CYAN)Erasing flash on $(BOARD_B_PORT)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_B_PORT) -b 115200 erase_flash 2>&1 | tail -3'
+	@echo "$(CYAN)Flashing firmware + SPIFFS to $(BOARD_B_PORT)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_B_PORT) -b 115200 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 $(FIRMWARE_DIR)/build/bootloader/bootloader.bin 0x8000 $(FIRMWARE_DIR)/build/partition_table/partition-table.bin 0x10000 $(FIRMWARE_DIR)/build/esp32-tollgate.bin $(SPIFFS_OFFSET) $(SPIFFS_BIN) 2>&1 | tail -8'
+	@echo "$(GREEN)Firmware + SPIFFS flashed to Board B$(RESET)"
+	@echo "$(CYAN)Waiting $(FLASH_BOOT_WAIT)s for boot...$(RESET)"
+	@sleep $(FLASH_BOOT_WAIT)
+	@$(MAKE) wait-ready-b
+
+provision-c: ## Full provision Board C: erase + flash firmware + SPIFFS + wait (requires lock-c)
+	$(call require_lock_c)
+	@$(MAKE) generate-spiffs SPIFFS_BOARD=c
+	@echo "$(CYAN)Erasing flash on $(BOARD_C_PORT)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_C_PORT) -b 115200 erase_flash 2>&1 | tail -3'
+	@echo "$(CYAN)Flashing firmware + SPIFFS to $(BOARD_C_PORT)...$(RESET)"
+	@bash -c '$(ESP_IDF_SH) && esptool.py --chip esp32s3 -p $(BOARD_C_PORT) -b 115200 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 $(FIRMWARE_DIR)/build/bootloader/bootloader.bin 0x8000 $(FIRMWARE_DIR)/build/partition_table/partition-table.bin 0x10000 $(FIRMWARE_DIR)/build/esp32-tollgate.bin $(SPIFFS_OFFSET) $(SPIFFS_BIN) 2>&1 | tail -8'
+	@echo "$(GREEN)Firmware + SPIFFS flashed to Board C$(RESET)"
+	@echo "$(CYAN)Waiting $(FLASH_BOOT_WAIT)s for boot...$(RESET)"
+	@sleep $(FLASH_BOOT_WAIT)
+	@$(MAKE) wait-ready-c
 
 # ===========================================================================
 #  MONITOR (requires per-board lock)
@@ -327,8 +496,8 @@ WIFI_IFACE := $(shell iw dev | awk '/Interface/{print $$2}' | head -1)
 connect-a: ## Connect laptop to Board A AP
 	$(call require_lock_a)
 	@echo "$(CYAN)Connecting to $(BOARD_A_SSID)...$(RESET)"
-	@nmcli device wifi connect "$(BOARD_A_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
-	nmcli connection up "$(BOARD_A_UUID)" 2>/dev/null || \
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_A_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
+	echo "$(SUDO_PW)" | sudo -S nmcli connection up "$(BOARD_A_UUID)" 2>/dev/null || \
 	echo "$(YELLOW)Failed to connect$(RESET)"
 	@sleep 3
 	@echo "$(GREEN)Connected — Board A AP IP: $(BOARD_A_IP)$(RESET)"
@@ -336,17 +505,71 @@ connect-a: ## Connect laptop to Board A AP
 connect-b: ## Connect laptop to Board B AP
 	$(call require_lock_b)
 	@echo "$(CYAN)Connecting to $(BOARD_B_SSID)...$(RESET)"
-	@nmcli device wifi connect "$(BOARD_B_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
-	nmcli connection up "$(BOARD_B_UUID)" 2>/dev/null || \
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_B_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
+	echo "$(SUDO_PW)" | sudo -S nmcli connection up "$(BOARD_B_UUID)" 2>/dev/null || \
 	echo "$(YELLOW)Failed to connect$(RESET)"
 	@sleep 3
 	@echo "$(GREEN)Connected — Board B AP IP: $(BOARD_B_IP)$(RESET)"
 
+connect-c: ## Connect laptop to Board C AP
+	$(call require_lock_c)
+	@echo "$(CYAN)Connecting to $(BOARD_C_SSID)...$(RESET)"
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_C_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || \
+	echo "$(YELLOW)Failed to connect$(RESET)"
+	@sleep 3
+	@echo "$(GREEN)Connected — Board C AP IP: $(BOARD_C_IP)$(RESET)"
+
 disconnect: ## Disconnect from board AP
-	@nmcli connection show --active | grep -q TollGate && \
-		nmcli connection down $$(nmcli -t -f NAME connection show --active | grep TollGate | head -1) || \
-		echo "Not connected to any TollGate AP"
+	@echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
 	@echo "$(GREEN)Disconnected$(RESET)"
+
+FUND_AMOUNT ?= 42
+MINT_URL ?= https://testnut.cashu.space
+UPSTREAM_SSID ?= EnterSSID-2.4GHz
+
+fund-wallet-a: ## Fund Board A wallet: create token on upstream, send to board (requires lock-a)
+	$(call require_lock_a)
+	@echo "$(CYAN)Connecting to upstream WiFi to create token...$(RESET)"
+	@echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 2
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(UPSTREAM_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 3
+	@echo "$(CYAN)Creating $(FUND_AMOUNT) sat token from $(MINT_URL)...$(RESET)"
+	@TOKEN=$$(cashu -h $(MINT_URL) send --legacy $(FUND_AMOUNT) 2>&1 | grep '^cashu') && \
+		echo "$(CYAN)Token created$(RESET)" && \
+		echo "$(CYAN)Reconnecting to $(BOARD_A_SSID)...$(RESET)" && \
+		echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true && \
+		sleep 2 && \
+		echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_A_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || true && \
+		sleep 3 && \
+		echo "$(CYAN)Sending token to Board A...$(RESET)" && \
+		RESP=$$(curl -s --connect-timeout 5 --max-time 10 -X POST "http://$(BOARD_A_IP):2121/" -d "$$TOKEN" 2>/dev/null) && \
+		echo "$$RESP" && \
+		echo "" && \
+		WALLET=$$(curl -s --connect-timeout 5 "http://$(BOARD_A_IP):2121/wallet" 2>/dev/null) && \
+		echo "$(GREEN)Wallet: $$WALLET$(RESET)"
+
+fund-wallet-c: ## Fund Board C wallet: create token on upstream, send to board (requires lock-c)
+	$(call require_lock_c)
+	@echo "$(CYAN)Connecting to upstream WiFi to create token...$(RESET)"
+	@echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 2
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(UPSTREAM_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || true
+	@sleep 3
+	@echo "$(CYAN)Creating $(FUND_AMOUNT) sat token from $(MINT_URL)...$(RESET)"
+	@TOKEN=$$(cashu -h $(MINT_URL) send --legacy $(FUND_AMOUNT) 2>&1 | grep '^cashu') && \
+		echo "$(CYAN)Token created$(RESET)" && \
+		echo "$(CYAN)Reconnecting to $(BOARD_C_SSID)...$(RESET)" && \
+		echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(WIFI_IFACE) 2>/dev/null || true && \
+		sleep 2 && \
+		echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_C_SSID)" ifname $(WIFI_IFACE) 2>/dev/null || true && \
+		sleep 3 && \
+		echo "$(CYAN)Sending token to Board C...$(RESET)" && \
+		RESP=$$(curl -s --connect-timeout 5 --max-time 10 -X POST "http://$(BOARD_C_IP):2121/" -d "$$TOKEN" 2>/dev/null) && \
+		echo "$$RESP" && \
+		echo "" && \
+		WALLET=$$(curl -s --connect-timeout 5 "http://$(BOARD_C_IP):2121/wallet" 2>/dev/null) && \
+		echo "$(GREEN)Wallet: $$WALLET$(RESET)"
 
 _connect-a-if-needed:
 	@if ! ping -c 1 -W 2 $(BOARD_A_IP) >/dev/null 2>&1; then \
@@ -686,41 +909,42 @@ relay-test-full: ## Run all relay tests sequentially (requires lock-b)
 	fi
 
 # ===========================================================================
-#  ARCH COMPONENT EXTRACTION TESTS (Board A, tollgate_core)
+#  ARCH COMPONENT EXTRACTION TESTS (tollgate_core)
+#  Uses ARCH_BOARD / ARCH_PORT / ARCH_IP from boards.env
 # ===========================================================================
 
-ARCH_FIRMWARE_DIR := /home/c03rad0r/esp32-tollgate-arch
-ARCH_IP           := 10.192.45.1
-ARCH_SSID         := TollGate-C0E9CA
-ARCH_PORT         := /dev/ttyACM0
-ARCH_WIFI_IFACE   := wlp59s0
-ARCH_TESTS_DIR    := $(ARCH_FIRMWARE_DIR)/tests/integration
+ARCH_FIRMWARE_DIR  ?= /home/c03rad0r/esp32-tollgate-arch
+ARCH_IP            ?= 10.192.45.1
+ARCH_SSID          ?= TollGate-C0E9CA
+ARCH_PORT          ?= $(BOARD_C_PORT)
+ARCH_BOARD         ?= c
+ARCH_WIFI_IFACE    := wlp59s0
+ARCH_TESTS_DIR     ?= $(ARCH_FIRMWARE_DIR)/tests/integration
+ARCH_SPIFFS_DIR    := /tmp/arch_spiffs
+ARCH_SPIFFS_BIN    := /tmp/arch_spiffs.bin
+ARCH_SPIFFS_SIZE   := 0xF0000
+ARCH_SPIFFS_OFFSET := 0x410000
+ARCH_WIFI_SSID     ?= EnterSSID-2.4GHz
+ARCH_REQ_DELAY     := 2
 
-.PHONY: arch-build arch-flash-a arch-monitor-a arch-connect-a arch-disconnect \
-        arch-generate-spiffs arch-flash-spiffs-a \
+define require_arch_lock
+	@if [ ! -f "$(LOCK_DIR)/board-$(ARCH_BOARD).lock" ]; then \
+		echo "$(RED)$(BOLD)Board $(ARCH_BOARD) not locked — run 'make lock-$(ARCH_BOARD) PHASE=\"description\"' first$(RESET)"; \
+		echo "$(YELLOW)Another LLM session may be using this board.$(RESET)"; \
+		exit 1; \
+	fi
+endef
+
+.PHONY: arch-build arch-flash arch-generate-spiffs arch-flash-spiffs \
+        arch-wait-ready arch-connect arch-disconnect \
         arch-test-smoke arch-test-network arch-test-api arch-test-dns-fw \
         arch-test-reset arch-test-session arch-test-phase2 arch-test-full \
-        arch-test-cleanup arch-bootlog-a
+        arch-test-cleanup arch-test-api-quick
 
 arch-build: ## Build arch (tollgate_core) firmware
 	@echo "$(CYAN)Building arch firmware in $(ARCH_FIRMWARE_DIR)...$(RESET)"
 	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && cd $(ARCH_FIRMWARE_DIR) && idf.py build 2>&1 | tail -5'
 	@echo "$(GREEN)Build complete$(RESET)"
-
-arch-flash-a: ## Flash arch firmware + SPIFFS to Board A (requires lock)
-	$(call require_lock_a)
-	@$(MAKE) arch-generate-spiffs
-	@echo "$(CYAN)Erasing flash on Board A ($(ARCH_PORT))...$(RESET)"
-	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 erase_flash 2>&1 | tail -3'
-	@echo "$(CYAN)Flashing firmware + SPIFFS to Board A ($(ARCH_PORT))...$(RESET)"
-	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 $(ARCH_FIRMWARE_DIR)/build/bootloader/bootloader.bin 0x8000 $(ARCH_FIRMWARE_DIR)/build/partition_table/partition-table.bin 0x10000 $(ARCH_FIRMWARE_DIR)/build/esp32-tollgate.bin $(ARCH_SPIFFS_OFFSET) $(ARCH_SPIFFS_BIN) 2>&1 | tail -8'
-	@echo "$(GREEN)Board A flashed with arch firmware + SPIFFS (clean)$(RESET)"
-
-ARCH_SPIFFS_DIR   := /tmp/arch_spiffs
-ARCH_SPIFFS_BIN   := /tmp/arch_spiffs.bin
-ARCH_SPIFFS_SIZE  := 0xF0000
-ARCH_SPIFFS_OFFSET := 0x410000
-ARCH_WIFI_SSID    ?= EnterSSID-2.4GHz
 
 arch-generate-spiffs: ## Generate SPIFFS for arch firmware with auto-detected WPA mode
 	@echo "$(CYAN)Generating arch SPIFFS image...$(RESET)"
@@ -734,103 +958,170 @@ arch-generate-spiffs: ## Generate SPIFFS for arch firmware with auto-detected WP
 	@echo "$(GREEN)SPIFFS image: $(ARCH_SPIFFS_BIN)$(RESET)"
 	@cat $(ARCH_SPIFFS_DIR)/config.json
 
-arch-flash-spiffs-a: ## Flash SPIFFS to Board A with WPA auto-detect (requires lock)
-	$(call require_lock_a)
+arch-flash: ## Flash arch firmware + SPIFFS to arch board (requires lock-$(ARCH_BOARD))
+	$(call require_arch_lock)
+	@$(MAKE) arch-build
 	@$(MAKE) arch-generate-spiffs
-	@echo "$(CYAN)Flashing SPIFFS to Board A at offset $(ARCH_SPIFFS_OFFSET)...$(RESET)"
-	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 --after hard_reset write_flash $(ARCH_SPIFFS_OFFSET) $(ARCH_SPIFFS_BIN) 2>&1 | tail -5'
-	@echo "$(GREEN)SPIFFS flashed to Board A — rebooting$(RESET)"
+	@echo "$(CYAN)Erasing flash on $(ARCH_PORT)...$(RESET)"
+	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 erase_flash 2>&1 | tail -3'
+	@echo "$(CYAN)Flashing firmware + SPIFFS to $(ARCH_PORT)...$(RESET)"
+	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 $(ARCH_FIRMWARE_DIR)/build/bootloader/bootloader.bin 0x8000 $(ARCH_FIRMWARE_DIR)/build/partition_table/partition-table.bin 0x10000 $(ARCH_FIRMWARE_DIR)/build/esp32-tollgate.bin $(ARCH_SPIFFS_OFFSET) $(ARCH_SPIFFS_BIN) 2>&1 | tail -8'
+	@echo "$(GREEN)Firmware + SPIFFS flashed to $(ARCH_PORT)$(RESET)"
+	@echo "$(CYAN)Waiting 70s for boot...$(RESET)"
+	@sleep 70
+	@$(MAKE) arch-wait-ready
 
-arch-monitor-a: ## Serial monitor for arch Board A (requires lock)
-	$(call require_lock_a)
-	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && cd $(ARCH_FIRMWARE_DIR) && idf.py -p $(ARCH_PORT) monitor'
+arch-flash-spiffs: ## Flash SPIFFS only to arch board (requires lock)
+	$(call require_arch_lock)
+	@$(MAKE) arch-generate-spiffs
+	@echo "$(CYAN)Flashing SPIFFS to $(ARCH_PORT) at offset $(ARCH_SPIFFS_OFFSET)...$(RESET)"
+	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 --after no_reset write_flash $(ARCH_SPIFFS_OFFSET) $(ARCH_SPIFFS_BIN) 2>&1 | tail -5'
+	@echo "$(GREEN)SPIFFS flashed$(RESET)"
 
-arch-bootlog-a: ## Capture boot log from Board A (requires lock)
-	$(call require_lock_a)
-	@echo "$(CYAN)Capturing boot log from $(ARCH_PORT)...$(RESET)"
-	@timeout 15 python3 -c "import serial,time;s=serial.Serial('$(ARCH_PORT)',115200,timeout=1);s.write(b'\n');time.sleep(2);s.write(b'\n');time.sleep(10);data=s.read(8192);print(data.decode('utf-8',errors='replace'));s.close()" 2>&1 || true
+arch-wait-ready: ## Wait for arch board HTTP server to be ready (polls :2121/usage)
+	@echo "$(CYAN)Waiting for arch board at $(ARCH_IP):2121 to be ready...$(RESET)"
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+		if curl -s --connect-timeout 3 --max-time 5 "http://$(ARCH_IP):2121/usage" 2>/dev/null | grep -q "owner"; then \
+			echo "$(GREEN)Board ready! (attempt $$i)$(RESET)"; \
+			curl -s --max-time 5 "http://$(ARCH_IP):2121/usage" | python3 -m json.tool 2>/dev/null; \
+			exit 0; \
+		fi; \
+		echo "  attempt $$i/15 — not ready, waiting 5s..."; \
+		sleep 5; \
+	done; \
+	echo "$(RED)Board did not become ready after 75s$(RESET)"; \
+	exit 1
 
-arch-connect-a: ## WiFi connect to Board A AP (requires lock)
-	$(call require_lock_a)
+arch-connect: ## WiFi connect to arch board AP (requires lock)
+	$(call require_arch_lock)
 	@echo "$(CYAN)Connecting $(ARCH_WIFI_IFACE) to $(ARCH_SSID)...$(RESET)"
 	@echo "c03rad0r123" | sudo -S nmcli device wifi connect "$(ARCH_SSID)" ifname $(ARCH_WIFI_IFACE) 2>&1 | grep -v "Password:" || true
 	@sleep 3
-	@echo "$(CYAN)Waiting for DHCP...$(RESET)"
 	@for i in 1 2 3 4 5; do ping -c 1 -W 2 $(ARCH_IP) >/dev/null 2>&1 && break; sleep 2; done
 	@echo "$(GREEN)Connected to $(ARCH_SSID) ($(ARCH_IP))$(RESET)"
 
-arch-disconnect: ## Disconnect WiFi from Board A AP
+arch-disconnect: ## Disconnect WiFi from arch board AP
 	@echo "c03rad0r123" | sudo -S nmcli device disconnect $(ARCH_WIFI_IFACE) 2>&1 | grep -v "Password:" || true
 	@sleep 2
-	@echo "$(GREEN)Disconnected from Board A AP$(RESET)"
+	@echo "$(GREEN)Disconnected from board AP$(RESET)"
+
+arch-test-api-quick: ## Quick API sanity check (requires lock)
+	$(call require_arch_lock)
+	@echo "$(BOLD)=== Quick API Test ===$(RESET)"
+	@echo "$(CYAN)1/5 — /usage$(RESET)"
+	@sleep $(ARCH_REQ_DELAY) && curl -s --max-time 10 "http://$(ARCH_IP):2121/usage" | python3 -m json.tool 2>/dev/null || echo "$(RED)  FAILED$(RESET)"
+	@echo "$(CYAN)2/5 — /portal-config$(RESET)"
+	@sleep $(ARCH_REQ_DELAY) && curl -s --max-time 10 "http://$(ARCH_IP):2121/portal-config" | python3 -m json.tool 2>/dev/null || echo "$(RED)  FAILED$(RESET)"
+	@echo "$(CYAN)3/5 — /whoami$(RESET)"
+	@sleep $(ARCH_REQ_DELAY) && curl -s --max-time 10 "http://$(ARCH_IP):2121/whoami" 2>/dev/null || echo "$(RED)  FAILED$(RESET)"
+	@echo "$(CYAN)4/5 — Portal (port 80)$(RESET)"
+	@sleep $(ARCH_REQ_DELAY) && curl -s --max-time 10 -o /dev/null -w "HTTP %{http_code}, %{size_download} bytes" "http://$(ARCH_IP)/" 2>/dev/null && echo "" || echo "$(RED)  FAILED$(RESET)"
+	@echo "$(CYAN)5/5 — /usage (confirm still alive)$(RESET)"
+	@sleep $(ARCH_REQ_DELAY) && curl -s --max-time 10 "http://$(ARCH_IP):2121/usage" | python3 -m json.tool 2>/dev/null || echo "$(RED)  FAILED$(RESET)"
+	@echo "$(GREEN)=== Quick API Test Complete ===$(RESET)"
 
 arch-test-smoke: ## Smoke test: SSID, portal, grant, reset, internet (~30s)
-	$(call require_lock_a)
+	$(call require_arch_lock)
 	@echo "$(BOLD)=== Smoke Test ===$(RESET)"
-	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) AP_SSID=$(ARCH_SSID) node smoke.mjs /dev/ttyACM0
+	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) AP_SSID=$(ARCH_SSID) REQ_DELAY=$(ARCH_REQ_DELAY) node smoke.mjs
 
 arch-test-network: ## Network test: AP scan, DHCP, DNS hijack (~15s)
-	$(call require_lock_a)
+	$(call require_arch_lock)
 	@echo "$(BOLD)=== Network Test ===$(RESET)"
-	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node network.mjs
+	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) REQ_DELAY=$(ARCH_REQ_DELAY) node network.mjs
 
 arch-test-api: ## API test: portal, captive detect, whoami, usage, DNS (~20s)
-	$(call require_lock_a)
+	$(call require_arch_lock)
 	@echo "$(BOLD)=== API Test ===$(RESET)"
-	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node api.mjs
+	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) REQ_DELAY=$(ARCH_REQ_DELAY) node api.mjs
 
 arch-test-dns-fw: ## DNS + Firewall test: hijack, NAT, forward after auth (~30s)
-	$(call require_lock_a)
+	$(call require_arch_lock)
 	@echo "$(BOLD)=== DNS + Firewall Test ===$(RESET)"
-	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node test-dns-firewall.mjs
+	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) REQ_DELAY=$(ARCH_REQ_DELAY) node test-dns-firewall.mjs
 
 arch-test-reset: ## Reset auth cycle: reset-pay-verify-reset-repay (~30s)
-	$(call require_lock_a)
+	$(call require_arch_lock)
 	@echo "$(BOLD)=== Reset Auth Test ===$(RESET)"
-	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node test-reset-auth.mjs
+	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) REQ_DELAY=$(ARCH_REQ_DELAY) node test-reset-auth.mjs
 
 arch-test-session: ## Session expiry: 65s wait, verify blocked, renew (~80s)
-	$(call require_lock_a)
+	$(call require_arch_lock)
 	@echo "$(BOLD)=== Session Expiry Test ===$(RESET)"
 	@echo "$(YELLOW)NOTE: This test waits 65s for session expiry$(RESET)"
-	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node test-session-expiry.mjs
+	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) REQ_DELAY=$(ARCH_REQ_DELAY) node test-session-expiry.mjs
 
 arch-test-phase2: ## Full API: discovery, tokens, spent, expiry, renewal (~90s)
-	$(call require_lock_a)
+	$(call require_arch_lock)
 	@echo "$(BOLD)=== Phase 2 API Test ===$(RESET)"
 	@echo "$(YELLOW)NOTE: This test waits 65s for session expiry$(RESET)"
-	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) node phase2.mjs
+	@cd $(ARCH_TESTS_DIR) && TOLLGATE_IP=$(ARCH_IP) REQ_DELAY=$(ARCH_REQ_DELAY) node phase2.mjs
 
 arch-test-cleanup: ## Disconnect WiFi + reset auth state
-	$(call require_lock_a)
-	@curl -s --connect-timeout 3 http://$(ARCH_IP)/reset_authentication 2>/dev/null || true
+	$(call require_arch_lock)
+	@sleep $(ARCH_REQ_DELAY) && curl -s --connect-timeout 3 "http://$(ARCH_IP):2121/reset_authentication" 2>/dev/null || true
 	@nmcli device disconnect $(ARCH_WIFI_IFACE) 2>/dev/null || true
 	@sleep 2
 	@echo "$(GREEN)Cleanup complete$(RESET)"
 
 arch-test-full: ## Run all arch E2E tests sequentially (~4min)
 	@echo "$(BOLD)=======================================$(RESET)"
-	@echo "$(BOLD)  Full Arch E2E Test Suite (Board A)   $(RESET)"
-	@echo "$(BOLD)=======================================$(RESET)"
+	@echo "$(BOLD)  Full Arch E2E
+# ===========================================================================
+#  Pytest wrapper targets
+# ===========================================================================
+
+PYTEST := cd /home/c03rad0r/physical-router-test-automation/esp32 && pytest
+
+pytest-smoke-a: ## Pytest: Board A smoke tests
+	@$(PYTEST) tests/test_smoke.py --board=a -m smoke
+
+pytest-smoke-c: ## Pytest: Board C smoke tests
+	@$(PYTEST) tests/test_smoke.py --board=c -m smoke
+
+pytest-api-a: ## Pytest: Board A API tests
+	@$(PYTEST) tests/test_api.py --board=a
+
+pytest-api-c: ## Pytest: Board C API tests
+	@$(PYTEST) tests/test_api.py --board=c
+
+pytest-portal-a: ## Pytest: Board A captive portal tests
+	@$(PYTEST) tests/test_captive_portal.py --board=a
+
+pytest-portal-c: ## Pytest: Board C captive portal tests
+	@$(PYTEST) tests/test_captive_portal.py --board=c
+
+pytest-multimint-a: ## Pytest: Board A multi-mint tests
+	@$(PYTEST) tests/test_multi_mint.py --board=a
+
+pytest-multimint-c: ## Pytest: Board C multi-mint tests
+	@$(PYTEST) tests/test_multi_mint.py --board=c
+
+pytest-fund-a: ## Pytest: Fund Board A wallet (upstream → board → reconnect)
+	@$(PYTEST) tests/test_wallet_funding.py --board=a -k "test_fund_wallet"
+
+pytest-fund-c: ## Pytest: Fund Board C wallet (upstream → board → reconnect)
+	@$(PYTEST) tests/test_wallet_funding.py --board=c -k "test_fund_wallet"
+
+pytest-spend-a: ## Pytest: Spend from Board A funded wallet
+	@$(PYTEST) tests/test_wallet_funding.py --board=a -k "test_spend"
+
+pytest-spend-c: ## Pytest: Spend from Board C funded wallet
+	@$(PYTEST) tests/test_wallet_funding.py --board=c -k "test_spend"
+
+pytest-all-a: ## Pytest: All Board A tests
+	@$(PYTEST) tests/ --board=a
+
+pytest-all-c: ## Pytest: All Board C tests
+	@$(PYTEST) tests/ --board=c
+
+pytest-smoke: ## Pytest: Smoke tests on selected board (use --board=a|b|c)
+	@$(PYTEST) tests/test_smoke.py --board=$(or $(BOARD),c) -m smoke
+
+pytest-help: ## Show pytest markers and options
+	@$(PYTEST) --markers
 	@echo ""
-	@FAILED=0; \
-	echo "$(CYAN)--- 1/7: Smoke Test ---$(RESET)"; \
-	$(MAKE) arch-test-smoke || FAILED=$$((FAILED + 1)); echo ""; \
-	echo "$(CYAN)--- 2/7: Network Test ---$(RESET)"; \
-	$(MAKE) arch-test-network || FAILED=$$((FAILED + 1)); echo ""; \
-	echo "$(CYAN)--- 3/7: API Test ---$(RESET)"; \
-	$(MAKE) arch-test-api || FAILED=$$((FAILED + 1)); echo ""; \
-	echo "$(CYAN)--- 4/7: DNS + Firewall Test ---$(RESET)"; \
-	$(MAKE) arch-test-dns-fw || FAILED=$$((FAILED + 1)); echo ""; \
-	echo "$(CYAN)--- 5/7: Reset Auth Test ---$(RESET)"; \
-	$(MAKE) arch-test-reset || FAILED=$$((FAILED + 1)); echo ""; \
-	echo "$(CYAN)--- 6/7: Session Expiry Test ---$(RESET)"; \
-	$(MAKE) arch-test-session || FAILED=$$((FAILED + 1)); echo ""; \
-	echo "$(CYAN)--- 7/7: Phase 2 API Test ---$(RESET)"; \
-	$(MAKE) arch-test-phase2 || FAILED=$$((FAILED + 1)); echo ""; \
-	echo ""; \
-	if [ $$FAILED -eq 0 ]; then \
-		echo "$(GREEN)=== ALL 7 ARCH E2E TESTS PASSED ===$(RESET)"; \
-	else \
-		echo "$(RED)=== $$FAILED/7 ARCH E2E TESTS FAILED ===$(RESET)"; \
-	fi
+	@echo "Usage: make pytest-all-c          # All Board C tests"
+	@echo "       make pytest-smoke-a        # Board A smoke only"
+	@echo "       make pytest-fund-c         # Fund Board C wallet"
+	@echo "       pytest tests/ --board=c    # Direct pytest"

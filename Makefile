@@ -39,7 +39,7 @@
 ROUTER ?= alpha
 SSID   ?=
 PASS   ?=
-MINT   ?= https://nofee.testnut.cashu.space
+MINT   ?= https://testnut-compat.mints.orangesync.tech
 VIA    ?=
 PHASE  ?=
 
@@ -90,8 +90,12 @@ help: ## Show this help
 	@echo "$(CYAN)--- Router management ---$(RESET)"
 	@echo "  make hw-deploy              ROUTER=alpha      # cross-compile + deploy binaries"
 	@echo "  make deploy-develop       ROUTER=alpha      # deploy from develop worktree"
+	@echo "  make deploy-configwizzard ROUTER=alpha      # build + deploy configurationwizzard SPA"
 	@echo "  make test-develop-smoke   ROUTER=alpha      # CLI config smoke tests"
 	@echo "  make test-develop-playwright ROUTER=alpha    # Playwright tests vs develop"
+	@echo "  make test-configwizzard-e2e ROUTER=alpha     # E2E: PR124 + configwizzard + :2121"
+	@echo "  make test-configwizzard-all  ROUTER=alpha    # deploy-develop + deploy-configwizzard + full E2E"
+	@echo "  make test-config-save     ROUTER=alpha      # config save round-trip + restart persistence"
 	@echo "  make status               ROUTER=alpha      # check service status"
 	@echo "  make shell                ROUTER=alpha      # interactive SSH session"
 	@echo "  make logs                 ROUTER=alpha      # tail tollgate logs"
@@ -124,7 +128,7 @@ help: ## Show this help
 	@echo "  ROUTER  - router label from routers.env (default: alpha)"
 	@echo "  SSID    - upstream WiFi SSID"
 	@echo "  PASS    - upstream WiFi passphrase"
-	@echo "  MINT    - mint URL for block/unblock (default: https://nofee.testnut.cashu.space)"
+	@echo "  MINT    - mint URL for block/unblock (default: https://testnut-compat.mints.orangesync.tech)"
 	@echo "  VIA     - intermediate router for rescue"
 	@echo "  PHASE   - description for router lock"
 	@echo ""
@@ -285,7 +289,9 @@ full-all: ## Run all test suites (lint + playwright + degraded + upstream)
         test-ssl-comprehensive \
         test-ssl-real-cert test-ssl-real-cert-remove test-ssl-real-cert-full \
         test-ssl-all \
-        deploy-develop test-develop-smoke test-develop-smoke-persist test-develop-playwright
+        deploy-develop test-develop-smoke test-develop-smoke-persist test-develop-playwright \
+        deploy-configwizzard test-configwizzard-e2e test-configwizzard-all \
+        test-config-save
 
 DEVELOP_SRC ?= $(HOME)/tollgate-worktrees/develop/src
 DEVICE ?= gl-mt3000
@@ -391,6 +397,51 @@ test-develop-playwright: ## Run Playwright tests against router with develop bin
 	TOLLGATE_SSH_HOST=$$router_host \
 	TOLLGATE_CAPTIVE_PORTAL_HOST=$$router_host \
 	npx playwright test tests/tollgate.spec.mjs tests/captive-portal.spec.mjs --project=desktop
+
+CONFIGWIZZARD_REPO ?= /tmp/configurationwizzard
+
+deploy-configwizzard: ## Build and deploy configurationwizzard SPA (admin + portal + rpcd plugin)
+	$(call require_hardware_lock)
+	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" mint-health/routers.env | cut -d= -f2); \
+	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
+	if [ ! -d "$(CONFIGWIZZARD_REPO)" ]; then echo "$(RED)configurationwizzard repo not found at $(CONFIGWIZZARD_REPO)$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=== Deploying configurationwizzard to $(ROUTER) ($$router_host) ===$(RESET)"; \
+	bash scripts/deploy-configwizzard.sh "$$router_host" "$(CONFIGWIZZARD_REPO)"
+
+test-configwizzard-e2e: ## Run E2E tests: PR124 CLI + rpcd plugin + :2121 API + SPA integration
+	$(call require_hardware_lock)
+	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" mint-health/routers.env | cut -d= -f2); \
+	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=== configurationwizzard E2E Tests [$(ROUTER)] ($$router_host) ===$(RESET)"; \
+	bash scripts/test-configwizzard-e2e.sh "$$router_host"
+
+test-configwizzard-all: ## Deploy everything + run full E2E test suite
+	$(call require_hardware_lock)
+	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" mint-health/routers.env | cut -d= -f2); \
+	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=======================================$(RESET)"; \
+	echo "$(BOLD)  Full Configwizzard E2E [$(ROUTER)]$(RESET)"; \
+	echo "$(BOLD)=======================================$(RESET)"; \
+	echo ""; \
+	echo "$(CYAN)1/3 — Deploying develop branch...$(RESET)"; \
+	$(MAKE) deploy-develop ROUTER=$(ROUTER); \
+	echo ""; \
+	echo "$(CYAN)2/3 — Deploying configurationwizzard SPA...$(RESET)"; \
+	$(MAKE) deploy-configwizzard ROUTER=$(ROUTER) CONFIGWIZZARD_REPO=$(CONFIGWIZZARD_REPO); \
+	echo ""; \
+	echo "$(CYAN)3/3 — Running E2E tests...$(RESET)"; \
+	$(MAKE) test-configwizzard-e2e ROUTER=$(ROUTER); \
+	echo ""; \
+	echo "$(BOLD)=======================================$(RESET)"; \
+	echo "$(GREEN)$(BOLD)  Full Configwizzard E2E complete [$(ROUTER)]$(RESET)"; \
+	echo "$(BOLD)=======================================$(RESET)"
+
+test-config-save: ## Run config save round-trip tests (save + disk verify + restart persistence)
+	$(call require_hardware_lock)
+	@router_host=$$(grep -E "^ROUTER_$$(echo $(ROUTER) | tr '[:lower:]' '[:upper:]')_HOST=" mint-health/routers.env | cut -d= -f2); \
+	if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'$(RESET)"; exit 1; fi; \
+	echo "$(BOLD)=== Config Save E2E Tests [$(ROUTER)] ($$router_host) ===$(RESET)"; \
+	bash scripts/test-config-save-e2e.sh "$$router_host"
 
 status: ## Check tollgate service status
 	@$(MAKE) -C mint-health r-status ROUTER=$(ROUTER)
@@ -697,9 +748,21 @@ setup: ## Install dependencies (npm + playwright + serial)
 	@echo "  cp upstream-wifi/routers.env.example upstream-wifi/routers.env"
 	@echo "  cp .env.example .env                                         # fill in LuCI credentials"
 	@echo ""
+	@echo "$(CYAN)--- ESP32 board provisioning ---$(RESET)"
+	@echo "  make esp32-provision-a                   # full provision Board A (erase + fw + SPIFFS + wait)"
+	@echo "  make esp32-provision-b                   # full provision Board B"
+	@echo "  make esp32-provision-c                   # full provision Board C"
+	@echo "  make esp32-flash-a                       # flash firmware only to Board A"
+	@echo "  make esp32-flash-b                       # flash firmware only to Board B"
+	@echo "  make esp32-flash-c                       # flash firmware only to Board C"
+	@echo "  make esp32-reset-a                       # reset Board A (no reflash)"
+	@echo "  make esp32-reset-b                       # reset Board B"
+	@echo "  make esp32-reset-c                       # reset Board C"
+	@echo "  make esp32-wait-ready-a                  # poll Board A :2121 until ready"
+	@echo "  make esp32-wait-ready-b                  # poll Board B :2121 until ready"
+	@echo "  make esp32-wait-ready-c                  # poll Board C :2121 until ready"
+	@echo ""
 	@echo "$(CYAN)--- ESP32 board tests ---$(RESET)"
-	@echo "  make esp32-flash-a                       # flash multi-mint firmware to Board A"
-	@echo "  make esp32-flash-b                       # flash multi-mint firmware to Board B"
 	@echo "  make esp32-test-multi-mint-a             # full multi-mint test on Board A"
 	@echo "  make esp32-test-multi-mint-b             # full multi-mint test on Board B"
 	@echo "  make esp32-test-all-boards               # test both ESP32 boards"
@@ -726,6 +789,9 @@ setup: ## Install dependencies (npm + playwright + serial)
  .PHONY: esp32-flash-a esp32-flash-b esp32-flash-c \
          esp32-monitor-a esp32-monitor-b esp32-monitor-c \
          esp32-connect-a esp32-connect-b esp32-disconnect \
+         esp32-reset-a esp32-reset-b esp32-reset-c \
+         esp32-wait-ready-a esp32-wait-ready-b esp32-wait-ready-c \
+         esp32-provision-a esp32-provision-b esp32-provision-c \
          esp32-test-discovery-a esp32-test-discovery-b \
          esp32-test-mints-a esp32-test-mints-b \
          esp32-test-multi-mint-a esp32-test-multi-mint-b esp32-test-all-boards \
@@ -745,6 +811,33 @@ esp32-flash-b: ## Flash firmware to Board B (requires lock-b)
 
 esp32-flash-c: ## Flash firmware to Board C (requires lock-c)
 	@$(MAKE) -C esp32 flash-c
+
+esp32-provision-a: ## Full provision Board A (erase + fw + SPIFFS + wait, requires lock-a)
+	@$(MAKE) -C esp32 provision-a
+
+esp32-provision-b: ## Full provision Board B (requires lock-b)
+	@$(MAKE) -C esp32 provision-b
+
+esp32-provision-c: ## Full provision Board C (requires lock-c)
+	@$(MAKE) -C esp32 provision-c
+
+esp32-reset-a: ## Reset Board A without reflashing (requires lock-a)
+	@$(MAKE) -C esp32 reset-a
+
+esp32-reset-b: ## Reset Board B without reflashing (requires lock-b)
+	@$(MAKE) -C esp32 reset-b
+
+esp32-reset-c: ## Reset Board C without reflashing (requires lock-c)
+	@$(MAKE) -C esp32 reset-c
+
+esp32-wait-ready-a: ## Wait for Board A :2121 to be ready
+	@$(MAKE) -C esp32 wait-ready-a
+
+esp32-wait-ready-b: ## Wait for Board B :2121 to be ready
+	@$(MAKE) -C esp32 wait-ready-b
+
+esp32-wait-ready-c: ## Wait for Board C :2121 to be ready
+	@$(MAKE) -C esp32 wait-ready-c
 
 esp32-monitor-a: ## Serial monitor Board A (requires lock-a)
 	@$(MAKE) -C esp32 monitor-a
@@ -1065,6 +1158,19 @@ publish:
 
 pr-smoke:
 	@echo "Usage: ./scripts/test-pr.sh --pr <N> [--reset] [--test api|all] [--publish]"
+
+# --- PR #120: Mint resilience test suite ---
+
+smoke-pr120: ## Quick smoke for PR #120 features (try-all-mints + CLI degraded ops)
+	pytest tests/api/test_try_all_mints.py tests/api/test_cli_degraded_operations.py -v --timeout=120
+
+full-pr120: ## Full PR #120 test suite (includes recovery lifecycle ~10 min)
+	pytest tests/api/test_try_all_mints.py tests/api/test_merchant_provider.py \
+		tests/api/test_recovery_lifecycle.py tests/api/test_cli_degraded_operations.py \
+		-v --timeout=600
+
+pr120-recovery: ## Recovery lifecycle tests only
+	pytest tests/api/test_recovery_lifecycle.py -v --timeout=600
 
 # --- Clean ---
 
