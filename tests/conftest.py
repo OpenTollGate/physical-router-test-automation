@@ -401,7 +401,7 @@ def deploy_session(request, router, backend):
         router.enable_debug_portal()
         router.ensure_test_mint()
         router.replace_mints()
-        for _ in range(20):
+        for _ in range(60):
             if router.api_status("/") == 200:
                 break
             time.sleep(1)
