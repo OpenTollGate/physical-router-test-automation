@@ -1,28 +1,23 @@
-"""Phone-tier tests for PR #117: hostname resolution and captive portal.
+"""Phone-tier hostname resolution and captive portal tests.
 
-HTTPS is opt-in (verified by API tests). Phone tests only confirm the
-user-facing behaviour: captive portal opens over HTTP and DNS resolves
-the TollGate hostname.
+Verifies user-facing behaviour: captive portal opens over HTTP and DNS
+resolves the TollGate hostname. Feature-detected via hostname check.
 """
 
 import pytest
 
 pytestmark = [pytest.mark.phone, pytest.mark.slow, pytest.mark.timeout(120),
-              pytest.mark.critical, pytest.mark.pr(117), pytest.mark.requires_wifi]
+              pytest.mark.critical, pytest.mark.requires_wifi]
 
 
-def _is_pr117_installed(router):
+def _skip_if_no_hostname_setup(router):
     hostname = router.ssh("uci get system.@system[0].hostname 2>/dev/null").strip()
-    return hostname.lower() == "tollgate"
-
-
-def _skip_if_no_pr117(router):
-    if not _is_pr117_installed(router):
-        pytest.skip("PR #117 not installed (hostname is not 'TollGate')")
+    if hostname.lower() != "tollgate":
+        pytest.skip("Hostname setup not present (hostname is not 'TollGate')")
 
 
 def test_captive_portal_opens_on_phone(router, adb, connected_wifi, screenshot_portal):
-    _skip_if_no_pr117(router)
+    _skip_if_no_hostname_setup(router)
 
     screenshot_portal("hostname-portal.png")
 
@@ -34,7 +29,7 @@ def test_captive_portal_opens_on_phone(router, adb, connected_wifi, screenshot_p
 
 
 def test_phone_can_resolve_tollgate_hostname(router, adb, connected_wifi):
-    _skip_if_no_pr117(router)
+    _skip_if_no_hostname_setup(router)
 
     result = adb.shell("ping -c 1 -W 3 tollgate.lan 2>&1", timeout=15)
     failed = any(s in result.lower() for s in

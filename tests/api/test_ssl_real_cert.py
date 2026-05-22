@@ -20,7 +20,6 @@ pytestmark = [
     pytest.mark.hardware,
     pytest.mark.config,
     pytest.mark.destructive,
-    pytest.mark.pr(123),
     pytest.mark.timeout(1800),
 ]
 

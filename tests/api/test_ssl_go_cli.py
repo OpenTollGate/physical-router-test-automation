@@ -1,9 +1,8 @@
-"""Tests for PR #123: Go-native SSL management CLI.
+"""Go-native SSL management CLI tests.
 
-These tests migrate the self-signed SSL coverage from `mint-health/Makefile`
-to pytest while leaving the Makefile targets available as legacy/reference
-manual commands. They verify the PR #123 API: `tollgate ssl apply/remove/status`,
-not the old PR #117 `tollgate-setup-ssl` shell script.
+Verifies `tollgate ssl apply/remove/status` — the Go CLI that replaced
+the old `tollgate-setup-ssl` shell script (PR #117). Feature-detected
+so tests run against any firmware with the Go SSL CLI.
 """
 
 from __future__ import annotations
@@ -23,7 +22,6 @@ pytestmark = [
     pytest.mark.go_only,
     pytest.mark.config,
     pytest.mark.destructive,
-    pytest.mark.pr(123),
 ]
 
 SSL_DIR = "/etc/tollgate/ssl"
