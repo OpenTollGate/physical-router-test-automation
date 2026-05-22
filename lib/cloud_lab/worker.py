@@ -979,11 +979,14 @@ def run_worker(config: WorkerConfig) -> int:
             counts = json.loads(run_json.read_text()).get("counts", {})
 
         report_url = ""
-        if config.publish and run_json.exists():
+        total_run = sum(counts.get(k, 0) for k in ("passed", "failed", "skipped", "error"))
+        if config.publish and run_json.exists() and test_exit == 0 and total_run > 0:
             log.info("Publishing results to gh-pages...")
             report_url = publish_results(config, results_dir)
             log.info("Published: %s", report_url)
             post_pr_comment(config, report_url, counts)
+        elif config.publish and (test_exit != 0 or total_run == 0):
+            log.warning("Skipping publish: exit=%d total_tests=%d", test_exit, total_run)
 
         log.info(
             "=== Pipeline complete: passed=%s failed=%s skipped=%s exit=%d (%.1fs) ===",
