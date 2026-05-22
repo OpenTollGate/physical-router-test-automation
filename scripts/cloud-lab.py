@@ -164,6 +164,38 @@ def cmd_cleanup_all(args: argparse.Namespace) -> int:
     return cleanup_all(zone=cast(str, args.zone))
 
 
+def cmd_install_reaper(args: argparse.Namespace) -> int:
+    marker = "# tollgate-cloud-reaper"
+    script = str(Path(__file__).resolve())
+    max_age = args.max_age_hours
+    cron_line = f"0 * * * * {script} cleanup-stale --max-age-hours {max_age} {marker}"
+
+    current = subprocess.run(["crontab", "-l"], capture_output=True, text=True, check=False).stdout or ""
+    existing = [l for l in current.splitlines() if marker not in l]
+
+    if args.uninstall:
+        if not any(marker in l for l in current.splitlines()):
+            print("No reaper cron job found.")
+            return 0
+        new_cron = "\n".join(existing).strip() + "\n"
+        subprocess.run(["crontab", "-"], input=new_cron, text=True, check=True)
+        print("Reaper cron job removed.")
+        return 0
+
+    if any(marker in l for l in current.splitlines()):
+        print(f"Reaper already installed. Updating to {max_age}h max age.")
+        existing_lines = existing
+    else:
+        existing_lines = current.splitlines()
+
+    new_cron = "\n".join(existing_lines + [cron_line]).strip() + "\n"
+    subprocess.run(["crontab", "-"], input=new_cron, text=True, check=True)
+    print(f"Reaper installed: VMs older than {max_age}h will be auto-deleted every hour.")
+    print(f"  Cron: {cron_line}")
+    print(f"  Uninstall: {script} install-reaper --uninstall")
+    return 0
+
+
 def cmd_run_tests(args: argparse.Namespace) -> int:
     """Synchronous wrapper: submit + wait (legacy compatibility)."""
     args.wait = True
@@ -235,6 +267,11 @@ def build_parser() -> argparse.ArgumentParser:
     nuke = sub.add_parser("cleanup-all", help="Delete ALL tollgate VMs regardless of age")
     nuke.add_argument("--zone", default=DEFAULT_ZONE)
     nuke.set_defaults(func=cmd_cleanup_all)
+
+    reaper = sub.add_parser("install-reaper", help="Install cron job to auto-delete VMs older than 2 hours")
+    reaper.add_argument("--max-age-hours", type=int, default=2)
+    reaper.add_argument("--uninstall", action="store_true", help="Remove the reaper cron job")
+    reaper.set_defaults(func=cmd_install_reaper)
 
     run = sub.add_parser("run-tests", help="Submit cloud run and wait (alias for submit --wait --publish)")
     run.add_argument("--zone", default=DEFAULT_ZONE)
