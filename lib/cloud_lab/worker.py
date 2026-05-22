@@ -545,7 +545,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
         log.info("Starting Beta OpenWrt VM (upstream router)...")
         beta_proc = _launch_qemu(
             name="openwrt-beta",
-            memory_mb=256,
+            memory_mb=128,
             cpus=1,
             disk_name="tollgate-seller.qcow2",
             tap_name="tg-poc-tap3",
@@ -571,7 +571,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
         log.info("Starting managed seller OpenWrt VM for reseller scenarios...")
         seller_proc = _launch_qemu(
             name="openwrt-seller",
-            memory_mb=256,
+            memory_mb=128,
             cpus=1,
             disk_name="tollgate-seller.qcow2",
             tap_name="tg-poc-tap3",
@@ -591,7 +591,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
     log.info("Starting Alpha OpenWrt VM...")
     reseller_proc = _launch_qemu(
         name="openwrt",
-        memory_mb=256,
+        memory_mb=128,
         cpus=1,
         disk_name="tollgate-poc.qcow2",
         tap_name="tg-poc-tap",
@@ -624,7 +624,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
     log.info("Starting Debian VM (cached overlay)...")
     debian_proc = _launch_qemu(
         name="debian",
-        memory_mb=1024,
+        memory_mb=1536,
         cpus=2,
         disk_name="debian-client.qcow2",
         tap_name="tg-poc-tap2",

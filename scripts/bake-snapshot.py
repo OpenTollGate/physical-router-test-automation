@@ -280,7 +280,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
             f"cd {workdir} && "
             "rm -f run/openwrt.serial.sock run/openwrt.monitor.sock run/openwrt.pid 2>/dev/null; "
             "nohup qemu-system-x86_64 "
-            "-enable-kvm -m 256 -smp 1 -display none "
+            "-enable-kvm -m 128 -smp 1 -display none "
             "-serial unix:run/openwrt.serial.sock,server=on,wait=off "
             "-monitor unix:run/openwrt.monitor.sock,server=on,wait=off "
             "-drive file=overlays/tollgate-poc.qcow2,format=qcow2,if=virtio "
