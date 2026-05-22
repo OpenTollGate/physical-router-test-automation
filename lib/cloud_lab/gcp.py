@@ -85,8 +85,26 @@ def vm_external_ip(project: str, zone: str, vm_name: str) -> str | None:
     return None
 
 
+# Machine type families that do NOT support GCP nested virtualization.
+# E2 (shared-core), N2D (AMD), T2A (Arm), A2 (GPU) lack VMX support.
+# See: https://cloud.google.com/compute/docs/instances/nested-virtualization/overview
+_NO_NESTED_VIRT_PREFIXES = ("e2-", "n2d-", "t2a-", "a2-")
+
+
+def _validate_machine_type(machine_type: str) -> None:
+    """Reject machine types that cannot run nested KVM."""
+    if any(machine_type.startswith(p) for p in _NO_NESTED_VIRT_PREFIXES):
+        raise ValueError(
+            f"Machine type '{machine_type}' does not support nested virtualization. "
+            f"Use an Intel-based type (n2-standard-*, n1-standard-*, c2-*). "
+            f"Nested virt requires Intel Haswell or later. "
+            f"See: https://cloud.google.com/compute/docs/instances/nested-virtualization/overview"
+        )
+
+
 def vm_up(vm_name: str, zone: str = DEFAULT_ZONE, machine_type: str = DEFAULT_MACHINE_TYPE,
           disk_size_gb: int = DEFAULT_DISK_SIZE_GB) -> int:
+    _validate_machine_type(machine_type)
     from lib.cloud_lab.constants import VM_NAME
     vm_name = vm_name or VM_NAME
     project = get_project()
@@ -107,7 +125,7 @@ def vm_up(vm_name: str, zone: str = DEFAULT_ZONE, machine_type: str = DEFAULT_MA
         f"--source-snapshot={SNAPSHOT_NAME}",
         f"--boot-disk-size={disk_size_gb}GB",
         "--enable-nested-virtualization",
-        *([] if machine_type.startswith("e2-") else ["--min-cpu-platform=Intel Cascade Lake"]),
+        "--min-cpu-platform=Intel Cascade Lake",
         "--tags=tollgate-runner",
     ], timeout=300)
     if r.returncode != 0 and vm_status(project, zone, vm_name) != "RUNNING":
@@ -374,6 +392,7 @@ def submit_run(
     }
     metadata_payload = ",".join(f"{k}={v}" for k, v in metadata.items())
 
+    _validate_machine_type(machine_type)
     ensure_firewall_rules(project)
     print(f"Creating VM {vm_name} from snapshot {SNAPSHOT_NAME}...")
     r = _run_gcloud([
@@ -384,7 +403,7 @@ def submit_run(
         f"--source-snapshot={SNAPSHOT_NAME}",
         f"--boot-disk-size={disk_size_gb}GB",
         "--enable-nested-virtualization",
-        *([] if machine_type.startswith("e2-") else ["--min-cpu-platform=Intel Cascade Lake"]),
+        "--min-cpu-platform=Intel Cascade Lake",
         "--tags=tollgate-runner,tollgate-run",
         "--labels=tollgate_run=true",
         "--scopes=compute-rw,storage-rw",
