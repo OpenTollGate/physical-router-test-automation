@@ -449,6 +449,14 @@ def ensure_cdk_binary() -> None:
 def start_local_mints(config: WorkerConfig) -> dict[str, subprocess.Popen[str]]:
     mints: dict[str, subprocess.Popen[str]] = {}
 
+    # cashu v0.20+ uses "fixed-window-elastic-expiry" strategy which was
+    # removed in limits>=5.0. Pin to 3.14.1 to keep Nutshell mints working.
+    _run(
+        "/opt/cashu-venv/bin/pip install -q 'limits==3.14.1' 2>/dev/null",
+        timeout=60,
+        check=False,
+    )
+
     # --- CDK V2 Mint (port 8383) ---
     cdk_config = f"""\
 [info]
