@@ -6,11 +6,18 @@ properly formatted, have no trailing slashes, and use HTTPS.
 
 import json
 
+import os
+
 import pytest
 
 from lib.helpers import parse_json_or_fail
 
 pytestmark = [pytest.mark.api, pytest.mark.extended]
+
+
+def _skip_if_local_mint():
+    if os.environ.get("TOLLGATE_VIRTUAL_LAB"):
+        pytest.skip("Local mints use HTTP in virtual lab")
 
 
 def _get_config_mint_urls(router):
@@ -20,6 +27,7 @@ def _get_config_mint_urls(router):
 
 
 def test_config_mint_urls_use_https(router):
+    _skip_if_local_mint()
     urls = _get_config_mint_urls(router)
     assert urls, "No mint URLs found in config"
     for url in urls:
@@ -36,6 +44,7 @@ def test_config_mint_urls_no_trailing_slash(router):
 
 
 def test_config_mint_urls_valid_format(router):
+    _skip_if_local_mint()
     urls = _get_config_mint_urls(router)
     for url in urls:
         from urllib.parse import urlparse
