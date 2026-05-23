@@ -928,7 +928,9 @@ def select_test_mint() -> str:
 
     Strategy: start with CDK (V2). If the backend crashes after being configured
     with it (V2-incompatible Go/gonuts), fall back to Nutshell V1 (V1 keysets).
+    If Nutshell V1 isn't running either, fall back to public testnuts.
     """
+    PUBLIC_TESTNUTS = "https://testnut.cashu.exchange"
     cdk_ok = False
     try:
         r = _run(
@@ -956,7 +958,18 @@ def select_test_mint() -> str:
     if cdk_ok:
         return CDK_MINT_URL
 
-    log.info("Backend does not support V2 keysets — falling back to Nutshell V1 mint")
+    nutshell_v1_ok = False
+    try:
+        req = urllib.request.Request(f"{NUTSHELL_V1_MINT_URL}/v1/keys")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            if resp.status == 200:
+                nutshell_v1_ok = True
+    except Exception:
+        pass
+
+    fallback_url = NUTSHELL_V1_MINT_URL if nutshell_v1_ok else PUBLIC_TESTNUTS
+    log.info("Backend does not support V2 keysets — falling back to %s", fallback_url)
+
     _run(
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
         f"python3 -c \""
@@ -965,13 +978,13 @@ def select_test_mint() -> str:
         f"import os; "
         f"r = Router(host=os.environ['TOLLGATE_SSH_HOST'], phone_ip='', phone_mac='', domain='', backend=BackendConfig(os.environ.get('TOLLGATE_BACKEND','go'))); "
         f"r.ssh('cp /tmp/config.json.bak /etc/tollgate/config.json 2>/dev/null || true'); "
-        f"r.replace_mints(['{NUTSHELL_V1_MINT_URL}']); "
+        f"r.replace_mints(['{fallback_url}']); "
         f"\" 2>&1",
         timeout=120,
         check=False,
     )
     wait_for_backend()
-    return NUTSHELL_V1_MINT_URL
+    return fallback_url
 
 
 def run_tests(config: WorkerConfig, results_dir: str) -> int:
