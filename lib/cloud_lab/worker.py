@@ -488,7 +488,15 @@ max_delay_time = 0
     # --- Nutshell V2 Mint (port 8384) ---
     _run("rm -rf /tmp/nutshell-v2-mint-data && mkdir -p /tmp/nutshell-v2-mint-data", timeout=10)
     ns_v2_log = Path("/tmp/nutshell-v2-mint.log")
-    ns_v2_env = {**os.environ, "CASHU_MINT_DATABASE": "/tmp/nutshell-v2-mint-data"}
+    ns_v2_env = {
+        **os.environ,
+        "CASHU_DIR": "/tmp/nutshell-v2-cashu",
+        "MINT_DATABASE": "/tmp/nutshell-v2-mint-data",
+        "MINT_BACKEND_BOLT11_SAT": "FakeWallet",
+        "MINT_PRIVATE_KEY": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "FAKEWALLET_DELAY_OUTGOING_PAYMENT": "0",
+        "FAKEWALLET_DELAY_INCOMING_PAYMENT": "0",
+    }
     ns_v2_proc = subprocess.Popen(
         ["/opt/cashu-venv/bin/python", "-m", "cashu.mint", "--port", str(NUTSHELL_V2_MINT_PORT), "--host", LOCAL_MINT_HOST],
         stdout=ns_v2_log.open("w"),
@@ -503,7 +511,15 @@ max_delay_time = 0
     # --- Nutshell V1 Mint (port 8385) ---
     _run("rm -rf /tmp/nutshell-v1-mint-data && mkdir -p /tmp/nutshell-v1-mint-data", timeout=10)
     ns_v1_log = Path("/tmp/nutshell-v1-mint.log")
-    ns_v1_env = {**os.environ, "CASHU_MINT_DATABASE": "/tmp/nutshell-v1-mint-data"}
+    ns_v1_env = {
+        **os.environ,
+        "CASHU_DIR": "/tmp/nutshell-v1-cashu",
+        "MINT_DATABASE": "/tmp/nutshell-v1-mint-data",
+        "MINT_BACKEND_BOLT11_SAT": "FakeWallet",
+        "MINT_PRIVATE_KEY": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about about",
+        "FAKEWALLET_DELAY_OUTGOING_PAYMENT": "0",
+        "FAKEWALLET_DELAY_INCOMING_PAYMENT": "0",
+    }
     ns_v1_proc = subprocess.Popen(
         ["/opt/cashu-venv/bin/python", "-m", "cashu.mint", "--port", str(NUTSHELL_V1_MINT_PORT), "--host", LOCAL_MINT_HOST],
         stdout=ns_v1_log.open("w"),
@@ -522,7 +538,8 @@ max_delay_time = 0
         check=False,
     )
 
-    # Health checks
+    # Health checks with early-exit detection
+    mint_procs = {"cdk-v2": cdk_proc, "nutshell-v2": ns_v2_proc, "nutshell-v1": ns_v1_proc}
     for name, url in [("cdk-v2", CDK_MINT_URL), ("nutshell-v2", NUTSHELL_V2_MINT_URL), ("nutshell-v1", NUTSHELL_V1_MINT_URL)]:
         for attempt in range(15):
             try:
@@ -533,6 +550,21 @@ max_delay_time = 0
                         break
             except Exception:
                 pass
+            proc = mint_procs[name]
+            poll = proc.poll()
+            if poll is not None:
+                log.error("Local mint %s exited early (rc=%d)", name, poll)
+                log_path = {
+                    "cdk-v2": "/tmp/cdk-mintd.log",
+                    "nutshell-v2": "/tmp/nutshell-v2-mint.log",
+                    "nutshell-v1": "/tmp/nutshell-v1-mint.log",
+                }[name]
+                try:
+                    tail = Path(log_path).read_text()[-2000:] if Path(log_path).exists() else "(no log)"
+                    log.error("Local mint %s log tail:\n%s", name, tail)
+                except Exception:
+                    pass
+                break
             time.sleep(2)
         else:
             log.warning("Local mint %s not healthy after 30s, continuing anyway", name)

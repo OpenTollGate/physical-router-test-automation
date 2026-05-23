@@ -1,7 +1,7 @@
 # TIP-02: Cashu Payments — Edge-Case Token Handling
 
 import pytest
-from lib.helpers import is_session_event, require_client_identity
+from lib.helpers import is_session_event, require_client_identity, is_degraded
 
 pytestmark = [pytest.mark.api, pytest.mark.extended]
 
@@ -36,11 +36,19 @@ def test_malformed_cashu_prefix(router, cashu):
 def test_duplicate_token_immediate_reuse(router, cashu):
     require_client_identity(router)
 
+    # Degraded-mode guard: backend returns kind 21023 (discovery) when
+    # mint is unreachable — cannot verify tokens, so double-spend test
+    # is meaningless.
+    if is_degraded(router):
+        pytest.skip("backend in degraded mode (mint unreachable), cannot test double-spend")
+
     # Mint token
     token = cashu.mint(1)
 
     # First payment should succeed
     resp1 = router.pay_direct(token)
+    if resp1.get("kind") == 21023:
+        pytest.skip("backend entered degraded mode during test (mint unreachable)")
     assert is_session_event(resp1), \
         f"First payment failed: {str(resp1)[:200]}"
 

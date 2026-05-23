@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from lib.constants import TOKEN_DEFAULT
+from lib.helpers import is_degraded
 
 pytestmark = [pytest.mark.api, pytest.mark.smoke, pytest.mark.virtual_lab, pytest.mark.timeout(180)]
 
@@ -39,6 +40,9 @@ def test_e2e_portal_payment(adb, cashu, router, results_dir, request):
     it, and records the authenticated portal plus internet access.
     """
     _skip_unless_virtual_lab()
+
+    if is_degraded(router):
+        pytest.skip("backend in degraded mode (mint unreachable), portal payment cannot succeed")
 
     client = request.config.getoption("--client", default="adb")
     if client != "container":
