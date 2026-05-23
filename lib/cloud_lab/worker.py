@@ -1003,7 +1003,15 @@ def select_test_mint() -> str:
         req = urllib.request.Request(f"{NUTSHELL_V1_MINT_URL}/v1/keys")
         with urllib.request.urlopen(req, timeout=3) as resp:
             if resp.status == 200:
-                nutshell_v1_ok = True
+                data = json.loads(resp.read())
+                keysets = data.get("keysets", [])
+                if keysets:
+                    kid = keysets[0].get("id", "")
+                    if kid.startswith("00") and len(kid) == 16:
+                        nutshell_v1_ok = True
+                        log.info("Nutshell V1 mint has V1 keysets (kid=%s)", kid)
+                    else:
+                        log.info("Nutshell V1 mint has V2 keysets (kid=%s), unusable for Go backend", kid[:16])
     except Exception:
         pass
 
