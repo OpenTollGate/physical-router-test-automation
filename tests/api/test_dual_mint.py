@@ -1,10 +1,11 @@
 import json
 import os
+import re
 
 import pytest
 
 from lib.cashu import CashuMint
-from lib.constants import LOCAL_MINT_URL, TEST_MINT_URL, V2_MINT_URL
+from lib.constants import V2_MINT_URL
 from lib.helpers import parse_json_or_fail, require_client_identity
 
 pytestmark = [pytest.mark.api, pytest.mark.extended]
@@ -110,3 +111,32 @@ def test_discovery_has_distinct_price_per_mint(discovery, config):
         assert isinstance(tag[2], (int, float, str)), f"step_size not numeric: {tag}"
         assert isinstance(tag[3], str), f"price_unit not string: {tag}"
         assert tag[4].startswith("http"), f"Expected URL at index 4: {tag}"
+
+
+def test_keyset_id_format_in_discovery(discovery):
+    v1_pattern = re.compile(r"^00[0-9a-fA-F]{14}$")
+    v2_pattern = re.compile(r"^01[0-9a-fA-F]{64}$")
+
+    tags = discovery.get("tags", [])
+    v1_keysets = []
+    v2_keysets = []
+
+    for tag in tags:
+        if isinstance(tag, str) and len(tag) in (16, 66):
+            if v1_pattern.match(tag):
+                v1_keysets.append(tag)
+            elif v2_pattern.match(tag):
+                v2_keysets.append(tag)
+
+    if not v1_keysets and not v2_keysets:
+        pytest.skip("No keyset IDs found in discovery tags")
+
+    if v1_keysets:
+        import logging
+        logging.info(f"Discovered {len(v1_keysets)} V1 keyset ID(s) in discovery: {v1_keysets}")
+
+    if v2_keysets:
+        for keyset_id in v2_keysets:
+            assert v2_pattern.match(keyset_id), \
+                f"V2 keyset ID does not match 01-prefix + 66 hex chars format: {keyset_id}"
+
