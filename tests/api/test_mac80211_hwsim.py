@@ -19,8 +19,8 @@ _HWSIM_KMOD_PKG = "kmod-mac80211-hwsim"
 
 
 def _is_x86_64(router):
-    arch = router.ssh("opkg print-architecture 2>/dev/null | head -1").strip()
-    return "x86_64" in arch or "x86" in arch
+    arch = router.ssh("uname -m 2>/dev/null").strip()
+    return arch == "x86_64"
 
 
 def _module_loaded(router):
