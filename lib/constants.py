@@ -11,7 +11,12 @@ TEST_MINT_URL = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.
 # with Python CLI but crashes the Go backend on startup.
 LOCAL_MINT_URL = os.environ.get("TOLLGATE_LOCAL_MINT_URL", "http://10.99.99.1:8085")
 LOCAL_502_MINT_URL = os.environ.get("TOLLGATE_LOCAL_502_MINT_URL", "http://10.99.99.1:8086")
-V2_MINT_URL = os.environ.get("TOLLGATE_V2_MINT_URL", "https://testnut.cashu.space")
+_V2_DEFAULT = (
+    "http://v2.testnut.cdk.lan:8383"
+    if os.environ.get("TOLLGATE_VIRTUAL_LAB")
+    else "https://testnut.cashu.space"
+)
+V2_MINT_URL = os.environ.get("TOLLGATE_V2_MINT_URL", _V2_DEFAULT)
 
 TOKEN_MIN = 1
 TOKEN_SMALL = 3

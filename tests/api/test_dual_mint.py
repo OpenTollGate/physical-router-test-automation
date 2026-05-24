@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -70,7 +71,8 @@ def test_v1_mint_payment_accepted(router, cashu):
 
 def test_v2_mint_payment_accepted(router):
     require_client_identity(router)
-    v2 = CashuMint(mint_url=V2_MINT_URL)
+    v2_url = os.environ.get("TOLLGATE_V2_MINT_URL", V2_MINT_URL)
+    v2 = CashuMint(mint_url=v2_url)
     if not v2.is_available():
         pytest.skip("cashu CLI not available for V2 mint test")
 

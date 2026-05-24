@@ -41,7 +41,17 @@ NUTSHELL_V2_MINT_PORT = 8384
 NUTSHELL_V1_MINT_PORT = 8385
 CDK_VERSION = "0.16.0"
 CDK_MINT_DIR = "/opt/cdk-mintd"
+
+# IP-based URLs — used for health checks before /etc/hosts is configured
 CDK_MINT_URL = f"http://{LOCAL_MINT_HOST}:{CDK_MINT_PORT}"
 NUTSHELL_V2_MINT_URL = f"http://{LOCAL_MINT_HOST}:{NUTSHELL_V2_MINT_PORT}"
 NUTSHELL_V1_MINT_URL = f"http://{LOCAL_MINT_HOST}:{NUTSHELL_V1_MINT_PORT}"
-NUTSHELL_V1_MINT_LAN = "http://v1.testnut.lan:8385"
+
+# Canonical LAN DNS names — used after /etc/hosts is set up
+# Naming scheme: $version.testnut.$implementation.lan
+V1_TESTNUT_NUTSHELL_LAN = "http://v1.testnut.nutshell.lan:8385"
+V2_TESTNUT_CDK_LAN = "http://v2.testnut.cdk.lan:8383"
+V2_TESTNUT_NUTSHELL_LAN = "http://v2.testnut.nutshell.lan:8384"
+
+# Backwards-compatible alias
+NUTSHELL_V1_MINT_LAN = V1_TESTNUT_NUTSHELL_LAN

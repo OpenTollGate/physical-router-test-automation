@@ -33,6 +33,9 @@ from lib.cloud_lab.constants import (
     NUTSHELL_V1_MINT_LAN,
     NUTSHELL_V2_MINT_PORT,
     NUTSHELL_V2_MINT_URL,
+    V1_TESTNUT_NUTSHELL_LAN,
+    V2_TESTNUT_CDK_LAN,
+    V2_TESTNUT_NUTSHELL_LAN,
     OPENWRT_IP,
     RESULTS_ROOT,
     SELLER_OPENWRT_IP,
@@ -369,6 +372,7 @@ def write_env_file(config: WorkerConfig) -> None:
         f"TOLLGATE_CDK_MINT_URL={CDK_MINT_URL}\n"
         f"TOLLGATE_NUTSHELL_V2_MINT_URL={NUTSHELL_V2_MINT_URL}\n"
         f"TOLLGATE_NUTSHELL_V1_MINT_URL={NUTSHELL_V1_MINT_URL}\n"
+        f"TOLLGATE_V2_MINT_URL={CDK_MINT_URL}\n"
         f"TOLLGATE_CLIENT_IP={DEBIAN_IP}\n"
         f"TOLLGATE_CLIENT_MAC={DEBIAN_MAC}\n"
         f"TOLLGATE_CONTAINER_HOST={DEBIAN_IP}\n"
@@ -545,7 +549,8 @@ max_delay_time = 0
     # /etc/hosts entries for local mint DNS
     _run(
         "grep -q 'testnut.cdk.lan' /etc/hosts || "
-        "echo '10.99.99.2 testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan v1.testnut.lan' >> /etc/hosts",
+        "echo '10.99.99.2 v1.testnut.nutshell.lan v2.testnut.cdk.lan v2.testnut.nutshell.lan "
+        "testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan v1.testnut.lan' >> /etc/hosts",
         check=False,
     )
 
@@ -586,7 +591,8 @@ max_delay_time = 0
         f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
         f"-o ControlPath=none root@{OPENWRT_IP} "
         f"'grep -q v1.testnut.lan /etc/hosts || "
-        f"echo \"{LOCAL_MINT_HOST} testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan v1.testnut.lan\" >> /etc/hosts; "
+        f"echo \"{LOCAL_MINT_HOST} v1.testnut.nutshell.lan v2.testnut.cdk.lan v2.testnut.nutshell.lan "
+        f"testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan v1.testnut.lan\" >> /etc/hosts; "
         f"killall -HUP dnsmasq 2>/dev/null || true'",
         timeout=15,
         check=False,
