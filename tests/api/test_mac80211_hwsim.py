@@ -127,7 +127,7 @@ def test_wlan_interface_appears_after_ap_config(router):
         radio_status = router.ssh(
             "iw dev 2>/dev/null; "
             "uci show wireless 2>/dev/null | head -20; "
-            "logread -e 'wireless\|netifd\|mac80211' 2>/dev/null | tail -10"
+            r"logread -e 'wireless|netifd|mac80211' 2>/dev/null | tail -10"
         )
         pytest.skip(
             f"No wlan interfaces after AP bringup. "
