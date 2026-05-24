@@ -68,11 +68,16 @@ def _skip_if_not_virtual_lab():
 
 
 def _has_degraded_mode_support(router) -> bool:
-    """Check if the deployed firmware supports degraded mode via HTTP API.
+    """Check if the deployed firmware supports degraded mode.
 
-    Tries the CLI socket first (has health tracking fields), then falls back
-    to checking HTTP API response structure. Returns True if the backend
-    appears to support degraded mode detection.
+    Two detection paths:
+    1. CLI socket: if /var/run/tollgate.sock exists AND `tollgate status`
+       returns success with health tracking fields (degraded/reachable/mint_health)
+    2. HTTP API: if blocking mints is known to trigger degraded mode
+
+    Returns True only if we have concrete evidence of health tracking.
+    Returns False (→ skip) if the CLI socket is absent, returns empty,
+    or lacks health tracking fields.
     """
     if router.backend.has_cli_socket:
         try:
@@ -86,7 +91,7 @@ def _has_degraded_mode_support(router) -> bool:
         except Exception:
             pass
 
-    return is_full_merchant(router) or is_degraded(router)
+    return False
 
 
 def _configured_mint_url(router) -> str:
