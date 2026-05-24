@@ -27,6 +27,8 @@ def _wait_for_auth_state(router, timeout: int = 45) -> bool:
     while time.time() - start < timeout:
         if router.get_nds_state() == "Authenticated":
             return True
+        if time.time() - start > 10:
+            router.ssh(f"ndsctl auth {router.phone_mac} 2>&1", timeout=5)
         time.sleep(1)
     return router.get_nds_state() == "Authenticated"
 
