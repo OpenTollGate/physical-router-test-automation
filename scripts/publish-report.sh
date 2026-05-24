@@ -20,6 +20,15 @@ set -euo pipefail
 # Standalone script — does NOT import from lib/.
 # ─────────────────────────────────────────────────────────────────────
 
+# Use venv Python if available (has jinja2), else system python3
+if [ -x "/opt/tollgate-venv/bin/python3" ]; then
+  PYTHON="/opt/tollgate-venv/bin/python3"
+elif [ -x "${HOME}/.tollgate-test-venv/bin/python3" ]; then
+  PYTHON="${HOME}/.tollgate-test-venv/bin/python3"
+else
+  PYTHON="python3"
+fi
+
 RUN_DIR="${1:?Usage: $0 <run-dir>}"
 RUN_DIR="$(cd "$(dirname "$RUN_DIR")" && pwd)/$(basename "$RUN_DIR")"
 
@@ -221,7 +230,7 @@ echo "==> Copied and cleaned report to ${TARGET_DIR}"
 
 echo "==> Injecting report explorer UI..."
 
-python3 "$REPO_DIR/scripts/inject-report-ui.py" "$TARGET_DIR"
+$PYTHON "$REPO_DIR/scripts/inject-report-ui.py" "$TARGET_DIR"
 
 # ── Purge old runs ───────────────────────────────────────────────────
 
@@ -294,7 +303,7 @@ purge_old_runs "$WORK/gh-pages/reports" "$KEEP"
 
 echo "==> Generating dashboard..."
 
-python3 "$REPO_DIR/scripts/render-dashboard.py" \
+$PYTHON "$REPO_DIR/scripts/render-dashboard.py" \
   --reports-dir "$WORK/gh-pages/reports" \
   --output "$WORK/gh-pages/index.html"
 
