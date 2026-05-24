@@ -582,7 +582,7 @@ max_delay_time = 0
 
     # Router-side /etc/hosts so the backend can resolve local mint DNS names
     _run(
-        f"sshpass -p{os.environ.get('TOLLGATE_LUCI_PASSWORD', '')} "
+        f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} "
         f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
         f"-o ControlPath=none root@{OPENWRT_IP} "
         f"'grep -q v1.testnut.lan /etc/hosts || "
