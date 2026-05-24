@@ -30,6 +30,7 @@ from lib.cloud_lab.constants import (
     LOCAL_MINT_HOST,
     NUTSHELL_V1_MINT_PORT,
     NUTSHELL_V1_MINT_URL,
+    NUTSHELL_V1_MINT_LAN,
     NUTSHELL_V2_MINT_PORT,
     NUTSHELL_V2_MINT_URL,
     OPENWRT_IP,
@@ -522,6 +523,7 @@ max_delay_time = 0
     ns_v1_env = {
         **os.environ,
         "CASHU_DIR": "/tmp/nutshell-v1-cashu",
+        "VERSION": "0.19.0",
         "MINT_DATABASE": "/tmp/nutshell-v1-mint-data",
         "MINT_BACKEND_BOLT11_SAT": "FakeWallet",
         "MINT_PRIVATE_KEY": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about about",
@@ -539,10 +541,10 @@ max_delay_time = 0
     mints["nutshell-v1"] = ns_v1_proc
     log.info("Started Nutshell V1 mint (pid=%d, port=%d)", ns_v1_proc.pid, NUTSHELL_V1_MINT_PORT)
 
-    # /etc/hosts entries for SSH debugging
+    # /etc/hosts entries for local mint DNS
     _run(
         "grep -q 'testnut.cdk.lan' /etc/hosts || "
-        "echo '10.99.99.2 testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan' >> /etc/hosts",
+        "echo '10.99.99.2 testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan v1.testnut.lan' >> /etc/hosts",
         check=False,
     )
 
@@ -576,6 +578,17 @@ max_delay_time = 0
             time.sleep(2)
         else:
             log.warning("Local mint %s not healthy after 30s, continuing anyway", name)
+
+    # Router-side /etc/hosts so the backend can resolve local mint DNS names
+    _run(
+        f"sshpass -p{os.environ.get('TOLLGATE_LUCI_PASSWORD', '')} "
+        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o ControlPath=none root@{OPENWRT_IP} "
+        f"'grep -q v1.testnut.lan /etc/hosts || "
+        f"echo \"{LOCAL_MINT_HOST} testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan v1.testnut.lan\" >> /etc/hosts'",
+        timeout=15,
+        check=False,
+    )
 
     return mints
 
@@ -1015,7 +1028,7 @@ def select_test_mint() -> str:
     except Exception:
         pass
 
-    fallback_url = NUTSHELL_V1_MINT_URL if nutshell_v1_ok else PUBLIC_TESTNUTS
+    fallback_url = NUTSHELL_V1_MINT_LAN if nutshell_v1_ok else PUBLIC_TESTNUTS
     log.info("Backend does not support V2 keysets — falling back to %s", fallback_url)
 
     _run(
