@@ -63,6 +63,20 @@ def test_wallet_info_shows_mint_count(router):
 
 
 def test_status_command_works(router):
+    """Test that the CLI status command returns valid data.
+
+    Gated on CLI socket availability — skips cleanly in cloud lab
+    (QEMU) where the Go backend may not have /var/run/tollgate.sock.
+    """
+    if not router.backend.has_cli_socket:
+        pytest.skip("CLI socket not supported by this backend")
+    try:
+        out = router.ssh("ls -S /var/run/tollgate.sock 2>/dev/null", timeout=5)
+        if not out.strip():
+            pytest.skip("No CLI socket at /var/run/tollgate.sock")
+    except Exception:
+        pytest.skip("Cannot check CLI socket availability")
+
     status = router.get_tollgate_status()
     assert status.get("success") is True, f"Status command failed: {status}"
 

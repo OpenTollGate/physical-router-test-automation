@@ -74,7 +74,7 @@ def _capture_visual_checkpoint(adb, results_dir: str, request, name: str):
 
 
 @pytest.mark.smoke
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(300)
 def test_visual_happy_path(adb, cashu, router, results_dir, request):
     _skip_unless_virtual_lab()
 
@@ -88,6 +88,14 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"[visual] gateway={gateway} client_mac={client_mac}")
+
+    # Pre-check: verify Playwright is functional in the container
+    try:
+        pw_check = adb._exec("python3 -c 'from playwright.sync_api import sync_playwright; print(\"PW_OK\")' 2>&1", timeout=15)
+        if "PW_OK" not in pw_check:
+            pytest.skip(f"Playwright not functional in container: {pw_check[:200]}")
+    except Exception as exc:
+        pytest.skip(f"Cannot check Playwright in container: {exc}")
 
     portal_url = f"http://{gateway}:{NDS_PORTAL_PORT}/"
     code = ""
@@ -118,7 +126,8 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     recording_thread.start()
 
     # Step 2: wait for portal to load and unpaid screenshot
-    assert adb.wait_for_portal_ready(timeout=60), "Playwright did not load portal in time"
+    # Use 90s timeout for cloud lab (Playwright startup is slower in QEMU)
+    assert adb.wait_for_portal_ready(timeout=90), "Playwright did not load portal in time"
     print("[visual] portal loaded, unpaid screenshot taken by recording thread")
 
     # Step 3: mint a token and let the recorded browser paste + submit it

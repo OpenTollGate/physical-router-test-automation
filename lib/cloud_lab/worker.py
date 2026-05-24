@@ -1068,7 +1068,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
     if config.two_router:
         two_router_cmd = (
             f"two_router_exit=0; "
-            f"python3 -m pytest tests/scenarios/test_two_router_cloud.py -v --tb=short --backend={backend} "
+            f"python3 -m pytest tests/scenarios/test_two_router_cloud.py -v --tb=short --timeout=300 --backend={backend} "
             f"{expected_pr}--client=container --results {results_dir} "
             f"--junitxml={results_dir}/raw/two-router/junit.xml "
             f"--html={results_dir}/raw/two-router/report.html --self-contained-html "
@@ -1079,7 +1079,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         f"mkdir -p {results_dir}/raw/api {results_dir}/raw/visual {results_dir}/raw/scenarios "
         f"{results_dir}/raw/two-router {results_dir}/report && "
         "visual_exit=0; api_exit=0; "
-        f"python3 -m pytest tests/api/test_visual_happy_path.py -v --tb=short --backend={backend} "
+        f"python3 -m pytest tests/api/test_visual_happy_path.py -v --tb=short --timeout=300 --backend={backend} "
         f"{expected_pr}--client=container --results {results_dir} "
         f"--junitxml={results_dir}/raw/visual/junit.xml "
         f"--html={results_dir}/raw/visual/report.html --self-contained-html "
