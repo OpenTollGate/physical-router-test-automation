@@ -525,6 +525,7 @@ max_delay_time = 0
         "CASHU_DIR": "/tmp/nutshell-v1-cashu",
         "VERSION": "0.19.0",
         "MINT_DATABASE": "/tmp/nutshell-v1-mint-data",
+        "MINT_AUTH_DATABASE": "/tmp/nutshell-v1-mint-data",
         "MINT_BACKEND_BOLT11_SAT": "FakeWallet",
         "MINT_PRIVATE_KEY": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about about",
         "FAKEWALLET_DELAY_OUTGOING_PAYMENT": "0",
