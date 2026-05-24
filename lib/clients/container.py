@@ -419,7 +419,7 @@ class ContainerClient:
             "    except Exception as e:\n"
             "        errors.append(f'goto-portal: {e}')\n"
             "    open('/tmp/tg-portal-ready', 'w').close()\n"
-            "    for _ in range(120):\n"
+            "    for _ in range(240):\n"
             "        if os.path.exists('/tmp/tg-token') or os.path.exists('/tmp/tg-paid'):\n"
             "            break\n"
             "        time.sleep(0.5)\n"
