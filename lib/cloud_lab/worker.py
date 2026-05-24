@@ -987,9 +987,10 @@ def wait_for_backend() -> None:
 def select_test_mint() -> str:
     """Probe the backend with CDK V2 keysets. Return the mint URL to use.
 
-    Strategy: start with CDK (V2). If the backend crashes after being configured
-    with it (V2-incompatible Go/gonuts), fall back to Nutshell V1 (V1 keysets).
-    If Nutshell V1 isn't running either, fall back to public testnuts.
+    Strategy: start with CDK (V2). If the backend starts as a full merchant
+    (kind 10021 with price_per_step tags) after being configured with CDK V2,
+    V2 is supported. If not (crash or degraded mode), fall back to Nutshell V1
+    (V1 keysets). If Nutshell V1 isn't running either, fall back to public testnuts.
     """
     PUBLIC_TESTNUTS = "https://testnut.cashu.exchange"
     cdk_ok = False
@@ -1003,16 +1004,22 @@ def select_test_mint() -> str:
             f"r = Router(host=os.environ['TOLLGATE_SSH_HOST'], phone_ip='', phone_mac='', domain='', backend=BackendConfig(os.environ.get('TOLLGATE_BACKEND','go'))); "
             f"r.ssh('cat /etc/tollgate/config.json > /tmp/config.json.bak'); "
             f"r.replace_mints(['{CDK_MINT_URL}']); "
-            f"time.sleep(5); "
+            f"time.sleep(8); "
             f"code = r.api_status('/'); "
-            f"print(f'v2_probe={{code}}'); "
+            f"body = r.api_body('/') or ''; "
+            f"try: data = json.loads(body); "
+            f"except: data = {{}}; "
+            f"has_pps = any(isinstance(t, list) and len(t) > 0 and t[0] == 'price_per_step' for t in data.get('tags', [])); "
+            f"print(f'v2_probe={{code}} full_merchant={{has_pps}}'); "
             f"\" 2>&1",
             timeout=120,
             check=False,
         )
-        if "v2_probe=200" in r.stdout:
+        if "v2_probe=200" in r.stdout and "full_merchant=True" in r.stdout:
             cdk_ok = True
-            log.info("Backend supports V2 keysets — using CDK mint")
+            log.info("Backend supports V2 keysets — using CDK mint (full merchant confirmed)")
+        elif "v2_probe=200" in r.stdout:
+            log.info("Backend returned 200 with CDK V2 but not full merchant — V2 likely unsupported")
     except Exception as exc:
         log.warning("V2 probe failed: %s", exc)
 
