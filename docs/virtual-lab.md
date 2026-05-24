@@ -115,8 +115,16 @@ interface. The VM uses the host bridge IP (192.168.1.2) as its gateway.
 - Android captive portal notification behavior
 - ADB UI automation
 - Mobile-data fallback behavior
-- Real WiFi association/deauth quirks
-- Device-specific OpenWrt target/kernel/package issues
+- Real WiFi association/deauth quirks (RSSI, signal strength, interference)
+- Device-specific OpenWrt target/kernel/package issues (mipsel, aarch64)
+
+## What works in virtual environments
+
+- **WiFi site scan** via `mac80211_hwsim` kernel module (`tests/api/test_mac80211_hwsim.py`)
+  - Virtual radios with `iw list`, `iw scan`, AP bringup
+  - x86_64 only (cloud lab, local QEMU)
+- API tests, captive portal via container client, payment flow, DNS
+- Router-to-router / multihop scenarios (two-router cloud)
 
 ## Framework integration
 
@@ -152,8 +160,11 @@ The reseller-mode tests are intentionally split into two groups:
 - `tests/scenarios/test_reseller_mode.py` uses only SSH/UCI/CLI/DNS-blocking
   operations and is designed to run on physical routers, the on-prem QEMU lab,
   and the GCP cloud lab.
-- WiFi/RF behavior such as upstream site scan, RSSI, association, and emergency
-  scan remains physical-hardware-only for now.
+- **Virtual WiFi scanning** works via `mac80211_hwsim` — see
+  `tests/api/test_mac80211_hwsim.py`. The kernel module creates virtual radios
+  that support `iw list`, `iw scan`, and AP bringup. Available on x86_64 targets
+  (cloud lab, local QEMU). Real RSSI, association quirks, and emergency scan still
+  require physical radio hardware.
 
 GCP runs can opt into the virtualizable scenario tier with:
 
