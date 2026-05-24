@@ -586,7 +586,8 @@ max_delay_time = 0
         f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
         f"-o ControlPath=none root@{OPENWRT_IP} "
         f"'grep -q v1.testnut.lan /etc/hosts || "
-        f"echo \"{LOCAL_MINT_HOST} testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan v1.testnut.lan\" >> /etc/hosts'",
+        f"echo \"{LOCAL_MINT_HOST} testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan v1.testnut.lan\" >> /etc/hosts; "
+        f"killall -HUP dnsmasq 2>/dev/null || true'",
         timeout=15,
         check=False,
     )
