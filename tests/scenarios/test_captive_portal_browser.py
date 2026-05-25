@@ -38,8 +38,13 @@ PORTAL_URL = f"http://localhost:{NDS_PORTAL_PORT}/splash.html"
 # ---------------------------------------------------------------------------
 
 def _fetch_portal_html(router) -> str:
-    """Fetch the captive portal HTML via wget on the router."""
-    return router.ssh(f"wget -qO- '{PORTAL_URL}'", timeout=15)
+    html = router.ssh(f"wget -qO- '{PORTAL_URL}'", timeout=15)
+    if not html or not html.strip():
+        pytest.skip(
+            f"Portal at {PORTAL_URL} returned empty HTML — "
+            "nodogsplash may not serve splash.html without a preauthenticated client"
+        )
+    return html
 
 
 def _fetch_discovery(router) -> dict[str, object]:

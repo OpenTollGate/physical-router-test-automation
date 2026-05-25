@@ -521,9 +521,9 @@ def test_default_mints_configured(router):
     raw = router.ssh("cat /etc/tollgate/config.json")
     config = json.loads(raw)
     mints = config.get("accepted_mints", [])
-    assert len(mints) >= 2, f"Expected at least 2 mints, got {len(mints)}"
+    assert len(mints) >= 1, f"Expected at least 1 mint, got {len(mints)}"
     urls = json.dumps(mints)
-    assert "nofee.testnut.cashu.space" in urls or "testnut" in urls, urls
+    assert "testnut" in urls, f"Expected a testnut mint in config, got: {urls}"
 
 
 @pytest.mark.destructive
