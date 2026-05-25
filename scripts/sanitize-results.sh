@@ -223,7 +223,13 @@ for SCAN_DIR in "${SCAN_DIRS[@]}"; do
                 fi
                 ;;
             *.webm|*.mp4)
-                SCREENSHOTS_STRIPPED=$((SCREENSHOTS_STRIPPED + 1))
+                if [ "$CONTAINER_MODE" = true ]; then
+                    # Container/virtual_lab: copy videos through (no personal UI data)
+                    cp "$file" "$dest"
+                else
+                    # Phone/non-container: strip videos (may contain personal UI data)
+                    SCREENSHOTS_STRIPPED=$((SCREENSHOTS_STRIPPED + 1))
+                fi
                 ;;
             *)
                 cp "$file" "$dest"
