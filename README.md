@@ -61,13 +61,16 @@ source ~/.tollgate-test-venv/bin/activate
 
 ## Cloud lab (GCP, fire-and-forget)
 
-Run API + container E2E tests in a nested-virt GCP VM (OpenWrt + Debian client). No physical router required.
+Run API + container E2E + virtual WiFi tests in a nested-virt GCP VM (OpenWrt + Debian client). No physical router required.
 
-**Prerequisites:** `gcloud` CLI (authenticated), `gh` CLI (authenticated), `GH_TOKEN` or `gh auth login`, and a GCP runner snapshot. `tollgate-runner-baked-v2` is the safe baseline; newer baked snapshots should only become the default after verification.
+**Prerequisites:** `gcloud` CLI (authenticated), `gh` CLI (authenticated), `GH_TOKEN` or `gh auth login`, and a GCP runner snapshot. `tollgate-runner-baked-v8` is the current snapshot (local mints, WiFi packages, 90min timeout).
 
 ```bash
 # Wait for upstream CI x86_64 artifact, spawn autonomous VM, exit immediately
 ./scripts/cloud-lab.py submit --pr 42 --publish
+
+# Test against a different repo's PR
+./scripts/cloud-lab.py submit --pr 42 --repo OpenTollGate/tollgate-module-basic-go --publish
 
 # By commit (use --branch if not on an open PR)
 ./scripts/cloud-lab.py submit --commit abc1234 --branch feat/foo --publish
@@ -85,21 +88,31 @@ Run API + container E2E tests in a nested-virt GCP VM (OpenWrt + Debian client).
 ./scripts/cloud-lab.py cleanup-stale
 ```
 
-The VM clones this test framework, resets only the OpenWrt overlay (Debian/Playwright overlay is cached in the snapshot), deploys the TollGate `.ipk`, runs pytest, publishes to [tests.tollgate.me](https://tests.tollgate.me/), posts a PR comment, and deletes itself.
+The VM clones this test framework, boots OpenWrt + Debian QEMU VMs, starts 3 local Cashu mints (CDK V2, Nutshell V1+V2), deploys the TollGate `.ipk`, runs pytest (~94 tests, ~25min), publishes to [tests.tollgate.me](https://tests.tollgate.me/), posts a PR comment, and deletes itself.
 
 `submit` waits for an **in-progress or completed** upstream CI build with a downloadable `x86_64` artifact. It does not trigger new CI builds.
 
 Cloud runs are designed to be fire-and-forget and parallelizable: each run gets its own GCP VM, run directory, and report URL. Publishing to `gh-pages` retries up to 10 times without force-push, pulling/rebasing and waiting a random 0-60 seconds between attempts to avoid races between concurrent runs.
 
-### Baking a faster GCP runner snapshot
+### Architecture
 
-Use the baker when dependencies change or when you want faster startup than the v2 baseline:
-
-```bash
-./scripts/bake-snapshot.py bake --base-snapshot tollgate-runner-baked-v2 --snapshot-name tollgate-runner-baked-v<N>
+```
+GCP Host VM (n2-standard-2)
+  ├── tg-poc-br (10.99.99.0/24) — management LAN
+  │     ├── host: 10.99.99.2 (mints, NAT, syslog capture)
+  │     ├── alpha: 10.99.99.1 (OpenWrt QEMU — TollGate under test)
+  │     └── debian: 10.99.99.100 (Debian QEMU — Playwright, cashu)
+  ├── Local mints: CDK V2 (:8383), Nutshell V2 (:8384), Nutshell V1 (:8385)
+  └── mac80211_hwsim: virtual WiFi radios for AP/STA testing
 ```
 
-The baker installs `gh`, `gcloud`, `/opt/tollgate-venv`, `/opt/cashu-venv`, Debian/OpenWrt base images, and a pre-provisioned OpenWrt base. It runs with `HOME=/root`, matching the GCP startup worker. After baking, verify the snapshot with a throwaway run before updating `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py`.
+### Baking a GCP runner snapshot
+
+```bash
+./scripts/bake-snapshot.py bake
+```
+
+The baker installs `gh`, `gcloud`, `/opt/tollgate-venv`, `/opt/cashu-venv`, `/opt/cdk-mintd`, WiFi packages (`kmod-mac80211-hwsim`, `wpad-basic`, `iw-full`, `iwinfo`), and pre-provisioned OpenWrt/Debian base images. It runs with `HOME=/root`, matching the GCP startup worker. After baking, verify the snapshot with a throwaway run before updating `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py`.
 
 ## Deploy to Router
 
