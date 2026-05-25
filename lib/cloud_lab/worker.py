@@ -382,6 +382,7 @@ def write_env_file(config: WorkerConfig) -> None:
         f"TOLLGATE_VIEWPORT=desktop\n"
         f"TOLLGATE_DISABLE_ARTIFACT_RERUN=1\n"
         f"TOLLGATE_CASHU_VENV=/opt/cashu-venv\n"
+        f"TOLLGATE_RECORD_ALL=1\n"
         f"TOLLGATE_ENABLE_RESELLER_SCENARIOS={reseller_scenarios}\n"
         f"TOLLGATE_SECONDARY_ROUTER_HOST={secondary_host}\n"
         f"TOLLGATE_SECONDARY_ROUTER_PORT={config.secondary_router_port}\n"

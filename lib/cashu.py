@@ -122,11 +122,18 @@ class CashuMint:
         proc.kill()
         proc.communicate()
 
+        created = False
         for _ in range(8):
             after = self._count_invoices()
             if after > before:
+                created = True
                 break
             time.sleep(3)
+
+        if not created:
+            raise RuntimeError(
+                f"Invoice not created after 29s (before={before}, after={after}, mint={self.mint_url})"
+            )
 
         quote_id = self._find_latest_quote_id()
         if not quote_id:
