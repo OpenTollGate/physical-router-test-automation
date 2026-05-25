@@ -168,17 +168,23 @@ if [[ -d "$RUN_DIR/raw" ]]; then
 fi
 
 # ── Sanitization ─────────────────────────────────────────────────────
-# Container (VM) mode: skip ALL sanitization. VM test reports contain no PII
-#   (random QEMU MACs, local IPs, test tokens, hardcoded "tollgate" password).
-#   The report is copied AS-IS — no HTML modification, no img tag stripping,
-#   no asset removal. This preserves base64-embedded images (screenshots)
-#   that would otherwise be destroyed by the sanitizer, causing about:blank
-#   img src bugs in the published report.
+# Container (VM) mode: run sanitize-results.sh for token/key redaction
+#   but preserve screenshots/videos (sanitize script detects container
+#   mode from run.json and skips media stripping automatically).
 # Phone / unknown mode: strip all screenshots, image tags, and asset references
 #   to prevent leaking PII from real device test reports.
 
 if [ "$CLIENT_TYPE" = "container" ]; then
-  echo "==> Container mode: skipping ALL sanitization, preserving report as-is (no PII in VM tests)"
+  echo "==> Container mode: running token/key redaction, preserving screenshots"
+  if [[ -f "$REPO_DIR/scripts/sanitize-results.sh" ]]; then
+    SANITIZE_OUT="$(mktemp -d /tmp/tollgate-sanitize-XXXXXX)"
+    if bash "$REPO_DIR/scripts/sanitize-results.sh" "$TARGET_DIR" "$SANITIZE_OUT" 2>/dev/null; then
+      rm -rf "$TARGET_DIR"
+      mv "$SANITIZE_OUT" "$TARGET_DIR"
+    else
+      rm -rf "$SANITIZE_OUT"
+    fi
+  fi
 else
   # Phone / unknown mode: strip all screenshots and XML
   echo "==> Non-container mode: stripping screenshots and XML"

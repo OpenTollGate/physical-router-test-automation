@@ -1002,3 +1002,20 @@ def pytest_sessionfinish(session, exitstatus):
     if _session_lock is not None:
         _session_lock.release()
         _session_lock = None
+
+    # Always collect router logs at session end (not just on failure).
+    # Uses bundle="session-end" to avoid overwriting per-failure bundles.
+    if "unit" in str(getattr(session.config, "testpaths", "")):
+        return
+    for item in session.items[:1]:
+        if "router" in item.fixturenames:
+            try:
+                router = item.funcargs.get("router")
+                if router and hasattr(router, "collect_logs"):
+                    results_dir = getattr(item, "_results_dir", None)
+                    if results_dir:
+                        router.collect_logs(results_dir, adb=None, bundle="session-end")
+                        log.info("Collected session-end logs to %s", results_dir)
+            except Exception:
+                pass
+            break

@@ -142,6 +142,28 @@ ARGS+=(-e 's|[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-f
 ARGS+=(-e 's|cashuA[a-zA-Z0-9+/=_-]{20,}|<redacted:token>|g')
 ARGS+=(-e 's|cashuB[a-zA-Z0-9+/=_-]{20,}|<redacted:token>|g')
 
+# GitHub tokens (gho_, ghp_, github_pat_)
+ARGS+=(-e 's|(gho_|ghp_|github_pat_)[A-Za-z0-9_]+|\1***|g')
+ARGS+=(-e 's|(GH_TOKEN=|gh-token=)[^ 	,]*|\1***|g')
+
+# SSH private key BEGIN lines
+ARGS+=(-e 's|-----BEGIN \(RSA \|EC \|DSA \|OPENSSH \)*PRIVATE KEY-----.*|-----BEGIN *** REDACTED KEY-----|g')
+
+# GCP OAuth2 access tokens
+ARGS+=(-e 's|ya29\.[A-Za-z0-9_-]+|ya29.***|g')
+
+# Bearer tokens
+ARGS+=(-e 's|Bearer [A-Za-z0-9._-]+|Bearer ***|g')
+
+# Generic API keys (api.key=, apikey=, api_key=)
+ARGS+=(-e 's|\(api[\._]\?key\)\s*[:=]\s*[A-Za-z0-9_-]\{20,\}|\1=***|gI')
+
+# Generic base64 secrets (token/secret/key/credential/password = <40+ base64 chars>)
+ARGS+=(-e 's|\(token\|secret\|key\|credential\|password\|passwd\)\s*[:=]\s*[A-Za-z0-9+/=]\{40,\}|\1=***|gI')
+
+# Passwords in config/env format (password=value, shorter than 40 chars)
+ARGS+=(-e 's|\(password\|passwd\)\s*[:=]\s*[^\s	,]\{4,\}|\1=***|gI')
+
 # Local filesystem paths
 ARGS+=(-e 's|/Users/[^/ '"'"'	]+|<local-path>|g')
 ARGS+=(-e 's|/home/[^/ '"'"'	]+|<local-path>|g')

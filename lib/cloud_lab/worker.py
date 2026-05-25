@@ -52,9 +52,25 @@ from lib.cloud_lab.constants import (
 log = logging.getLogger("tollgate.cloud_worker")
 
 _REDACT_PATTERNS = [
+    # GitHub tokens
     r"(gho_|ghp_|github_pat_)[A-Za-z0-9_]+",
     r"(GH_TOKEN=|gh-token=)[^\s,]+",
+    # Passwords
     r"(password|passwd|sshpass\s+-p)\s+[^\s,]+",
+    # SSH private keys (match BEGIN line and onward)
+    r"(-----BEGIN\s+(?:RSA\s+|EC\s+|DSA\s+|OPENSSH\s+)?PRIVATE KEY-----).*",
+    # GCP service account keys (PEM blocks)
+    r"(-----BEGIN\s+\w+\s+(?:PRIVATE\s+)?KEY-----).*",
+    # GCP OAuth2 access tokens
+    r"(ya29\.)[A-Za-z0-9_-]+",
+    # Bearer tokens in Authorization headers
+    r"(Bearer\s+)[A-Za-z0-9._-]+",
+    # Generic API keys (api.key=..., apikey=..., api_key=...)
+    r"(api[\._]?key\s*[:=]\s*)[A-Za-z0-9_-]{20,}",
+    # Generic base64-encoded secrets labelled as token/secret/key/credential/password
+    r"((?:token|secret|key|credential|password|passwd)\s*[:=]\s*)[A-Za-z0-9+/=]{40,}",
+    # Passwords in config/env format (password=value, shorter than 40 chars)
+    r"((?:password|passwd)\s*[:=]\s*)[^\s,]{4,}",
 ]
 
 
@@ -600,6 +616,36 @@ max_delay_time = 0
     )
 
     return mints
+
+
+def start_syslog_capture(results_dir: str) -> subprocess.Popen[str]:
+    """Start socat UDP listener to capture syslog from OpenWrt/Debian VMs."""
+    syslog_dir = Path(results_dir) / "raw" / "syslog"
+    syslog_dir.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen(
+        ["socat", "-u", "UDP4-LISTEN:514,bind=0.0.0.0,fork",
+         f"OPEN:{syslog_dir}/all.log,append,create"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    log.info("Syslog capture started on UDP 514 → %s", syslog_dir)
+    return proc
+
+
+def configure_openwrt_syslog(openwrt_ip: str) -> None:
+    """Configure OpenWrt to forward syslog to host VM via UDP 514."""
+    _run(
+        f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} "
+        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o ControlPath=none root@{openwrt_ip} "
+        f"'uci set system.@system[0].log_ip=10.99.99.2 && "
+        f"uci set system.@system[0].log_port=514 && "
+        f"uci commit system && /etc/init.d/log restart'",
+        timeout=15,
+        check=False,
+    )
+    log.info("Configured OpenWrt syslog forwarding on %s → 10.99.99.2:514", openwrt_ip)
 
 
 def stop_local_mints(mints: dict[str, subprocess.Popen[str]]) -> None:
@@ -1224,16 +1270,32 @@ def stop_inner_vms() -> None:
     _run("killall -9 qemu-system-x86_64 2>/dev/null || true", timeout=15, check=False)
 
 
-def _start_vm_log_streaming(config: WorkerConfig) -> list[tuple[threading.Thread, subprocess.Popen[str]]]:
-    streams: list[tuple[threading.Thread, subprocess.Popen[str]]] = []
+def _start_vm_log_streaming(
+    config: WorkerConfig, results_dir: str
+) -> list[tuple[threading.Thread, subprocess.Popen[str], Any]]:
+    streams: list[tuple[threading.Thread, subprocess.Popen[str], Any]] = []
 
-    def _stream_reader(prefix: str, proc: subprocess.Popen[str]) -> None:
+    streamed_dir = os.path.join(results_dir, "raw", "streamed")
+    if os.path.isdir(results_dir):
+        os.makedirs(streamed_dir, exist_ok=True)
+
+    def _stream_reader(prefix: str, proc: subprocess.Popen[str], fh: Any) -> None:
         assert proc.stdout is not None
         try:
             for raw_line in proc.stdout:
-                log.info("[%s] %s", prefix, _redact(raw_line.rstrip("\n")))
+                redacted = _redact(raw_line.rstrip("\n"))
+                log.info("[%s] %s", prefix, redacted)
+                if fh is not None:
+                    fh.write(redacted + "\n")
+                    fh.flush()
         except Exception:
             pass
+        finally:
+            if fh is not None:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
 
     targets = [
         ("openwrt", OPENWRT_IP, f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
@@ -1252,27 +1314,40 @@ def _start_vm_log_streaming(config: WorkerConfig) -> list[tuple[threading.Thread
         )
 
     for prefix, _ip, ssh_cmd in targets:
+        fh: Any = None
+        if os.path.isdir(results_dir):
+            log_path = os.path.join(streamed_dir, f"{prefix}.log")
+            try:
+                fh = open(log_path, buffering=1, encoding="utf-8")  # noqa: SIM115
+            except OSError:
+                fh = None
         proc = subprocess.Popen(
             ["bash", "-c", ssh_cmd],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
         )
-        t = threading.Thread(target=_stream_reader, args=(prefix, proc), daemon=True)
+        t = threading.Thread(target=_stream_reader, args=(prefix, proc, fh), daemon=True)
         t.start()
-        streams.append((t, proc))
+        streams.append((t, proc, fh))
 
     return streams
 
 
-def _stop_vm_log_streaming(streams: list[tuple[threading.Thread, subprocess.Popen[str]]]) -> None:
-    for t, proc in streams:
+def _stop_vm_log_streaming(streams: list[tuple[threading.Thread, subprocess.Popen[str], Any]]) -> None:
+    for t, proc, fh in streams:
         try:
             proc.kill()
         except OSError:
             pass
-    for t, proc in streams:
+    for t, proc, fh in streams:
         t.join(timeout=5)
+    for t, proc, fh in streams:
+        if fh is not None:
+            try:
+                fh.close()
+            except Exception:
+                pass
 
 
 def delete_self(config: WorkerConfig) -> None:
@@ -1295,8 +1370,9 @@ def run_worker(config: WorkerConfig) -> int:
     started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     test_exit = 1
     wall_t0 = time.monotonic()
-    vm_streams: list[tuple[threading.Thread, subprocess.Popen[str]]] = []
+    vm_streams: list[tuple[threading.Thread, subprocess.Popen[str], Any]] = []
     local_mints: dict[str, subprocess.Popen[str]] = {}
+    syslog_proc: subprocess.Popen[str] | None = None
 
     try:
         log.info("=== Pipeline start ===")
@@ -1313,6 +1389,18 @@ def run_worker(config: WorkerConfig) -> int:
 
         log.info("[4/10] Inner VMs (OpenWrt + Debian)")
         start_inner_vms(config)
+
+        log.info("[4.5/10] Start syslog capture + configure OpenWrt forwarding")
+        try:
+            syslog_proc = start_syslog_capture(results_dir)
+        except Exception as exc:
+            log.warning("Syslog capture start failed (non-fatal): %s", exc)
+        try:
+            configure_openwrt_syslog(OPENWRT_IP)
+            if config.secondary_router_host:
+                configure_openwrt_syslog(config.secondary_router_host)
+        except Exception as exc:
+            log.warning("OpenWrt syslog config failed (non-fatal): %s", exc)
 
         log.info("[5/10] Start local mints (CDK + Nutshell)")
         local_mints = start_local_mints(config)
@@ -1337,7 +1425,7 @@ def run_worker(config: WorkerConfig) -> int:
             log.info("Updated .env TOLLGATE_TEST_MINT_URL=%s", chosen_mint)
 
         log.info("[9/10] Run tests (results_dir=%s)", results_dir)
-        vm_streams = _start_vm_log_streaming(config)
+        vm_streams = _start_vm_log_streaming(config, results_dir)
         try:
             test_exit = run_tests(config, results_dir)
         finally:
@@ -1376,6 +1464,8 @@ def run_worker(config: WorkerConfig) -> int:
         log.error("Pipeline failed at step: %s (%.1fs elapsed)", _redact(str(exc))[:200], time.monotonic() - wall_t0)
         raise
     finally:
+        if syslog_proc and syslog_proc.poll() is None:
+            syslog_proc.kill()
         stop_local_mints(local_mints)
         keep_failed_vm = config.keep_vm_on_failure and test_exit != 0
         if keep_failed_vm:

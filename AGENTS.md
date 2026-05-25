@@ -497,7 +497,69 @@ After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check tha
 
 ## GCP cloud lab (fire-and-forget)
 
-`scripts/cloud-lab.py submit` runs TollGate API tests in nested KVM on a GCP VM (`n2-standard-2` + the `SNAPSHOT_NAME` configured in `lib/cloud_lab/constants.py`). `tollgate-runner-baked-v7` is the current snapshot; newer baked snapshots must be verified before becoming the default.
+`scripts/cloud-lab.py submit` runs TollGate tests in nested KVM on a GCP VM (`n2-standard-2` + the `SNAPSHOT_NAME` configured in `lib/cloud_lab/constants.py`). The current snapshot is `tollgate-runner-baked-v8`; newer baked snapshots must be verified before becoming the default.
+
+### Architecture
+
+```
+┌─ GCP Host VM (n2-standard-2, nested KVM) ──────────────────────┐
+│                                                                  │
+│  tg-poc-br (10.99.99.0/24) — management LAN                    │
+│    ├── host: 10.99.99.2 (mints, NAT, orchestration)            │
+│    ├── alpha: 10.99.99.1 (OpenWrt QEMU, TollGate under test)   │
+│    ├── beta: 10.99.99.11 (optional second OpenWrt for 2-router) │
+│    └── debian: 10.99.99.100 (Debian QEMU, Playwright, cashu)   │
+│                                                                  │
+│  tg-upstream-br (10.99.98.0/24) — simulated WAN (2-router)     │
+│    ├── alpha WAN: DHCP from beta                                │
+│    └── beta WAN: 10.99.98.1 (static, DHCP server)              │
+│                                                                  │
+│  Local mints (on host):                                         │
+│    ├── CDK V2:      :8383 (V2 keysets, 01-prefix)              │
+│    ├── Nutshell V2:  :8384 (V2 keysets)                         │
+│    └── Nutshell V1:  :8385 (V1 keysets, 00-prefix, for Go)     │
+│                                                                  │
+│  OpenWrt VM (alpha):                                            │
+│    ├── hwsim radios: kmod-mac80211-hwsim (pre-installed in v8)  │
+│    ├── wpad-basic, iw-full, iwinfo (pre-installed in v8)        │
+│    └── /etc/hosts maps mint DNS → 10.99.99.2                   │
+│                                                                  │
+│  Test flow (worker.py):                                         │
+│    [1] Boot GCP VM from snapshot                                │
+│    [2] Clone test repo, install deps (baked)                    │
+│    [3] Boot OpenWrt + Debian QEMU VMs                           │
+│    [4] Start 3 local mints (CDK + Nutshell V1 + V2)            │
+│    [5] Deploy TollGate .ipk to OpenWrt                          │
+│    [6] Select mint (CDK V2 if backend supports it, else V1)     │
+│    [7] Run tests: visual → API → vl-scenarios → scenarios       │
+│    [8] Collect results, publish to gh-pages, self-delete        │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Local mint selection strategy
+
+The worker runs 3 local Cashu mints to eliminate dependency on the public `testnut.cashu.exchange`. `select_test_mint()` probes the backend:
+
+1. **Try CDK V2** (`http://10.99.99.2:8383`) — configure backend with V2 mint URL, check if backend returns `kind 10021` with `price_per_step` tags. If yes → V2 supported, use CDK.
+2. **Fall back to Nutshell V1** (`http://10.99.99.2:8385`) — retries up to 10 times (30s). Checks for V1 keyset ID (`00`-prefix, 16 chars). Go backend (`gonuts`) requires V1 keysets.
+3. **Last resort: public testnut** — only if local mints are genuinely broken.
+
+The `.env` file's `TOLLGATE_TEST_MINT_URL` is updated to the chosen mint URL so the cashu CLI in tests uses the local mint.
+
+### Test runners
+
+Tests run sequentially in a single shell command with a 90-minute timeout:
+
+| Runner | Tests | Typical time |
+|--------|-------|-------------|
+| **visual** | Container client e2e portal payment | ~2min |
+| **api** | `tests/api/` (89 tests with local mint) | ~15min |
+| **vl-scenarios** | Captive portal browser, mint health, boot hygiene, upstream WiFi | ~2min |
+| **scenarios** | Reseller mode (only with `--reseller-scenarios`) | ~3min |
+| **two-router** | Two-router cloud (only with `--two-router`) | ~5min |
+
+Each runner writes junit.xml + report.html to `raw/<runner>/`. The overall exit code is the worst of all runners.
 
 ### Flow
 
@@ -518,8 +580,8 @@ After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check tha
 
 - **Debian qcow2 overlay** (Playwright + Chromium) lives on the baked snapshot — do **not** reset it per run.
 - **OpenWrt overlay** is recreated from base each run for a clean TollGate install.
-- **Persistent caches** live under `/opt` (`/opt/tollgate-venv`, `/opt/cashu-venv`). Avoid `/tmp` for baked caches because it may be empty after boot.
-- Re-bake snapshot when Debian packages, Playwright versions, gh/gcloud CLI, Python deps, cashu, or OpenWrt provisioning logic change.
+- **Persistent caches** live under `/opt` (`/opt/tollgate-venv`, `/opt/cashu-venv`, `/opt/cdk-mintd`). Avoid `/tmp` for baked caches because it may be empty after boot.
+- Re-bake snapshot when Debian packages, Playwright versions, gh/gcloud CLI, Python deps, cashu, CDK, or OpenWrt provisioning logic change.
 
 ### Snapshot baking
 
@@ -534,11 +596,13 @@ What it bakes into the snapshot:
 - `gcloud` CLI (Google Cloud apt repo, for VM self-delete)
 - `/opt/tollgate-venv` (Python venv with pytest, playwright, etc.)
 - `/opt/cashu-venv` (cashu CLI with active-field patch)
+- `/opt/cdk-mintd` (CDK mintd binary for local V2 mint)
 - Pre-provisioned `openwrt-base.qcow2` (SSH enabled, password set, firewall rule added, network configured to 10.99.99.1)
+- **WiFi packages** (v8+): `kmod-mac80211-hwsim`, `wpad-basic`, `iw-full`, `iwinfo` for virtual radio testing
 
 The baker must run remote setup with `HOME=/root`, because the GCP startup worker also exports `HOME=/root`. If bake commands accidentally write to `/home/<ssh-user>/tollgate-virtual-lab`, the worker will read stale images from `/root/tollgate-virtual-lab`.
 
-After baking, verify the snapshot with a throwaway cloud run or `cloud-lab.py up` before updating `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py` to the new snapshot name (auto-incremented, e.g. `tollgate-runner-baked-v7`).
+After baking, verify the snapshot with a throwaway cloud run or `cloud-lab.py up` before updating `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py` to the new snapshot name (auto-incremented, e.g. `tollgate-runner-baked-v8`).
 
 The worker (`lib/cloud_lab/worker.py`) detects pre-provisioned OpenWrt bases automatically — if SSH works within 15s of boot, serial provisioning is skipped. Falls back to serial provisioning for old snapshots without pre-provisioned bases.
 
@@ -552,17 +616,53 @@ The worker (`lib/cloud_lab/worker.py`) detects pre-provisioned OpenWrt bases aut
 ./scripts/bake-snapshot.py bake         # create new snapshot with deps pre-installed
 ```
 
-### Timing (post-bake optimizations)
+### Timing (v8 snapshot with local mints)
 
 | Phase | Duration | Notes |
 |---|---|---|
 | VM boot + startup | ~2m | GCP startup script overhead |
-| gh + venv + cashu | 0s (baked) | Pre-installed in snapshot |
+| gh + venv + cashu + cdk | 0s (baked) | Pre-installed in snapshot |
 | Boot OpenWrt + Debian VMs | ~30s | OpenWrt SSH-first detection, no serial |
+| Start local mints | ~5s | CDK + Nutshell V1 + V2, health checked |
 | Deploy TollGate | ~50s | Download + install .ipk |
-| Run tests | ~7m | Visual=101s, API=~5m |
+| Select test mint | ~5s | V2 probe, then V1 fallback |
+| Run tests | ~20m | 94 tests with local mint (no timeouts) |
 | Collect + publish | ~30s | |
-| **Total** | **~10-11min** | Down from ~15min pre-optimization |
+| **Total** | **~25min** | Was ~10min before local mints (fewer tests ran) |
+
+### mac80211_hwsim virtual WiFi (v8+)
+
+The v8 snapshot includes WiFi simulation packages. Tests in `tests/api/test_mac80211_hwsim.py` verify:
+
+| Test | What it verifies | Status |
+|------|-----------------|--------|
+| `test_install_hwsim_module` | Package pre-installed (baked) | SKIPPED (already loaded) |
+| `test_load_hwsim_radios` | `modprobe mac80211_hwsim radios=2` | **PASSED** |
+| `test_iw_list_shows_virtual_radios` | `iw list` shows ≥2 Wiphy | **PASSED** |
+| `test_wlan_interface_ap_pears_after_ap_config` | UCI AP config → hostapd brings up interface | In progress (naming fix applied) |
+| `test_iw_scan_executes` | `iw <iface> scan` runs without error | Depends on AP bringup |
+
+OpenWrt names hwsim interfaces `phy<N>-ap0` (not `wlan0`). Tests must check `iw dev` output for interface names, not hardcoded `wlan0`.
+
+hwsim supports STA mode — each radio can be AP, STA, or both simultaneously (2048 concurrent interfaces). Future work: configure radio1 as STA to enable upstream WiFi scan/connect tests in the cloud lab.
+
+### What works in the cloud lab
+
+- API tests (89 passed, 0 failed with local mint)
+- Container client e2e portal payment (visual recording)
+- Scenario tests: captive portal browser, mint health, boot hygiene, upstream WiFi CLI
+- Reseller mode scenarios (with `--reseller-scenarios`)
+- Two-router tests (with `--two-router`)
+- Virtual WiFi: module load, radio detection, AP bringup
+- Local mints: CDK V2, Nutshell V1, Nutshell V2 (all FakeWallet)
+
+### What needs improvement
+
+- **hwsim AP bringup test**: Interface naming fix applied but not yet verified in cloud run (interface is `phy2-ap0` not `wlan0`)
+- **hwsim STA mode**: Second radio configured as station to enable `tollgate upstream scan` tests
+- **Portal browser tests**: Nodogsplash doesn't serve `splash.html` without a preauthenticated client — tests skip correctly but could be improved
+- **Mint health/degraded tests**: Most skip in cloud lab because feature detection gates are conservative — could be relaxed with local mint manipulation
+- **Multi-VM topology**: Currently limited to 2 OpenWrt VMs. Future: per-environment bridge isolation for dozens of VMs
 
 ### Out of scope for cloud
 
