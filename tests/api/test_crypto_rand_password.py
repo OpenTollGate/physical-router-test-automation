@@ -51,39 +51,44 @@ def _try_network_command(router, subcommand, args=None):
         return False, str(exc)
 
 
+def _skip_if_no_password_command(router):
+    """Skip if the password-setting network subcommand is not available.
+
+    Tries the current subcommand name first, falls back to the original
+    name used in early PR #111 drafts.
+    """
+    ok, resp = _try_network_command(router, "private")
+    if ok:
+        return ok, resp
+
+    ok2, resp2 = _try_network_command(router, "set-private-network")
+    if ok2:
+        return ok2, resp2
+
+    pytest.skip(
+        "network private / set-private-network command not available on this firmware. "
+        f"Response: {str(resp)[:200]}"
+    )
+
+
 def test_current_password_generation_available(router):
-    """Check if the network set-private-network command exists via socket.
+    """Check if the network private command exists via socket.
 
     This documents the baseline: whether the password generation command
     is available on the current firmware. PR #111 changes the RNG source
     behind this command from math/rand to crypto/rand.
     """
-    ok, resp = _try_network_command(router, "set-private-network")
-
-    if not ok:
-        pytest.skip(
-            f"network set-private-network command not available on this firmware "
-            f"(requires PR #111 fix/security-crypto-rand). Response: {str(resp)[:200]}"
-        )
-
-    log.info("network set-private-network command is available")
+    ok, resp = _skip_if_no_password_command(router)
+    log.info("network password command is available")
 
 
 def test_password_generation_creates_valid_wpa2_password(router):
-    """Generate a password via set-private-network and verify the format.
+    """Generate a password via the network command and verify the format.
 
     PR #111 changes generateRandomPassword() to use crypto/rand. The output
-    format should remain Word-Word-Word-NN for WPA2 compatibility. This test
-    verifies the generated password follows the expected pattern.
-
-    Skips if the command is not available (pre-PR #111 firmware).
+    format should remain Word-Word-Word-NN for WPA2 compatibility.
     """
-    ok, resp = _try_network_command(router, "set-private-network")
-    if not ok:
-        pytest.skip(
-            "network set-private-network command not available on this firmware "
-            "(requires PR #111 fix/security-crypto-rand)"
-        )
+    ok, resp = _skip_if_no_password_command(router)
 
     # The response should contain the generated password somewhere
     raw = json.dumps(resp)
@@ -109,20 +114,9 @@ def test_password_generation_creates_valid_wpa2_password(router):
 def test_password_format_is_word_word_word_digits(router):
     """Verify the password matches the strict Word-Word-Word-DD pattern.
 
-    The WPA2 password format used by TollGate is:
-    - At least 3 word segments separated by hyphens
-    - Each word: one uppercase letter followed by one or more lowercase
-    - Ends with 2 or more digits
-
-    This test validates the structural format independently of the RNG source.
     PR #111 changes the RNG but should preserve this format exactly.
     """
-    ok, resp = _try_network_command(router, "set-private-network")
-    if not ok:
-        pytest.skip(
-            "network set-private-network command not available on this firmware "
-            "(requires PR #111 fix/security-crypto-rand)"
-        )
+    ok, resp = _skip_if_no_password_command(router)
 
     raw = json.dumps(resp)
     candidates = re.findall(r'[A-Z][a-z]+-[A-Z][a-z]+-[A-Z][a-z]+-\d{2,}', raw)
