@@ -11,6 +11,7 @@ Only runs on x86_64 targets where the kmod package is available.
 """
 
 import pytest
+import re
 import time
 
 pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.virtual_lab]
@@ -120,8 +121,9 @@ def test_wlan_interface_appears_after_ap_config(router):
     time.sleep(8)
 
     ip_link = router.ssh("ip link show 2>/dev/null")
-    has_wlan = any(name in ip_link for name in ("wlan0", "wlan1"))
-    if not has_wlan:
+    iw_dev = router.ssh("iw dev 2>/dev/null")
+    has_wireless = any(name in ip_link for name in ("wlan", "phy")) or "Interface" in iw_dev
+    if not has_wireless:
         # Debug: show what netifd sees
         radio_status = router.ssh(
             "iw dev 2>/dev/null; "
@@ -139,12 +141,18 @@ def test_iw_scan_executes(router):
     if not _module_loaded(router):
         pytest.skip("mac80211_hwsim not loaded")
 
-    has_wlan = "wlan0" in router.ssh("ip link show 2>/dev/null")
-    if not has_wlan:
-        pytest.skip("wlan0 not available for scan")
+    iw_dev = router.ssh("iw dev 2>/dev/null")
+    interface_names = re.findall(r"Interface (\S+)", iw_dev)
+    scan_iface = None
+    for iface in interface_names:
+        if "ap" not in iface.lower():
+            scan_iface = iface
+            break
+    if not scan_iface and interface_names:
+        scan_iface = interface_names[0]
+    if not scan_iface:
+        pytest.skip("No wireless interfaces available for scan")
 
-    scan_output = router.ssh("iw wlan0 scan 2>&1")
-    # Scan may return "No scan results" or "command failed: Device or resource busy"
-    # Either way, we just want to verify the command executes without module errors
+    scan_output = router.ssh(f"iw {scan_iface} scan 2>&1")
     assert "No such device" not in scan_output, \
-        f"wlan0 disappeared during scan: {scan_output[:200]}"
+        f"{scan_iface} disappeared during scan: {scan_output[:200]}"
