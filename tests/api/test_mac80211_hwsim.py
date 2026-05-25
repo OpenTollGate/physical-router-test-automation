@@ -34,6 +34,11 @@ def test_install_hwsim_module(router):
     if _module_loaded(router):
         pytest.skip("mac80211_hwsim already loaded")
 
+    # Check if kmod package is already installed (e.g., baked into snapshot)
+    opkg_status = router.ssh(f"opkg list-installed 2>/dev/null | grep '{_HWSIM_KMOD_PKG}'")
+    if _HWSIM_KMOD_PKG in opkg_status:
+        return
+
     router.ssh("opkg update >/dev/null 2>&1 || true")
     result = router.ssh(f"opkg install {_HWSIM_KMOD_PKG} 2>&1")
     if "Cannot install" in result or "not found" in result.lower():

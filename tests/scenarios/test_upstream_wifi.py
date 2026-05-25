@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.go_only]
+pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.go_only, pytest.mark.virtual_lab]
 
 
 def _skip_if_no_upstream_wifi(router):

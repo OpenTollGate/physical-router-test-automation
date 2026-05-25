@@ -1076,6 +1076,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         f"tests/scenarios/test_captive_portal_browser.py "
         f"tests/scenarios/test_mint_health.py "
         f"tests/scenarios/test_boot_hygiene.py "
+        f"tests/scenarios/test_upstream_wifi.py "
         f"-v --tb=short --timeout=600 --backend={backend} "
         f"{expected_pr}--client=container --results {results_dir} "
         f"--junitxml={results_dir}/raw/vl-scenarios/junit.xml "
