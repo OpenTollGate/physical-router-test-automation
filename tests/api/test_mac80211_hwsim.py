@@ -71,54 +71,48 @@ def test_wlan_interface_appears_after_ap_config(router):
     if not _module_loaded(router):
         pytest.skip("mac80211_hwsim not loaded")
 
-    # Detect the hwsim PHY number and mac80211 path
-    phy_info = router.ssh(
-        "iw dev 2>/dev/null | head -1; "
-        "iw phy 'phy0' info 2>/dev/null | head -1; "
-        "ls /sys/class/ieee80211/ 2>/dev/null"
-    ).strip()
+    # Find hwsim PHYs by checking which ones have the mac80211_hwsim driver
+    hwsim_phys = router.ssh(
+        "for d in /sys/class/ieee80211/phy*; do "
+        "  driver=$(readlink $d/device/driver 2>/dev/null); "
+        "  if echo \"$driver\" | grep -q mac80211_hwsim; then "
+        "    basename $d; "
+        "  fi; "
+        "done"
+    ).strip().split()
 
-    phy_names = [p for p in phy_info.split() if p.startswith("phy")]
-    if not phy_names:
-        # List ieee80211 entries directly
-        ieee80211 = router.ssh("ls /sys/class/ieee80211/ 2>/dev/null").strip()
-        phy_names = ieee80211.split() if ieee80211 else []
+    if not hwsim_phys:
+        pytest.skip("No hwsim PHYs found (mac80211_hwsim driver not bound)")
 
-    if not phy_names:
-        pytest.skip("No PHY devices detected after hwsim load")
+    target_phy = hwsim_phys[0]
 
-    phy0 = phy_names[0]  # e.g., "phy0"
-
-    # Get the mac80211 path for this PHY
+    # Get the mac80211 path for this PHY (used by netifd to match radio sections)
     phy_path = router.ssh(
-        f"readlink /sys/class/ieee80211/{phy0}/device/driver 2>/dev/null || "
-        f"readlink /sys/class/ieee80211/{phy0} 2>/dev/null"
+        f"cat /sys/class/ieee80211/{target_phy}/mac80211/phyname 2>/dev/null; "
+        f"readlink -f /sys/class/ieee80211/{target_phy}/device 2>/dev/null"
     ).strip()
 
-    # Build a fresh wireless config referencing the hwsim PHY
-    # First, remove any existing wireless config sections
+    # Build a fresh wireless config referencing the hwsim PHY via path
     router.ssh(
-        # Delete all existing wifi-device and wifi-iface sections
         "uci -q delete wireless.@wifi-device[0]; "
         "while uci -q delete wireless.@wifi-device[0]; do true; done; "
         "while uci -q delete wireless.@wifi-iface[0]; do true; done; "
-        ""
-        # Create new radio0 device for hwsim PHY
+
         "uci set wireless.radio0=wifi-device; "
         "uci set wireless.radio0.type='mac80211'; "
+        f"uci set wireless.radio0.phy='{target_phy}'; "
         "uci set wireless.radio0.channel='1'; "
         "uci set wireless.radio0.band='2g'; "
         "uci set wireless.radio0.htmode='HT20'; "
         "uci set wireless.radio0.disabled='0'; "
-        ""
-        # Create AP interface on radio0
+
         "uci set wireless.ap0=wifi-iface; "
         "uci set wireless.ap0.device='radio0'; "
         "uci set wireless.ap0.mode='ap'; "
         "uci set wireless.ap0.ssid='HWSIM-Test'; "
         "uci set wireless.ap0.network='lan'; "
         "uci set wireless.ap0.encryption='none'; "
-        ""
+
         "uci commit wireless 2>/dev/null; "
         "wifi reload 2>/dev/null || true"
     )
@@ -136,7 +130,7 @@ def test_wlan_interface_appears_after_ap_config(router):
         )
         pytest.skip(
             f"No wlan interfaces after AP bringup. "
-            f"PHY={phy0} path={phy_path[:100]}. "
+            f"PHY={target_phy} path={phy_path[:100]}. "
             f"Debug: {radio_status[:400]}"
         )
 
