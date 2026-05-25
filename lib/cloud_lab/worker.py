@@ -1028,21 +1028,24 @@ def select_test_mint() -> str:
         return CDK_MINT_URL
 
     nutshell_v1_ok = False
-    try:
-        req = urllib.request.Request(f"{NUTSHELL_V1_MINT_URL}/v1/keys")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            if resp.status == 200:
-                data = json.loads(resp.read())
-                keysets = data.get("keysets", [])
-                if keysets:
-                    kid = keysets[0].get("id", "")
-                    if kid.startswith("00") and len(kid) == 16:
-                        nutshell_v1_ok = True
-                        log.info("Nutshell V1 mint has V1 keysets (kid=%s)", kid)
-                    else:
+    for _attempt in range(10):
+        try:
+            req = urllib.request.Request(f"{NUTSHELL_V1_MINT_URL}/v1/keys")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read())
+                    keysets = data.get("keysets", [])
+                    if keysets:
+                        kid = keysets[0].get("id", "")
+                        if kid.startswith("00") and len(kid) == 16:
+                            nutshell_v1_ok = True
+                            log.info("Nutshell V1 mint has V1 keysets (kid=%s)", kid)
+                            break
                         log.info("Nutshell V1 mint has V2 keysets (kid=%s), unusable for Go backend", kid[:16])
-    except Exception:
-        pass
+                        break
+        except Exception:
+            pass
+        time.sleep(3)
 
     fallback_url = NUTSHELL_V1_MINT_LAN if nutshell_v1_ok else PUBLIC_TESTNUTS
     log.info("Backend does not support V2 keysets — falling back to %s", fallback_url)

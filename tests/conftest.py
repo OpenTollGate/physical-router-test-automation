@@ -486,12 +486,16 @@ def adb(request, router):
 
 @pytest.fixture(scope="session")
 def cashu():
-    try:
-        mint = CashuMint()
-        mint.ensure_mint_available(timeout=10)
-        return mint
-    except MintUnavailableError as exc:
-        pytest.skip(f"cashu mint unavailable: {exc}")
+    mint = CashuMint()
+    for attempt in range(5):
+        try:
+            mint.ensure_mint_available(timeout=10)
+            return mint
+        except MintUnavailableError as exc:
+            if attempt < 4:
+                time.sleep(5)
+            else:
+                pytest.skip(f"cashu mint unavailable after 5 retries: {exc}")
 
 
 @pytest.fixture(scope="session")
