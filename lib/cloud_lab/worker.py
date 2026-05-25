@@ -1126,7 +1126,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         "  if [ \"$e\" -ne 0 ] && [ \"$e\" -gt \"$worst_exit\" ]; then worst_exit=$e; fi; done; "
         "exit \"$worst_exit\""
     )
-    r = _run(test_cmd, timeout=3600, check=False)
+    r = _run(test_cmd, timeout=5400, check=False)
     log.info("Test stdout (%d bytes): %s", len(r.stdout), _redact(r.stdout[-2000:]))
     return r.returncode
 
