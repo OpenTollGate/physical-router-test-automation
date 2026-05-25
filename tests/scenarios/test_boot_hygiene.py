@@ -21,7 +21,7 @@ from lib.constants import TEST_MINT_URL
 
 log = logging.getLogger("tollgate.scenarios.boot_hygiene")
 
-pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.destructive]
+pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.destructive, pytest.mark.virtual_lab]
 
 RECOVERY_POLL_TIMEOUT = 960
 RECOVERY_POLL_INTERVAL = 15

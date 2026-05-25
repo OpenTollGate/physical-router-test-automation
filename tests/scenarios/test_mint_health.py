@@ -27,7 +27,7 @@ from lib.constants import TEST_MINT_URL
 
 log = logging.getLogger("tollgate.scenarios.mint_health")
 
-pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.timeout(600)]
+pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.timeout(600), pytest.mark.virtual_lab]
 
 RECOVERY_POLL_TIMEOUT = 960   # 16 minutes (matches Makefile)
 RECOVERY_POLL_INTERVAL = 15

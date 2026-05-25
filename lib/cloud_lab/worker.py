@@ -1067,6 +1067,21 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
     expected_pr = f"--expected-pr={config.sut_pr} " if config.sut_pr else ""
     backend = config.backend
     run_scenarios = config.reseller_scenarios
+    # Virtual-lab scenario tests (captive portal browser, mint health, hwsim)
+    # Runs alongside the main API suite. Excludes reseller/two-router which
+    # have their own dedicated runners.
+    vl_scenario_cmd = (
+        f"vl_scenario_exit=0; "
+        f"python3 -m pytest "
+        f"tests/scenarios/test_captive_portal_browser.py "
+        f"tests/scenarios/test_mint_health.py "
+        f"tests/scenarios/test_boot_hygiene.py "
+        f"-v --tb=short --timeout=600 --backend={backend} "
+        f"{expected_pr}--client=container --results {results_dir} "
+        f"--junitxml={results_dir}/raw/vl-scenarios/junit.xml "
+        f"--html={results_dir}/raw/vl-scenarios/report.html --self-contained-html "
+        f">{results_dir}/raw/vl-scenarios/output.log 2>&1; vl_scenario_exit=$?; "
+    )
     scenario_cmd = ""
     if run_scenarios:
         scenario_cmd = (
@@ -1090,7 +1105,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
     test_cmd = (
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
         f"mkdir -p {results_dir}/raw/api {results_dir}/raw/visual {results_dir}/raw/scenarios "
-        f"{results_dir}/raw/two-router {results_dir}/report && "
+        f"{results_dir}/raw/vl-scenarios {results_dir}/raw/two-router {results_dir}/report && "
         "visual_exit=0; api_exit=0; "
         f"python3 -m pytest tests/api/test_visual_happy_path.py -v --tb=short --timeout=300 --backend={backend} "
         f"{expected_pr}--client=container --results {results_dir} "
@@ -1103,10 +1118,11 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         f"--junitxml={results_dir}/raw/api/junit.xml "
         f"--html={results_dir}/raw/api/report.html --self-contained-html "
         f">{results_dir}/raw/api/output.log 2>&1; api_exit=$?; "
+        f"{vl_scenario_cmd}"
         f"{scenario_cmd}"
         f"{two_router_cmd}"
         "worst_exit=0; "
-        "for e in \"$visual_exit\" \"$api_exit\" \"${scenario_exit:-0}\" \"${two_router_exit:-0}\"; do "
+        "for e in \"$visual_exit\" \"$api_exit\" \"${vl_scenario_exit:-0}\" \"${scenario_exit:-0}\" \"${two_router_exit:-0}\"; do "
         "  if [ \"$e\" -ne 0 ] && [ \"$e\" -gt \"$worst_exit\" ]; then worst_exit=$e; fi; done; "
         "exit \"$worst_exit\""
     )
@@ -1118,6 +1134,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
 def collect_and_render(config: WorkerConfig, results_dir: str, started_at: str, finished_at: str) -> None:
     commit_arg = f"--sut-commit {config.sut_commit} " if config.sut_commit else ""
     pr_arg = f"--sut-pr {config.sut_pr} " if config.sut_pr else ""
+    vl_scenario_pytest = "--pytest vl-scenarios=raw/vl-scenarios/junit.xml "
     scenario_pytest = ""
     if config.reseller_scenarios:
         scenario_pytest = "--pytest scenarios=raw/scenarios/junit.xml "
@@ -1127,7 +1144,7 @@ def collect_and_render(config: WorkerConfig, results_dir: str, started_at: str, 
     _run(
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
         f"python3 scripts/collect-results.py --run-dir {results_dir} "
-        f"--pytest visual=raw/visual/junit.xml --pytest api=raw/api/junit.xml {scenario_pytest}{two_router_pytest}"
+        f"--pytest visual=raw/visual/junit.xml --pytest api=raw/api/junit.xml {vl_scenario_pytest}{scenario_pytest}{two_router_pytest}"
         f"--run-id {config.run_id} "
         f"--sut-repo {config.artifact_repo} --sut-branch {shlex.quote(config.sut_branch)} "
         f"{commit_arg}{pr_arg}--sut-backend {config.backend} "

@@ -403,6 +403,22 @@ def cmd_bake(args: argparse.Namespace) -> int:
             print(f"WARNING: OpenWrt SSH wait returned {r.returncode}", file=sys.stderr)
         print(f"  Serial provisioning done in {time.monotonic() - t0:.1f}s")
 
+        # Step 8b: Install WiFi packages for hwsim-based virtual WiFi testing
+        _step(8, total_steps, "Installing WiFi packages for hwsim testing")
+        wifi_pkgs = "kmod-mac80211-hwsim wpad-basic iw-full iwinfo"
+        wifi_install_cmd = (
+            f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
+            "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+            f"-o ConnectTimeout=3 root@{OPENWRT_IP} "
+            f"'opkg update >/dev/null 2>&1 && opkg install {wifi_pkgs} 2>&1 && echo WIFI_PKGS_OK || echo WIFI_PKGS_SKIP' "
+            "2>/dev/null || true"
+        )
+        r = _gcloud_ssh(vm_name, wifi_install_cmd, zone, project, timeout=120)
+        if "WIFI_PKGS_OK" in (r.stdout or ""):
+            print("  WiFi packages installed: kmod-mac80211-hwsim wpad-basic iw-full iwinfo")
+        else:
+            print(f"  WARNING: WiFi package install skipped (non-fatal): {(r.stdout or '')[:200]}", file=sys.stderr)
+
         shutdown_cmd = (
             f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
             "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
