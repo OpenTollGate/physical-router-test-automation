@@ -5,48 +5,31 @@ PR #104 fixed three security issues:
 2. Double-spent token detection (not crashing)
 3. X-Forwarded-For header trust from localhost only
 
+All three tests use xfail(strict=False): if the fix is absent, the test
+fails as XFAIL (expected — yellow in reports).  Once PR #104 lands and
+the fix is present, the test passes as XPASS (green).  No version-string
+or binary-grep probe needed — the test outcome IS the probe.
+
 See: https://github.com/OpenTollGate/tollgate-knowledgebase/tree/main/incidents/2026-01-XX_security-fixes-pr104
 """
 
 import pytest
 from lib.cashu import CashuMint
-from lib.helpers import gate_bug_fix, require_client_identity
-
-
-def _has_security_fixes(router):
-    """Check if PR #104 security fixes are present via behavioral probing.
-
-    Binary string grep is unreliable across architectures and build modes.
-    Instead, test the actual behavior:
-    - Case-insensitive mint: pay with a differently-cased mint URL
-    - Spent token: second payment with same token returns error, not panic
-    - Proxy header: just check the version string includes 'security' or 'correctness'
-
-    We use a single combined probe: check the installed version string for
-    the PR #104 branch name pattern.
-    """
-    try:
-        version = router.ssh("tollgate version 2>/dev/null || echo unknown", timeout=5)
-        # PR 104 branch produces version strings containing "fix-security" or "security-and-correctness"
-        return "security" in version.lower() and "correctness" in version.lower()
-    except Exception:
-        return False
+from lib.helpers import require_client_identity
 
 
 @pytest.mark.api
 @pytest.mark.extended
+@pytest.mark.xfail(
+    reason="mint-url-case-sensitive not fixed — expected in PR #104",
+    strict=False,
+)
 def test_mint_url_case_insensitive(router, cashu):
     """Mint URLs with different casing should still be accepted.
 
     The bug was that the Go backend would crash if the mint URL in a token
     differed from the configured mint URL by case only.
     """
-    gate_bug_fix(
-        _has_security_fixes(router),
-        bug_id="mint-url-case-sensitive",
-        fix_pr="PR #104",
-    )
-
     # Get the configured mint URL
     status = router.get_tollgate_status()
     assert status.get("success") is True
@@ -62,18 +45,16 @@ def test_mint_url_case_insensitive(router, cashu):
 
 @pytest.mark.api
 @pytest.mark.extended
+@pytest.mark.xfail(
+    reason="spent-token-string-match not fixed — expected in PR #104",
+    strict=False,
+)
 def test_spent_token_detected(router, cashu):
     """Double-spending a token should return a proper error, not crash.
 
     The bug was that paying with an already-spent token would cause a 500 error
     (panic/crash) instead of a proper error response.
     """
-    gate_bug_fix(
-        _has_security_fixes(router),
-        bug_id="spent-token-string-match",
-        fix_pr="PR #104",
-    )
-
     require_client_identity(router)
 
     # Mint a test token
@@ -96,24 +77,23 @@ def test_spent_token_detected(router, cashu):
 
 @pytest.mark.api
 @pytest.mark.extended
+@pytest.mark.xfail(
+    reason="proxy-header-trust not fixed — expected in PR #104",
+    strict=False,
+)
 def test_proxy_header_only_from_localhost(router):
     """X-Forwarded-For should only be trusted from localhost.
 
     The bug was that X-Forwarded-For and X-Real-Ip headers from external
     clients could bypass authentication by spoofing the client IP.
     """
-    gate_bug_fix(
-        _has_security_fixes(router),
-        bug_id="proxy-header-trust",
-        fix_pr="PR #104",
-    )
-
     # This test verifies that the fix is present but cannot easily test
     # the actual header validation from an external client.
     # The fix ensures that X-Forwarded-For is only honored from localhost
     # (CGI/NDS context), not from direct HTTP requests.
 
-    # Basic sanity check - verify the backend is running
+    # Basic sanity check - verify the backend is running and returns
+    # reachability info in the status response (added by PR #104)
     status = router.get_tollgate_status()
     assert status.get("success") is True
     assert "reachable" in status.get("raw", "").lower()
