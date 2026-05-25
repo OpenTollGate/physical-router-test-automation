@@ -197,7 +197,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
             "> /etc/apt/sources.list.d/google-cloud-sdk.list; "
             "fi && "
             "apt-get update -qq && "
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gh google-cloud-cli >/dev/null && "
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gh google-cloud-cli socat >/dev/null && "
             "command -v gh >/dev/null && command -v gcloud >/dev/null && echo CLI_INSTALLED_OK"
         )
         r = _gcloud_ssh(vm_name, gh_install_cmd, zone, project, timeout=180)

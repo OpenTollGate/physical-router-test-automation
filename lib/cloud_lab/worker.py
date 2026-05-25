@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -620,6 +621,10 @@ max_delay_time = 0
 
 def start_syslog_capture(results_dir: str) -> subprocess.Popen[str]:
     """Start socat UDP listener to capture syslog from OpenWrt/Debian VMs."""
+    if not shutil.which("socat"):
+        _run("apt-get install -y -qq socat >/dev/null 2>&1 || true", timeout=30, check=False)
+        if not shutil.which("socat"):
+            raise FileNotFoundError("socat not available and install failed")
     syslog_dir = Path(results_dir) / "raw" / "syslog"
     syslog_dir.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(
