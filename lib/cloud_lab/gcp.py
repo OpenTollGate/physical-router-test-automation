@@ -15,6 +15,7 @@ import io
 import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from lib.cloud_lab.artifact import ensure_target_artifact
 from lib.cloud_lab.constants import (
@@ -25,6 +26,7 @@ from lib.cloud_lab.constants import (
     SNAPSHOT_NAME,
     SUITE_REPO,
 )
+from lib.cloud_lab.provider import CloudProvider
 from lib.cloud_lab.resolve import RunTarget
 
 
@@ -49,101 +51,6 @@ def _run_gcloud(args: list[str], timeout: int = 120) -> subprocess.CompletedProc
             print(f"WARNING: transient gcloud failure, retrying ({attempt}/3): {last.stderr[:200]}", file=sys.stderr)
             time.sleep(5 * attempt)
     return last
-
-
-def vm_status(project: str, zone: str, vm_name: str) -> str | None:
-    r = _run_gcloud([
-        "compute", "instances", "describe", vm_name,
-        f"--project={project}", f"--zone={zone}", "--format=json",
-    ], timeout=30)
-    if r.returncode != 0:
-        return None
-    try:
-        data = json.loads(r.stdout)
-        status = data.get("status")
-        return status if isinstance(status, str) else None
-    except json.JSONDecodeError:
-        return None
-
-
-def vm_external_ip(project: str, zone: str, vm_name: str) -> str | None:
-    r = _run_gcloud([
-        "compute", "instances", "describe", vm_name,
-        f"--project={project}", f"--zone={zone}", "--format=json",
-    ], timeout=30)
-    if r.returncode != 0:
-        return None
-    try:
-        data = json.loads(r.stdout)
-        for iface in data.get("networkInterfaces", []):
-            for ac in iface.get("accessConfigs", []):
-                ip = ac.get("natIP")
-                if ip:
-                    return ip
-    except (json.JSONDecodeError, AttributeError):
-        return None
-    return None
-
-
-def vm_up(vm_name: str, zone: str = DEFAULT_ZONE, machine_type: str = DEFAULT_MACHINE_TYPE,
-          disk_size_gb: int = DEFAULT_DISK_SIZE_GB) -> int:
-    from lib.cloud_lab.constants import VM_NAME
-    vm_name = vm_name or VM_NAME
-    project = get_project()
-    status = vm_status(project, zone, vm_name)
-    if status == "RUNNING":
-        ip = vm_external_ip(project, zone, vm_name)
-        print(f"VM {vm_name} already RUNNING at {ip}")
-        return 0
-    if status and status != "RUNNING":
-        print(f"VM {vm_name} exists ({status}), starting...")
-        r = _run_gcloud(["compute", "instances", "start", vm_name, f"--project={project}", f"--zone={zone}"], timeout=120)
-        return 0 if r.returncode == 0 else 1
-    print(f"Creating VM from snapshot {SNAPSHOT_NAME}...")
-    r = _run_gcloud([
-        "compute", "instances", "create", vm_name,
-        f"--project={project}", f"--zone={zone}",
-        f"--machine-type={machine_type}",
-        f"--source-snapshot={SNAPSHOT_NAME}",
-        f"--boot-disk-size={disk_size_gb}GB",
-        "--enable-nested-virtualization",
-        "--min-cpu-platform=Intel Cascade Lake",
-        "--tags=tollgate-runner",
-    ], timeout=300)
-    if r.returncode != 0 and vm_status(project, zone, vm_name) != "RUNNING":
-        print(f"ERROR: {r.stderr}", file=sys.stderr)
-        return 1
-    ensure_firewall_rules(project)
-    print(f"VM {vm_name} created")
-    return 0
-
-
-def vm_down(vm_name: str, zone: str = DEFAULT_ZONE) -> int:
-    project = get_project()
-    r = _run_gcloud([
-        "compute", "instances", "delete", vm_name,
-        f"--project={project}", f"--zone={zone}", "--delete-disks=all", "--quiet",
-    ], timeout=120)
-    return r.returncode
-
-
-def get_project() -> str:
-    r = _run_gcloud(["config", "get-value", "project"], timeout=30)
-    if r.returncode != 0 or not r.stdout.strip():
-        print("ERROR: No GCP project set. Run: gcloud config set project <PROJECT_ID>", file=sys.stderr)
-        sys.exit(1)
-    return r.stdout.strip()
-
-
-def ensure_firewall_rules(project: str) -> None:
-    r = _run_gcloud(["compute", "firewall-rules", "describe", FIREWALL_RULE_SSH, f"--project={project}"], timeout=30)
-    if r.returncode == 0:
-        return
-    _run_gcloud([
-        "compute", "firewall-rules", "create", FIREWALL_RULE_SSH,
-        f"--project={project}", "--allow=tcp:22", "--source-ranges=0.0.0.0/0",
-        "--description=Allow SSH for TollGate test runner",
-    ], timeout=60)
 
 
 def _sanitize_vm_name(run_id: str) -> str:
@@ -309,6 +216,182 @@ def _build_startup_script(suite_overlay_b64: str = "") -> str:
     """)
 
 
+class GCPProvider(CloudProvider):
+    """Google Cloud Platform provider using gcloud CLI."""
+
+    def __init__(self, zone: str = DEFAULT_ZONE,
+                 machine_type: str = DEFAULT_MACHINE_TYPE,
+                 disk_size_gb: int = DEFAULT_DISK_SIZE_GB) -> None:
+        self.zone = zone
+        self.machine_type = machine_type
+        self.disk_size_gb = disk_size_gb
+        self._project: str | None = None
+
+    @property
+    def name(self) -> str:
+        return "gcp"
+
+    def _get_project(self) -> str:
+        if self._project is None:
+            self._project = get_project()
+        return self._project
+
+    def vm_up(self, name: str, **kwargs: Any) -> int:
+        zone = kwargs.get("zone", self.zone)
+        machine_type = kwargs.get("machine_type", self.machine_type)
+        disk_size_gb = kwargs.get("disk_size_gb", self.disk_size_gb)
+        return vm_up(name, zone=zone, machine_type=machine_type, disk_size_gb=disk_size_gb)
+
+    def vm_down(self, name: str, **kwargs: Any) -> int:
+        zone = kwargs.get("zone", self.zone)
+        return vm_down(name, zone=zone)
+
+    def vm_status(self, name: str, **kwargs: Any) -> str | None:
+        zone = kwargs.get("zone", self.zone)
+        return vm_status(self._get_project(), zone, name)
+
+    def vm_external_ip(self, name: str, **kwargs: Any) -> str | None:
+        zone = kwargs.get("zone", self.zone)
+        return vm_external_ip(self._get_project(), zone, name)
+
+    def submit_run(
+        self,
+        target: RunTarget,
+        *,
+        publish: bool = False,
+        artifact_timeout_s: int = 1800,
+        reseller_scenarios: bool = False,
+        secondary_router_host: str = "",
+        secondary_router_port: str = "",
+        keep_vm_on_failure: bool = False,
+        **kwargs: Any,
+    ) -> dict[str, str]:
+        return submit_run(
+            target,
+            zone=kwargs.get("zone", self.zone),
+            publish=publish,
+            artifact_timeout_s=artifact_timeout_s,
+            machine_type=kwargs.get("machine_type", self.machine_type),
+            disk_size_gb=kwargs.get("disk_size_gb", self.disk_size_gb),
+            reseller_scenarios=reseller_scenarios,
+            secondary_router_host=secondary_router_host,
+            secondary_router_port=secondary_router_port,
+            keep_vm_on_failure=keep_vm_on_failure,
+        )
+
+    def status_run(self, run_id: str, **kwargs: Any) -> int:
+        return status_run(run_id, zone=kwargs.get("zone", self.zone))
+
+    def cleanup_stale(self, max_age_hours: int = 2, **kwargs: Any) -> int:
+        return cleanup_stale(zone=kwargs.get("zone", self.zone), max_age_hours=max_age_hours)
+
+    def cleanup_all(self, **kwargs: Any) -> int:
+        return cleanup_all(zone=kwargs.get("zone", self.zone))
+
+    def ssh_command(self, name: str, user: str = "root") -> list[str]:
+        return [
+            "ssh", "-i", SSH_KEY,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            f"{user}@{name}",
+        ]
+
+
+def vm_status(project: str, zone: str, vm_name: str) -> str | None:
+    r = _run_gcloud([
+        "compute", "instances", "describe", vm_name,
+        f"--project={project}", f"--zone={zone}", "--format=json",
+    ], timeout=30)
+    if r.returncode != 0:
+        return None
+    try:
+        data = json.loads(r.stdout)
+        status = data.get("status")
+        return status if isinstance(status, str) else None
+    except json.JSONDecodeError:
+        return None
+
+
+def vm_external_ip(project: str, zone: str, vm_name: str) -> str | None:
+    r = _run_gcloud([
+        "compute", "instances", "describe", vm_name,
+        f"--project={project}", f"--zone={zone}", "--format=json",
+    ], timeout=30)
+    if r.returncode != 0:
+        return None
+    try:
+        data = json.loads(r.stdout)
+        for iface in data.get("networkInterfaces", []):
+            for ac in iface.get("accessConfigs", []):
+                ip = ac.get("natIP")
+                if ip:
+                    return ip
+    except (json.JSONDecodeError, AttributeError):
+        return None
+    return None
+
+
+def vm_up(vm_name: str, zone: str = DEFAULT_ZONE, machine_type: str = DEFAULT_MACHINE_TYPE,
+          disk_size_gb: int = DEFAULT_DISK_SIZE_GB) -> int:
+    from lib.cloud_lab.constants import VM_NAME
+    vm_name = vm_name or VM_NAME
+    project = get_project()
+    status = vm_status(project, zone, vm_name)
+    if status == "RUNNING":
+        ip = vm_external_ip(project, zone, vm_name)
+        print(f"VM {vm_name} already RUNNING at {ip}")
+        return 0
+    if status and status != "RUNNING":
+        print(f"VM {vm_name} exists ({status}), starting...")
+        r = _run_gcloud(["compute", "instances", "start", vm_name, f"--project={project}", f"--zone={zone}"], timeout=120)
+        return 0 if r.returncode == 0 else 1
+    print(f"Creating VM from snapshot {SNAPSHOT_NAME}...")
+    r = _run_gcloud([
+        "compute", "instances", "create", vm_name,
+        f"--project={project}", f"--zone={zone}",
+        f"--machine-type={machine_type}",
+        f"--source-snapshot={SNAPSHOT_NAME}",
+        f"--boot-disk-size={disk_size_gb}GB",
+        "--enable-nested-virtualization",
+        "--min-cpu-platform=Intel Cascade Lake",
+        "--tags=tollgate-runner",
+    ], timeout=300)
+    if r.returncode != 0 and vm_status(project, zone, vm_name) != "RUNNING":
+        print(f"ERROR: {r.stderr}", file=sys.stderr)
+        return 1
+    ensure_firewall_rules(project)
+    print(f"VM {vm_name} created")
+    return 0
+
+
+def vm_down(vm_name: str, zone: str = DEFAULT_ZONE) -> int:
+    project = get_project()
+    r = _run_gcloud([
+        "compute", "instances", "delete", vm_name,
+        f"--project={project}", f"--zone={zone}", "--delete-disks=all", "--quiet",
+    ], timeout=120)
+    return r.returncode
+
+
+def get_project() -> str:
+    r = _run_gcloud(["config", "get-value", "project"], timeout=30)
+    if r.returncode != 0 or not r.stdout.strip():
+        print("ERROR: No GCP project set. Run: gcloud config set project <PROJECT_ID>", file=sys.stderr)
+        sys.exit(1)
+    return r.stdout.strip()
+
+
+def ensure_firewall_rules(project: str) -> None:
+    r = _run_gcloud(["compute", "firewall-rules", "describe", FIREWALL_RULE_SSH, f"--project={project}"], timeout=30)
+    if r.returncode == 0:
+        return
+    _run_gcloud([
+        "compute", "firewall-rules", "create", FIREWALL_RULE_SSH,
+        f"--project={project}", "--allow=tcp:22", "--source-ranges=0.0.0.0/0",
+        "--description=Allow SSH for TollGate test runner",
+    ], timeout=60)
+
+
 def submit_run(
     target: RunTarget,
     *,
@@ -330,9 +413,6 @@ def submit_run(
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     short = (target.sut_commit or target.branch)[:7]
-    # Sanitize slashes from branch names (e.g. fix/v2-keyset-ids → fix-v2-)
-    # Slashes in run_id create nested directory paths that break results
-    # collection and gh-pages publish.
     short = short.replace("/", "-")
     run_id = f"{timestamp}-{short}"
     vm_name = _sanitize_vm_name(run_id)
