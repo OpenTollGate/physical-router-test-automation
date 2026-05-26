@@ -1,4 +1,4 @@
-"""Multi-provider cloud test lab (GCP, VPS)."""
+"""Multi-provider cloud test lab (GCP, VPS, Hetzner)."""
 
 from lib.cloud_lab.provider import CloudProvider
 from lib.cloud_lab.resolve import RunTarget, resolve_target

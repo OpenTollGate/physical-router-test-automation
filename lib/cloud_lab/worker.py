@@ -68,6 +68,7 @@ class WorkerConfig:
     vm_name: str
     gh_token: str
     provider: str = "gcp"
+    hetzner_api_token: str = ""
 
 
 def _metadata_get(key: str) -> str:
@@ -149,6 +150,7 @@ def load_config_from_file(path: str) -> WorkerConfig:
         vm_name=data.get("vm_name", ""),
         gh_token=data.get("gh_token", ""),
         provider=data.get("provider", "gcp"),
+        hetzner_api_token=data.get("hetzner_api_token", ""),
     )
     log.info(
         "Config (from file): run=%s branch=%s repo=%s backend=%s provider=%s",
@@ -800,6 +802,16 @@ def delete_self(config: WorkerConfig) -> None:
         _run(
             "killall -9 qemu-system-x86_64 2>/dev/null || true",
             timeout=15,
+            check=False,
+        )
+        return
+    if config.provider == "hetzner":
+        from lib.cloud_lab.constants import HETZNER_API_URL
+        log.info("Hetzner provider: self-deleting server %s", config.vm_name)
+        _run(
+            f"curl -sf -X DELETE {HETZNER_API_URL}/servers/{config.vm_name} "
+            f"-H 'Authorization: Bearer {shlex.quote(config.hetzner_api_token)}'",
+            timeout=60,
             check=False,
         )
         return

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage the TollGate cloud test lab (GCP or VPS)."""
+"""Manage the TollGate cloud test lab (GCP, VPS, or Hetzner)."""
 
 from __future__ import annotations
 
@@ -45,12 +45,15 @@ def _get_provider(args: argparse.Namespace) -> CloudProvider:
     provider_name = getattr(args, "provider", None) or os.environ.get("TOLLGATE_CLOUD_PROVIDER", "gcp")
     if provider_name == "vps":
         return VPSProvider()
+    if provider_name == "hetzner":
+        from lib.cloud_lab.hetzner import HetznerProvider
+        return HetznerProvider()
     if provider_name == "gcp":
         zone = getattr(args, "zone", DEFAULT_ZONE)
         machine_type = getattr(args, "machine_type", DEFAULT_MACHINE_TYPE)
         disk_size_gb = getattr(args, "disk_size_gb", DEFAULT_DISK_SIZE_GB)
         return GCPProvider(zone=zone, machine_type=machine_type, disk_size_gb=disk_size_gb)
-    print(f"ERROR: Unknown provider '{provider_name}'. Use 'gcp' or 'vps'.", file=sys.stderr)
+    print(f"ERROR: Unknown provider '{provider_name}'. Use 'gcp', 'vps', or 'hetzner'.", file=sys.stderr)
     sys.exit(1)
 
 
@@ -174,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--provider",
         default=_default_provider(),
-        choices=["gcp", "vps"],
+        choices=["gcp", "vps", "hetzner"],
         help="Cloud lab provider (default: auto-detected from TOLLGATE_VPS_HOST or gcp)",
     )
     sub = parser.add_subparsers(dest="command", required=True)

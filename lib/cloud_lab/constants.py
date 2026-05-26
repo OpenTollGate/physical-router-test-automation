@@ -1,4 +1,4 @@
-"""Shared constants for the cloud test lab (GCP, VPS, and provider-agnostic)."""
+"""Shared constants for the cloud test lab (GCP, VPS, Hetzner, and provider-agnostic)."""
 
 from __future__ import annotations
 
@@ -21,6 +21,16 @@ VPS_USER = os.environ.get("TOLLGATE_VPS_USER", "root")
 VPS_SSH_KEY = os.environ.get("TOLLGATE_VPS_SSH_KEY", os.path.expanduser("~/.ssh/id_ed25519"))
 VPS_WORKER_CONFIG = "/tmp/tollgate-worker-config.json"
 VPS_RUN_LOCK = "/tmp/tollgate-run.lock"
+
+# ── Hetzner-specific ─────────────────────────────────────────────────────────
+
+HETZNER_API_TOKEN = os.environ.get("HETZNER_API_TOKEN", "")
+HETZNER_API_URL = "https://api.hetzner.cloud/v1"
+HETZNER_SERVER_TYPE = os.environ.get("HETZNER_SERVER_TYPE", "cx32")
+HETZNER_SNAPSHOT_NAME = os.environ.get("HETZNER_SNAPSHOT_NAME", "tollgate-runner-baked")
+HETZNER_SSH_KEY_ID = os.environ.get("HETZNER_SSH_KEY_ID", "")
+HETZNER_SSH_KEY = os.environ.get("HETZNER_SSH_KEY", os.path.expanduser("~/.ssh/id_ed25519"))
+HETZNER_LOCATION = os.environ.get("HETZNER_LOCATION", "fsn1")
 
 # ── Provider-agnostic (virtual lab topology) ──────────────────────────────────
 
