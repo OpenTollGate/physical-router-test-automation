@@ -1494,10 +1494,13 @@ def run_worker(config: WorkerConfig) -> int:
         report_url = ""
         total_run = sum(counts.get(k, 0) for k in ("passed", "failed", "skipped", "error"))
         if config.publish and run_json.exists() and total_run > 0:
-            log.info("Publishing results to gh-pages...")
-            report_url = publish_results(config, results_dir)
-            log.info("Published: %s", report_url)
-            post_pr_comment(config, report_url, counts)
+            try:
+                log.info("Publishing results to gh-pages...")
+                report_url = publish_results(config, results_dir)
+                log.info("Published: %s", report_url)
+                post_pr_comment(config, report_url, counts)
+            except Exception as pub_exc:
+                log.error("Publish failed (non-fatal): %s", _redact(str(pub_exc))[:500])
         elif config.publish and total_run == 0:
             log.warning("Skipping publish: total_tests=%d (no tests collected)", total_run)
 
@@ -1512,7 +1515,8 @@ def run_worker(config: WorkerConfig) -> int:
         return test_exit
     except Exception as exc:
         elapsed = time.monotonic() - wall_t0
-        log.error("Pipeline failed at step: %s (%.1fs elapsed)", _redact(str(exc))[:200], elapsed)
+        import traceback
+        log.error("Pipeline failed at step: %s (%.1fs elapsed)\n%s", _redact(str(exc))[:200], elapsed, traceback.format_exc())
         if elapsed >= MAX_WALL_SECONDS:
             log.error("2h max lifetime exceeded — force-deleting VM")
             stop_inner_vms()
@@ -1527,11 +1531,14 @@ def run_worker(config: WorkerConfig) -> int:
         if syslog_proc and syslog_proc.poll() is None:
             syslog_proc.kill()
         stop_local_mints(local_mints)
+        stop_inner_vms()
         if force_delete:
-            stop_inner_vms()
+            log.info("Force-deleting VM (2h lifetime exceeded)")
             delete_self(config)
+        elif config.keep_vm_on_failure:
+            log.warning("Keeping VM alive for debugging (keep_vm_on_failure=true). "
+                        "Kill switch will shut it down at 2h if still running.")
         else:
-            stop_inner_vms()
             log.info("Self-deleting VM %s", config.vm_name)
             delete_self(config)
 
