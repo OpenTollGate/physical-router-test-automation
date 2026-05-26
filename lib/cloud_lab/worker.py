@@ -1,4 +1,4 @@
-"""Autonomous cloud lab worker — runs on the GCP outer VM."""
+"""Autonomous cloud lab worker — runs on the GCP outer VM or a persistent VPS."""
 
 from __future__ import annotations
 
@@ -67,6 +67,7 @@ class WorkerConfig:
     zone: str
     vm_name: str
     gh_token: str
+    provider: str = "gcp"
 
 
 def _metadata_get(key: str) -> str:
@@ -113,6 +114,45 @@ def load_config_from_metadata() -> WorkerConfig:
     log.info(
         "Artifact: run_id=%s suite_ref=%s reseller=%s secondary=%s",
         cfg.artifact_run_id, cfg.suite_ref[:7], cfg.reseller_scenarios, cfg.secondary_router_host or "(none)",
+    )
+    return cfg
+
+
+def load_config_from_file(path: str) -> WorkerConfig:
+    """Load WorkerConfig from a JSON file (used by VPS provider)."""
+    config_path = Path(path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Worker config file not found: {path}")
+    data = json.loads(config_path.read_text())
+
+    def _bool(val: object) -> bool:
+        if isinstance(val, bool):
+            return val
+        return str(val).lower() in ("true", "1", "yes")
+
+    cfg = WorkerConfig(
+        run_id=data["run_id"],
+        sut_branch=data["sut_branch"],
+        sut_commit=data.get("sut_commit", ""),
+        sut_pr=data.get("sut_pr", ""),
+        artifact_run_id=data["artifact_run_id"],
+        artifact_repo=data["artifact_repo"],
+        suite_ref=data["suite_ref"],
+        backend=data["backend"],
+        reseller_scenarios=_bool(data.get("reseller_scenarios", False)),
+        secondary_router_host=data.get("secondary_router_host", ""),
+        secondary_router_port=data.get("secondary_router_port", ""),
+        keep_vm_on_failure=_bool(data.get("keep_vm_on_failure", False)),
+        publish=_bool(data.get("publish", False)),
+        project=data.get("project", ""),
+        zone=data.get("zone", ""),
+        vm_name=data.get("vm_name", ""),
+        gh_token=data.get("gh_token", ""),
+        provider=data.get("provider", "gcp"),
+    )
+    log.info(
+        "Config (from file): run=%s branch=%s repo=%s backend=%s provider=%s",
+        cfg.run_id, cfg.sut_branch, cfg.artifact_repo, cfg.backend, cfg.provider,
     )
     return cfg
 
@@ -752,6 +792,14 @@ def stop_inner_vms() -> None:
 
 
 def delete_self(config: WorkerConfig) -> None:
+    if config.provider == "vps":
+        log.info("VPS provider: skipping self-delete (persistent host)")
+        _run(
+            "killall -9 qemu-system-x86_64 2>/dev/null || true",
+            timeout=15,
+            check=False,
+        )
+        return
     _run(
         f"gcloud compute instances delete {shlex.quote(config.vm_name)} "
         f"--project={shlex.quote(config.project)} --zone={shlex.quote(config.zone)} "
@@ -835,15 +883,22 @@ def run_worker(config: WorkerConfig) -> int:
         if config.keep_vm_on_failure and test_exit != 0:
             log.error("Keeping VM alive for debugging (keep_vm_on_failure=true)")
         else:
-            log.info("Self-deleting VM %s", config.vm_name)
+            log.info("Self-cleanup for provider=%s vm=%s", config.provider, config.vm_name)
             delete_self(config)
 
 
 def main() -> int:
-    if "--from-metadata" not in sys.argv:
-        print("Usage: python -m lib.cloud_lab.worker --from-metadata", file=sys.stderr)
+    if "--from-metadata" in sys.argv:
+        config = load_config_from_metadata()
+    elif "--from-file" in sys.argv:
+        idx = sys.argv.index("--from-file")
+        if idx + 1 >= len(sys.argv):
+            print("Usage: python -m lib.cloud_lab.worker --from-file <config.json>", file=sys.stderr)
+            return 2
+        config = load_config_from_file(sys.argv[idx + 1])
+    else:
+        print("Usage: python -m lib.cloud_lab.worker --from-metadata | --from-file <config.json>", file=sys.stderr)
         return 2
-    config = load_config_from_metadata()
     return run_worker(config)
 
 
