@@ -37,6 +37,31 @@ from lib.cloud_lab.gcp import (
 from lib.cloud_lab.resolve import resolve_target
 
 
+def _warn_running_vms() -> None:
+    project = get_project()
+    r = subprocess.run(
+        [
+            "gcloud", "compute", "instances", "list",
+            f"--project={project}",
+            "--filter=labels.tollgate_run=true AND status=RUNNING",
+            "--format=json",
+        ],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    if r.returncode != 0 or not r.stdout.strip():
+        return
+    import json
+    instances = json.loads(r.stdout)
+    if not instances:
+        return
+    print(f"\n⚠  {len(instances)} running TollGate VM(s) detected:", file=sys.stderr)
+    for inst in instances:
+        name = inst.get("name", "?")
+        created = inst.get("creationTimestamp", "?")
+        print(f"   - {name} (created {created})", file=sys.stderr)
+    print("   Run 'cleanup-stale' or 'cleanup-all' to delete them.\n", file=sys.stderr)
+
+
 def cmd_up(args: argparse.Namespace) -> int:
     return vm_up(
         cast(str, getattr(args, "vm_name", VM_NAME) or VM_NAME),
@@ -95,6 +120,7 @@ def cmd_ssh(args: argparse.Namespace) -> int:
 
 
 def cmd_submit(args: argparse.Namespace) -> int:
+    _warn_running_vms()
     target = resolve_target(
         pr=cast(str | None, args.pr),
         branch=cast(str | None, args.branch),
@@ -156,6 +182,7 @@ def _wait_for_run(run_id: str, zone: str) -> int:
 
 def cmd_submit_all_mints(args: argparse.Namespace) -> int:
     """Submit 3 parallel runs, one per mint type."""
+    _warn_running_vms()
     mint_types = ["cdk-v2", "nutshell-v2", "nutshell-v1"]
     target = resolve_target(
         pr=cast(str | None, args.pr),

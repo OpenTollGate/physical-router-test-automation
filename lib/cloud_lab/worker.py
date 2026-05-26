@@ -1419,6 +1419,7 @@ def run_worker(config: WorkerConfig) -> int:
     started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     test_exit = 1
     wall_t0 = time.monotonic()
+    MAX_WALL_SECONDS = 7200
     vm_streams: list[tuple[threading.Thread, subprocess.Popen[str], Any]] = []
     local_mints: dict[str, subprocess.Popen[str]] = {}
     syslog_proc: subprocess.Popen[str] | None = None
@@ -1510,15 +1511,25 @@ def run_worker(config: WorkerConfig) -> int:
         )
         return test_exit
     except Exception as exc:
-        log.error("Pipeline failed at step: %s (%.1fs elapsed)", _redact(str(exc))[:200], time.monotonic() - wall_t0)
+        elapsed = time.monotonic() - wall_t0
+        log.error("Pipeline failed at step: %s (%.1fs elapsed)", _redact(str(exc))[:200], elapsed)
+        if elapsed >= MAX_WALL_SECONDS:
+            log.error("2h max lifetime exceeded — force-deleting VM")
+            stop_inner_vms()
+            delete_self(config)
+            return 1
         raise
     finally:
+        elapsed = time.monotonic() - wall_t0
+        force_delete = elapsed >= MAX_WALL_SECONDS
+        if force_delete:
+            log.warning("2h max lifetime reached (%.1fs) — forcing VM deletion regardless of keep_vm_on_failure", elapsed)
         if syslog_proc and syslog_proc.poll() is None:
             syslog_proc.kill()
         stop_local_mints(local_mints)
-        keep_failed_vm = config.keep_vm_on_failure and test_exit != 0
-        if keep_failed_vm:
-            log.error("Keeping VM and inner QEMU VMs alive for debugging (keep_vm_on_failure=true)")
+        if force_delete:
+            stop_inner_vms()
+            delete_self(config)
         else:
             stop_inner_vms()
             log.info("Self-deleting VM %s", config.vm_name)

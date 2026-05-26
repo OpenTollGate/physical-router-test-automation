@@ -278,6 +278,13 @@ def _build_startup_script(suite_overlay_b64: str = "") -> str:
         exec >> /var/log/tollgate-run.log 2>&1
         echo "=== TollGate cloud worker started $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
+        # Hard kill switch: VM self-destructs after 2 hours regardless of test state.
+        # This prevents runaway costs from forgotten --keep-vm-on-failure VMs.
+        # The worker also has its own 2h timeout, but this is the last line of defense.
+        setsid bash -c 'sleep 7200 && echo "2h kill switch triggered" >> /var/log/tollgate-run.log && shutdown -h now "TollGate 2h max lifetime exceeded"' </dev/null >/dev/null 2>&1 &
+        KILL_SWITCH_PID=$!
+        echo "Kill switch armed: PID=$KILL_SWITCH_PID (shutdown in 7200s)"
+
         export HOME="/root"
         export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         export GH_TOKEN=$(curl -sf -H "Metadata-Flavor: Google" \\
