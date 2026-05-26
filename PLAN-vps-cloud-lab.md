@@ -25,60 +25,60 @@ Replace Google Cloud Platform infrastructure with a generic SSH-based VPS provid
 
 ## Files to Create
 
-- [ ] `lib/cloud_lab/provider.py` — Abstract `CloudProvider` base class
-- [ ] `lib/cloud_lab/vps.py` — `VPSProvider` implementation (SSH-based)
-- [ ] `tollgate-infrastructure-kit/ansible/roles/cloud_lab_runner/` — Ansible role to prepare VPS
+- [x] `lib/cloud_lab/provider.py` — Abstract `CloudProvider` base class
+- [x] `lib/cloud_lab/vps.py` — `VPSProvider` implementation (SSH-based)
+- [x] `tollgate-infrastructure-kit/ansible/roles/cloud_lab_runner/` — Ansible role to prepare VPS
 
 ## Files to Modify
 
-- [ ] `lib/cloud_lab/constants.py` — Add VPS-specific constants, keep GCP constants
-- [ ] `lib/cloud_lab/gcp.py` — Refactor into `GCPProvider(CloudProvider)`, keep module-level wrappers
-- [ ] `lib/cloud_lab/worker.py` — Add `load_config_from_file()`, make `delete_self()` provider-aware
-- [ ] `lib/cloud_lab/__init__.py` — Update docstring, export provider classes
-- [ ] `scripts/cloud-lab.py` — Add `--provider gcp|vps` flag, route through provider
-- [ ] `tollgate-infrastructure-kit/ansible/playbooks/setup-all.yml` — Add `cloud_lab_runner` role
+- [x] `lib/cloud_lab/constants.py` — Add VPS-specific constants, keep GCP constants
+- [x] `lib/cloud_lab/gcp.py` — Refactor into `GCPProvider(CloudProvider)`, keep module-level wrappers
+- [x] `lib/cloud_lab/worker.py` — Add `load_config_from_file()`, make `delete_self()` provider-aware
+- [x] `lib/cloud_lab/__init__.py` — Update docstring, export provider classes
+- [x] `scripts/cloud-lab.py` — Add `--provider gcp|vps` flag, route through provider
+- [x] `tollgate-infrastructure-kit/ansible/playbooks/setup-all.yml` — Add `cloud_lab_runner` role
 
 ## Implementation Checklist
 
 ### Phase 1: Provider Abstraction Layer
 
-- [ ] Create `lib/cloud_lab/provider.py` with `CloudProvider` ABC
-- [ ] Refactor `lib/cloud_lab/gcp.py` into `GCPProvider` class (backward-compatible wrappers)
-- [ ] Update `lib/cloud_lab/constants.py` with VPS constants
+- [x] Create `lib/cloud_lab/provider.py` with `CloudProvider` ABC
+- [x] Refactor `lib/cloud_lab/gcp.py` into `GCPProvider` class (backward-compatible wrappers)
+- [x] Update `lib/cloud_lab/constants.py` with VPS constants
 
 ### Phase 2: VPS Provider
 
-- [ ] Create `lib/cloud_lab/vps.py` with `VPSProvider`
-- [ ] Add SSH-based VM lifecycle (up/down/status/ip)
-- [ ] Add `submit_run()` with JSON config + nohup worker
-- [ ] Add lock file mechanism for concurrency control
-- [ ] Add cleanup_stale/cleanup_all
+- [x] Create `lib/cloud_lab/vps.py` with `VPSProvider`
+- [x] Add SSH-based VM lifecycle (up/down/status/ip)
+- [x] Add `submit_run()` with JSON config + nohup worker
+- [x] Add lock file mechanism for concurrency control
+- [x] Add cleanup_stale/cleanup_all
 
 ### Phase 3: Worker Updates
 
-- [ ] Add `load_config_from_file()` to `worker.py`
-- [ ] Make `delete_self()` provider-aware (no-op for VPS)
-- [ ] Update `main()` to support `--from-file` flag
-- [ ] Keep `--from-metadata` for GCP unchanged
+- [x] Add `load_config_from_file()` to `worker.py`
+- [x] Make `delete_self()` provider-aware (no-op for VPS)
+- [x] Update `main()` to support `--from-file` flag
+- [x] Keep `--from-metadata` for GCP unchanged
 
 ### Phase 4: CLI Integration
 
-- [ ] Add `--provider` flag to `scripts/cloud-lab.py`
-- [ ] Route all subcommands through selected provider
-- [ ] Update `lib/cloud_lab/__init__.py`
+- [x] Add `--provider` flag to `scripts/cloud-lab.py`
+- [x] Route all subcommands through selected provider
+- [x] Update `lib/cloud_lab/__init__.py`
 
 ### Phase 5: Ansible Role
 
-- [ ] Create `cloud_lab_runner` Ansible role
-- [ ] Install QEMU/KVM, bridge-utils, python3-venv, sshpass
-- [ ] Download OpenWrt + Debian images
-- [ ] Optionally bake Debian Playwright overlay
-- [ ] Add role to `setup-all.yml`
+- [x] Create `cloud_lab_runner` Ansible role
+- [x] Install QEMU/KVM, bridge-utils, python3-venv, sshpass
+- [x] Download OpenWrt + Debian images
+- [x] Optionally bake Debian Playwright overlay
+- [x] Add role to `setup-all.yml`
 
 ### Phase 6: Testing & Cleanup
 
-- [ ] Run lint/typecheck on all modified files
-- [ ] Verify GCP path still works (no regressions)
+- [x] Run lint/typecheck on all modified files
+- [x] Verify GCP path still works (no regressions)
 - [ ] Test VPS path end-to-end
 
 ## Backward Compatibility Guarantees
