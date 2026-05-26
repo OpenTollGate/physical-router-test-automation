@@ -263,8 +263,39 @@ def collect_runs(reports_dir):
     return runs
 
 
+def parse_version(version_str):
+    """Parse installed_version into structured components.
+
+    Examples:
+        feature-v2-keyset-support.98.f89e109 -> prefix='feature-v2-keyset-support', run=98
+        126-merge.99.161d30b -> prefix='126-merge', run=99
+        main.42.abc1234 -> prefix='main', run=42
+    """
+    if not version_str or version_str == "unknown":
+        return {"raw": version_str or "", "display": version_str or "", "run_number": "", "ci_url": ""}
+
+    parts = version_str.split(".")
+    prefix = parts[0] if parts else ""
+    run_number = parts[1] if len(parts) > 1 else ""
+    commit_part = parts[2] if len(parts) > 2 else ""
+
+    display = version_str
+    if len(parts) == 3:
+        show_prefix = prefix if len(prefix) <= 28 else prefix[:25] + "..."
+        display = "%s · #%s" % (show_prefix, run_number)
+
+    return {
+        "raw": version_str,
+        "display": display,
+        "prefix": prefix,
+        "run_number": run_number,
+        "commit_part": commit_part,
+    }
+
+
 def build_commit_groups(runs):
-    groups = OrderedDict()
+    # Phase 1: Build initial groups by commit hash (same as before)
+    commit_to_runs = OrderedDict()
     for run in runs:
         commit = run.get("commit", "unknown")
         branch = run.get("branch", "")
@@ -277,42 +308,107 @@ def build_commit_groups(runs):
             elif branch and branch != "unknown":
                 fallback = "branch-%s" % branch
             group_key = "unknown:%s" % (fallback or "metadata")
-        if group_key not in groups:
-            meta = run
-            repo = meta.get("repo", "") or DEFAULT_REPO
-            if repo == "unknown":
-                repo = ""
-            branch = meta.get("branch", "")
-            pr = meta.get("pr", "")
-            base_url = repo_base_url(repo)
-            short = meta.get("commit_short", commit[:7])
-            if commit == "unknown" and branch and branch != "unknown":
-                short = branch
-            groups[group_key] = {
-                "commit": commit,
-                "short": short,
-                "branch": branch,
-                "pr": pr if str(pr) not in ("0", "") else "",
-                "commit_url": "%s/commit/%s" % (base_url, commit) if base_url else "",
-                "branch_url": "%s/tree/%s" % (base_url, branch) if base_url and branch else "",
-                "pr_url": "%s/pull/%s" % (base_url, pr) if base_url and str(pr) not in ("0", "") else "",
-                "version": meta.get("installed_version", ""),
-                "build_time": meta.get("build_time", ""),
-                "openwrt_version": meta.get("openwrt_version", ""),
-                "virtual_lab": meta.get("virtual_lab", False),
-                "runs": [],
-            }
-        groups[group_key]["runs"].append(run)
+        if group_key not in commit_to_runs:
+            commit_to_runs[group_key] = []
+        commit_to_runs[group_key].append(run)
 
-        # Track lab types per group
-        if "_lab_type_set" not in groups[group_key]:
-            groups[group_key]["_lab_type_set"] = set()
-        groups[group_key]["_lab_type_set"].add(run.get("lab_type", "") or "unknown")
+    # Phase 2: Merge groups that share the same PR number
+    pr_groups = OrderedDict()
+    non_pr_groups = []
 
-    # Build matrix per group
+    for group_key, group_runs in commit_to_runs.items():
+        pr = ""
+        for r in group_runs:
+            p = r.get("pr", "")
+            if str(p) not in ("0", "", "None"):
+                pr = str(p)
+                break
+        if pr:
+            pr_key = "pr-%s" % pr
+            if pr_key not in pr_groups:
+                pr_groups[pr_key] = []
+            pr_groups[pr_key].append(group_key)
+        else:
+            non_pr_groups.append(group_key)
+
+    merged = OrderedDict()
+    for pr_key, old_keys in pr_groups.items():
+        merged[pr_key] = old_keys
+    for gk in non_pr_groups:
+        merged[gk] = [gk]
+
+    # Phase 3: Build final groups from merged mapping
+    groups = OrderedDict()
+    for new_key, old_keys in merged.items():
+        all_runs = []
+        for ok in old_keys:
+            all_runs.extend(commit_to_runs[ok])
+
+        all_runs.sort(key=lambda r: (
+            0 if r.get("started_at", "") else 1,
+            r.get("started_at", ""),
+        ), reverse=True)
+
+        meta = all_runs[0] if all_runs else {}
+
+        # For PR groups, prefer feature branch metadata over merge commit
+        feature_meta = meta
+        for r in all_runs:
+            b = r.get("branch", "")
+            if b and b not in ("main", "master"):
+                feature_meta = r
+                break
+
+        repo = feature_meta.get("repo", "") or DEFAULT_REPO
+        if repo == "unknown":
+            repo = ""
+        branch = feature_meta.get("branch", "")
+        pr = feature_meta.get("pr", "")
+        commit = feature_meta.get("commit", "unknown")
+        base_url = repo_base_url(repo)
+        short = feature_meta.get("commit_short", commit[:7])
+
+        # Collect all unique commits in this group
+        all_commits = []
+        seen_commits = set()
+        for r in all_runs:
+            c = r.get("commit", "unknown")
+            cs = r.get("commit_short", c[:7])
+            if c not in seen_commits:
+                seen_commits.add(c)
+                all_commits.append({"hash": c, "short": cs})
+
+        if commit == "unknown" and branch and branch != "unknown":
+            short = branch
+
+        version_str = feature_meta.get("installed_version", "")
+        version_info = parse_version(version_str)
+
+        groups[new_key] = {
+            "commit": commit,
+            "short": short,
+            "branch": branch,
+            "pr": pr if str(pr) not in ("0", "") else "",
+            "commit_url": "%s/commit/%s" % (base_url, commit) if base_url else "",
+            "branch_url": "%s/tree/%s" % (base_url, branch) if base_url and branch else "",
+            "pr_url": "%s/pull/%s" % (base_url, pr) if base_url and str(pr) not in ("0", "") else "",
+            "version": version_str,
+            "version_info": version_info,
+            "build_time": feature_meta.get("build_time", ""),
+            "openwrt_version": feature_meta.get("openwrt_version", ""),
+            "virtual_lab": feature_meta.get("virtual_lab", False),
+            "runs": all_runs,
+            "all_commits": all_commits,
+            "_is_pr_group": new_key.startswith("pr-"),
+        }
+
+    # Phase 4: Build matrix per group
     commit_groups = []
-    for group in groups.values():
-        lab_types = sorted(group.pop("_lab_type_set", set()))
+    for new_key, group in groups.items():
+        lab_type_set = set()
+        for run in group["runs"]:
+            lab_type_set.add(run.get("lab_type", "") or "unknown")
+        lab_types = sorted(lab_type_set)
         group["lab_types"] = lab_types
         if len(lab_types) > 1:
             group["lab_type"] = "mixed"
@@ -346,11 +442,42 @@ def build_commit_groups(runs):
         ordered_labs = [l for l in LAB_ORDER if l in seen_labs]
         ordered_labs.extend(sorted(seen_labs - set(LAB_ORDER)))
 
+        # Compute aggregate stats
+        total_passed = sum(r.get("counts", {}).get("passed", 0) for r in group["runs"])
+        total_failed = sum(r.get("counts", {}).get("failed", 0) + r.get("counts", {}).get("errors", 0) for r in group["runs"])
+        total_skipped = sum(r.get("counts", {}).get("skipped", 0) for r in group["runs"])
+
+        latest_ts = ""
+        for r in group["runs"]:
+            ts = r.get("started_at", "")
+            if ts and ts > latest_ts:
+                latest_ts = ts
+
         group["matrix"] = matrix
         group["tiers"] = ordered_tiers
         group["labs"] = ordered_labs
+        group["stats"] = {
+            "passed": total_passed,
+            "failed": total_failed,
+            "skipped": total_skipped,
+            "any_failed": total_failed > 0,
+        }
+        group["_latest_ts"] = latest_ts
 
         commit_groups.append(group)
+
+    # Phase 5: Sort groups — PR groups first (by latest run desc), then non-PR groups
+    def sort_key(g):
+        is_pr = 0 if g.get("_is_pr_group") else 1
+        ts = g.get("_latest_ts", "") or ""
+        return (is_pr, ts)
+
+    commit_groups.sort(key=sort_key)
+
+    # Clean up internal keys
+    for g in commit_groups:
+        g.pop("_is_pr_group", None)
+        g.pop("_latest_ts", None)
 
     return commit_groups
 
@@ -399,6 +526,21 @@ def main():
     if not last_updated:
         last_updated = "N/A"
 
+    unique_prs = sorted(set(
+        str(r.get("pr", ""))
+        for r in runs
+        if str(r.get("pr", "")) not in ("0", "", "None")
+    ))
+    unique_branches = sorted(set(
+        r.get("branch", "")
+        for r in runs
+        if r.get("branch", "") and r.get("branch", "") != "unknown"
+    ))
+    unique_statuses = sorted(set(
+        badge_status(r)
+        for r in runs
+    ))
+
     rendered = template.render(
         last_updated=last_updated,
         total_runs=total_runs,
@@ -406,6 +548,9 @@ def main():
         commit_groups=commit_groups,
         lab_display=LAB_DISPLAY,
         lab_dot_color=LAB_DOT_COLOR,
+        filter_prs=unique_prs,
+        filter_branches=unique_branches,
+        filter_statuses=unique_statuses,
     )
 
     output_path = Path(args.output)

@@ -7,93 +7,159 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:#f0f2f5;color:#1a1a2e;line-height:1.5}
-.header{background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);color:#fff;padding:1.5rem 2rem;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.2)}
-.header h1{font-size:1.5rem;font-weight:600;letter-spacing:.5px}
-.header .updated{font-size:.85rem;opacity:.8}
-.container{max-width:1400px;margin:2rem auto;padding:0 1rem}
-.summary{display:flex;gap:1rem;margin-bottom:1rem;flex-wrap:wrap}
-.summary-card{background:#fff;border-radius:8px;padding:1rem 1.5rem;flex:1;min-width:160px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
-.summary-card .label{font-size:.8rem;text-transform:uppercase;letter-spacing:.5px;color:#666;margin-bottom:.25rem}
-.summary-card .value{font-size:1.75rem;font-weight:700;color:#1a1a2e}
-.filter-banner{display:none;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:8px;padding:.8rem 1rem;margin-bottom:1rem;box-shadow:0 1px 3px rgba(0,0,0,.05)}
-.filter-banner.show{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
-.filter-banner a{color:#c2410c;font-weight:600;text-decoration:none}
-.filter-banner a:hover{text-decoration:underline}
-.commit-group{background:#fff;border-radius:8px;margin-bottom:1.5rem;box-shadow:0 1px 3px rgba(0,0,0,.08);overflow:hidden}
-.commit-header{padding:1rem 1.5rem;border-bottom:1px solid #eee;display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
-.commit-header .hash{font-family:"SF Mono",SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace;font-size:1rem;font-weight:600}
-.commit-header .hash a{color:#302b63;text-decoration:none}
-.commit-header .hash a:hover{text-decoration:underline}
-.badge{display:inline-block;font-size:.75rem;font-weight:500;padding:2px 8px;border-radius:12px;vertical-align:middle}
-.badge-branch{background:#e8f0fe;color:#1a73e8;text-decoration:none}
-.badge-branch:hover{background:#d2e3fc}
-.badge-pr{background:#e6f4ea;color:#137333;text-decoration:none}
-.badge-pr:hover{background:#ceead6}
-.badge-passed{background:#e6f4ea;color:#137333}
-.badge-failed{background:#fce8e8;color:#d93025}
-.badge-errored{background:#fce8e8;color:#d93025}
-.badge-partial{background:#fce8b2;color:#b06000}
-.badge-version{background:#f1f3f4;color:#5f6368}
-.badge-vlab{background:#f3e8fd;color:#6a1b9a}
-.badge-scope{background:#eef2ff;color:#4338ca}
-.badge-lab{background:#eff6ff;color:#1d4ed8}
+:root{
+  --bg:#0b0d11;
+  --surface:#14171e;
+  --surface-2:#1c2029;
+  --surface-3:#252a35;
+  --border:#2a2f3a;
+  --text:#e4e6eb;
+  --text-2:#9ba1b0;
+  --text-3:#6b7280;
+  --accent:#6d5dfc;
+  --accent-soft:rgba(109,93,252,.12);
+  --green:#22c55e;
+  --green-soft:rgba(34,197,94,.1);
+  --green-text:#4ade80;
+  --red:#ef4444;
+  --red-soft:rgba(239,68,68,.1);
+  --red-text:#f87171;
+  --amber:#f59e0b;
+  --amber-soft:rgba(245,158,11,.1);
+  --blue:#3b82f6;
+  --blue-soft:rgba(59,130,246,.1);
+  --mono:"SF Mono",SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace;
+  --sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --radius:10px;
+  --radius-sm:6px;
+  --shadow:0 1px 3px rgba(0,0,0,.3),0 4px 12px rgba(0,0,0,.15);
+}
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:400;src:local('DM Sans'),url('data:font/woff2;base64,') format('woff2')}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);line-height:1.6;-webkit-font-smoothing:antialiased}
+
+.header{background:var(--surface);border-bottom:1px solid var(--border);padding:1.25rem 2rem;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;backdrop-filter:blur(12px)}
+.header h1{font-size:1.15rem;font-weight:600;letter-spacing:-.01em;display:flex;align-items:center;gap:.6rem}
+.header h1 .logo{font-size:1.3rem}
+.header .updated{font-size:.78rem;color:var(--text-3);font-variant-numeric:tabular-nums}
+
+.container{max-width:1440px;margin:0 auto;padding:1rem 1.5rem 3rem}
+
+.summary{display:flex;gap:.75rem;margin-bottom:1.25rem;flex-wrap:wrap}
+.summary-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:.85rem 1.2rem;flex:1;min-width:140px}
+.summary-card .label{font-size:.7rem;text-transform:uppercase;letter-spacing:.8px;color:var(--text-3);margin-bottom:.15rem}
+.summary-card .value{font-size:1.5rem;font-weight:700;font-variant-numeric:tabular-nums}
+
+.filter-bar{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem 1.25rem;margin-bottom:1.25rem;display:flex;flex-direction:column;gap:.85rem}
+.filter-row{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+.filter-row .filter-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.8px;color:var(--text-3);min-width:48px;flex-shrink:0}
+.search-box{position:relative;flex:0 1 280px}
+.search-box input{width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.45rem .7rem .45rem 2rem;color:var(--text);font-size:.82rem;font-family:var(--sans);outline:none;transition:border-color .15s}
+.search-box input:focus{border-color:var(--accent)}
+.search-box input::placeholder{color:var(--text-3)}
+.search-box svg{position:absolute;left:.65rem;top:50%;transform:translateY(-50%);color:var(--text-3);pointer-events:none}
+.filter-pill{display:inline-flex;align-items:center;gap:.3rem;font-size:.75rem;font-weight:500;padding:.3rem .65rem;border-radius:20px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text-2);transition:all .15s;user-select:none;white-space:nowrap}
+.filter-pill:hover{border-color:var(--text-3);color:var(--text)}
+.filter-pill.active{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.filter-pill.active-green{background:var(--green-soft);border-color:var(--green);color:var(--green-text)}
+.filter-pill.active-red{background:var(--red-soft);border-color:var(--red);color:var(--red-text)}
+.filter-clear{font-size:.75rem;color:var(--accent);cursor:pointer;background:none;border:none;padding:.3rem .5rem;font-family:var(--sans);font-weight:500}
+.filter-clear:hover{text-decoration:underline}
+.filter-active-banner{display:none;background:var(--accent-soft);border:1px solid rgba(109,93,252,.25);border-radius:var(--radius-sm);padding:.55rem .9rem;margin-bottom:1rem;font-size:.82rem;color:var(--accent);align-items:center;justify-content:space-between;gap:1rem}
+.filter-active-banner.show{display:flex}
+
+.commit-group{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:1rem;overflow:hidden;transition:opacity .25s,transform .25s}
+.commit-group.hidden{display:none}
+.commit-group.fade-out{opacity:0;transform:translateY(-8px)}
+
+.commit-header{padding:1rem 1.5rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
+.commit-header .hash{font-family:var(--mono);font-size:.92rem;font-weight:600}
+.commit-header .hash a{color:var(--text);text-decoration:none;transition:color .15s}
+.commit-header .hash a:hover{color:var(--accent)}
+.badge{display:inline-flex;align-items:center;gap:.25rem;font-size:.7rem;font-weight:500;padding:2px 8px;border-radius:12px;vertical-align:middle;white-space:nowrap}
+.badge-branch{background:var(--blue-soft);color:var(--blue);text-decoration:none;transition:background .15s}
+.badge-branch:hover{background:rgba(59,130,246,.2)}
+.badge-pr{background:var(--green-soft);color:var(--green-text);text-decoration:none;transition:background .15s}
+.badge-pr:hover{background:rgba(34,197,94,.2)}
+.badge-passed{background:var(--green-soft);color:var(--green-text)}
+.badge-failed{background:var(--red-soft);color:var(--red-text)}
+.badge-errored{background:var(--red-soft);color:var(--red-text)}
+.badge-partial{background:var(--amber-soft);color:var(--amber)}
+.badge-vlab{background:rgba(139,92,246,.1);color:#a78bfa}
+.badge-scope{background:rgba(99,102,241,.1);color:#818cf8}
+.badge-lab{background:var(--blue-soft);color:var(--blue)}
+.badge-version{background:var(--surface-3);color:var(--text-2);font-family:var(--mono);font-size:.65rem;letter-spacing:.02em;max-width:260px;overflow:hidden;text-overflow:ellipsis}
+.badge-version .build-icon{opacity:.6;margin-right:2px;font-size:.6rem}
+.commits-list{display:flex;gap:.35rem;flex-wrap:wrap}
+.commits-list .mini-commit{font-family:var(--mono);font-size:.65rem;padding:1px 5px;background:var(--surface-3);border-radius:4px;color:var(--text-3)}
+
 .matrix-wrap{padding:1rem 1.5rem 1.25rem}
-.matrix-table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden}
-.matrix-table th,.matrix-table td{border-right:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb;vertical-align:top}
+.matrix-table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.matrix-table th,.matrix-table td{border-right:1px solid var(--border);border-bottom:1px solid var(--border);vertical-align:top}
 .matrix-table tr:last-child td{border-bottom:none}
 .matrix-table tr:last-child th{border-bottom:none}
 .matrix-table th:last-child,.matrix-table td:last-child{border-right:none}
-.matrix-table thead th{background:#f8fafc;color:#475569;font-size:.75rem;text-transform:uppercase;letter-spacing:.5px;padding:.8rem;text-align:left}
-.matrix-table .row-label{width:220px;background:#fafbfc;padding:.85rem .9rem;font-size:.9rem;font-weight:600;color:#1f2937}
-.lab-label{display:flex;align-items:center;gap:.6rem}
-.lab-dot{width:10px;height:10px;border-radius:50%;flex:0 0 10px}
-.matrix-cell{padding:.8rem;min-height:110px}
-.cell-passed{background:#f0fdf4}
-.cell-failed{background:#fef2f2}
-.cell-empty{background:#f9fafb;color:#9ca3af;text-align:center;font-size:1.1rem;vertical-align:middle}
-.cell-status{display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.45rem;flex-wrap:wrap}
-.cell-counts{font-variant-numeric:tabular-nums;font-weight:600;font-size:.95rem}
-.cell-counts .pass{color:#137333}
-.cell-counts .fail{color:#d93025}
-.cell-counts .skip{color:#6b7280}
-.cell-meta{display:flex;gap:.5rem;flex-wrap:wrap;font-size:.78rem;color:#475569;margin-bottom:.45rem}
-.cell-link a{color:#1a73e8;text-decoration:none;font-weight:600;font-size:.85rem}
-.cell-link a:hover{text-decoration:underline}
-.runs-details{border-top:1px solid #eee;background:#fcfcfd}
-.runs-details summary{list-style:none;cursor:pointer;padding:.9rem 1.5rem;font-weight:600;color:#374151}
+.matrix-table thead th{background:var(--surface-2);color:var(--text-3);font-size:.7rem;text-transform:uppercase;letter-spacing:.6px;padding:.7rem;text-align:left;font-weight:600}
+.matrix-table .row-label{width:200px;background:var(--surface-2);padding:.75rem .85rem;font-size:.85rem;font-weight:600;color:var(--text)}
+.lab-label{display:flex;align-items:center;gap:.55rem}
+.lab-dot{width:8px;height:8px;border-radius:50%;flex:0 0 8px}
+.matrix-cell{padding:.7rem;min-height:100px}
+.cell-passed{background:rgba(34,197,94,.04)}
+.cell-failed{background:rgba(239,68,68,.04)}
+.cell-empty{background:var(--surface-2);color:var(--text-3);text-align:center;font-size:1rem;vertical-align:middle}
+.cell-status{display:flex;align-items:center;justify-content:space-between;gap:.4rem;margin-bottom:.4rem;flex-wrap:wrap}
+.cell-counts{font-variant-numeric:tabular-nums;font-weight:600;font-size:.88rem}
+.cell-counts .pass{color:var(--green-text)}
+.cell-counts .fail{color:var(--red-text)}
+.cell-counts .skip{color:var(--text-3)}
+.cell-meta{display:flex;gap:.45rem;flex-wrap:wrap;font-size:.72rem;color:var(--text-3);margin-bottom:.4rem}
+.cell-link a{color:var(--accent);text-decoration:none;font-weight:600;font-size:.8rem;transition:opacity .15s}
+.cell-link a:hover{opacity:.8}
+
+.runs-details{border-top:1px solid var(--border);background:var(--surface-2)}
+.runs-details summary{list-style:none;cursor:pointer;padding:.8rem 1.5rem;font-weight:500;color:var(--text-2);display:flex;align-items:center;gap:.65rem;transition:background .15s;font-size:.85rem}
 .runs-details summary::-webkit-details-marker{display:none}
-.runs-details summary:hover{background:#f8fafc}
-.run-header{display:grid;grid-template-columns:155px 70px 80px 60px 180px 70px 1fr 55px 55px;padding:.5rem 1.5rem;background:#fafbfc;font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#666;border-top:1px solid #eee;border-bottom:1px solid #eee;gap:.5rem}
-.runs{padding:.25rem 0}
-.run-row{display:grid;grid-template-columns:155px 70px 80px 60px 180px 70px 1fr 55px 55px;align-items:center;padding:.65rem 1.5rem;border-bottom:1px solid #f5f5f5;font-size:.875rem;gap:.5rem}
+.runs-details summary:hover{background:rgba(255,255,255,.02)}
+.chevron{display:inline-flex;transition:transform .2s ease}
+.runs-details[open] .chevron{transform:rotate(90deg)}
+.runs-summary-stats{display:inline-flex;gap:.5rem;font-size:.72rem;margin-left:.35rem}
+.runs-summary-stats .stat{font-variant-numeric:tabular-nums}
+.runs-summary-stats .stat-pass{color:var(--green-text)}
+.runs-summary-stats .stat-fail{color:var(--red-text)}
+.runs-summary-stats .stat-skip{color:var(--text-3)}
+.run-header{display:grid;grid-template-columns:155px 70px 80px 60px 180px 70px 1fr 55px 55px;padding:.45rem 1.5rem;font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);border-top:1px solid var(--border);border-bottom:1px solid var(--border);gap:.5rem}
+.runs{padding:.2rem 0}
+.run-row{display:grid;grid-template-columns:155px 70px 80px 60px 180px 70px 1fr 55px 55px;align-items:center;padding:.55rem 1.5rem;border-bottom:1px solid rgba(42,47,58,.5);font-size:.82rem;gap:.5rem}
 .run-row:last-child{border-bottom:none}
-.run-row:hover{background:#fafbfc}
-.run-time{color:#555;font-variant-numeric:tabular-nums}
-.run-plan{font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.3px;background:#fce8b2;color:#b06000;padding:2px 6px;border-radius:4px;text-align:center}
-.run-router,.run-client{color:#444;font-family:"SF Mono",SFMono-Regular,Consolas,monospace;font-size:.75rem;white-space:nowrap;min-width:0;max-width:180px;overflow:hidden;text-overflow:ellipsis;display:block}
-.runner-summary{font-size:.8rem;color:#555}
-.runner-summary .rname{font-weight:600;color:#333}
+.run-row:hover{background:rgba(255,255,255,.02)}
+.run-time{color:var(--text-2);font-variant-numeric:tabular-nums;font-size:.78rem}
+.run-plan{font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.3px;background:var(--amber-soft);color:var(--amber);padding:2px 6px;border-radius:4px;text-align:center}
+.run-router,.run-client{color:var(--text-2);font-family:var(--mono);font-size:.72rem;white-space:nowrap;min-width:0;max-width:180px;overflow:hidden;text-overflow:ellipsis;display:block}
+.runner-summary{font-size:.78rem;color:var(--text-2)}
+.runner-summary .rname{font-weight:600;color:var(--text)}
 .runner-summary .rcount{font-variant-numeric:tabular-nums}
-.runner-summary .rp{color:#137333}
-.runner-summary .rf{color:#d93025}
-.runner-summary .rs{color:#80868b}
-.run-dur{font-variant-numeric:tabular-nums;color:#555;font-size:.8rem}
-.run-link a{color:#1a73e8;text-decoration:none;font-weight:500;font-size:.8rem}
+.runner-summary .rp{color:var(--green-text)}
+.runner-summary .rf{color:var(--red-text)}
+.runner-summary .rs{color:var(--text-3)}
+.run-dur{font-variant-numeric:tabular-nums;color:var(--text-2);font-size:.78rem}
+.run-link a{color:var(--accent);text-decoration:none;font-weight:500;font-size:.78rem}
 .run-link a:hover{text-decoration:underline}
-.empty{padding:3rem;text-align:center;color:#888;font-size:1rem}
-@media (max-width: 960px){
-  .header{padding:1.25rem;align-items:flex-start;flex-direction:column;gap:.4rem}
+.empty{padding:3rem;text-align:center;color:var(--text-3);font-size:.95rem}
+
+@media(max-width:960px){
+  .header{padding:1rem;align-items:flex-start;flex-direction:column;gap:.4rem}
+  .container{padding:1rem .75rem 2rem}
+  .filter-row{gap:.4rem}
+  .search-box{flex:1 1 100%}
   .matrix-wrap{overflow-x:auto}
-  .matrix-table{min-width:760px}
-  .run-header,.run-row{min-width:930px}
+  .matrix-table{min-width:700px}
+  .run-header,.run-row{min-width:880px}
   .runs-details{overflow-x:auto}
 }
 </style>
 </head>
 <body>
 <div class="header">
-<h1>TollGate Test Reports</h1>
+<h1><span class="logo">📡</span> TollGate Test Reports</h1>
 <div class="updated">Last updated: [[ last_updated ]]</div>
 </div>
 <div class="container">
@@ -101,23 +167,77 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
 <div class="summary-card"><div class="label">Total Runs</div><div class="value">[[ total_runs ]]</div></div>
 <div class="summary-card"><div class="label">Commits Tested</div><div class="value">[[ total_commits ]]</div></div>
 </div>
-<div class="filter-banner" id="filter-banner">
-  <span>Showing only lab: <strong id="filter-lab-name"></strong></span>
-  <a href="./" id="clear-filter-link">Clear filter</a>
+
+[% if filter_prs or filter_branches or filter_statuses %]
+<div class="filter-bar" id="filter-bar">
+  <div class="filter-row">
+    <div class="search-box">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+      <input type="text" id="search-input" placeholder="Search commits, branches, PRs..." autocomplete="off">
+    </div>
+    [% if filter_statuses %]
+    <span class="filter-label">Status</span>
+    [% for s in filter_statuses %]
+    <button class="filter-pill" data-filter="status" data-value="[[ s ]]" onclick="toggleFilter(this)">[[ s ]]</button>
+    [% endfor %]
+    [% endif %]
+  </div>
+  <div class="filter-row">
+    [% if filter_prs %]
+    <span class="filter-label">PRs</span>
+    [% for p in filter_prs %]
+    <button class="filter-pill" data-filter="pr" data-value="[[ p ]]" onclick="toggleFilter(this)">#[[ p ]]</button>
+    [% endfor %]
+    [% endif %]
+  </div>
+  <div class="filter-row">
+    [% if filter_branches %]
+    <span class="filter-label">Branches</span>
+    [% for b in filter_branches %]
+    <button class="filter-pill" data-filter="branch" data-value="[[ b ]]" onclick="toggleFilter(this)">[[ b ]]</button>
+    [% endfor %]
+    [% endif %]
+    <button class="filter-clear" id="clear-filters" onclick="clearAllFilters()" style="margin-left:auto;display:none">Clear all</button>
+  </div>
 </div>
+<div class="filter-active-banner" id="filter-active-banner">
+  <span id="filter-active-text">Filters active</span>
+  <button class="filter-clear" onclick="clearAllFilters()">Clear all</button>
+</div>
+[% endif %]
+
+<div class="filter-active-banner" id="lab-banner">
+  <span>Showing only lab: <strong id="filter-lab-name"></strong></span>
+  <a href="./" style="color:var(--accent);font-weight:600;text-decoration:none;font-size:.82rem">Clear filter</a>
+</div>
+
 [% if not commit_groups %]
 <div class="empty">No test reports found.</div>
 [% else %]
 [% for group in commit_groups %]
-<div class="commit-group" data-labs="[[ group.lab_types|join(' ') ]]">
+<div class="commit-group"
+     data-labs="[[ group.lab_types|join(' ') ]]"
+     data-pr="[[ group.pr ]]"
+     data-branch="[[ group.branch ]]"
+     data-status="[% if group.stats.any_failed %]failed[% else %]passed[% endif %]"
+     data-search-text="[[ group.short ]] [[ group.branch ]] #[[ group.pr ]] [[ group.version ]] [% for c in group.all_commits %][[ c.short ]] [[ c.hash ]][% endfor %]">
   <div class="commit-header">
   [% if group.commit and group.commit != 'unknown' and group.commit_url %]
     <span class="hash"><a href="[[ group.commit_url ]]">[[ group.short ]]</a></span>
   [% else %]
     <span class="hash">[[ group.short ]]</span>
   [% endif %]
+  [% if group.all_commits|length > 1 %]
+    <span class="commits-list">
+    [% for c in group.all_commits %]
+      <span class="mini-commit">[[ c.short ]]</span>
+    [% endfor %]
+    </span>
+  [% endif %]
   [% if group.version and group.version != 'unknown' %]
-    <span class="badge badge-version" title="OpenWrt: [[ group.openwrt_version ]] | Built: [[ group.build_time ]]">[[ group.version ]]</span>
+    <span class="badge badge-version" title="Build: [[ group.version_info.raw ]]\nOpenWrt: [[ group.openwrt_version ]]\nBuilt: [[ group.build_time ]]">
+      <span class="build-icon">⬡</span>[[ group.version_info.display ]]
+    </span>
   [% endif %]
   [% if group.branch and group.branch != 'unknown' %]
     <a class="badge badge-branch" href="[[ group.branch_url ]]">[[ group.branch ]]</a>
@@ -155,14 +275,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
           <td class="matrix-cell [% if cell.badge_status == 'passed' %]cell-passed[% else %]cell-failed[% endif %]">
             <div class="cell-status">
               <span class="badge badge-[[ cell.badge_status ]]">[[ cell.badge_status ]]</span>
-              <span class="cell-counts"><span class="pass">[[ get(cell, 'counts.passed', 0) ]] passed</span> · <span class="fail">[[ get(cell, 'counts.failed', 0) + get(cell, 'counts.errors', 0) ]] failed</span> · <span class="skip">[[ get(cell, 'counts.skipped', 0) ]] skipped</span></span>
+              <span class="cell-counts"><span class="pass">[[ get(cell, 'counts.passed', 0) ]]✓</span> <span class="fail">[[ get(cell, 'counts.failed', 0) + get(cell, 'counts.errors', 0) ]]✗</span> <span class="skip">[[ get(cell, 'counts.skipped', 0) ]]○</span></span>
             </div>
             <div class="cell-meta">
               [% if cell.scope %]<span class="badge badge-scope">[[ cell.scope ]]</span>[% endif %]
               <span>[[ cell.duration_ms|format_duration ]]</span>
               [% if cell.started_at %]<span>[[ cell.started_at|format_ts ]]</span>[% endif %]
             </div>
-            <div class="cell-link"><a href="[[ cell.report_path ]]">View report</a></div>
+            <div class="cell-link"><a href="[[ cell.report_path ]]">View report →</a></div>
           </td>
           [% else %]
           <td class="matrix-cell cell-empty">&mdash;</td>
@@ -175,7 +295,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
   </div>
 
   <details class="runs-details">
-    <summary>All runs ([[ group.runs|length ]])</summary>
+    <summary>
+      <span class="chevron">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+      </span>
+      All runs ([[ group.runs|length ]])
+      <span class="runs-summary-stats">
+        <span class="stat stat-pass">[[ group.stats.passed ]]✓</span>
+        <span class="stat stat-fail">[[ group.stats.failed ]]✗</span>
+        <span class="stat stat-skip">[[ group.stats.skipped ]]○</span>
+      </span>
+    </summary>
     <div class="run-header">
       <span>Timestamp</span>
       <span>Plan</span>
@@ -210,38 +340,170 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica N
 <script>
 (() => {
   const params = new URLSearchParams(window.location.search);
-  const lab = params.get('lab');
   const groups = document.querySelectorAll('.commit-group');
-  const banner = document.getElementById('filter-banner');
-  const label = document.getElementById('filter-lab-name');
-  const clearLink = document.getElementById('clear-filter-link');
+  const labBanner = document.getElementById('lab-banner');
+  const labLabel = document.getElementById('filter-lab-name');
+  const searchInput = document.getElementById('search-input');
+  const clearBtn = document.getElementById('clear-filters');
+  const filterBanner = document.getElementById('filter-active-banner');
+  const filterText = document.getElementById('filter-active-text');
   const container = document.querySelector('.container');
-  const empty = document.createElement('div');
-  let visible = 0;
-  if(!lab){
-    return;
-  }
-  groups.forEach((group) => {
-    const labs = (group.getAttribute('data-labs') || '').split(/\s+/).filter(Boolean);
-    const match = labs.indexOf(lab) !== -1;
-    group.style.display = match ? '' : 'none';
-    if(match){
-      visible += 1;
+
+  const state = {
+    status: new Set(),
+    pr: new Set(),
+    branch: new Set(),
+    search: '',
+    lab: params.get('lab') || ''
+  };
+
+  function applyFilters() {
+    let visible = 0;
+    let activeCount = state.status.size + state.pr.size + state.branch.size + (state.search ? 1 : 0);
+
+    groups.forEach(group => {
+      let show = true;
+
+      if (state.lab) {
+        const labs = (group.getAttribute('data-labs') || '').split(/\s+/).filter(Boolean);
+        if (labs.indexOf(state.lab) === -1) show = false;
+      }
+
+      if (show && state.status.size > 0) {
+        const s = group.getAttribute('data-status') || '';
+        if (!state.status.has(s)) show = false;
+      }
+
+      if (show && state.pr.size > 0) {
+        const p = group.getAttribute('data-pr') || '';
+        if (!state.pr.has(p)) show = false;
+      }
+
+      if (show && state.branch.size > 0) {
+        const b = group.getAttribute('data-branch') || '';
+        if (!state.branch.has(b)) show = false;
+      }
+
+      if (show && state.search) {
+        const text = (group.getAttribute('data-search-text') || '').toLowerCase();
+        if (text.indexOf(state.search.toLowerCase()) === -1) show = false;
+      }
+
+      group.classList.toggle('hidden', !show);
+      if (show) visible++;
+    });
+
+    if (clearBtn) clearBtn.style.display = activeCount > 0 ? '' : 'none';
+    if (filterBanner) {
+      if (activeCount > 0) {
+        filterBanner.classList.add('show');
+        const parts = [];
+        if (state.status.size) parts.push([...state.status].join(', '));
+        if (state.pr.size) parts.push([...state.pr].map(p => '#' + p).join(', '));
+        if (state.branch.size) parts.push([...state.branch].join(', '));
+        if (state.search) parts.push('"' + state.search + '"');
+        filterText.textContent = 'Showing ' + visible + ' of ' + groups.length + ' groups — ' + parts.join(' · ');
+      } else {
+        filterBanner.classList.remove('show');
+      }
     }
+
+    updateURL();
+  }
+
+  function updateURL() {
+    const p = new URLSearchParams();
+    if (state.lab) p.set('lab', state.lab);
+    if (state.status.size) for (const s of state.status) p.append('status', s);
+    if (state.pr.size) for (const v of state.pr) p.append('pr', v);
+    if (state.branch.size) for (const v of state.branch) p.append('branch', v);
+    if (state.search) p.set('q', state.search);
+    const qs = p.toString();
+    const url = window.location.pathname + (qs ? '?' + qs : '');
+    history.replaceState(null, '', url);
+  }
+
+  window.toggleFilter = function(el) {
+    const type = el.getAttribute('data-filter');
+    const value = el.getAttribute('data-value');
+    const set = state[type];
+    if (!set) return;
+
+    if (set.has(value)) {
+      set.delete(value);
+      el.classList.remove('active');
+      el.classList.remove('active-green');
+      el.classList.remove('active-red');
+    } else {
+      set.add(value);
+      if (type === 'status' && value === 'passed') el.classList.add('active-green');
+      else if (type === 'status' && value === 'failed') el.classList.add('active-red');
+      else el.classList.add('active');
+    }
+    applyFilters();
+  };
+
+  window.clearAllFilters = function() {
+    state.status.clear();
+    state.pr.clear();
+    state.branch.clear();
+    state.search = '';
+    if (searchInput) searchInput.value = '';
+    document.querySelectorAll('.filter-pill').forEach(p => {
+      p.classList.remove('active', 'active-green', 'active-red');
+    });
+    applyFilters();
+  };
+
+  if (searchInput) {
+    let debounce;
+    searchInput.addEventListener('input', () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        state.search = searchInput.value.trim();
+        applyFilters();
+      }, 200);
+    });
+  }
+
+  // Restore from URL params
+  params.getAll('status').forEach(s => {
+    state.status.add(s);
+    const pill = document.querySelector('.filter-pill[data-filter="status"][data-value="' + s + '"]');
+    if (pill) pill.classList.add('active-green');
   });
-  if(label){
-    label.textContent = lab;
+  params.getAll('pr').forEach(p => {
+    state.pr.add(p);
+    const pill = document.querySelector('.filter-pill[data-filter="pr"][data-value="' + p + '"]');
+    if (pill) pill.classList.add('active');
+  });
+  params.getAll('branch').forEach(b => {
+    state.branch.add(b);
+    const pill = document.querySelector('.filter-pill[data-filter="branch"][data-value="' + CSS.escape(b) + '"]');
+    if (pill) pill.classList.add('active');
+  });
+  if (params.get('q') && searchInput) {
+    state.search = params.get('q');
+    searchInput.value = state.search;
   }
-  if(clearLink){
-    clearLink.href = window.location.pathname;
+
+  // Lab filter (preserved)
+  if (state.lab && labBanner && labLabel) {
+    labLabel.textContent = state.lab;
+    labBanner.classList.add('show');
   }
-  if(banner){
-    banner.classList.add('show');
-  }
-  if(!visible){
-    empty.className = 'empty';
-    empty.textContent = 'No commit groups match the selected lab filter.';
-    container.appendChild(empty);
+
+  applyFilters();
+
+  if (state.lab) {
+    let visible = 0;
+    groups.forEach(g => { if (!g.classList.contains('hidden')) visible++; });
+    if (!visible) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No commit groups match the selected filters.';
+      container.appendChild(empty);
+    }
   }
 })();
 </script>
