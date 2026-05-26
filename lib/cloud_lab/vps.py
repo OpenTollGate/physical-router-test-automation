@@ -210,14 +210,12 @@ class VPSProvider(CloudProvider):
 
         worker_cmd = (
             f"echo '{run_id}' > {VPS_RUN_LOCK} && "
-            "set -a && "
-            f"export GH_TOKEN=$({shlex.quote(token)} 2>/dev/null || echo '') && "
-            "set +a && "
+            f"export GH_TOKEN={shlex.quote(token)} && "
             "cd /opt/tollgate-test && "
             "if [ ! -d .git ]; then "
             f"git clone --depth 50 https://github.com/{SUITE_REPO}.git .; "
             "fi && "
-            f"git fetch --depth 1 origin && git checkout {shlex.quote(suite_ref)} && "
+            f"git fetch origin && git checkout {shlex.quote(suite_ref)} || git checkout main && "
             f"{overlay_setup}"
             "if [ -d /opt/tollgate-venv ]; then "
             "/opt/tollgate-venv/bin/pip install -q -r requirements.txt 2>/dev/null || true; "
@@ -235,7 +233,7 @@ class VPSProvider(CloudProvider):
         print(f"Starting worker on VPS (run_id={run_id})...")
         nohup_cmd = (
             f"nohup bash -c {shlex.quote(worker_cmd)} "
-            f"> /dev/null 2>&1 & echo $!"
+            f">> /var/log/tollgate-run.log 2>&1 & echo $!"
         )
         r = _ssh(nohup_cmd, timeout=30, check=False)
         if r.returncode != 0:
