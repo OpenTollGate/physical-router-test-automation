@@ -79,7 +79,26 @@ Replace Google Cloud Platform infrastructure with a generic SSH-based VPS provid
 
 - [x] Run lint/typecheck on all modified files
 - [x] Verify GCP path still works (no regressions)
-- [ ] Test VPS path end-to-end
+- [x] Test VPS path end-to-end (pipeline runs, overlay applies, QEMU launches)
+- [x] Identified: VPS requires KVM support — software emulation too slow for OpenWrt boot
+
+## Bugs Found and Fixed During Testing
+
+1. **GH_TOKEN export bug**: Was using command substitution `$(token)` instead of literal value. Fixed in `vps.py`.
+2. **Log redirection**: nohup was redirecting to `/dev/null`. Fixed to redirect to `/var/log/tollgate-run.log`.
+3. **Suite overlay**: VPS couldn't reach local commit SHAs. Added `_build_suite_overlay()` to always upload cloud_lab module files.
+4. **KVM flag**: Worker hardcoded `-enable-kvm`. Made conditional on `/dev/kvm` existence.
+5. **Boot timeout**: Software emulation needs 300s+ for OpenWrt serial boot. Increased from 90s to 300s.
+6. **Syntax error**: `cmd.extend([` list wasn't properly closed with `])`.
+
+## VPS Requirements for Production Use
+
+The VPS **must** have KVM/nested virtualization support (`egrep -c '(vmx|svm)' /proc/cpuinfo` > 0). Without KVM, OpenWrt takes >10 minutes to boot in QEMU software emulation, making the test pipeline impractical.
+
+Recommended VPS types:
+- Hetzner VDS (dedicated vCPU with nested virt)
+- Bare metal / dedicated servers
+- Any VPS with explicit nested virtualization support
 
 ## Backward Compatibility Guarantees
 
