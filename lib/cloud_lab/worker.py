@@ -270,7 +270,7 @@ def _serial_send_wait(conn: socket.socket, command: str, wait: float = 2.0) -> s
     return _recv_serial(conn, timeout=2.0)
 
 
-def _provision_openwrt_serial(name: str, ip: str, timeout: int = 90) -> None:
+def _provision_openwrt_serial(name: str, ip: str, timeout: int = 300) -> None:
     serial_sock = _virt_lab_workdir() / "run" / f"{name}.serial.sock"
     deadline = time.time() + timeout
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
