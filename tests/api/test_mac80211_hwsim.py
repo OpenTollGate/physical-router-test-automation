@@ -163,6 +163,21 @@ def test_iw_scan_executes(router):
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _cleanup_sta_config(router):
+    """Remove STA radio1 + wwan network config after STA tests complete."""
+    yield
+    router.ssh(
+        "uci -q delete wireless.radio1; "
+        "uci -q delete wireless.sta0; "
+        "uci -q delete network.wwan; "
+        "uci commit wireless 2>/dev/null; "
+        "uci commit network 2>/dev/null; "
+        "wifi reload 2>/dev/null || true; "
+        "/etc/init.d/network reload 2>/dev/null || true"
+    )
+
+
 def _get_hwsim_phys(router):
     """Return list of PHY names bound to mac80211_hwsim driver."""
     phys = router.ssh(
@@ -193,7 +208,11 @@ def _sta_interface_exists(router):
 
 @pytest.mark.slow
 def test_sta_scan_sees_ap(router):
-    """Configure second hwsim radio as STA and verify it scans the AP SSID."""
+    """Configure second hwsim radio as STA and verify it scans the AP SSID.
+
+    Uses a dedicated 'wwan' network (not 'lan') to avoid BRIDGE_NOT_ALLOWED
+    errors — STA interfaces cannot be members of a bridged network in OpenWrt.
+    """
     if not _module_loaded(router):
         pytest.skip("mac80211_hwsim not loaded")
 
@@ -203,7 +222,17 @@ def test_sta_scan_sees_ap(router):
 
     sta_phy = hwsim_phys[1]
 
+    # Create a dedicated 'wwan' network interface for the STA (unbridged).
+    # This avoids the BRIDGE_NOT_ALLOWED error that occurs when a STA iface
+    # is assigned to the 'lan' bridge.
     router.ssh(
+        # Network interface: unbridged, DHCP client
+        "uci set network.wwan=interface; "
+        "uci set network.wwan.proto='dhcp'; "
+        "uci set network.wwan.device='@sta0'; "
+        "uci commit network 2>/dev/null; "
+
+        # Wireless: STA on dedicated wwan network (NOT lan)
         "uci set wireless.radio1=wifi-device; "
         "uci set wireless.radio1.type='mac80211'; "
         f"uci set wireless.radio1.phy='{sta_phy}'; "
@@ -216,10 +245,11 @@ def test_sta_scan_sees_ap(router):
         "uci set wireless.sta0.device='radio1'; "
         "uci set wireless.sta0.mode='sta'; "
         "uci set wireless.sta0.ssid='HWSIM-Test'; "
-        "uci set wireless.sta0.network='lan'; "
+        "uci set wireless.sta0.network='wwan'; "
         "uci set wireless.sta0.encryption='none'; "
 
         "uci commit wireless 2>/dev/null; "
+        "/etc/init.d/network reload 2>/dev/null || true; "
         "wifi reload 2>/dev/null || true"
     )
 
@@ -236,13 +266,16 @@ def test_sta_scan_sees_ap(router):
         )
 
     router.ssh(f"iw {sta_iface} scan trigger 2>/dev/null || true")
-    time.sleep(2)
+    time.sleep(3)
     scan_dump = router.ssh(f"iw {sta_iface} scan dump 2>&1")
 
-    # Also try the combined scan command as fallback
-    if "HWSIM-Test" not in scan_dump:
-        combined_scan = router.ssh(f"iw {sta_iface} scan 2>&1")
-        scan_dump = combined_scan
+    if "HWSIM-Test" not in scan_dump and "Resource busy" in scan_dump:
+        time.sleep(3)
+        scan_dump = router.ssh(f"iw {sta_iface} scan 2>&1")
+
+    if "HWSIM-Test" not in scan_dump and "Resource busy" in scan_dump:
+        time.sleep(5)
+        scan_dump = router.ssh(f"iw {sta_iface} scan 2>&1")
 
     assert "HWSIM-Test" in scan_dump, \
         f"STA scan did not find 'HWSIM-Test' SSID. Output: {scan_dump[:500]}"
@@ -285,7 +318,11 @@ def test_sta_associates_with_ap(router):
 
 
 def test_sta_receives_dhcp(router):
-    """Verify the STA interface can obtain a DHCP lease (aspirational)."""
+    """Verify the STA interface can obtain a DHCP lease from the AP's LAN.
+
+    The wwan interface is configured as DHCP client via UCI. We check that
+    netifd obtained a lease after association.
+    """
     if not _module_loaded(router):
         pytest.skip("mac80211_hwsim not loaded")
 
@@ -293,17 +330,22 @@ def test_sta_receives_dhcp(router):
     if not sta_iface:
         pytest.skip("No STA interface found")
 
-    router.ssh(f"ip link set {sta_iface} up 2>/dev/null || true")
-    time.sleep(1)
+    # Wait for netifd to complete DHCP on the wwan interface
+    got_lease = False
+    for _ in range(10):
+        addr = router.ssh(f"ip -4 addr show {sta_iface} 2>/dev/null")
+        if "inet " in addr:
+            got_lease = True
+            break
+        time.sleep(2)
 
-    dhcp_output = router.ssh(
-        f"udhcpc -i {sta_iface} -n -q -T 3 -t 3 2>&1"
-    )
-
-    if "lease of" not in dhcp_output.lower() and "bound to" not in dhcp_output.lower():
+    if not got_lease:
+        netifd_log = router.ssh(
+            r"logread -e 'netifd|wwan' 2>/dev/null | tail -10"
+        )
         pytest.skip(
-            f"DHCP did not succeed on STA interface (circular dependency possible). "
-            f"Output: {dhcp_output[:300]}"
+            f"STA did not obtain DHCP lease on {sta_iface}. "
+            f"netifd log: {netifd_log[:300]}"
         )
 
 

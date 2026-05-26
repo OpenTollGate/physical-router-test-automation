@@ -105,6 +105,7 @@ class WorkerConfig:
     zone: str
     vm_name: str
     gh_token: str
+    mint: str
 
 
 def _metadata_get(key: str) -> str:
@@ -143,11 +144,12 @@ def load_config_from_metadata() -> WorkerConfig:
         zone=_metadata_get("tollgate-zone"),
         vm_name=_metadata_get("tollgate-vm-name"),
         gh_token=_metadata_get("tollgate-gh-token"),
+        mint=_metadata_get_optional("tollgate-mint", "auto"),
     )
     log.info(
-        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s",
+        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s",
         cfg.run_id, cfg.sut_branch, cfg.artifact_repo, cfg.backend,
-        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure,
+        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure, cfg.mint,
     )
     log.info(
         "Artifact: run_id=%s suite_ref=%s reseller=%s secondary=%s",
@@ -453,20 +455,37 @@ def ensure_outer_deps() -> None:
 
 def ensure_cdk_binary() -> None:
     binary = f"{CDK_MINT_DIR}/cdk-mintd"
+    cli_binary = f"{CDK_MINT_DIR}/cdk-cli"
     r = _run(f"test -x {binary} && echo CDK_BINARY_OK", timeout=10, check=False)
     if "CDK_BINARY_OK" in r.stdout:
         log.info("CDK mintd binary already cached")
-        return
-    log.info("Downloading CDK mintd v%s...", CDK_VERSION)
-    _run(f"mkdir -p {CDK_MINT_DIR}", timeout=10)
-    _run(
-        f"wget -q -O {binary} "
-        f"https://github.com/cashubtc/cdk/releases/download/v{CDK_VERSION}/cdk-mintd-{CDK_VERSION}-x86_64",
-        timeout=120,
-    )
-    _run(f"chmod +x {binary}", timeout=10)
-    r = _run(f"{binary} --version 2>&1 || {binary} --help 2>&1 | head -1", timeout=10, check=False)
-    log.info("CDK binary verified: %s", (r.stdout or "").strip()[:80])
+    else:
+        log.info("Downloading CDK mintd v%s...", CDK_VERSION)
+        _run(f"mkdir -p {CDK_MINT_DIR}", timeout=10)
+        _run(
+            f"wget -q -O {binary} "
+            f"https://github.com/cashubtc/cdk/releases/download/v{CDK_VERSION}/cdk-mintd-{CDK_VERSION}-x86_64",
+            timeout=120,
+        )
+        _run(f"chmod +x {binary}", timeout=10)
+        r = _run(f"{binary} --version 2>&1 || {binary} --help 2>&1 | head -1", timeout=10, check=False)
+        log.info("CDK binary verified: %s", (r.stdout or "").strip()[:80])
+
+    r = _run(f"test -x {cli_binary} && echo CDK_CLI_OK", timeout=10, check=False)
+    if "CDK_CLI_OK" in r.stdout:
+        log.info("CDK CLI binary already cached")
+    else:
+        log.info("Downloading CDK CLI v%s...", CDK_VERSION)
+        _run(f"mkdir -p {CDK_MINT_DIR}", timeout=10)
+        _run(
+            f"wget -q -O {cli_binary} "
+            f"https://github.com/cashubtc/cdk/releases/download/v{CDK_VERSION}/cdk-cli-{CDK_VERSION}-x86_64",
+            timeout=120,
+        )
+        _run(f"chmod +x {cli_binary}", timeout=10)
+        _run(f"ln -sf {cli_binary} /usr/local/bin/cdk-cli 2>/dev/null || true", timeout=10)
+        r = _run(f"{cli_binary} --version 2>&1 || {cli_binary} --help 2>&1 | head -1", timeout=10, check=False)
+        log.info("CDK CLI binary verified: %s", (r.stdout or "").strip()[:80])
 
 
 def start_local_mints(config: WorkerConfig) -> dict[str, subprocess.Popen[str]]:
@@ -1036,14 +1055,52 @@ def wait_for_backend() -> None:
     raise RuntimeError("TollGate backend did not become healthy after 60s")
 
 
-def select_test_mint() -> str:
+def _configure_mint(mint_url: str) -> None:
+    """Configure the backend to use a specific mint URL and wait for health."""
+    _run(
+        f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
+        f"python3 -c \""
+        f"from lib.router import Router; "
+        f"from lib.backend import BackendConfig; "
+        f"import os; "
+        f"r = Router(host=os.environ['TOLLGATE_SSH_HOST'], phone_ip='', phone_mac='', domain='', backend=BackendConfig(os.environ.get('TOLLGATE_BACKEND','go'))); "
+        f"r.ssh('cp /tmp/config.json.bak /etc/tollgate/config.json 2>/dev/null || true'); "
+        f"r.replace_mints(['{mint_url}']); "
+        f"\" 2>&1",
+        timeout=120,
+        check=False,
+    )
+    wait_for_backend()
+
+
+def select_test_mint(forced_mint: str = "auto") -> str:
     """Probe the backend with CDK V2 keysets. Return the mint URL to use.
+
+    If forced_mint is not 'auto', skip probing and use the specified mint:
+      - 'cdk-v2'       → CDK V2 mint (01-prefix keysets)
+      - 'nutshell-v2'  → Nutshell V2 mint (01-prefix keysets)
+      - 'nutshell-v1'  → Nutshell V1 mint (00-prefix keysets, for Go/gonuts)
 
     Strategy: start with CDK (V2). If the backend starts as a full merchant
     (kind 10021 with price_per_step tags) after being configured with CDK V2,
     V2 is supported. If not (crash or degraded mode), fall back to Nutshell V1
     (V1 keysets). If Nutshell V1 isn't running either, fall back to public testnuts.
     """
+    MINT_ALIASES = {
+        "cdk-v2": (CDK_MINT_URL, V2_TESTNUT_CDK_LAN),
+        "nutshell-v2": (NUTSHELL_V2_MINT_URL, V2_TESTNUT_NUTSHELL_LAN),
+        "nutshell-v1": (NUTSHELL_V1_MINT_URL, V1_TESTNUT_NUTSHELL_LAN),
+    }
+
+    if forced_mint != "auto":
+        urls = MINT_ALIASES.get(forced_mint)
+        if not urls:
+            raise ValueError(f"Unknown mint '{forced_mint}'. Choose from: {', '.join(MINT_ALIASES)}")
+        host_url, lan_url = urls
+        log.info("Forced mint=%s → %s (LAN: %s)", forced_mint, host_url, lan_url)
+        _configure_mint(lan_url)
+        return lan_url
+
     PUBLIC_TESTNUTS = "https://testnut.cashu.exchange"
     cdk_ok = False
     try:
@@ -1076,7 +1133,7 @@ def select_test_mint() -> str:
         log.warning("V2 probe failed: %s", exc)
 
     if cdk_ok:
-        return CDK_MINT_URL
+        return V2_TESTNUT_CDK_LAN
 
     nutshell_v1_ok = False
     for _attempt in range(10):
@@ -1101,20 +1158,7 @@ def select_test_mint() -> str:
     fallback_url = NUTSHELL_V1_MINT_LAN if nutshell_v1_ok else PUBLIC_TESTNUTS
     log.info("Backend does not support V2 keysets — falling back to %s", fallback_url)
 
-    _run(
-        f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
-        f"python3 -c \""
-        f"from lib.router import Router; "
-        f"from lib.backend import BackendConfig; "
-        f"import os; "
-        f"r = Router(host=os.environ['TOLLGATE_SSH_HOST'], phone_ip='', phone_mac='', domain='', backend=BackendConfig(os.environ.get('TOLLGATE_BACKEND','go'))); "
-        f"r.ssh('cp /tmp/config.json.bak /etc/tollgate/config.json 2>/dev/null || true'); "
-        f"r.replace_mints(['{fallback_url}']); "
-        f"\" 2>&1",
-        timeout=120,
-        check=False,
-    )
-    wait_for_backend()
+    _configure_mint(fallback_url)
     return fallback_url
 
 
@@ -1420,8 +1464,8 @@ def run_worker(config: WorkerConfig) -> int:
         log.info("[8/10] Wait for backend health")
         wait_for_backend()
 
-        log.info("[8.5/10] Select test mint (V2 if supported, else V1)")
-        chosen_mint = select_test_mint()
+        log.info("[8.5/10] Select test mint (forced=%s)", config.mint)
+        chosen_mint = select_test_mint(forced_mint=config.mint)
         env_path = Path(f"{TEST_DIR}/.env")
         if env_path.exists():
             env_text = env_path.read_text()

@@ -210,6 +210,7 @@ _OVERLAY_ALLOWLIST = {
     "lib/cloud_lab/worker.py",
     "lib/helpers.py",
     "lib/router.py",
+    "lib/cashu.py",
     "lib/reseller_mode.py",
     "pytest.ini",
     "scripts/cloud-lab.py",
@@ -218,6 +219,8 @@ _OVERLAY_ALLOWLIST = {
     "tests/api/test_concurrent_payments.py",
     "tests/api/test_edge_tokens.py",
     "tests/api/test_e2e_portal_payment.py",
+    "tests/api/test_mac80211_hwsim.py",
+    "tests/api/test_dual_mint.py",
     "tests/scenarios/test_reseller_mode.py",
     "tests/scenarios/test_two_router_cloud.py",
 }
@@ -348,6 +351,7 @@ def submit_run(
     secondary_router_host: str = "",
     secondary_router_port: str = "",
     keep_vm_on_failure: bool = False,
+    mint: str = "auto",
 ) -> dict[str, str]:
     """Pre-flight artifact check, then create fire-and-forget GCP VM. Returns run metadata."""
     cleanup_stale(max_age_hours=2)
@@ -390,6 +394,7 @@ def submit_run(
         "tollgate-secondary-router-host": secondary_router_host,
         "tollgate-secondary-router-port": secondary_router_port,
         "tollgate-keep-vm-on-failure": "true" if keep_vm_on_failure else "false",
+        "tollgate-mint": mint,
     }
     metadata_payload = ",".join(f"{k}={v}" for k, v in metadata.items())
 

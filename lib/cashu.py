@@ -192,3 +192,134 @@ class CashuMint:
         payload = [{"mint": "https://wrong-mint.example.com",
                      "proofs": [{"amount": 4, "secret": "fake", "C": "fake"}]}]
         return "cashuA" + base64.b64encode(json.dumps(payload).encode()).decode()
+
+
+_CDK_CLI_PATHS = [
+    "/opt/cdk-mintd/cdk-cli",
+    "/usr/local/bin/cdk-cli",
+]
+
+
+class CdkCliWallet:
+    def __init__(self, mint_url: str, cdk_cli_path: str | None = None):
+        self.mint_url = mint_url
+        if cdk_cli_path:
+            self._cli = cdk_cli_path
+        else:
+            self._cli = self._find_cli()
+
+    def _find_cli(self) -> str:
+        for path in _CDK_CLI_PATHS:
+            if os.path.isfile(path) and os.access(path, os.X_OK):
+                return path
+        for dir_entry in os.environ.get("PATH", "").split(os.pathsep):
+            candidate = os.path.join(dir_entry, "cdk-cli")
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+        return _CDK_CLI_PATHS[0]
+
+    def is_available(self) -> bool:
+        return os.path.isfile(self._cli) and os.access(self._cli, os.X_OK)
+
+    def ensure_mint_available(self, timeout: int = 15):
+        keys_url = f"{self.mint_url.rstrip('/')}/v1/keys"
+        req = request.Request(keys_url, headers={"User-Agent": "tollgate-test/1.0"})
+        try:
+            with request.urlopen(req, timeout=timeout) as response:
+                if response.status != 200:
+                    raise MintUnavailableError(
+                        f"Mint health check failed with HTTP {response.status}"
+                    )
+        except MintUnavailableError:
+            raise
+        except (error.URLError, TimeoutError) as exc:
+            raise MintUnavailableError(f"cashu mint unavailable: {exc}") from exc
+        except Exception as exc:
+            raise MintUnavailableError(f"cashu mint unexpected error: {exc}") from exc
+
+    def _mint_token(self, amount: int, timeout: int) -> str:
+        mint_r = subprocess.run(
+            [self._cli, "mint", self.mint_url, str(amount)],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if mint_r.returncode != 0:
+            raise RuntimeError(
+                f"cdk-cli mint failed (exit {mint_r.returncode}): "
+                f"{mint_r.stderr[-300:]}"
+            )
+
+        send_r = subprocess.run(
+            [self._cli, "send", "--mint-url", self.mint_url, "--v3"],
+            input=f"{amount}\n",
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if send_r.returncode != 0:
+            raise RuntimeError(
+                f"cdk-cli send failed (exit {send_r.returncode}): "
+                f"stdout={send_r.stdout[-200:]} stderr={send_r.stderr[-200:]}"
+            )
+
+        for line in send_r.stdout.strip().splitlines():
+            line = line.strip()
+            if line.startswith(("cashuA", "cashuB")):
+                return line
+
+        raise RuntimeError(
+            f"cdk-cli send produced no token: {send_r.stdout[-300:]}"
+        )
+
+    def mint(self, amount: int = 4, legacy: bool = False, timeout: int = 60,
+             retries: int = 2) -> str:
+        if not self.is_available():
+            raise RuntimeError(f"cdk-cli not found at {self._cli}")
+
+        last_err: RuntimeError = RuntimeError("mint failed with no specific error")
+        for attempt in range(1 + retries):
+            try:
+                self.ensure_mint_available()
+                return self._mint_token(amount, timeout)
+            except subprocess.TimeoutExpired:
+                raise MintUnavailableError(
+                    f"cdk-cli mint() timed out after {timeout}s"
+                )
+            except RuntimeError as exc:
+                last_err = exc
+                if attempt < retries:
+                    time.sleep(5 * (attempt + 1))
+        raise last_err
+
+    @staticmethod
+    def synthetic_wrong_mint_token() -> str:
+        return CashuMint.synthetic_wrong_mint_token()
+
+    def mint_from_wrong_mint(self, amount: int = 4, timeout: int = 90) -> str:
+        return self.synthetic_wrong_mint_token()
+
+
+def create_minter(
+    mint_url: str = TEST_MINT_URL,
+    venv_path: str | None = None,
+) -> CashuMint | CdkCliWallet:
+    def _probe_keyset_version(url: str) -> str | None:
+        keys_url = f"{url.rstrip('/')}/v1/keys"
+        req = request.Request(keys_url, headers={"User-Agent": "tollgate-test/1.0"})
+        try:
+            with request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read())
+        except Exception:
+            return None
+        for keyset in data.get("keysets", []):
+            kid = keyset.get("id", "")
+            if kid.startswith("01"):
+                return "v2"
+            if kid.startswith("00"):
+                return "v1"
+        return None
+
+    version = _probe_keyset_version(mint_url)
+    cdk = CdkCliWallet(mint_url)
+
+    if version == "v2" and cdk.is_available():
+        return cdk
+
+    return CashuMint(venv_path=venv_path, mint_url=mint_url)

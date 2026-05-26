@@ -114,12 +114,14 @@ def cmd_submit(args: argparse.Namespace) -> int:
         secondary_router_host=cast(str, args.secondary_router_host or ""),
         secondary_router_port=cast(str, args.secondary_router_port or ""),
         keep_vm_on_failure=cast(bool, args.keep_vm_on_failure),
+        mint=cast(str, args.mint),
     )
     pr_line = f"  PR:           {target.pr} ({target.repo}@{target.branch})\n" if target.pr else f"  Branch:       {target.repo}@{target.branch}\n"
+    mint_line = f"  Mint:         {cast(str, args.mint)}\n" if cast(str, args.mint) != "auto" else ""
     print(f"""
 Submitted run {info['run_id']}
 {pr_line}  SUT commit:   {target.sut_commit or '(branch head)'}
-  VM:           {info['vm_name']} ({info['zone']})
+{mint_line}  VM:           {info['vm_name']} ({info['zone']})
   Artifact run: {info['artifact_run_id']}
   Suite ref:    {info['suite_ref']} (must exist on github.com/{SUITE_REPO})
   Logs:         {info['log_hint']}
@@ -150,6 +152,45 @@ def _wait_for_run(run_id: str, zone: str) -> int:
             return 0
         print(f"  VM still running: {r.stdout.strip()}")
         time.sleep(60)
+
+
+def cmd_submit_all_mints(args: argparse.Namespace) -> int:
+    """Submit 3 parallel runs, one per mint type."""
+    mint_types = ["cdk-v2", "nutshell-v2", "nutshell-v1"]
+    target = resolve_target(
+        pr=cast(str | None, args.pr),
+        branch=cast(str | None, args.branch),
+        commit=cast(str | None, args.commit),
+        backend=cast(str, args.backend),
+        repo_override=cast(str | None, args.repo),
+    )
+    infos = []
+    for mint in mint_types:
+        info = submit_run(
+            target,
+            zone=cast(str, args.zone),
+            publish=cast(bool, args.publish),
+            artifact_timeout_s=cast(int, args.artifact_timeout),
+            machine_type=cast(str, args.machine_type),
+            disk_size_gb=cast(int, args.disk_size),
+            reseller_scenarios=cast(bool, args.reseller_scenarios),
+            two_router=cast(bool, args.two_router),
+            secondary_router_host=cast(str, args.secondary_router_host or ""),
+            secondary_router_port=cast(str, args.secondary_router_port or ""),
+            keep_vm_on_failure=cast(bool, args.keep_vm_on_failure),
+            mint=mint,
+        )
+        infos.append((mint, info))
+
+    pr_line = f"  PR:           {target.pr} ({target.repo}@{target.branch})\n" if target.pr else f"  Branch:       {target.repo}@{target.branch}\n"
+    print(f"""
+Submitted 3 parallel runs for multi-mint validation
+{pr_line}  SUT commit:   {target.sut_commit or '(branch head)'}
+""")
+    for mint, info in infos:
+        print(f"  [{mint}] run={info['run_id']} vm={info['vm_name']}")
+    print()
+    return 0
 
 
 def cmd_status_run(args: argparse.Namespace) -> int:
@@ -251,8 +292,24 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--secondary-router-port", default="", help="Optional SSH port for the seller/secondary router")
     submit.add_argument("--keep-vm-on-failure", action="store_true", help="Do not self-delete failed worker VMs; useful for debugging")
     submit.add_argument("--artifact-timeout", type=int, default=1800, help="Seconds to wait for CI artifact")
+    submit.add_argument("--mint", default="auto", choices=["auto", "cdk-v2", "nutshell-v2", "nutshell-v1"],
+                        help="Force a specific mint type instead of auto-detection. Use 'submit-all-mints' for parallel runs.")
     target_flags(submit)
     submit.set_defaults(func=cmd_submit)
+
+    all_mints = sub.add_parser("submit-all-mints", help="Submit 3 parallel runs (one per mint type: cdk-v2, nutshell-v2, nutshell-v1)")
+    all_mints.add_argument("--zone", default=DEFAULT_ZONE)
+    all_mints.add_argument("--machine-type", default=DEFAULT_MACHINE_TYPE)
+    all_mints.add_argument("--disk-size", type=int, default=DEFAULT_DISK_SIZE_GB)
+    all_mints.add_argument("--publish", action="store_true", help="Publish reports to gh-pages when done")
+    all_mints.add_argument("--reseller-scenarios", action="store_true", help="Run virtualizable reseller-mode scenario tests")
+    all_mints.add_argument("--two-router", action="store_true", help="Boot second OpenWrt VM for two-router degraded-mode tests")
+    all_mints.add_argument("--secondary-router-host", default="", help="Seller/secondary router IP or host for reseller scenarios")
+    all_mints.add_argument("--secondary-router-port", default="", help="Optional SSH port for the seller/secondary router")
+    all_mints.add_argument("--keep-vm-on-failure", action="store_true", help="Do not self-delete failed worker VMs; useful for debugging")
+    all_mints.add_argument("--artifact-timeout", type=int, default=1800, help="Seconds to wait for CI artifact")
+    target_flags(all_mints)
+    all_mints.set_defaults(func=cmd_submit_all_mints)
 
     sr = sub.add_parser("status-run", help="Show status of a submitted run")
     sr.add_argument("--run-id", required=True)
@@ -285,6 +342,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--secondary-router-port", default="", help="Optional SSH port for the seller/secondary router")
     run.add_argument("--keep-vm-on-failure", action="store_true", help="Do not self-delete failed worker VMs; useful for debugging")
     run.add_argument("--artifact-timeout", type=int, default=1800)
+    run.add_argument("--mint", default="auto", choices=["auto", "cdk-v2", "nutshell-v2", "nutshell-v1"],
+                     help="Force a specific mint type instead of auto-detection")
     target_flags(run)
     run.set_defaults(func=cmd_run_tests)
 

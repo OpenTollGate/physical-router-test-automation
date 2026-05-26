@@ -17,7 +17,7 @@ except ImportError:
 
 from lib.router import Router
 from lib.router_lock import RouterLock
-from lib.cashu import CashuMint, MintUnavailableError
+from lib.cashu import CashuMint, MintUnavailableError, create_minter
 from lib.clients.adb import ADBDevice
 from lib.clients.wifi import WiFi
 from lib.clients.desktop import MacWiFiClient, MacAdapter, LinuxWiFiClient, LinuxAdapter
@@ -486,11 +486,12 @@ def adb(request, router):
 
 @pytest.fixture(scope="session")
 def cashu():
-    mint = CashuMint()
+    mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
+    minter = create_minter(mint_url)
     for attempt in range(5):
         try:
-            mint.ensure_mint_available(timeout=10)
-            return mint
+            minter.ensure_mint_available(timeout=10)
+            return minter
         except MintUnavailableError as exc:
             if attempt < 4:
                 time.sleep(5)

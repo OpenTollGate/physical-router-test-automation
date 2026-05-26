@@ -73,21 +73,25 @@ def test_v1_mint_payment_accepted(router, cashu):
 def test_v2_mint_payment_accepted(router):
     require_client_identity(router)
     v2_url = os.environ.get("TOLLGATE_V2_MINT_URL", V2_MINT_URL)
-    v2 = CashuMint(mint_url=v2_url)
-    if not v2.is_available():
-        pytest.skip("cashu CLI not available for V2 mint test")
 
     try:
-        token = v2.mint(amount=4, legacy=False)
-    except Exception as exc:
-        pytest.skip(f"V2 mint unreachable or minting failed: {exc}")
+        from lib.cashu import create_minter
+        minter = create_minter(v2_url)
+        token = minter.mint(amount=4, legacy=False)
+    except ImportError:
+        v2 = CashuMint(mint_url=v2_url)
+        if not v2.is_available():
+            pytest.skip("cashu CLI not available for V2 mint test")
+        try:
+            token = v2.mint(amount=4, legacy=False)
+        except Exception as exc:
+            pytest.skip(f"V2 mint unreachable or minting failed: {exc}")
 
     resp = router.pay_direct(token)
 
     if resp.get("kind") == 21023 and "not accepted" in resp.get("content", ""):
         pytest.skip(
-            "Go backend (gonuts) does not support V2 keyset IDs (01-prefix, 33 bytes). "
-            "Fix: pin tollgate-module-basic-go to Amperstrand/gonuts-tollgate feature/v2-keyset-ids. "
+            "Backend rejected V2 keyset token. "
             f"Response: {str(resp)[:200]}"
         )
 
