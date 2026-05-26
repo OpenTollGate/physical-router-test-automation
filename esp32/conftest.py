@@ -278,3 +278,75 @@ def _create_cashu_token(mint_url: str, amount: int) -> str:
         raise RuntimeError(f"No token in cashu output: {result.stdout}\n{result.stderr}")
     except FileNotFoundError:
         raise RuntimeError("cashu CLI not found. Install: pip install cashu")
+
+
+class RelayHelper:
+    def __init__(self, board_config: BoardConfig):
+        self.ip = board_config.ip
+        self.port = 4869
+        self.ws_url = f"ws://{self.ip}:{self.port}"
+
+    def connect(self, timeout: int = 8):
+        import websocket
+        return websocket.create_connection(self.ws_url, timeout=timeout)
+
+    def nip11(self, timeout: int = 5) -> dict | None:
+        try:
+            result = subprocess.run(
+                ["curl", "-s", "--connect-timeout", str(timeout),
+                 "-H", "Accept: application/nostr+json",
+                 f"http://{self.ip}:{self.port}/"],
+                capture_output=True, text=True, timeout=timeout + 5,
+            )
+            return json.loads(result.stdout) if result.stdout else None
+        except Exception:
+            return None
+
+    def collect_messages(self, ws, count: int = 2, timeout_s: float = 5.0) -> list:
+        msgs = []
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline and len(msgs) < count:
+            try:
+                ws.settimeout(1.0)
+                data = ws.recv()
+                msgs.append(json.loads(data))
+            except Exception:
+                break
+        return msgs
+
+
+class DnsHelper:
+    def __init__(self, board_config: BoardConfig, wifi_iface: str):
+        self.ip = board_config.ip
+        self.iface = wifi_iface
+
+    def resolves_to_self(self, domain: str) -> bool:
+        try:
+            result = subprocess.run(
+                ["dig", "+short", "+timeout=5", domain, f"@{self.ip}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return result.stdout.strip() == self.ip
+        except Exception:
+            return False
+
+    def resolves(self, domain: str, timeout: int = 5) -> bool:
+        try:
+            result = subprocess.run(
+                ["dig", "+short", f"+timeout={timeout}", "+tries=1", domain],
+                capture_output=True, text=True, timeout=timeout + 5,
+            )
+            out = result.stdout.strip()
+            return len(out) > 0 and "NXDOMAIN" not in out
+        except Exception:
+            return False
+
+
+@pytest.fixture(scope="session")
+def relay(board_config):
+    return RelayHelper(board_config)
+
+
+@pytest.fixture(scope="session")
+def dns(board_config, config):
+    return DnsHelper(board_config, config.wifi_iface)

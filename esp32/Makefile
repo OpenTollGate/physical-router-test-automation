@@ -1109,11 +1109,11 @@ pytest-spend-a: ## Pytest: Spend from Board A funded wallet
 pytest-spend-c: ## Pytest: Spend from Board C funded wallet
 	@$(PYTEST) tests/test_wallet_funding.py --board=c -k "test_spend"
 
-pytest-all-a: ## Pytest: All Board A tests
-	@$(PYTEST) tests/ --board=a
+pytest-all-a: ## Pytest: All Board A tests (non-destructive, ordered)
+	@$(PYTEST) tests/test_smoke.py tests/test_api.py tests/test_captive_portal.py tests/test_multi_mint.py tests/test_market.py tests/test_relay_nip11.py tests/test_local_relay.py --board=a
 
-pytest-all-c: ## Pytest: All Board C tests
-	@$(PYTEST) tests/ --board=c
+pytest-all-c: ## Pytest: All Board C tests (non-destructive, ordered)
+	@$(PYTEST) tests/test_smoke.py tests/test_api.py tests/test_captive_portal.py tests/test_multi_mint.py tests/test_market.py tests/test_relay_nip11.py tests/test_local_relay.py --board=c
 
 pytest-smoke: ## Pytest: Smoke tests on selected board (use --board=a|b|c)
 	@$(PYTEST) tests/test_smoke.py --board=$(or $(BOARD),c) -m smoke
@@ -1125,3 +1125,36 @@ pytest-help: ## Show pytest markers and options
 	@echo "       make pytest-smoke-a        # Board A smoke only"
 	@echo "       make pytest-fund-c         # Fund Board C wallet"
 	@echo "       pytest tests/ --board=c    # Direct pytest"
+
+pytest-relay-a: ## Pytest: Board A local relay tests
+	@$(PYTEST) tests/test_local_relay.py tests/test_relay_nip11.py --board=a
+
+pytest-relay-c: ## Pytest: Board C local relay tests
+	@$(PYTEST) tests/test_local_relay.py tests/test_relay_nip11.py --board=c
+
+pytest-market-a: ## Pytest: Board A market discovery tests
+	@$(PYTEST) tests/test_market.py --board=a
+
+pytest-market-c: ## Pytest: Board C market discovery tests
+	@$(PYTEST) tests/test_market.py --board=c
+
+pytest-cvm-a: ## Pytest: Board A CVM roundtrip tests
+	@BOARD_A_NSEC=$(BOARD_A_NSEC) $(PYTEST) tests/test_cvm.py --board=a
+
+pytest-reset-a: ## Pytest: Board A reset auth + payment test
+	@$(PYTEST) tests/test_reset_auth.py --board=a -k "not test_second_payment"
+
+pytest-reset-c: ## Pytest: Board C reset auth + payment test
+	@$(PYTEST) tests/test_reset_auth.py --board=c -k "not test_second_payment"
+
+pytest-dns-a: ## Pytest: Board A DNS + firewall tests
+	@$(PYTEST) tests/test_dns_firewall.py --board=a -k "not requires_funding"
+
+pytest-dns-c: ## Pytest: Board C DNS + firewall tests
+	@$(PYTEST) tests/test_dns_firewall.py --board=c -k "not requires_funding"
+
+pytest-session-a: ## Pytest: Board A session expiry test (~90s)
+	@$(PYTEST) tests/test_session_expiry.py --board=a --timeout=120
+
+pytest-session-c: ## Pytest: Board C session expiry test (~90s)
+	@$(PYTEST) tests/test_session_expiry.py --board=c --timeout=120
