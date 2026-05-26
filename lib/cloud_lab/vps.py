@@ -25,6 +25,32 @@ from lib.cloud_lab.gcp import _gh_token, _sanitize_vm_name, _suite_ref, _working
 from lib.cloud_lab.provider import CloudProvider
 from lib.cloud_lab.resolve import RunTarget
 
+_VPS_SUITE_FILES = [
+    "lib/cloud_lab/__init__.py",
+    "lib/cloud_lab/constants.py",
+    "lib/cloud_lab/gcp.py",
+    "lib/cloud_lab/provider.py",
+    "lib/cloud_lab/vps.py",
+    "lib/cloud_lab/worker.py",
+    "scripts/cloud-lab.py",
+]
+
+
+def _build_suite_overlay() -> str:
+    """Build a base64 tar.gz of the cloud_lab module files for VPS overlay."""
+    import base64
+    import io
+    import tarfile
+
+    repo_dir = Path(__file__).resolve().parents[2]
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for rel in _VPS_SUITE_FILES:
+            full = repo_dir / rel
+            if full.is_file():
+                tar.add(full, arcname=rel)
+    return base64.b64encode(buf.getvalue()).decode()
+
 
 def _ssh(
     cmd: str,
@@ -153,6 +179,10 @@ class VPSProvider(CloudProvider):
         short = (target.sut_commit or target.branch)[:7].replace("/", "-")
         run_id = f"{timestamp}-{short}"
         suite_ref = _suite_ref()
+        if suite_ref != "main":
+            local_sha = suite_ref
+            suite_ref = "main"
+            print(f"Note: suite_ref {local_sha[:7]} not reachable from VPS, using 'main'")
         token = _gh_token()
 
         r = _ssh(f"if [ -f {VPS_RUN_LOCK} ]; then cat {VPS_RUN_LOCK}; fi", timeout=15, check=False)
@@ -181,6 +211,7 @@ class VPSProvider(CloudProvider):
         }
 
         overlay_b64 = _working_tree_overlay()
+        suite_overlay_b64 = _build_suite_overlay()
 
         config_json = json.dumps(config, indent=2)
         local_config = Path(f"/tmp/tollgate-vps-config-{run_id}.json")
@@ -193,20 +224,22 @@ class VPSProvider(CloudProvider):
             raise RuntimeError(f"Failed to upload config: {r.stderr.strip()}")
         local_config.unlink(missing_ok=True)
 
-        overlay_setup = ""
+        combined_overlay = suite_overlay_b64
         if overlay_b64:
-            overlay_local = Path(f"/tmp/tollgate-vps-overlay-{run_id}.b64")
-            overlay_local.write_text(overlay_b64)
-            remote_overlay = "/tmp/tollgate-suite-overlay.tar.gz.b64"
-            r = _scp_to(str(overlay_local), remote_overlay)
-            overlay_local.unlink(missing_ok=True)
-            if r.returncode != 0:
-                raise RuntimeError(f"Failed to upload overlay: {r.stderr.strip()}")
-            overlay_setup = (
-                "base64 -d /tmp/tollgate-suite-overlay.tar.gz.b64 > /tmp/tollgate-suite-overlay.tar.gz && "
-                "tar xzf /tmp/tollgate-suite-overlay.tar.gz -C /opt/tollgate-test && "
-                "echo 'Applied local suite overlay' && "
-            )
+            print("Including local working tree overlay")
+
+        overlay_local = Path(f"/tmp/tollgate-vps-overlay-{run_id}.b64")
+        overlay_local.write_text(combined_overlay)
+        remote_overlay = "/tmp/tollgate-suite-overlay.tar.gz.b64"
+        r = _scp_to(str(overlay_local), remote_overlay)
+        overlay_local.unlink(missing_ok=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"Failed to upload overlay: {r.stderr.strip()}")
+        overlay_setup = (
+            "base64 -d /tmp/tollgate-suite-overlay.tar.gz.b64 > /tmp/tollgate-suite-overlay.tar.gz && "
+            "tar xzf /tmp/tollgate-suite-overlay.tar.gz -C /opt/tollgate-test && "
+            "echo 'Applied suite overlay' && "
+        )
 
         worker_cmd = (
             f"echo '{run_id}' > {VPS_RUN_LOCK} && "
