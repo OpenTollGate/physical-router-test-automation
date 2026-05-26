@@ -206,7 +206,10 @@ def _launch_qemu(
             pass
     cmd = [
         "qemu-system-x86_64",
-        "-enable-kvm",
+    ]
+    if Path("/dev/kvm").exists():
+        cmd.append("-enable-kvm")
+    cmd.extend([
         "-m",
         str(memory_mb),
         "-smp",
@@ -225,7 +228,7 @@ def _launch_qemu(
         f"virtio-net-pci,netdev=net0,mac={mac}",
         "-pidfile",
         str(pidfile),
-    ]
+    ])
     log.info("Launching %s QEMU: disk=%s tap=%s mac=%s", name, disk_name, tap_name, mac)
     with qemu_log.open("w") as log_file:
         proc = subprocess.Popen(
@@ -237,7 +240,7 @@ def _launch_qemu(
             start_new_session=True,
             cwd=workdir,
         )
-    deadline = time.time() + 10
+    deadline = time.time() + 30
     while time.time() < deadline:
         if proc.poll() is not None:
             raise RuntimeError(f"{name} QEMU exited early with rc={proc.returncode}; see {qemu_log}")
