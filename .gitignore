@@ -27,6 +27,7 @@ findings/
 
 # Agent orchestration artifacts
 .sisyphus/
+.omo/
 
 # Playwright MCP session logs
 .playwright-mcp/
