@@ -408,6 +408,7 @@ def write_env_file(config: WorkerConfig) -> None:
         f"TOLLGATE_SECONDARY_ROUTER_HOST={secondary_host}\n"
         f"TOLLGATE_SECONDARY_ROUTER_PORT={config.secondary_router_port}\n"
         f"TOLLGATE_SECONDARY_ROUTER_PASSWORD={VIRT_LAB_PASSWORD}\n"
+        f"TOLLGATE_PORTAL={config.portal}\n"
         f"GH_TOKEN={os.environ.get('GH_TOKEN', '')}\n"
     )
     Path(TEST_DIR, ".env").write_text(env_content)
