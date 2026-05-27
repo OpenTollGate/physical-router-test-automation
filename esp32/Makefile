@@ -256,7 +256,7 @@ SPIFFS_BIN     := /tmp/tollgate_spiffs.bin
 SPIFFS_SIZE    := 0xF0000
 SPIFFS_OFFSET  := 0x410000
 WIFI_SSID      ?= $(shell grep -oP 'WIFI_SSID\s*=\s*\K.*' $(FIRMWARE_DIR)/.env 2>/dev/null || echo "EnterSSID-2.4GHz")
-WIFI_PASSWORD  ?= $(shell grep -oP 'WIFI_PASSWORD\s*=\s*\K.*' $(FIRMWARE_DIR)/.env 2>/dev/null || echo "c03rad0r123")
+WIFI_PASSWORD  ?= $(shell grep -oP 'WIFI_PASSWORD\s*=\s*\K.*' $(FIRMWARE_DIR)/.env 2>/dev/null || echo "$(SUDO_PW)")
 
 detect-wpa-security: ## Scan WiFi and detect WPA security mode for configured SSID
 	@echo "$(CYAN)Scanning WiFi networks...$(RESET)"
@@ -574,7 +574,7 @@ fund-wallet-c: ## Fund Board C wallet: create token on upstream, send to board (
 _connect-a-if-needed:
 	@if ! ping -c 1 -W 2 $(BOARD_A_IP) >/dev/null 2>&1; then \
 		echo "$(CYAN)Not connected to Board A — connecting...$(RESET)"; \
-		echo "c03rad0r123" | sudo -S nmcli device wifi connect "$(BOARD_A_SSID)" ifname $(WIFI_IFACE) 2>&1 | grep -v "Password:" || true; \
+		echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_A_SSID)" ifname $(WIFI_IFACE) 2>&1 | grep -v "Password:" || true; \
 		sleep 3; \
 	fi
 	@echo "$(GREEN)Board A reachable at $(BOARD_A_IP)$(RESET)"
@@ -582,7 +582,7 @@ _connect-a-if-needed:
 _connect-b-if-needed:
 	@if ! ping -c 1 -W 2 $(BOARD_B_IP) >/dev/null 2>&1; then \
 		echo "$(CYAN)Not connected to Board B — connecting...$(RESET)"; \
-		echo "c03rad0r123" | sudo -S nmcli device wifi connect "$(BOARD_B_SSID)" ifname $(WIFI_IFACE) 2>&1 | grep -v "Password:" || true; \
+		echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(BOARD_B_SSID)" ifname $(WIFI_IFACE) 2>&1 | grep -v "Password:" || true; \
 		sleep 3; \
 	fi
 	@echo "$(GREEN)Board B reachable at $(BOARD_B_IP)$(RESET)"
@@ -805,11 +805,11 @@ test-cvm-mcp-a: ## End-to-end MCP tools/call via CVM on Board A
 #  LOCAL RELAY TESTS (Board B, feature/local-relay)
 # ===========================================================================
 
-RELAY_FIRMWARE_DIR = /home/c03rad0r/esp32-tollgate-hardening
+RELAY_FIRMWARE_DIR ?= $(HOME)/esp32-tollgate-hardening
 RELAY_IP           = $(BOARD_B_IP)
 RELAY_PORT_NUM     = 4869
 RELAY_SSID         = $(BOARD_B_SSID)
-RELAY_TESTS_DIR    = /home/c03rad0r/esp32-tollgate/tests/integration
+RELAY_TESTS_DIR    ?= $(RELAY_FIRMWARE_DIR)/tests/integration
 
 .PHONY: relay-build relay-flash-b relay-connect-b \
         relay-test-smoke relay-test-nip11 relay-test-pubsub \
@@ -913,7 +913,7 @@ relay-test-full: ## Run all relay tests sequentially (requires lock-b)
 #  Uses ARCH_BOARD / ARCH_PORT / ARCH_IP from boards.env
 # ===========================================================================
 
-ARCH_FIRMWARE_DIR  ?= /home/c03rad0r/esp32-tollgate-arch
+ARCH_FIRMWARE_DIR  ?= $(HOME)/esp32-tollgate-arch
 ARCH_IP            ?= 10.192.45.1
 ARCH_SSID          ?= TollGate-C0E9CA
 ARCH_PORT          ?= $(BOARD_C_PORT)
@@ -925,6 +925,7 @@ ARCH_SPIFFS_BIN    := /tmp/arch_spiffs.bin
 ARCH_SPIFFS_SIZE   := 0xF0000
 ARCH_SPIFFS_OFFSET := 0x410000
 ARCH_WIFI_SSID     ?= EnterSSID-2.4GHz
+ARCH_WIFI_PASSWORD ?= $(SUDO_PW)
 ARCH_REQ_DELAY     := 2
 
 define require_arch_lock
@@ -943,7 +944,7 @@ endef
 
 arch-build: ## Build arch (tollgate_core) firmware
 	@echo "$(CYAN)Building arch firmware in $(ARCH_FIRMWARE_DIR)...$(RESET)"
-	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && cd $(ARCH_FIRMWARE_DIR) && idf.py build 2>&1 | tail -5'
+	@bash -c '$(ESP_IDF_SH) && cd $(ARCH_FIRMWARE_DIR) && idf.py build 2>&1 | tail -5'
 	@echo "$(GREEN)Build complete$(RESET)"
 
 arch-generate-spiffs: ## Generate SPIFFS for arch firmware with auto-detected WPA mode
@@ -952,9 +953,9 @@ arch-generate-spiffs: ## Generate SPIFFS for arch firmware with auto-detected WP
 	@WPA_MODE=$$($(MAKE) --no-print-directory detect-wpa-security WIFI_SSID="$(ARCH_WIFI_SSID)"); \
 	WPA_MODE=$$(echo "$$WPA_MODE" | tail -1); \
 	echo "$(CYAN)Detected WPA mode: $$WPA_MODE$(RESET)"; \
-	python3 -c "import json,sys; json.dump({'nsec':'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2','wifi_networks':[{'ssid':'$(ARCH_WIFI_SSID)','password':'c03rad0r123!'}],'ap_password':'','wifi_auth_mode':sys.argv[1],'mint_url':'https://testnut.cashu.space','price_per_step':21,'step_size_ms':60000}, open('$(ARCH_SPIFFS_DIR)/config.json','w'), indent=2)" "$$WPA_MODE"
+	python3 -c "import json,sys; json.dump({'nsec':'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2','wifi_networks':[{'ssid':'$(ARCH_WIFI_SSID)','password':'$(ARCH_WIFI_PASSWORD)!'}],'ap_password':'','wifi_auth_mode':sys.argv[1],'mint_url':'https://testnut.cashu.space','price_per_step':21,'step_size_ms':60000}, open('$(ARCH_SPIFFS_DIR)/config.json','w'), indent=2)" "$$WPA_MODE"
 	@echo "$(CYAN)Building SPIFFS image ($(ARCH_SPIFFS_SIZE) bytes)...$(RESET)"
-	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && python3 $$IDF_PATH/components/spiffs/spiffsgen.py $(ARCH_SPIFFS_SIZE) $(ARCH_SPIFFS_DIR) $(ARCH_SPIFFS_BIN) 2>&1'
+	@bash -c 'source $(ESP_IDF_PATH)/export.sh 2>/dev/null && python3 $$IDF_PATH/components/spiffs/spiffsgen.py $(ARCH_SPIFFS_SIZE) $(ARCH_SPIFFS_DIR) $(ARCH_SPIFFS_BIN) 2>&1'
 	@echo "$(GREEN)SPIFFS image: $(ARCH_SPIFFS_BIN)$(RESET)"
 	@cat $(ARCH_SPIFFS_DIR)/config.json
 
@@ -963,9 +964,9 @@ arch-flash: ## Flash arch firmware + SPIFFS to arch board (requires lock-$(ARCH_
 	@$(MAKE) arch-build
 	@$(MAKE) arch-generate-spiffs
 	@echo "$(CYAN)Erasing flash on $(ARCH_PORT)...$(RESET)"
-	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 erase_flash 2>&1 | tail -3'
+	@bash -c 'source $(ESP_IDF_PATH)/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 erase_flash 2>&1 | tail -3'
 	@echo "$(CYAN)Flashing firmware + SPIFFS to $(ARCH_PORT)...$(RESET)"
-	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 $(ARCH_FIRMWARE_DIR)/build/bootloader/bootloader.bin 0x8000 $(ARCH_FIRMWARE_DIR)/build/partition_table/partition-table.bin 0x10000 $(ARCH_FIRMWARE_DIR)/build/esp32-tollgate.bin $(ARCH_SPIFFS_OFFSET) $(ARCH_SPIFFS_BIN) 2>&1 | tail -8'
+	@bash -c 'source $(ESP_IDF_PATH)/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 $(ARCH_FIRMWARE_DIR)/build/bootloader/bootloader.bin 0x8000 $(ARCH_FIRMWARE_DIR)/build/partition_table/partition-table.bin 0x10000 $(ARCH_FIRMWARE_DIR)/build/esp32-tollgate.bin $(ARCH_SPIFFS_OFFSET) $(ARCH_SPIFFS_BIN) 2>&1 | tail -8'
 	@echo "$(GREEN)Firmware + SPIFFS flashed to $(ARCH_PORT)$(RESET)"
 	@echo "$(CYAN)Waiting 70s for boot...$(RESET)"
 	@sleep 70
@@ -975,7 +976,7 @@ arch-flash-spiffs: ## Flash SPIFFS only to arch board (requires lock)
 	$(call require_arch_lock)
 	@$(MAKE) arch-generate-spiffs
 	@echo "$(CYAN)Flashing SPIFFS to $(ARCH_PORT) at offset $(ARCH_SPIFFS_OFFSET)...$(RESET)"
-	@bash -c 'source /home/c03rad0r/esp/esp-idf/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 --after no_reset write_flash $(ARCH_SPIFFS_OFFSET) $(ARCH_SPIFFS_BIN) 2>&1 | tail -5'
+	@bash -c 'source $(ESP_IDF_PATH)/export.sh 2>/dev/null && esptool.py --chip esp32s3 -p $(ARCH_PORT) -b 115200 --after no_reset write_flash $(ARCH_SPIFFS_OFFSET) $(ARCH_SPIFFS_BIN) 2>&1 | tail -5'
 	@echo "$(GREEN)SPIFFS flashed$(RESET)"
 
 arch-wait-ready: ## Wait for arch board HTTP server to be ready (polls :2121/usage)
@@ -995,13 +996,13 @@ arch-wait-ready: ## Wait for arch board HTTP server to be ready (polls :2121/usa
 arch-connect: ## WiFi connect to arch board AP (requires lock)
 	$(call require_arch_lock)
 	@echo "$(CYAN)Connecting $(ARCH_WIFI_IFACE) to $(ARCH_SSID)...$(RESET)"
-	@echo "c03rad0r123" | sudo -S nmcli device wifi connect "$(ARCH_SSID)" ifname $(ARCH_WIFI_IFACE) 2>&1 | grep -v "Password:" || true
+	@echo "$(SUDO_PW)" | sudo -S nmcli device wifi connect "$(ARCH_SSID)" ifname $(ARCH_WIFI_IFACE) 2>&1 | grep -v "Password:" || true
 	@sleep 3
 	@for i in 1 2 3 4 5; do ping -c 1 -W 2 $(ARCH_IP) >/dev/null 2>&1 && break; sleep 2; done
 	@echo "$(GREEN)Connected to $(ARCH_SSID) ($(ARCH_IP))$(RESET)"
 
 arch-disconnect: ## Disconnect WiFi from arch board AP
-	@echo "c03rad0r123" | sudo -S nmcli device disconnect $(ARCH_WIFI_IFACE) 2>&1 | grep -v "Password:" || true
+	@echo "$(SUDO_PW)" | sudo -S nmcli device disconnect $(ARCH_WIFI_IFACE) 2>&1 | grep -v "Password:" || true
 	@sleep 2
 	@echo "$(GREEN)Disconnected from board AP$(RESET)"
 
@@ -1071,7 +1072,7 @@ arch-test-full: ## Run all arch E2E tests sequentially (~4min)
 #  Pytest wrapper targets
 # ===========================================================================
 
-PYTEST := cd /home/c03rad0r/physical-router-test-automation/esp32 && pytest
+PYTEST := cd $(shell pwd) && pytest
 
 pytest-smoke-a: ## Pytest: Board A smoke tests
 	@$(PYTEST) tests/test_smoke.py --board=a -m smoke

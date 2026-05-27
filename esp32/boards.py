@@ -2,6 +2,7 @@ import os
 import subprocess
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass
@@ -43,15 +44,15 @@ class Config:
         cfg = Config()
         cfg.wifi_iface = _detect_wifi_iface()
         cfg.upstream_ssid = os.environ.get("UPSTREAM_SSID", "EnterSSID-2.4GHz")
-        cfg.sudo_pw = os.environ.get("SUDO_PW", "c03rad0r123")
+        cfg.sudo_pw = os.environ.get("SUDO_PW", "")
         cfg.lock_dir = os.environ.get(
             "LOCK_DIR",
-            "/home/c03rad0r/physical-router-test-automation/locks",
+            str(Path(__file__).resolve().parent.parent / "locks"),
         )
         cfg.mint_url = os.environ.get("MINT_URL", "https://testnut-nutshell.mints.orangesync.tech")
         cfg.fund_amount = int(os.environ.get("FUND_AMOUNT", "42"))
         cfg.firmware_dir = os.environ.get(
-            "FIRMWARE_DIR", "/home/c03rad0r/esp32-tollgate"
+            "FIRMWARE_DIR", ""
         )
 
         cfg.boards = {

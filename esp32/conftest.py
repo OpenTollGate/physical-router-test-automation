@@ -59,7 +59,7 @@ def board_lock(request, config, board_config):
                 owner = line.split(":", 1)[1].strip().split("@")[0]
                 current_user = os.environ.get("USER", "unknown")
                 if owner != current_user:
-                    pytest.exit(
+                    pytest.skip(
                         f"\n  Board {board_config.id} locked by another session:\n"
                         f"  {existing}\n"
                         f"  Use --force-unlock to override."

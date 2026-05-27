@@ -1251,6 +1251,7 @@ def collect_and_render(config: WorkerConfig, results_dir: str, started_at: str, 
         f"--suite-commit {config.suite_ref} --client-type container "
         f"--router-id gcp-cloud --router-model gcp-n2-standard-2 --router-arch {CLOUD_ARCH} "
         f"--viewport desktop --test-plan cloud-api --query-router {OPENWRT_IP} --virtual-lab "
+        f"--lab-type gcloud --tier api --scope full --profile gcloud-api "
         f"--started-at {started_at} --finished-at {finished_at} --allow-failures",
         timeout=60,
     )
