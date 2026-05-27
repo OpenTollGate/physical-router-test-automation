@@ -491,6 +491,7 @@ def cashu():
     for attempt in range(5):
         try:
             minter.ensure_mint_available(timeout=10)
+            minter.warmup(timeout=30)
             return minter
         except MintUnavailableError as exc:
             if attempt < 4:

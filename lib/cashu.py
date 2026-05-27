@@ -145,7 +145,25 @@ class CashuMint:
     def _timeout_handler(self, signum, frame):
         raise _MintTimeoutError()
 
-    def mint(self, amount: int = 4, legacy: bool = True, timeout: int = 60, retries: int = 2) -> str:
+    def warmup(self, timeout: int = 60) -> None:
+        """Pre-initialize the cashu wallet DB and fetch keysets.
+
+        The first ``cashu`` CLI call is slow (Python startup + wallet DB
+        creation + keyset fetch ≈ 10-15 s on a cold GCP VM).  Calling this
+        once during fixture setup prevents the first real ``mint()`` from
+        blowing past the SIGALRM deadline.
+        """
+        if not self.is_available():
+            return
+        try:
+            subprocess.run(
+                [self._cashu, "-h", self.mint_url, "-t", "balance"],
+                capture_output=True, text=True, timeout=timeout, env=self._env(),
+            )
+        except (subprocess.TimeoutExpired, Exception):
+            pass  # non-fatal — the real mint() will retry
+
+    def mint(self, amount: int = 4, legacy: bool = True, timeout: int = 120, retries: int = 2) -> str:
         if not self.is_available():
             raise RuntimeError(f"cashu venv not found at {self.venv_path}")
 
@@ -267,6 +285,18 @@ class CdkCliWallet:
         raise RuntimeError(
             f"cdk-cli send produced no token: {send_r.stdout[-300:]}"
         )
+
+    def warmup(self, timeout: int = 60) -> None:
+        """Pre-initialize the CDK CLI by running a lightweight command."""
+        if not self.is_available():
+            return
+        try:
+            subprocess.run(
+                [self._cli, "--help"],
+                capture_output=True, text=True, timeout=timeout,
+            )
+        except (subprocess.TimeoutExpired, Exception):
+            pass  # non-fatal
 
     def mint(self, amount: int = 4, legacy: bool = False, timeout: int = 60,
              retries: int = 2) -> str:
