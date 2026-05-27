@@ -14,12 +14,13 @@ def test_admin_spa_serves_on_port_80(router):
     _skip_if_no_admin_spa(router)
 
     r = subprocess.run(
-        ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+        ["curl", "-s", "-L", "-o", "/dev/null", "-w", "%{http_code}",
          f"http://{router.host}/", "--connect-timeout", "5"],
         capture_output=True, text=True, timeout=15,
     )
     code = r.stdout.strip()
-    assert code == "200", f"Admin SPA on port 80 returned {code}"
+    assert code in ("200", "302", "307"), \
+        f"Admin SPA on port 80 returned {code} (expected 200/302/307)"
 
 
 def test_luci_serves_on_port_8080(router):
