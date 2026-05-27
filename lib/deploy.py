@@ -107,65 +107,81 @@ def _transfer_to_router(router, local_path, remote_path):
     log.info("Transfer verified: %d bytes", local_size)
 
 
-def _fix_ar_member_names(ipk_path: Path) -> None:
-    """Strip trailing slashes from ar archive member names in-place.
+def _repack_ar_to_targz(ipk_path: Path) -> None:
+    """Convert an ar-wrapped (Debian format) ipk to gzip tar (OpenWrt format).
 
-    Some CI build systems produce ipks with member names like
-    ``debian-binary/`` (trailing slash).  OpenWrt's opkg rejects these
-    as "Malformed package file".  Rewrite the file with clean names.
+    Some CI build systems (e.g. configurationwizzard) produce ipks in
+    Debian's ar archive format.  OpenWrt's opkg expects gzip-compressed
+    tar archives containing ``./debian-binary``, ``./control.tar.gz``,
+    and ``./data.tar.gz``.  This function extracts the ar members and
+    repacks them into the correct format.
+
+    If the file is already gzip tar format, this is a no-op.
     """
-    import struct
+    import tarfile
+    import io
 
     with open(ipk_path, "rb") as f:
         data = f.read()
+
+    # Already gzip tar format — nothing to do
+    if data[:2] == b"\x1f\x8b":
+        return
 
     ar_magic = b"!<arch>\n"
     if not data.startswith(ar_magic):
         return
 
-    out = bytearray(ar_magic)
+    # Parse ar archive: extract debian-binary, control.tar.gz, data.tar.gz
+    members: dict[str, bytes] = {}
     pos = len(ar_magic)
-    fixed = 0
 
     while pos < len(data):
         if pos + 60 > len(data):
             break
         header = data[pos:pos + 60]
-        name_field = header[0:16]
-        size_field = header[48:58]
-
-        size_str = size_field.decode("ascii", errors="replace").strip()
-        if not size_str:
+        name_field = header[0:16].decode("ascii", errors="replace")
+        size_field = header[48:58].decode("ascii", errors="replace").strip()
+        if not size_field:
             break
-        member_size = int(size_str)
+        member_size = int(size_field)
 
-        stripped = name_field.rstrip()  # remove trailing spaces
-        stripped = stripped.rstrip(b"/")  # remove trailing slash
-        if stripped != name_field.rstrip():
-            fixed += 1
-            padded = stripped + b" " * (16 - len(stripped))
-            header = padded + header[16:]
-
-        out += header
-
+        # Strip trailing spaces and slashes from name
+        name = name_field.strip().rstrip("/")
         content_start = pos + 60
         content_end = content_start + member_size
         if content_end > len(data):
             break
-        out += data[content_start:content_end]
+
+        members[name] = data[content_start:content_end]
 
         # ar pads to 2-byte boundary
         if member_size % 2:
-            pad = data[content_end:content_end + 1]
-            out += pad
             content_end += 1
-
         pos = content_end
 
-    if fixed:
-        log.info("Fixed %d ar member name(s) in %s", fixed, ipk_path.name)
-        with open(ipk_path, "wb") as f:
-            f.write(out)
+    if not members:
+        log.warning("No ar members found in %s — skipping repack", ipk_path.name)
+        return
+
+    log.info(
+        "Repacking ar→targz: %s (members: %s)",
+        ipk_path.name, ", ".join(members.keys()),
+    )
+
+    # Write gzip tar with ./ prefix (matching OpenWrt's buildroot output)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for name, content in members.items():
+            info = tarfile.TarInfo(name=f"./{name}")
+            info.size = len(content)
+            tf.addfile(info, io.BytesIO(content))
+
+    with open(ipk_path, "wb") as f:
+        f.write(buf.getvalue())
+
+    log.info("Repacked %s: %d bytes ar → %d bytes tar.gz",
+             ipk_path.name, len(data), ipk_path.stat().st_size)
 
 
 def _parse_version(opkg_line):
@@ -740,7 +756,7 @@ def deploy_portal(router, portal, arch: str | None = None, branch: str = "main")
         output_name=f"portal-{portal.type}-{arch}.ipk",
     )
 
-    _fix_ar_member_names(ipk_path)
+    _repack_ar_to_targz(ipk_path)
 
     log.info("Installing portal package %s from %s", portal.package_name, ipk_path.name)
     _transfer_to_router(router, ipk_path, "/tmp/portal.ipk")
