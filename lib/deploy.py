@@ -87,9 +87,85 @@ def _scp_to_router(router, local_path, remote_path):
         cmd += ["-P", str(router.port)]
 
     cmd += [str(local_path), f"root@{router.host}:{remote_path}"]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=_ssh_env())
+    r = subprocess.run(cmd, capture_output=True, timeout=120, env=_ssh_env())
     if r.returncode != 0:
-        raise RuntimeError(f"SCP failed (exit {r.returncode}): {r.stderr.strip()[:300]}")
+        raise RuntimeError(f"SCP failed (exit {r.returncode}): {r.stderr.decode(errors='replace').strip()[:300]}")
+
+
+def _transfer_to_router(router, local_path, remote_path):
+    """Transfer a binary file to router via SCP (bytes mode) with size verification."""
+    _scp_to_router(router, local_path, remote_path)
+
+    file_path = Path(local_path)
+    local_size = file_path.stat().st_size
+    remote_size_out = router.ssh(f"wc -c < {remote_path}", timeout=10).strip()
+    remote_size = int(remote_size_out) if remote_size_out else 0
+    if remote_size != local_size:
+        raise RuntimeError(
+            f"Transfer size mismatch: local={local_size} remote={remote_size} for {file_path.name}"
+        )
+    log.info("Transfer verified: %d bytes", local_size)
+
+
+def _fix_ar_member_names(ipk_path: Path) -> None:
+    """Strip trailing slashes from ar archive member names in-place.
+
+    Some CI build systems produce ipks with member names like
+    ``debian-binary/`` (trailing slash).  OpenWrt's opkg rejects these
+    as "Malformed package file".  Rewrite the file with clean names.
+    """
+    import struct
+
+    with open(ipk_path, "rb") as f:
+        data = f.read()
+
+    ar_magic = b"!<arch>\n"
+    if not data.startswith(ar_magic):
+        return
+
+    out = bytearray(ar_magic)
+    pos = len(ar_magic)
+    fixed = 0
+
+    while pos < len(data):
+        if pos + 60 > len(data):
+            break
+        header = data[pos:pos + 60]
+        name_field = header[0:16]
+        size_field = header[48:58]
+
+        size_str = size_field.decode("ascii", errors="replace").strip()
+        if not size_str:
+            break
+        member_size = int(size_str)
+
+        stripped = name_field.rstrip()  # remove trailing spaces
+        stripped = stripped.rstrip(b"/")  # remove trailing slash
+        if stripped != name_field.rstrip():
+            fixed += 1
+            padded = stripped + b" " * (16 - len(stripped))
+            header = padded + header[16:]
+
+        out += header
+
+        content_start = pos + 60
+        content_end = content_start + member_size
+        if content_end > len(data):
+            break
+        out += data[content_start:content_end]
+
+        # ar pads to 2-byte boundary
+        if member_size % 2:
+            pad = data[content_end:content_end + 1]
+            out += pad
+            content_end += 1
+
+        pos = content_end
+
+    if fixed:
+        log.info("Fixed %d ar member name(s) in %s", fixed, ipk_path.name)
+        with open(ipk_path, "wb") as f:
+            f.write(out)
 
 
 def _parse_version(opkg_line):
@@ -298,7 +374,8 @@ def ensure_artifact(
 
 
 def download_artifact(branch: str, arch: str, run_id: str | None = None,
-                      repo: str | None = None, workflow: str | None = None) -> Path:
+                      repo: str | None = None, workflow: str | None = None,
+                      output_name: str | None = None) -> Path:
     artifact_repo = repo or REPO
     artifact_workflow = workflow or WORKFLOW
     if BUILD_DIR.exists():
@@ -378,7 +455,8 @@ def download_artifact(branch: str, arch: str, run_id: str | None = None,
         raise RuntimeError(f"No .ipk found for arch '{arch}'. Available: {available or 'none'}")
 
     src = matches[0]
-    flat = BUILD_DIR / f"tollgate-wrt-{arch}.ipk"
+    flat_name = output_name or f"tollgate-wrt-{arch}.ipk"
+    flat = BUILD_DIR / flat_name
     if src.resolve() != flat.resolve():
         shutil.copy2(src, flat)
 
@@ -620,6 +698,77 @@ def firstboot_reset(router, expected_mac: str | None = None) -> dict[str, object
     install_test_deps(router)
 
     return {"success": True, "rebooted": True}
+
+
+def deploy_portal(router, portal, arch: str | None = None, branch: str = "main") -> dict[str, object]:
+    """Download and install an alternative portal .ipk on the router.
+
+    Only runs when ``portal.needs_separate_deploy`` is True (i.e. not
+    the built-in portal).  The portal package must PROVIDE
+    ``tollgate-captive-portal-site`` and CONFLICT with the built-in
+    portal so that ``opkg`` handles the symlink swap automatically.
+    """
+    from lib.portal import PortalConfig
+
+    assert isinstance(portal, PortalConfig)
+    if not portal.needs_separate_deploy:
+        return {"skipped": True, "reason": "builtin portal"}
+
+    if not arch:
+        env_arch = os.environ.get("TOLLGATE_ROUTER_ARCH")
+        if env_arch:
+            arch = env_arch
+        else:
+            arch = detect_arch(router)
+            log.info("Auto-detected router arch: %s", arch)
+
+    assert portal.repo is not None
+    assert portal.workflow is not None
+
+    log.info("Downloading portal artifact from %s@%s", portal.repo, branch)
+    run_id = ensure_artifact(
+        branch=branch,
+        arch=arch,
+        repo=portal.repo,
+        workflow=portal.workflow,
+    )
+    ipk_path = download_artifact(
+        branch, arch,
+        run_id=run_id,
+        repo=portal.repo,
+        workflow=portal.workflow,
+        output_name=f"portal-{portal.type}-{arch}.ipk",
+    )
+
+    _fix_ar_member_names(ipk_path)
+
+    log.info("Installing portal package %s from %s", portal.package_name, ipk_path.name)
+    _transfer_to_router(router, ipk_path, "/tmp/portal.ipk")
+
+    install_out = router.ssh(
+        "opkg install --force-overwrite --force-depends /tmp/portal.ipk 2>&1"
+        "; rm -f /tmp/portal.ipk",
+        timeout=120,
+    )
+    log.info("opkg install output: %s", (install_out or "").strip()[:500])
+
+    pkg_name = portal.package_name or portal.type
+    check = router.ssh(f"opkg list-installed | grep -w {pkg_name}", timeout=10)
+    installed = bool(check.strip())
+    if installed:
+        log.info("Portal %s installed successfully", portal.type)
+        router.ssh("/etc/init.d/nodogsplash restart 2>/dev/null || true", timeout=30)
+    else:
+        log.error(
+            "Portal %s failed to install. opkg output: %s",
+            portal.type, (install_out or "").strip()[:500],
+        )
+
+    return {
+        "success": installed,
+        "portal_type": portal.type,
+        "package": pkg_name,
+    }
 
 
 def deploy_branch(router, branch: str, arch: str | None = None,

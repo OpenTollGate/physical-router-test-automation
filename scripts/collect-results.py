@@ -375,6 +375,7 @@ def main():
     parser.add_argument("--sut-branch", default=None)
     parser.add_argument("--sut-pr", type=int, default=None)
     parser.add_argument("--sut-backend", default=None)
+    parser.add_argument("--portal", default=None, help="Captive portal theme (builtin, net4sats)")
     parser.add_argument("--sut-version", default="unknown")
     parser.add_argument("--suite-commit", default=None)
     parser.add_argument("--router-id", default=None)
@@ -519,6 +520,7 @@ def main():
         "branch": args.sut_branch or "unknown",
         "pr": args.sut_pr,
         "backend": args.sut_backend or "unknown",
+        "portal": args.portal or "builtin",
         "installed_version": args.sut_version or "unknown",
     }
 

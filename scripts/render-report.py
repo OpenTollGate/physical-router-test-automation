@@ -242,6 +242,7 @@ def render_sut(run):
     branch = sut.get("branch", "unknown")
     pr = sut.get("pr")
     backend = sut.get("backend", "unknown")
+    portal = sut.get("portal", "builtin")
     version = sut.get("installed_version", "unknown")
 
     repo_url = gh_repo_url(repo)
@@ -263,6 +264,7 @@ def render_sut(run):
     <span class="label">Branch</span><span class="value">{esc(branch)}</span>
     <span class="label">PR</span><span class="value">{pr_cell}</span>
     <span class="label">Backend</span><span class="value">{esc(backend)}</span>
+    <span class="label">Portal</span><span class="value">{esc(portal)}</span>
     <span class="label">Version</span><span class="value mono">{esc(version)}</span>
   </div>
 </div>"""

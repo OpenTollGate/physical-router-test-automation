@@ -208,6 +208,8 @@ _OVERLAY_ALLOWLIST = {
     "lib/cloud_lab/constants.py",
     "lib/cloud_lab/gcp.py",
     "lib/cloud_lab/worker.py",
+    "lib/deploy.py",
+    "lib/portal.py",
     "lib/helpers.py",
     "lib/router.py",
     "lib/cashu.py",
@@ -215,10 +217,14 @@ _OVERLAY_ALLOWLIST = {
     "pytest.ini",
     "scripts/cloud-lab.py",
     "scripts/virtual-lab.py",
+    "scripts/collect-results.py",
+    "scripts/render-report.py",
     "tests/conftest.py",
     "tests/api/test_concurrent_payments.py",
     "tests/api/test_edge_tokens.py",
     "tests/api/test_e2e_portal_payment.py",
+    "tests/api/test_lightning_portal.py",
+    "tests/api/test_portal_verify.py",
     "tests/api/test_mac80211_hwsim.py",
     "tests/api/test_dual_mint.py",
     "tests/scenarios/test_reseller_mode.py",
@@ -278,12 +284,12 @@ def _build_startup_script(suite_overlay_b64: str = "") -> str:
         exec >> /var/log/tollgate-run.log 2>&1
         echo "=== TollGate cloud worker started $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
-        # Hard kill switch: VM self-destructs after 2 hours regardless of test state.
-        # This prevents runaway costs from forgotten --keep-vm-on-failure VMs.
-        # The worker also has its own 2h timeout, but this is the last line of defense.
-        setsid bash -c 'sleep 7200 && echo "2h kill switch triggered" >> /var/log/tollgate-run.log && shutdown -h now "TollGate 2h max lifetime exceeded"' </dev/null >/dev/null 2>&1 &
+        # Hard kill switch: VM self-destructs after 1 hour regardless of test state.
+        # This prevents runaway costs from forgotten VMs.
+        # The worker also has its own 1h timeout, but this is the last line of defense.
+        setsid bash -c 'sleep 3600 && echo "1h kill switch triggered" >> /var/log/tollgate-run.log && shutdown -h now "TollGate 1h max lifetime exceeded"' </dev/null >/dev/null 2>&1 &
         KILL_SWITCH_PID=$!
-        echo "Kill switch armed: PID=$KILL_SWITCH_PID (shutdown in 7200s)"
+        echo "Kill switch armed: PID=$KILL_SWITCH_PID (shutdown in 3600s)"
 
         export HOME="/root"
         export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -359,6 +365,7 @@ def submit_run(
     secondary_router_port: str = "",
     keep_vm_on_failure: bool = False,
     mint: str = "auto",
+    portal: str = "builtin",
 ) -> dict[str, str]:
     """Pre-flight artifact check, then create fire-and-forget GCP VM. Returns run metadata."""
     cleanup_stale(max_age_hours=2)
@@ -402,6 +409,7 @@ def submit_run(
         "tollgate-secondary-router-port": secondary_router_port,
         "tollgate-keep-vm-on-failure": "true" if keep_vm_on_failure else "false",
         "tollgate-mint": mint,
+        "tollgate-portal": portal,
     }
     metadata_payload = ",".join(f"{k}={v}" for k, v in metadata.items())
 

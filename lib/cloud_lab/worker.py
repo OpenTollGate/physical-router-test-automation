@@ -106,6 +106,7 @@ class WorkerConfig:
     vm_name: str
     gh_token: str
     mint: str
+    portal: str
 
 
 def _metadata_get(key: str) -> str:
@@ -138,18 +139,19 @@ def load_config_from_metadata() -> WorkerConfig:
         two_router=_metadata_get_optional("tollgate-two-router").lower() in ("true", "1", "yes"),
         secondary_router_host=_metadata_get_optional("tollgate-secondary-router-host"),
         secondary_router_port=_metadata_get_optional("tollgate-secondary-router-port"),
-        keep_vm_on_failure=_metadata_get_optional("tollgate-keep-vm-on-failure").lower() in ("true", "1", "yes"),
+        keep_vm_on_failure=_metadata_get_optional("tollgate-keep-vm-on-failure").lower() not in ("false", "0", "no"),
         publish=_metadata_get("tollgate-publish").lower() in ("true", "1", "yes"),
         project=_metadata_get("tollgate-project"),
         zone=_metadata_get("tollgate-zone"),
         vm_name=_metadata_get("tollgate-vm-name"),
         gh_token=_metadata_get("tollgate-gh-token"),
         mint=_metadata_get_optional("tollgate-mint", "auto"),
+        portal=_metadata_get_optional("tollgate-portal", "builtin"),
     )
     log.info(
-        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s",
+        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s portal=%s",
         cfg.run_id, cfg.sut_branch, cfg.artifact_repo, cfg.backend,
-        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure, cfg.mint,
+        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure, cfg.mint, cfg.portal,
     )
     log.info(
         "Artifact: run_id=%s suite_ref=%s reseller=%s secondary=%s",
@@ -1042,6 +1044,46 @@ sys.exit(0 if ok else 1)
     log.info("Deploy complete for %d host(s)", 1 + bool(config.secondary_router_host))
 
 
+def deploy_portal_overlay(config: WorkerConfig) -> None:
+    """Download and install an alternative portal .ipk on the OpenWrt VM."""
+    from lib.portal import PortalConfig
+
+    portal = PortalConfig(config.portal)
+    if not portal.needs_separate_deploy:
+        return
+
+    repo_arg = repr(portal.repo)
+    workflow_arg = repr(portal.workflow)
+    portal_type_arg = repr(portal.type)
+    py = f"""
+import logging
+import os
+import sys
+
+from lib.portal import PortalConfig
+from lib.deploy import deploy_portal
+from lib.router import Router
+from lib.backend import BackendConfig
+
+os.environ["TOLLGATE_DISABLE_ARTIFACT_RERUN"] = "1"
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s", datefmt="%H:%M:%S")
+
+backend = BackendConfig({repr(config.backend)})
+router = Router(host={OPENWRT_IP!r}, phone_ip='', phone_mac='', domain='', backend=backend)
+portal = PortalConfig({portal_type_arg})
+
+result = deploy_portal(router, portal, arch={CLOUD_ARCH!r})
+print(f"portal={{portal.type}} success={{result.get('success')}} skipped={{result.get('skipped', False)}}")
+sys.exit(0 if result.get('success') or result.get('skipped') else 1)
+"""
+    _run(
+        f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
+        f"python3 -c {shlex.quote(py)}",
+        timeout=300,
+    )
+    log.info("Portal overlay deploy complete: %s", config.portal)
+
+
 def wait_for_backend() -> None:
     for attempt in range(30):
         r = _run(f"curl -s -o /dev/null -w '%{{http_code}}' http://{OPENWRT_IP}:2121/ || true", timeout=10, check=False)
@@ -1249,6 +1291,7 @@ def collect_and_render(config: WorkerConfig, results_dir: str, started_at: str, 
         f"--sut-repo {config.artifact_repo} --sut-branch {shlex.quote(config.sut_branch)} "
         f"{commit_arg}{pr_arg}--sut-backend {config.backend} "
         f"--suite-commit {config.suite_ref} --client-type container "
+        f"--portal {config.portal} "
         f"--router-id gcp-cloud --router-model gcp-n2-standard-2 --router-arch {CLOUD_ARCH} "
         f"--viewport desktop --test-plan cloud-api --query-router {OPENWRT_IP} --virtual-lab "
         f"--lab-type gcloud --tier api --scope full --profile gcloud-api "
@@ -1260,6 +1303,68 @@ def collect_and_render(config: WorkerConfig, results_dir: str, started_at: str, 
         f"python3 scripts/render-report.py --run-dir {results_dir}",
         timeout=60,
     )
+
+
+def _create_minimal_run_json(
+    config: WorkerConfig, results_dir: str, started_at: str, finished_at: str, test_exit: int
+) -> None:
+    results_path = Path(results_dir)
+    run_json = results_path / "run.json"
+    if run_json.exists():
+        return
+
+    passed = failed = skipped = error = 0
+    for junit in results_path.rglob("junit.xml"):
+        try:
+            import xml.etree.ElementTree as ET
+            tree = ET.parse(junit)
+            root = tree.getroot()
+            passed += int(root.get("tests", 0)) - int(root.get("failures", 0)) - int(root.get("errors", 0)) - int(root.get("skipped", 0))
+            failed += int(root.get("failures", 0))
+            skipped += int(root.get("skipped", 0))
+            error += int(root.get("errors", 0))
+        except Exception:
+            pass
+
+    commit_short = (config.sut_commit or "")[:7] or "unknown"
+    run_data = {
+        "schema_version": 1,
+        "run_id": config.run_id,
+        "status": "failed" if test_exit != 0 else "passed",
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "counts": {"passed": passed, "failed": failed, "skipped": skipped, "error": error},
+        "sut": {
+            "repo": config.artifact_repo,
+            "branch": config.sut_branch,
+            "commit": config.sut_commit or "unknown",
+            "commit_short": commit_short,
+            "pr": config.sut_pr,
+            "backend": config.backend,
+            "portal": config.portal,
+        },
+        "lab": {"router_id": "gcp-cloud", "client_type": "container", "lab_type": "gcloud"},
+        "note": "minimal run.json created after collect_and_render failure",
+    }
+    results_path.mkdir(parents=True, exist_ok=True)
+    run_json.write_text(json.dumps(run_data, indent=2))
+    log.info("Created minimal run.json: %d passed, %d failed, %d skipped", passed, failed, skipped)
+
+    summary_path = results_path / "summary.json"
+    if not summary_path.exists():
+        summary_data = {"tests": [], "counts": run_data["counts"]}
+        summary_path.write_text(json.dumps(summary_data, indent=2))
+
+    report_dir = results_path / "report"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    index_html = report_dir / "index.html"
+    if not index_html.exists():
+        index_html.write_text(
+            f"<html><head><title>Run {config.run_id}</title></head>"
+            f"<body><h1>Run {config.run_id}</h1>"
+            f"<p>passed={passed} failed={failed} skipped={skipped}</p>"
+            f"<p>collect_and_render failed — minimal report</p></body></html>"
+        )
 
 
 def publish_results(config: WorkerConfig, results_dir: str) -> str:
@@ -1421,75 +1526,102 @@ def run_worker(config: WorkerConfig) -> int:
     started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     test_exit = 1
     wall_t0 = time.monotonic()
-    MAX_WALL_SECONDS = 7200
+    MAX_WALL_SECONDS = 3600
     vm_streams: list[tuple[threading.Thread, subprocess.Popen[str], Any]] = []
     local_mints: dict[str, subprocess.Popen[str]] = {}
     syslog_proc: subprocess.Popen[str] | None = None
 
     try:
-        log.info("=== Pipeline start ===")
-
-        os.environ["GH_TOKEN"] = config.gh_token
-        log.info("[1/10] Suite checkout (ref=%s)", config.suite_ref[:7])
-        ensure_suite_checkout(config)
-
-        log.info("[2/10] Outer deps (venv + cashu)")
-        ensure_outer_deps()
-
-        log.info("[3/10] GitHub CLI auth (token=***%s)", config.gh_token[-4:] if len(config.gh_token) > 8 else "***")
-        ensure_github_cli(config.gh_token)
-
-        log.info("[4/10] Inner VMs (OpenWrt + Debian)")
-        start_inner_vms(config)
-
-        log.info("[4.5/10] Start syslog capture + configure OpenWrt forwarding")
         try:
-            syslog_proc = start_syslog_capture(results_dir)
+            log.info("=== Pipeline start ===")
+
+            os.environ["GH_TOKEN"] = config.gh_token
+            log.info("[1/10] Suite checkout (ref=%s)", config.suite_ref[:7])
+            ensure_suite_checkout(config)
+
+            log.info("[2/10] Outer deps (venv + cashu)")
+            ensure_outer_deps()
+
+            log.info("[3/10] GitHub CLI auth (token=***%s)", config.gh_token[-4:] if len(config.gh_token) > 8 else "***")
+            ensure_github_cli(config.gh_token)
+
+            log.info("[4/10] Inner VMs (OpenWrt + Debian)")
+            start_inner_vms(config)
+
+            log.info("[4.5/10] Start syslog capture + configure OpenWrt forwarding")
+            try:
+                syslog_proc = start_syslog_capture(results_dir)
+            except Exception as exc:
+                log.warning("Syslog capture start failed (non-fatal): %s", exc)
+            try:
+                configure_openwrt_syslog(OPENWRT_IP)
+                if config.secondary_router_host:
+                    configure_openwrt_syslog(config.secondary_router_host)
+            except Exception as exc:
+                log.warning("OpenWrt syslog config failed (non-fatal): %s", exc)
+
+            log.info("[5/10] Start local mints (CDK + Nutshell)")
+            local_mints = start_local_mints(config)
+
+            log.info("[6/10] Write .env + Debian client deps")
+            write_env_file(config)
+            ensure_debian_client_deps()
+
+            log.info("[7/10] Deploy TollGate (branch=%s, artifact_run=%s)", config.sut_branch, config.artifact_run_id)
+            deploy_tollgate(config)
+
+            log.info("[8/10] Wait for backend health")
+            wait_for_backend()
+
+            if config.portal != "builtin":
+                log.info("[8.1/10] Deploy portal overlay (%s)", config.portal)
+                try:
+                    deploy_portal_overlay(config)
+                except Exception as portal_exc:
+                    log.error("Portal overlay failed (non-fatal, tests may skip): %s", _redact(str(portal_exc))[:500])
+
+            log.info("[8.5/10] Select test mint (forced=%s)", config.mint)
+            chosen_mint = select_test_mint(forced_mint=config.mint)
+            env_path = Path(f"{TEST_DIR}/.env")
+            if env_path.exists():
+                env_text = env_path.read_text()
+                env_text = env_text.replace(f"TOLLGATE_TEST_MINT_URL={CDK_MINT_URL}", f"TOLLGATE_TEST_MINT_URL={chosen_mint}")
+                env_path.write_text(env_text)
+                log.info("Updated .env TOLLGATE_TEST_MINT_URL=%s", chosen_mint)
+
+            log.info("[9/10] Run tests (results_dir=%s)", results_dir)
+            vm_streams = _start_vm_log_streaming(config, results_dir)
+            try:
+                test_exit = run_tests(config, results_dir)
+            finally:
+                _stop_vm_log_streaming(vm_streams)
+            log.info("Tests finished with exit=%d (%.1fs elapsed)", test_exit, time.monotonic() - wall_t0)
+
         except Exception as exc:
-            log.warning("Syslog capture start failed (non-fatal): %s", exc)
-        try:
-            configure_openwrt_syslog(OPENWRT_IP)
-            if config.secondary_router_host:
-                configure_openwrt_syslog(config.secondary_router_host)
-        except Exception as exc:
-            log.warning("OpenWrt syslog config failed (non-fatal): %s", exc)
+            elapsed = time.monotonic() - wall_t0
+            import traceback
+            log.error("Pipeline failed at step: %s (%.1fs elapsed)\n%s", _redact(str(exc))[:200], elapsed, traceback.format_exc())
+            if elapsed >= MAX_WALL_SECONDS:
+                log.error("1h max lifetime exceeded — force-deleting VM")
+                stop_inner_vms()
+                delete_self(config)
+                return 1
+            test_exit = 1
 
-        log.info("[5/10] Start local mints (CDK + Nutshell)")
-        local_mints = start_local_mints(config)
-
-        log.info("[6/10] Write .env + Debian client deps")
-        write_env_file(config)
-        ensure_debian_client_deps()
-
-        log.info("[7/10] Deploy TollGate (branch=%s, artifact_run=%s)", config.sut_branch, config.artifact_run_id)
-        deploy_tollgate(config)
-
-        log.info("[8/10] Wait for backend health")
-        wait_for_backend()
-
-        log.info("[8.5/10] Select test mint (forced=%s)", config.mint)
-        chosen_mint = select_test_mint(forced_mint=config.mint)
-        env_path = Path(f"{TEST_DIR}/.env")
-        if env_path.exists():
-            env_text = env_path.read_text()
-            env_text = env_text.replace(f"TOLLGATE_TEST_MINT_URL={CDK_MINT_URL}", f"TOLLGATE_TEST_MINT_URL={chosen_mint}")
-            env_path.write_text(env_text)
-            log.info("Updated .env TOLLGATE_TEST_MINT_URL=%s", chosen_mint)
-
-        log.info("[9/10] Run tests (results_dir=%s)", results_dir)
-        vm_streams = _start_vm_log_streaming(config, results_dir)
-        try:
-            test_exit = run_tests(config, results_dir)
-        finally:
-            _stop_vm_log_streaming(vm_streams)
-        log.info("Tests finished with exit=%d (%.1fs elapsed)", test_exit, time.monotonic() - wall_t0)
-
+        # ── Collect, render, publish (always attempted) ──────────────
         finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        log.info("[10/10] Collect + render results")
-        collect_and_render(config, results_dir, started_at, finished_at)
+
+        try:
+            log.info("[10/10] Collect + render results")
+            collect_and_render(config, results_dir, started_at, finished_at)
+        except Exception as collect_exc:
+            log.error("collect_and_render failed (non-fatal): %s", _redact(str(collect_exc))[:500])
+
+        run_json = Path(results_dir) / "run.json"
+        if not run_json.exists():
+            _create_minimal_run_json(config, results_dir, started_at, finished_at, test_exit)
 
         counts: dict[str, Any] = {}
-        run_json = Path(results_dir) / "run.json"
         if run_json.exists():
             counts = json.loads(run_json.read_text()).get("counts", {})
 
@@ -1515,31 +1647,21 @@ def run_worker(config: WorkerConfig) -> int:
             time.monotonic() - wall_t0,
         )
         return test_exit
-    except Exception as exc:
-        elapsed = time.monotonic() - wall_t0
-        import traceback
-        log.error("Pipeline failed at step: %s (%.1fs elapsed)\n%s", _redact(str(exc))[:200], elapsed, traceback.format_exc())
-        if elapsed >= MAX_WALL_SECONDS:
-            log.error("2h max lifetime exceeded — force-deleting VM")
-            stop_inner_vms()
-            delete_self(config)
-            return 1
-        raise
     finally:
         elapsed = time.monotonic() - wall_t0
         force_delete = elapsed >= MAX_WALL_SECONDS
         if force_delete:
-            log.warning("2h max lifetime reached (%.1fs) — forcing VM deletion regardless of keep_vm_on_failure", elapsed)
+            log.warning("1h max lifetime reached (%.1fs) — forcing VM deletion regardless of self_delete setting", elapsed)
         if syslog_proc and syslog_proc.poll() is None:
             syslog_proc.kill()
         stop_local_mints(local_mints)
         stop_inner_vms()
         if force_delete:
-            log.info("Force-deleting VM (2h lifetime exceeded)")
+            log.info("Force-deleting VM (1h lifetime exceeded)")
             delete_self(config)
         elif config.keep_vm_on_failure:
             log.warning("Keeping VM alive for debugging (keep_vm_on_failure=true). "
-                        "Kill switch will shut it down at 2h if still running.")
+                        "Kill switch will shut it down at 1h if still running.")
         else:
             log.info("Self-deleting VM %s", config.vm_name)
             delete_self(config)

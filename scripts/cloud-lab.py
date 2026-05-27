@@ -139,15 +139,17 @@ def cmd_submit(args: argparse.Namespace) -> int:
         two_router=cast(bool, args.two_router),
         secondary_router_host=cast(str, args.secondary_router_host or ""),
         secondary_router_port=cast(str, args.secondary_router_port or ""),
-        keep_vm_on_failure=cast(bool, args.keep_vm_on_failure),
+        keep_vm_on_failure=not getattr(args, "self_delete", False),
         mint=cast(str, args.mint),
+        portal=cast(str, args.portal),
     )
     pr_line = f"  PR:           {target.pr} ({target.repo}@{target.branch})\n" if target.pr else f"  Branch:       {target.repo}@{target.branch}\n"
     mint_line = f"  Mint:         {cast(str, args.mint)}\n" if cast(str, args.mint) != "auto" else ""
+    portal_line = f"  Portal:       {cast(str, args.portal)}\n" if cast(str, args.portal) != "builtin" else ""
     print(f"""
 Submitted run {info['run_id']}
 {pr_line}  SUT commit:   {target.sut_commit or '(branch head)'}
-{mint_line}  VM:           {info['vm_name']} ({info['zone']})
+{mint_line}{portal_line}  VM:           {info['vm_name']} ({info['zone']})
   Artifact run: {info['artifact_run_id']}
   Suite ref:    {info['suite_ref']} (must exist on github.com/{SUITE_REPO})
   Logs:         {info['log_hint']}
@@ -204,7 +206,7 @@ def cmd_submit_all_mints(args: argparse.Namespace) -> int:
             two_router=cast(bool, args.two_router),
             secondary_router_host=cast(str, args.secondary_router_host or ""),
             secondary_router_port=cast(str, args.secondary_router_port or ""),
-            keep_vm_on_failure=cast(bool, args.keep_vm_on_failure),
+            keep_vm_on_failure=not getattr(args, "self_delete", False),
             mint=mint,
         )
         infos.append((mint, info))
@@ -317,10 +319,12 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--two-router", action="store_true", help="Boot second OpenWrt VM for two-router degraded-mode tests")
     submit.add_argument("--secondary-router-host", default="", help="Seller/secondary router IP or host for reseller scenarios")
     submit.add_argument("--secondary-router-port", default="", help="Optional SSH port for the seller/secondary router")
-    submit.add_argument("--keep-vm-on-failure", action="store_true", help="Do not self-delete failed worker VMs; useful for debugging")
+    submit.add_argument("--self-delete", action="store_true", help="Self-delete VM after tests complete (default: keep alive for debugging, 1h kill switch)")
     submit.add_argument("--artifact-timeout", type=int, default=1800, help="Seconds to wait for CI artifact")
     submit.add_argument("--mint", default="auto", choices=["auto", "cdk-v2", "nutshell-v2", "nutshell-v1"],
                         help="Force a specific mint type instead of auto-detection. Use 'submit-all-mints' for parallel runs.")
+    submit.add_argument("--portal", default="builtin", choices=["builtin", "net4sats"],
+                        help="Captive portal to deploy (default: builtin). 'net4sats' deploys the configurationwizzard SPA.")
     target_flags(submit)
     submit.set_defaults(func=cmd_submit)
 
@@ -333,7 +337,7 @@ def build_parser() -> argparse.ArgumentParser:
     all_mints.add_argument("--two-router", action="store_true", help="Boot second OpenWrt VM for two-router degraded-mode tests")
     all_mints.add_argument("--secondary-router-host", default="", help="Seller/secondary router IP or host for reseller scenarios")
     all_mints.add_argument("--secondary-router-port", default="", help="Optional SSH port for the seller/secondary router")
-    all_mints.add_argument("--keep-vm-on-failure", action="store_true", help="Do not self-delete failed worker VMs; useful for debugging")
+    all_mints.add_argument("--self-delete", action="store_true", help="Self-delete VM after tests complete (default: keep alive for debugging, 1h kill switch)")
     all_mints.add_argument("--artifact-timeout", type=int, default=1800, help="Seconds to wait for CI artifact")
     target_flags(all_mints)
     all_mints.set_defaults(func=cmd_submit_all_mints)
@@ -345,15 +349,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     clean = sub.add_parser("cleanup-stale", help="Delete tollgate run VMs older than max age")
     clean.add_argument("--zone", default=DEFAULT_ZONE)
-    clean.add_argument("--max-age-hours", type=int, default=2)
+    clean.add_argument("--max-age-hours", type=int, default=1)
     clean.set_defaults(func=cmd_cleanup_stale)
 
     nuke = sub.add_parser("cleanup-all", help="Delete ALL tollgate VMs regardless of age")
     nuke.add_argument("--zone", default=DEFAULT_ZONE)
     nuke.set_defaults(func=cmd_cleanup_all)
 
-    reaper = sub.add_parser("install-reaper", help="Install cron job to auto-delete VMs older than 2 hours")
-    reaper.add_argument("--max-age-hours", type=int, default=2)
+    reaper = sub.add_parser("install-reaper", help="Install cron job to auto-delete VMs older than 1 hour")
+    reaper.add_argument("--max-age-hours", type=int, default=1)
     reaper.add_argument("--uninstall", action="store_true", help="Remove the reaper cron job")
     reaper.set_defaults(func=cmd_install_reaper)
 
@@ -367,7 +371,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--two-router", action="store_true", help="Boot second OpenWrt VM for two-router degraded-mode tests")
     run.add_argument("--secondary-router-host", default="", help="Seller/secondary router IP or host for reseller scenarios")
     run.add_argument("--secondary-router-port", default="", help="Optional SSH port for the seller/secondary router")
-    run.add_argument("--keep-vm-on-failure", action="store_true", help="Do not self-delete failed worker VMs; useful for debugging")
+    run.add_argument("--self-delete", action="store_true", help="Self-delete VM after tests complete (default: keep alive for debugging, 1h kill switch)")
     run.add_argument("--artifact-timeout", type=int, default=1800)
     run.add_argument("--mint", default="auto", choices=["auto", "cdk-v2", "nutshell-v2", "nutshell-v1"],
                      help="Force a specific mint type instead of auto-detection")
