@@ -5,8 +5,42 @@ const HYDRATE_TIMEOUT = 15000;
 
 test.describe('admin SPA', () => {
 
+	async function tryLogin(page) {
+		await page.waitForSelector('body', { timeout: HYDRATE_TIMEOUT });
+		await page.waitForTimeout(2000);
+
+		const hasPasswordField = await page.$('input[type="password"]');
+		if (!hasPasswordField) {
+			const bodyText = await page.evaluate(() => document.body.innerText.toLowerCase());
+			const hasLogin = bodyText.match(/login|password|sign in/i);
+			if (!hasLogin) return true;
+		}
+
+		const passwordInput = await page.$('input[type="password"]');
+		if (!passwordInput) return true;
+
+		const password = process.env.TOLLGATE_LUCI_PASSWORD || 'c03rad0r123';
+		await passwordInput.fill(password);
+
+		const usernameInput = await page.$('input[type="text"], input[name="username"], input[placeholder*="user" i]');
+		if (usernameInput) {
+			await usernameInput.fill('root');
+		}
+
+		const submitBtn = await page.$('button[type="submit"], button:has-text("Login"), button:has-text("Log in"), button:has-text("Sign in"), input[type="submit"]');
+		if (submitBtn) {
+			await submitBtn.click();
+		} else {
+			await passwordInput.press('Enter');
+		}
+
+		await page.waitForTimeout(3000);
+		return true;
+	}
+
 	test.beforeEach(async ({ page }) => {
 		await page.goto('/', { waitUntil: 'domcontentloaded' });
+		await tryLogin(page);
 	});
 
 	test('login page loads with TollGate branding', async ({ page }) => {
