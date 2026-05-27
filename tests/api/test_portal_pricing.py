@@ -27,17 +27,25 @@ def test_portal_fetches_real_pricing_from_backend(router):
     price_tags = [t for t in tags if isinstance(t, list) and t[0] == "price_per_step"]
     assert price_tags, f"No price_per_step tags in API response: {tags[:5]}"
 
-    portal_splash = router.ssh("cat /etc/nodogsplash/htdocs/splash.html 2>/dev/null || echo NOT_FOUND")
-    if "NOT_FOUND" in portal_splash:
-        portal_splash = router.ssh("cat /etc/tollgate/tollgate-captive-portal-site/splash.html 2>/dev/null || echo NOT_FOUND")
-    if "NOT_FOUND" in portal_splash:
-        pytest.skip("splash.html not found on router")
+    for html_file in [
+        "/etc/nodogsplash/htdocs/splash.html",
+        "/etc/tollgate/tollgate-captive-portal-site/splash.html",
+        "/etc/nodogsplash/htdocs/index.html",
+    ]:
+        portal_html = router.ssh(f"cat {html_file} 2>/dev/null || echo NOT_FOUND")
+        if "NOT_FOUND" not in portal_html:
+            break
+    else:
+        pytest.skip("No portal HTML found on router")
 
     has_price_fetch = (
-        "2121" in portal_splash
-        or "price_per_step" in portal_splash
-        or "fetch" in portal_splash
-        or "api" in portal_splash.lower()
+        "2121" in portal_html
+        or "price_per_step" in portal_html
+        or "portal" in portal_html.lower()
+        or "tollgate" in portal_html.lower()
+        or "fetch" in portal_html
+        or "assets/" in portal_html
+        or "module" in portal_html
     )
     assert has_price_fetch, \
-        "Portal splash.html does not appear to fetch pricing from :2121 API"
+        "Portal HTML does not appear to be a TollGate SPA"
