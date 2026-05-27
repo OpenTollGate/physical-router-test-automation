@@ -656,6 +656,77 @@ hwsim supports STA mode — each radio can be AP, STA, or both simultaneously (2
 - Virtual WiFi: module load, radio detection, AP bringup
 - Local mints: CDK V2, Nutshell V1, Nutshell V2 (all FakeWallet)
 
+### Debian Container Client Cashu Token Flow
+
+The cloud lab uses a Debian QEMU VM (`10.99.99.100`) as the test client. Visual portal tests record the full Cashu payment flow from the user's perspective using Playwright inside this container. Here's how tokens get from the test framework to the browser:
+
+```
+┌─ Test Machine / GCP Host ────────────────────────────────────┐
+│                                                               │
+│  1. pytest creates CashuMint(venv, mint_url)                 │
+│  2. cashu.warmup() → pre-initialize wallet DB                │
+│  3. cashu.mint(4) → subprocess: cashu send 4 --legacy       │
+│     Returns: "cashuAeyJwcm..."                               │
+│  4. adb.signal_token(token) → SSH to container:              │
+│     echo 'cashuAeyJwcm...' > /tmp/tg-token                   │
+│                                                               │
+└───────────────────────────│───────────────────────────────────┘
+                            │ SSH
+                            ▼
+┌─ Debian QEMU Container (10.99.99.100) ───────────────────────┐
+│                                                               │
+│  5. Playwright recording script (already running):            │
+│     - Launched by adb.start_portal_recording() via SSH       │
+│     - Chromium navigated to http://10.99.99.1:2050/ (portal) │
+│     - Screenshots: 01-portal-unpaid.png                       │
+│     - Writes /tmp/tg-portal-ready (signals: browser loaded)  │
+│                                                               │
+│  6. Token signal polling loop (inside Playwright script):    │
+│     for _ in range(240):                                      │
+│       if /tmp/tg-token exists: → read token, break           │
+│       sleep(0.5)                                              │
+│                                                               │
+│  7. submit_token(token):                                      │
+│     - Find token input (textarea / input[name*=token])       │
+│     - token_input.fill(token)                                 │
+│     - Screenshot: 02-token-filled.png                         │
+│     - Click submit button (purchase/submit/pay)              │
+│     - Poll for auth markers (data-sm="authed", "remaining")  │
+│     - Screenshot: 03-portal-paid.png                          │
+│                                                               │
+│  8. Verify internet access:                                   │
+│     - Navigate to http://1.1.1.1                              │
+│     - Screenshot: 04-internet-access.png                      │
+│                                                               │
+│  9. Close browser context → save video to                     │
+│     /tmp/tg-e2e/portal-flow.webm                              │
+│                                                               │
+└───────────────────────────────────────────────────────────────┘
+```
+
+**Key synchronization points:**
+
+| Signal | Path | Purpose |
+|--------|------|---------|
+| `/tmp/tg-portal-ready` | Written by Playwright | Test waits for this before minting token (portal loaded) |
+| `/tmp/tg-token` | Written by test via `adb.signal_token()` | Playwright reads token and fills it into portal |
+| `/tmp/tg-paid` | Alternative to `tg-token` | For out-of-band payment; Playwright reloads portal to capture paid state |
+
+**Mint URL config chain:**
+
+1. `worker.py` → `select_test_mint()` probes backend for V2 support
+2. Falls back to Nutshell V1 (`http://v1.testnut.nutshell.lan:8385`) for Go backend
+3. Writes chosen URL to `.env` as `TOLLGATE_TEST_MINT_URL`
+4. `conftest.py` `cashu()` fixture reads `TOLLGATE_TEST_MINT_URL` from env
+5. `CashuMint` or `CdkCliWallet` uses this URL for all minting operations
+
+**Recording lifecycle (`lib/clients/container.py`):**
+
+- `start_portal_recording()` — SSH to container, launches Playwright script as background process
+- `wait_for_portal_ready(timeout=90)` — polls for `/tmp/tg-portal-ready` on container
+- `signal_token(token)` — writes `/tmp/tg-token` on container
+- `finish_portal_recording(output_dir, timeout=120)` — waits for Playwright script to complete, collects screenshots + video via SCP
+
 ### What needs improvement
 
 - **hwsim AP bringup test**: Interface naming fix applied but not yet verified in cloud run (interface is `phy2-ap0` not `wlan0`)
