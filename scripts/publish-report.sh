@@ -331,12 +331,14 @@ fi
 random_publish_sleep() {
   python3 - <<'PY'
 import random
-print(random.randint(0, 60))
+print(random.randint(30, 300))
 PY
 }
 
 echo "==> Committing and pushing to gh-pages..."
 PUSH_OK=0
+RUN_BRANCH="gh-pages-${DIR_TIMESTAMP}"
+
 for attempt in $(seq 1 10); do
   if [ "$attempt" -gt 1 ]; then
     delay="$(random_publish_sleep)"
@@ -361,9 +363,18 @@ for attempt in $(seq 1 10); do
 
   echo "WARNING: gh-pages push failed (attempt ${attempt}/10)"
 done
+
+# Fallback: push to a per-run branch so the report isn't lost.
 if [ "$PUSH_OK" -ne 1 ]; then
-  echo "ERROR: gh-pages push failed after 10 attempts" >&2
-  exit 1
+  echo "WARNING: Direct gh-pages push failed — falling back to ${RUN_BRANCH}"
+  git branch -f "$RUN_BRANCH" HEAD 2>/dev/null || true
+  if git push origin "$RUN_BRANCH" 2>&1; then
+    echo "==> Pushed report to ${RUN_BRANCH} (merge into gh-pages manually)"
+    PUSH_OK=2
+  else
+    echo "ERROR: gh-pages push failed after 10 attempts and fallback also failed" >&2
+    exit 1
+  fi
 fi
 
 # ── Print URLs ───────────────────────────────────────────────────────
