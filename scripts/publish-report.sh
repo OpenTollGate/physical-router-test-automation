@@ -140,10 +140,14 @@ REMOTE_URL="$(git -C "$REPO_DIR" remote get-url origin)"
 WORK=$(mktemp -d /tmp/tollgate-report-XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
-if git clone --single-branch -b gh-pages "$REMOTE_URL" "$WORK/gh-pages" 2>/dev/null; then
+CLONE_LOG="$WORK/gh-pages-clone.log"
+if git clone --single-branch -b gh-pages "$REMOTE_URL" "$WORK/gh-pages" 2>"$CLONE_LOG"; then
   echo "==> Cloned existing gh-pages branch"
 else
-  echo "==> gh-pages branch not found, creating fresh"
+  echo "==> gh-pages branch not found or clone failed (creating fresh)"
+  if [ -s "$CLONE_LOG" ]; then
+    echo "    clone stderr: $(head -5 "$CLONE_LOG")"
+  fi
   mkdir -p "$WORK/gh-pages"
   cd "$WORK/gh-pages"
   git init -b gh-pages
