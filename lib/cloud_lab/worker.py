@@ -1416,7 +1416,7 @@ def post_pr_comment(config: WorkerConfig, report_url: str, counts: dict[str, Any
     if "tollgate-rs" in config.artifact_repo or config.backend == "rust":
         repo = config.artifact_repo
     _run(
-        f"gh pr comment {shlex.quote(config.sut_pr)} --repo {shlex.quote(config.artifact_repo)} "
+        f"gh pr comment {shlex.quote(config.sut_pr)} --repo {shlex.quote(repo)} "
         f"--body {shlex.quote(body)}",
         timeout=30,
         check=False,
