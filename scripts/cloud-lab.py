@@ -43,7 +43,7 @@ def _warn_running_vms() -> None:
         [
             "gcloud", "compute", "instances", "list",
             f"--project={project}",
-            "--filter=labels.tollgate_run=true AND status=RUNNING",
+            "--filter=labels.tollgate_run=true",
             "--format=json",
         ],
         capture_output=True, text=True, timeout=30, check=False,
@@ -54,12 +54,34 @@ def _warn_running_vms() -> None:
     instances = json.loads(r.stdout)
     if not instances:
         return
-    print(f"\n⚠  {len(instances)} running TollGate VM(s) detected:", file=sys.stderr)
+
+    now = time.time()
+    stale_names = []
+    running_names = []
     for inst in instances:
         name = inst.get("name", "?")
-        created = inst.get("creationTimestamp", "?")
-        print(f"   - {name} (created {created})", file=sys.stderr)
-    print("   Run 'cleanup-stale' or 'cleanup-all' to delete them.\n", file=sys.stderr)
+        created_str = inst.get("creationTimestamp", "")
+        status = inst.get("status", "UNKNOWN")
+        try:
+            from datetime import datetime as _dt
+            created = _dt.fromisoformat(created_str.replace("Z", "+00:00")).timestamp()
+            age_hours = (now - created) / 3600
+        except (ValueError, TypeError):
+            age_hours = 0
+        if age_hours >= 1:
+            stale_names.append(name)
+        else:
+            running_names.append(f"{name} ({status}, created {created_str})")
+
+    if stale_names:
+        print(f"\n⚠  Auto-deleting {len(stale_names)} stale VM(s) (>1h old): {', '.join(stale_names)}", file=sys.stderr)
+        cleanup_stale(max_age_hours=1)
+
+    if running_names:
+        print(f"\n⚠  {len(running_names)} recent TollGate VM(s) still running:", file=sys.stderr)
+        for name in running_names:
+            print(f"   - {name}", file=sys.stderr)
+        print("", file=sys.stderr)
 
 
 def cmd_up(args: argparse.Namespace) -> int:
@@ -238,7 +260,7 @@ def cmd_install_reaper(args: argparse.Namespace) -> int:
     marker = "# tollgate-cloud-reaper"
     script = str(Path(__file__).resolve())
     max_age = args.max_age_hours
-    cron_line = f"0 * * * * {script} cleanup-stale --max-age-hours {max_age} {marker}"
+    cron_line = f"*/30 * * * * {script} cleanup-stale --max-age-hours {max_age} {marker}"
 
     current = subprocess.run(["crontab", "-l"], capture_output=True, text=True, check=False).stdout or ""
     existing = [l for l in current.splitlines() if marker not in l]
