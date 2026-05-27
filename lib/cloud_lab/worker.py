@@ -48,6 +48,7 @@ from lib.cloud_lab.constants import (
     UPSTREAM_TAP_BETA,
     VIRT_LAB_PASSWORD,
     VIRT_LAB_WORKDIR,
+    WORKER_LOG,
 )
 
 log = logging.getLogger("tollgate.cloud_worker")
@@ -549,6 +550,7 @@ max_delay_time = 0
         "MINT_PRIVATE_KEY": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
         "FAKEWALLET_DELAY_OUTGOING_PAYMENT": "0",
         "FAKEWALLET_DELAY_INCOMING_PAYMENT": "0",
+        "MINT_RATE_LIMIT": "False",
     }
     ns_v2_proc = subprocess.Popen(
         ["/opt/cashu-venv/bin/python", "-m", "cashu.mint", "--port", str(NUTSHELL_V2_MINT_PORT), "--host", LOCAL_MINT_HOST],
@@ -571,9 +573,10 @@ max_delay_time = 0
         "MINT_DATABASE": "/tmp/nutshell-v1-mint-data",
         "MINT_AUTH_DATABASE": "/tmp/nutshell-v1-mint-data",
         "MINT_BACKEND_BOLT11_SAT": "FakeWallet",
-        "MINT_PRIVATE_KEY": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about about",
+        "MINT_PRIVATE_KEY": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about about",
         "FAKEWALLET_DELAY_OUTGOING_PAYMENT": "0",
         "FAKEWALLET_DELAY_INCOMING_PAYMENT": "0",
+        "MINT_RATE_LIMIT": "False",
     }
     ns_v1_proc = subprocess.Popen(
         ["/opt/cashu-venv/bin/python", "-m", "cashu.mint", "--port", str(NUTSHELL_V1_MINT_PORT), "--host", LOCAL_MINT_HOST],
@@ -1269,7 +1272,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         "  if [ \"$e\" -ne 0 ] && [ \"$e\" -gt \"$worst_exit\" ]; then worst_exit=$e; fi; done; "
         "exit \"$worst_exit\""
     )
-    r = _run(test_cmd, timeout=5400, check=False)
+    r = _run(test_cmd, timeout=3000, check=False)
     log.info("Test stdout (%d bytes): %s", len(r.stdout), _redact(r.stdout[-2000:]))
     return r.returncode
 
@@ -1603,14 +1606,17 @@ def run_worker(config: WorkerConfig) -> int:
             import traceback
             log.error("Pipeline failed at step: %s (%.1fs elapsed)\n%s", _redact(str(exc))[:200], elapsed, traceback.format_exc())
             if elapsed >= MAX_WALL_SECONDS:
-                log.error("1h max lifetime exceeded — force-deleting VM")
-                stop_inner_vms()
-                delete_self(config)
-                return 1
+                log.warning("1h max lifetime exceeded — will force-delete after collect/publish")
             test_exit = 1
 
         # ── Collect, render, publish (always attempted) ──────────────
         finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        _run(
+            f"mkdir -p {results_dir}/raw && "
+            f"cp {WORKER_LOG} {results_dir}/raw/worker.log 2>/dev/null || true",
+            timeout=10, check=False,
+        )
 
         try:
             log.info("[10/10] Collect + render results")
@@ -1628,16 +1634,14 @@ def run_worker(config: WorkerConfig) -> int:
 
         report_url = ""
         total_run = sum(counts.get(k, 0) for k in ("passed", "failed", "skipped", "error"))
-        if config.publish and run_json.exists() and total_run > 0:
+        if config.publish and run_json.exists():
             try:
-                log.info("Publishing results to gh-pages...")
+                log.info("Publishing results to gh-pages (total_tests=%d)...", total_run)
                 report_url = publish_results(config, results_dir)
                 log.info("Published: %s", report_url)
                 post_pr_comment(config, report_url, counts)
             except Exception as pub_exc:
                 log.error("Publish failed (non-fatal): %s", _redact(str(pub_exc))[:500])
-        elif config.publish and total_run == 0:
-            log.warning("Skipping publish: total_tests=%d (no tests collected)", total_run)
 
         log.info(
             "=== Pipeline complete: passed=%s failed=%s skipped=%s exit=%d (%.1fs) ===",

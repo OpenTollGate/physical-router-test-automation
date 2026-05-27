@@ -86,7 +86,7 @@ class CashuMint:
         )
         return r.stdout.count("Mint quote")
 
-    def _wait_and_claim(self, quote_id, amount, timeout=90):
+    def _wait_and_claim(self, quote_id, amount, timeout=30):
         for _ in range(timeout // 3):
             time.sleep(3)
             try:
@@ -123,16 +123,16 @@ class CashuMint:
         proc.communicate()
 
         created = False
-        for _ in range(8):
+        for _ in range(5):
             after = self._count_invoices()
             if after > before:
                 created = True
                 break
-            time.sleep(3)
+            time.sleep(2)
 
         if not created:
             raise RuntimeError(
-                f"Invoice not created after 29s (before={before}, after={after}, mint={self.mint_url})"
+                f"Invoice not created after 15s (before={before}, after={after}, mint={self.mint_url})"
             )
 
         quote_id = self._find_latest_quote_id()
