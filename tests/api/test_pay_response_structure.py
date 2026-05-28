@@ -20,15 +20,11 @@ def test_pay_rejects_empty_body(router):
 
 def test_pay_rejects_invalid_json(router):
     resp_text = router.ssh(
-        f"wget -qO- --post-data='not-json' "
+        f"wget -O- --post-data='not-json' "
         f"--header='Content-Type: application/json' '{router.backend_url('/')}' 2>&1 || true"
     )
-    assert resp_text, "Expected error response for invalid JSON"
-    try:
-        data = json.loads(resp_text)
-        assert data.get("success") is not True, f"Invalid JSON accepted: {resp_text[:200]}"
-    except json.JSONDecodeError:
-        pass
+    assert "error" in resp_text.lower() or "400" in resp_text or "500" in resp_text or "HTTP error" in resp_text, \
+        f"Expected error response for invalid JSON, got: {resp_text[:200]}"
 
 
 def test_pay_rejects_fake_token(router):
