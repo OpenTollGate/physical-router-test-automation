@@ -1063,8 +1063,13 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
         timeout=30,
     )
 
-    r_mod = _inner_ssh(debian_ip, "modprobe mac80211_hwsim radios=1 2>&1 || true", timeout=15)
-    log.info("[vwifi] Debian hwsim radios=1: %s", r_mod.stdout.strip()[:200] or "(ok)")
+    r_mod = _inner_ssh(debian_ip, """
+        modprobe mac80211_hwsim 2>/dev/null && echo HWSIM_OK || {
+            apt-get install -y -qq linux-modules-extra-$(uname -r) 2>&1 | tail -3
+            modprobe mac80211_hwsim radios=1 2>&1 && echo HWSIM_INSTALLED || echo HWSIM_NOT_AVAILABLE
+        }
+    """, timeout=120)
+    log.info("[vwifi] Debian hwsim: %s", r_mod.stdout.strip()[:300])
 
     time.sleep(2)
     r_iw = _inner_ssh(debian_ip, "iw phy 2>/dev/null | grep -E 'wiphy|Wiphy' || echo NO_PHYS; iw dev 2>/dev/null | grep Interface || echo NO_INTERFACES", timeout=15)
@@ -2355,9 +2360,9 @@ def run_worker(config: WorkerConfig) -> int:
         if syslog_proc and syslog_proc.poll() is None:
             syslog_proc.kill()
         stop_local_mints(local_mints)
-        stop_inner_vms()
         if force_delete:
             log.info("Force-deleting VM (1h lifetime exceeded)")
+            stop_inner_vms()
             delete_self(config)
         elif config.keep_vm_on_failure and exit_code != 0:
             log.warning("Keeping VM + inner VMs alive for debugging (keep_vm_on_failure=true). "
