@@ -835,12 +835,12 @@ def setup_bridge() -> None:
     )
 
 
-_VWIFI_BIN_DIR = Path("/opt/vwifi/bin")
+_VWIFI_BIN_DIR = Path("/opt/vwifi")
 
 
 def _ensure_vwifi_binaries() -> Path:
     """Ensure vwifi binaries are available on the host. Returns binary dir."""
-    server = _VWIFI_BIN_DIR / "vwifi-server"
+    server = _VWIFI_BIN_DIR / "host" / "vwifi-server"
     if server.exists() and os.access(server, os.X_OK):
         log.info("[vwifi] Binaries already present at %s", _VWIFI_BIN_DIR)
         return _VWIFI_BIN_DIR
@@ -849,27 +849,24 @@ def _ensure_vwifi_binaries() -> Path:
     build_script = Path(TEST_DIR) / "scripts" / "build-vwifi.sh"
     if build_script.exists():
         _run(
-            f"bash {shlex.quote(str(build_script))} --output-dir {shlex.quote(str(_VWIFI_BIN_DIR.parent))}",
+            f"bash {shlex.quote(str(build_script))} --output-dir {shlex.quote(str(_VWIFI_BIN_DIR))}",
             timeout=300,
         )
     else:
-        # Fallback: clone and build inline
         _run(
             "apt-get update -qq && "
             "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
             "cmake make g++ pkg-config libnl-3-dev libnl-genl-3-dev git >/dev/null 2>&1 || true && "
             "rm -rf /tmp/vwifi-build && "
             "git clone --depth 1 https://github.com/Raizo62/vwifi.git /tmp/vwifi-build && "
-            f"mkdir -p {_VWIFI_BIN_DIR} && "
+            f"mkdir -p {_VWIFI_BIN_DIR}/host {_VWIFI_BIN_DIR}/debian {_VWIFI_BIN_DIR}/openwrt && "
             "cd /tmp/vwifi-build && "
             "mkdir -p build-host && cd build-host && "
-            f"cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) && "
-            f"cp vwifi-server vwifi-ctrl {_VWIFI_BIN_DIR}/ && "
+            "cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) && "
+            f"cp vwifi-server vwifi-ctrl {_VWIFI_BIN_DIR}/host/ && "
             "cd /tmp/vwifi-build && "
-            "mkdir -p build-guest && cd build-guest && "
-            "cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS='-static' && "
-            f"make -j$(nproc) && "
-            f"mkdir -p {_VWIFI_BIN_DIR}/debian {_VWIFI_BIN_DIR}/openwrt && "
+            "rm -rf build-guest && mkdir -p build-guest && cd build-guest && "
+            "cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) && "
             f"cp vwifi-client vwifi-add-interfaces {_VWIFI_BIN_DIR}/debian/ && "
             f"cp vwifi-client vwifi-add-interfaces {_VWIFI_BIN_DIR}/openwrt/",
             timeout=600,
@@ -891,7 +888,7 @@ def _setup_vwifi_host() -> int | None:
 
     # Ensure binaries exist
     bin_dir = _ensure_vwifi_binaries()
-    server_bin = bin_dir / "vwifi-server"
+    server_bin = bin_dir / "host" / "vwifi-server"
     if not server_bin.exists():
         log.warning("[vwifi] vwifi-server binary not found, skipping vwifi setup")
         return None
