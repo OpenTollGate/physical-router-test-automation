@@ -43,7 +43,7 @@ def test_rust_balance(router, cashu):
 
 def test_rust_whoami(router):
     resp = router.ssh(
-        f"curl -s -H 'X-Forwarded-For: {router.phone_ip or '127.0.0.1'}' "
+        f"wget -qO- --header='X-Forwarded-For: {router.phone_ip or '127.0.0.1'}' "
         f"'{router.backend_url('/whoami')}'"
     )
     assert resp, "Empty whoami response"
@@ -52,9 +52,8 @@ def test_rust_whoami(router):
 
 def test_rust_ln_invoice_create(router):
     resp = router.ssh(
-        f"curl -s -X POST '{router.backend_url('/ln-invoice')}' "
-        f"-H 'Content-Type: application/json' "
-        f"-d '{{\"amount\": 10, \"unit\": \"sat\"}}'"
+        f"wget -qO- --post-data='{{\"amount\": 10, \"unit\": \"sat\"}}' "
+        f"--header='Content-Type: application/json' '{router.backend_url('/ln-invoice')}'"
     )
     data = parse_json_or_fail(resp, "ln-invoice create", skip=True)
     assert "quote" in data or "payment_request" in data or "invoice" in data, \
@@ -63,6 +62,6 @@ def test_rust_ln_invoice_create(router):
 
 def test_rust_ln_invoice_status(router):
     resp = router.ssh(
-        f"curl -s '{router.backend_url('/ln-invoice')}?quote=nonexistent-test-quote'"
+        f"wget -qO- '{router.backend_url('/ln-invoice')}?quote=nonexistent-test-quote'"
     )
     assert resp, "Empty ln-invoice status response"

@@ -35,9 +35,9 @@ def _skip_if_degraded(router):
 
 def _create_invoice(router, amount=21):
     create_resp = router.ssh(
-        f"curl -s -m 15 -X POST 'http://[::1]:{BACKEND_PORT}/ln-invoice' "
-        f"-H 'Content-Type: application/json' "
-        f"-d '{{\"amount\": {amount}}}'",
+        f"wget -qO- --timeout=15 --post-data='{{\"amount\": {amount}}}' "
+        f"--header='Content-Type: application/json' "
+        f"'http://[::1]:{BACKEND_PORT}/ln-invoice'",
         timeout=30,
     )
     assert create_resp, "Empty response from POST /ln-invoice"
@@ -53,7 +53,7 @@ def _poll_until_settled(router, quote, timeout_s=45):
     last_status = ""
     while time.time() < deadline:
         status_resp = router.ssh(
-            f"curl -s -m 10 'http://[::1]:{BACKEND_PORT}/ln-invoice?quote={quote}'",
+            f"wget -qO- --timeout=10 'http://[::1]:{BACKEND_PORT}/ln-invoice?quote={quote}'",
             timeout=15,
         )
         try:

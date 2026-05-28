@@ -303,7 +303,7 @@ class Router:
         url = f"http://[::1]:{BACKEND_PORT}{path}"
         if self.jump_host:
             try:
-                out = self.ssh(f"curl -s -o /dev/null -w '%{{http_code}}' '{url}'", timeout=15)
+                out = self.ssh(f"wget -S -o /dev/null -O /dev/null '{url}' 2>&1 | head -1 | grep -oE '[0-9]{{3}}' | head -1", timeout=15)
                 return int(out.strip()) if out.strip().isdigit() else 0
             except Exception:
                 return 0
@@ -319,7 +319,7 @@ class Router:
         url = f"http://[::1]:{BACKEND_PORT}{path}"
         if self.jump_host:
             try:
-                return self.ssh(f"curl -s '{url}'", timeout=15)
+                return self.ssh(f"wget -qO- '{url}'", timeout=15)
             except Exception:
                 return ""
         r = subprocess.run(
@@ -331,24 +331,21 @@ class Router:
     def backend_curl_xff(self, path: str, ip: str | None = None, method: str | None = None,
                          headers: dict | None = None, data: str | None = None) -> str:
         ip = ip or self.phone_ip
-        parts = ["curl", "-s", "-H", f"'X-Forwarded-For: {ip}'"]
-        if method:
-            parts += ["-X", method]
+        header_args = f"--header='X-Forwarded-For: {ip}'"
         if headers:
             for k, v in headers.items():
-                parts += ["-H", f"'{k}: {v}'"]
+                header_args += f" --header='{k}: {v}'"
         if data:
-            parts += ["-d", f"'{data}'"]
-        parts.append(f"'{path}'")
-        return self.ssh(" ".join(parts))
+            return self.ssh(f"wget -qO- {header_args} --post-data='{data}' '{path}'")
+        return self.ssh(f"wget -qO- {header_args} '{path}'")
 
     def pay_direct(self, token: str, ip: str | None = None) -> dict:
         ip = ip or self.phone_ip
         cmd = (
-            f"curl -s -m 20 -X POST {shlex.quote(self.backend_url('/'))} "
-            f"-H {shlex.quote('Content-Type: text/plain')} "
-            f"-H {shlex.quote(f'X-Forwarded-For: {ip}')} "
-            "--data-binary @-"
+            f"wget -qO- --timeout=20 --post-file=- "
+            f"--header='Content-Type: text/plain' "
+            f"--header='X-Forwarded-For: {ip}' "
+            f"'{self.backend_url('/')}'"
         )
         result = self.ssh_stdin(cmd, token, timeout=60)
         resp = result.stdout.strip()
@@ -370,10 +367,10 @@ class Router:
         escaped = token.replace("'", "'\\''")
         resp = self.ssh(
             f"printf '%s' '{escaped}' > /tmp/tg-pay-token.txt && "
-            f"curl -s -m 20 -X POST '{self.backend_url('/')}' "
-            f"-H 'Content-Type: text/plain' "
-            f"-H 'X-Forwarded-For: {ip}' "
-            f"-d @/tmp/tg-pay-token.txt; "
+            f"wget -qO- --timeout=20 --post-file=/tmp/tg-pay-token.txt "
+            f"--header='Content-Type: text/plain' "
+            f"--header='X-Forwarded-For: {ip}' "
+            f"'{self.backend_url('/')}'; "
             f"rm -f /tmp/tg-pay-token.txt",
             timeout=60,
         )
@@ -385,7 +382,7 @@ class Router:
     def pay_via_header(self, token: str, mac: str | None = None) -> str:
         mac = mac or self.phone_mac
         return self.ssh(
-            f"curl -s -H 'X-Cashu: {token}' "
+            f"wget -qO- --header='X-Cashu: {token}' "
             f"'http://[::1]:{BACKEND_PORT}/pay?mac={mac}'"
         )
 
@@ -548,7 +545,7 @@ class Router:
         if not self.backend.has_config_json:
             # Rust backend: check advertisement for mint URL
             try:
-                resp = self.ssh(f"curl -s -m 5 http://127.0.0.1:{BACKEND_PORT}/")
+                resp = self.ssh(f"wget -qO- --timeout=5 http://127.0.0.1:{BACKEND_PORT}/")
                 if TEST_MINT_URL in resp:
                     log.info(f"Rust backend already has test mint: {TEST_MINT_URL}")
                     return

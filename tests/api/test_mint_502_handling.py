@@ -78,8 +78,8 @@ def local_502_config(router):
 
 def test_local_502_mint_returns_502(router):
     code = router.ssh(
-        "curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 "
-        f"{LOCAL_502_MINT_URL}/v1/keysets"
+        f"wget -S -o /dev/null -O /dev/null --timeout=10 "
+        f"'{LOCAL_502_MINT_URL}/v1/keysets' 2>&1 | head -1 | grep -oE '[0-9]{{3}}' | head -1"
     ).strip()
     if code in ("000", "001"):
         pytest.skip(f"Local 502 mint at {LOCAL_502_MINT_URL} not reachable (HTTP {code}) — not deployed in this environment")

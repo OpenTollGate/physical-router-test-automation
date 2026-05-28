@@ -16,13 +16,11 @@ PORTAL_TYPE = os.environ.get("TOLLGATE_PORTAL", "builtin").lower()
 
 
 def _nds_gateway_responsive(router):
-    """Check if nodogsplash gateway is actually serving requests."""
-    curl = router.ssh(
-        "curl -s -o /dev/null -w '%{http_code}' "
-        "http://127.0.0.1:2050/ 2>/dev/null",
+    resp = router.ssh(
+        "wget -S -o /dev/null -O /dev/null 'http://127.0.0.1:2050/' 2>&1 | head -1 | grep -oE '[0-9]{3}' | head -1",
         timeout=5,
     )
-    return curl.strip() in ("200", "302", "301", "307", "308")
+    return resp.strip() in ("200", "302", "301", "307", "308")
 
 
 def _skip_unless_nds_responsive(router):
@@ -46,12 +44,11 @@ class TestBuiltinPortal:
     @pytest.mark.skipif(PORTAL_TYPE != "builtin", reason="only for builtin portal")
     def test_builtin_portal_served_via_nds(self, router):
         _skip_unless_nds_responsive(router)
-        curl = router.ssh(
-            "curl -s -o /dev/null -w '%{http_code}' "
-            "http://127.0.0.1:2050/splash.html 2>/dev/null",
+        code = router.ssh(
+            "wget -S -o /dev/null -O /dev/null 'http://127.0.0.1:2050/splash.html' 2>&1 | head -1 | grep -oE '[0-9]{3}' | head -1",
             timeout=10,
         )
-        assert "200" in curl, f"nodogsplash not serving splash.html (got {curl})"
+        assert "200" in code, f"nodogsplash not serving splash.html (got {code})"
 
     @pytest.mark.skipif(PORTAL_TYPE != "builtin", reason="only for builtin portal")
     def test_builtin_portal_has_cashu_form(self, router):
@@ -77,12 +74,11 @@ class TestNet4satsPortal:
     @pytest.mark.skipif(PORTAL_TYPE != "net4sats", reason="only for net4sats portal")
     def test_net4sats_portal_served_via_nds(self, router):
         _skip_unless_nds_responsive(router)
-        curl = router.ssh(
-            "curl -s -o /dev/null -w '%{http_code}' "
-            "http://127.0.0.1:2050/portal.html 2>/dev/null",
+        code = router.ssh(
+            "wget -S -o /dev/null -O /dev/null 'http://127.0.0.1:2050/portal.html' 2>&1 | head -1 | grep -oE '[0-9]{3}' | head -1",
             timeout=10,
         )
-        assert "200" in curl, f"nodogsplash not serving portal.html (got {curl})"
+        assert "200" in code, f"nodogsplash not serving portal.html (got {code})"
 
     @pytest.mark.skipif(PORTAL_TYPE != "net4sats", reason="only for net4sats portal")
     def test_net4sats_portal_has_payment_elements(self, router):
@@ -109,19 +105,17 @@ class TestPortalAgnostic:
 
     def test_nds_gateway_responds(self, router):
         _skip_unless_nds_responsive(router)
-        curl = router.ssh(
-            "curl -s -o /dev/null -w '%{http_code}' "
-            "http://127.0.0.1:2050/ 2>/dev/null",
+        code = router.ssh(
+            "wget -S -o /dev/null -O /dev/null 'http://127.0.0.1:2050/' 2>&1 | head -1 | grep -oE '[0-9]{3}' | head -1",
             timeout=10,
         )
-        assert curl.strip() in ("200", "302", "301"), (
-            f"nodogsplash gateway not responding on :2050 (got {curl})"
+        assert code.strip() in ("200", "302", "301"), (
+            f"nodogsplash gateway not responding on :2050 (got {code})"
         )
 
     def test_tollgate_backend_healthy(self, router):
-        curl = router.ssh(
-            "curl -s -o /dev/null -w '%{http_code}' "
-            f"http://[::1]:{os.environ.get('TOLLGATE_BACKEND_PORT', '2121')}/ 2>/dev/null",
+        code = router.ssh(
+            f"wget -S -o /dev/null -O /dev/null 'http://[::1]:{os.environ.get('TOLLGATE_BACKEND_PORT', '2121')}/' 2>&1 | head -1 | grep -oE '[0-9]{{3}}' | head -1",
             timeout=10,
         )
-        assert "200" in curl, f"tollgate backend not healthy on :2121 (got {curl})"
+        assert "200" in code, f"tollgate backend not healthy on :2121 (got {code})"
