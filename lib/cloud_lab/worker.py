@@ -1078,8 +1078,10 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
     log.info("[vwifi] Debian after modprobe: %s", r_iw.stdout.strip()[:300])
 
     r_client = _inner_ssh(debian_ip, """
-        vwifi-client 10.99.99.2 2>&1 &
+        nohup vwifi-client 10.99.99.2 >/tmp/vwifi-client.log 2>&1 &
+        disown
         sleep 5
+        cat /tmp/vwifi-client.log
         echo VWIFI_CLIENT_DONE
     """, timeout=30)
     log.info("[vwifi] Debian vwifi-client output: %s", r_client.stdout.strip()[:300])
