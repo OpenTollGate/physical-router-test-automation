@@ -23,7 +23,7 @@
 set -euo pipefail
 
 VWIFI_REPO="https://github.com/Raizo62/vwifi.git"
-VWIFI_BRANCH="main"
+VWIFI_BRANCH="master"
 BUILD_DIR="/tmp/vwifi-build"
 
 # Default output directory relative to repo root
