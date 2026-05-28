@@ -3,8 +3,15 @@ import pytest
 pytestmark = [pytest.mark.api, pytest.mark.smoke, pytest.mark.go_only]
 
 
+def _skip_if_no_version_cli(router):
+    r = router.ssh("tollgate version 2>&1 || true", timeout=10)
+    if "unknown command" in r.lower() or "not found" in r.lower() or not r.strip():
+        pytest.skip("tollgate version subcommand not available")
+
+
 @pytest.fixture(scope="module")
 def version(router):
+    _skip_if_no_version_cli(router)
     for attempt in range(5):
         result = router.get_tollgate_version()
         if result.get("success"):

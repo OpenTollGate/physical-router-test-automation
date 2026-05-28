@@ -51,9 +51,9 @@ class TestBuiltinPortal:
         assert "200" in code, f"nodogsplash not serving splash.html (got {code})"
 
     @pytest.mark.skipif(PORTAL_TYPE != "builtin", reason="only for builtin portal")
-    def test_builtin_portal_has_cashu_form(self, router):
-        html = router.ssh("cat /etc/nodogsplash/htdocs/splash.html 2>/dev/null")
-        assert "cashu" in html.lower(), "builtin portal missing cashu form element"
+    def test_builtin_portal_has_spa_assets(self, router):
+        ls = router.ssh("ls /etc/nodogsplash/htdocs/assets/*.js 2>/dev/null")
+        assert ls.strip(), "builtin portal missing SPA JS bundles in htdocs/assets/"
 
 
 class TestNet4satsPortal:

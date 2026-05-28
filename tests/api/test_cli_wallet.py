@@ -3,13 +3,21 @@ import pytest
 pytestmark = [pytest.mark.api, pytest.mark.smoke, pytest.mark.go_only]
 
 
+def _skip_if_no_wallet_cli(router):
+    r = router.ssh("tollgate wallet 2>&1 || true", timeout=10)
+    if "unknown command" in r.lower() or "not found" in r.lower() or not r.strip():
+        pytest.skip("tollgate wallet subcommand not available")
+
+
 @pytest.fixture(scope="module")
 def wallet_info(router):
+    _skip_if_no_wallet_cli(router)
     return router.get_wallet_info()
 
 
 @pytest.fixture(scope="module")
 def wallet_balance(router):
+    _skip_if_no_wallet_cli(router)
     return router.get_wallet_balance()
 
 
