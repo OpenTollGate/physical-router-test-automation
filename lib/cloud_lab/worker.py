@@ -853,22 +853,36 @@ def _ensure_vwifi_binaries() -> Path:
             timeout=300,
         )
     else:
+        # Fallback: install deps + Docker, then build host (glibc) and
+        # guest binaries (static musl via Alpine container).
         _run(
             "apt-get update -qq && "
             "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
-            "cmake make g++ pkg-config libnl-3-dev libnl-genl-3-dev git >/dev/null 2>&1 || true && "
+            "cmake make g++ pkg-config libnl-3-dev libnl-genl-3-dev git docker.io "
+            ">/dev/null 2>&1 || true && "
+            "systemctl start docker 2>/dev/null || true && "
             "rm -rf /tmp/vwifi-build && "
-            "git clone --depth 1 https://github.com/Raizo62/vwifi.git /tmp/vwifi-build && "
+            "git clone --depth 1 --branch master https://github.com/Raizo62/vwifi.git /tmp/vwifi-build && "
             f"mkdir -p {_VWIFI_BIN_DIR}/host {_VWIFI_BIN_DIR}/debian {_VWIFI_BIN_DIR}/openwrt && "
+            # Host binaries (glibc dynamic — runs on the GCP Ubuntu host)
             "cd /tmp/vwifi-build && "
-            "mkdir -p build-host && cd build-host && "
+            "rm -rf build-host && mkdir -p build-host && cd build-host && "
             "cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) && "
             f"cp vwifi-server vwifi-ctrl {_VWIFI_BIN_DIR}/host/ && "
+            # Guest binaries (static musl via Alpine Docker — runs on musl OpenWrt)
             "cd /tmp/vwifi-build && "
-            "rm -rf build-guest && mkdir -p build-guest && cd build-guest && "
-            "cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) && "
-            f"cp vwifi-client vwifi-add-interfaces {_VWIFI_BIN_DIR}/debian/ && "
-            f"cp vwifi-client vwifi-add-interfaces {_VWIFI_BIN_DIR}/openwrt/",
+            "docker run --rm -v /tmp/vwifi-build:/src -v /opt/vwifi:/output alpine:latest sh -c '"
+            "set -e && "
+            "apk add --no-cache cmake make g++ pkgconf libnl3-dev libnl3-static "
+            "libstdc++-dev musl-dev linux-headers 2>&1 | tail -3 && "
+            "cd /src && rm -rf build-musl && mkdir build-musl && cd build-musl && "
+            "rm -f /usr/lib/libnl*.so* && "
+            "cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS=-static && "
+            "make -j$(nproc) vwifi-client vwifi-add-interfaces && "
+            "mkdir -p /output/debian /output/openwrt && "
+            "cp vwifi-client vwifi-add-interfaces /output/debian/ && "
+            "cp vwifi-client vwifi-add-interfaces /output/openwrt/"
+            "'",
             timeout=600,
         )
 
