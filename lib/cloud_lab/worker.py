@@ -2145,7 +2145,11 @@ def run_worker(config: WorkerConfig) -> int:
 
             if config.vwifi_enabled:
                 log.info("[3.5/10] Starting vwifi-server on host for cross-VM WiFi relay")
-                _setup_vwifi_host()
+                try:
+                    _setup_vwifi_host()
+                except Exception as vwifi_exc:
+                    log.warning("[vwifi] Host setup failed (non-fatal, WiFi tests may skip): %s", vwifi_exc)
+                    config.vwifi_enabled = False
             else:
                 log.info("[vwifi] Skipped (not enabled — use --vwifi to opt in)")
 
