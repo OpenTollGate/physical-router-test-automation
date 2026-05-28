@@ -963,21 +963,14 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
         timeout=30,
     )
 
-    # Remove existing hwsim, load empty hwsim, add vwifi interfaces
+    # _setup_hwsim_wifi() already loaded hwsim with radios=0 for vwifi mode.
+    # Create vwifi interfaces and start client.
     r = _inner_ssh(alpha_ip, """
-        # Unload existing hwsim if loaded with radios
-        rmmod mac80211_hwsim 2>/dev/null || true
-        sleep 1
-        # Load empty hwsim (vwifi-add-interfaces will create the PHYs)
-        modprobe mac80211_hwsim radios=0 2>&1 || insmod mac80211_hwsim radios=0 2>&1 || true
-        sleep 1
-        # Add 1 virtual radio via vwifi
+        iw phy 2>/dev/null | grep -c 'Wiphy' || echo '0'
         vwifi-add-interfaces 1 2>&1
         sleep 2
-        # Start vwifi-client in background (connects to host vwifi-server via vsock)
         vwifi-client &
         sleep 3
-        # Check interfaces
         iw dev 2>/dev/null | grep Interface || echo 'NO_INTERFACES'
     """, timeout=30)
 
@@ -1272,11 +1265,32 @@ def _setup_hwsim_wifi(alpha_ip: str, *, vwifi_mode: bool = False) -> None:
 
     # --- 1. Load mac80211_hwsim module (idempotent) ---
     r = _inner_ssh(alpha_ip, "lsmod | grep mac80211_hwsim", timeout=10)
-    if r.returncode == 0 and "mac80211_hwsim" in r.stdout:
+    already_loaded = r.returncode == 0 and "mac80211_hwsim" in r.stdout
+
+    if vwifi_mode:
+        # vwifi needs hwsim loaded with radios=0 (empty) so vwifi-add-interfaces
+        # can create PHYs itself.  If already loaded (from baked snapshot with
+        # default radios), force-unload first.
+        if already_loaded:
+            log.info("[hwsim] vwifi mode: unloading existing hwsim (has default radios)")
+            _inner_ssh(alpha_ip, """
+                # Remove any interfaces that hold a reference to hwsim PHYs
+                for iface in $(iw dev | grep Interface | awk '{print $2}'); do
+                    iw dev $iface del 2>/dev/null || true
+                done
+                rmmod mac80211_hwsim 2>/dev/null || true
+                sleep 1
+            """, timeout=15)
+        r = _inner_ssh(alpha_ip, "modprobe mac80211_hwsim radios=0 2>&1", timeout=15)
+        if r.returncode != 0:
+            log.warning("[hwsim] modprobe mac80211_hwsim radios=0 failed (rc=%d): %s — skipping WiFi setup",
+                        r.returncode, (r.stderr or r.stdout or "").strip()[:300])
+            return
+        log.info("[hwsim] Loaded mac80211_hwsim radios=0 (vwifi mode)")
+    elif already_loaded:
         log.info("[hwsim] Module already loaded, skipping modprobe")
     else:
-        radios = "0" if vwifi_mode else "2"
-        r = _inner_ssh(alpha_ip, f"modprobe mac80211_hwsim radios={radios} 2>&1", timeout=15)
+        r = _inner_ssh(alpha_ip, "modprobe mac80211_hwsim radios=2 2>&1", timeout=15)
         if r.returncode != 0:
             log.warning("[hwsim] modprobe mac80211_hwsim failed (rc=%d): %s — skipping WiFi setup",
                         r.returncode, (r.stderr or r.stdout or "").strip()[:300])
@@ -1285,7 +1299,7 @@ def _setup_hwsim_wifi(alpha_ip: str, *, vwifi_mode: bool = False) -> None:
         if r.returncode != 0:
             log.warning("[hwsim] Module not in lsmod after modprobe — skipping WiFi setup")
             return
-        log.info("[hwsim] Loaded mac80211_hwsim radios=%s", radios)
+        log.info("[hwsim] Loaded mac80211_hwsim radios=2")
 
     # In vwifi mode, skip manual interface creation — vwifi-add-interfaces handles it
     if vwifi_mode:
