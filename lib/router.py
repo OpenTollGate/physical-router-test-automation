@@ -171,7 +171,7 @@ class Router:
         return self.ssh(f"wget -qO- '{url}'", timeout=timeout)
 
     def router_fetch_status(self, url: str, timeout: int = 10) -> str:
-        return self.ssh(f"wget -S -o /dev/null -O /dev/null '{url}' 2>&1 | head -1 | grep -oE '[0-9]{{3}}' | head -1", timeout=timeout)
+        return self.ssh(f"wget --spider '{url}' 2>&1 | grep -oE 'HTTP error [0-9]{{3}}|HTTP/[0-9.]+ [0-9]{{3}}' | grep -oE '[0-9]{{3}}' | tail -1", timeout=timeout)
 
     def _ssh_env(self):
         env = os.environ.copy()
@@ -331,13 +331,15 @@ class Router:
     def backend_curl_xff(self, path: str, ip: str | None = None, method: str | None = None,
                          headers: dict | None = None, data: str | None = None) -> str:
         ip = ip or self.phone_ip
-        header_args = f"--header='X-Forwarded-For: {ip}'"
+        header_args = ""
+        if ip:
+            header_args += f" --header='X-Forwarded-For: {ip}'"
         if headers:
             for k, v in headers.items():
                 header_args += f" --header='{k}: {v}'"
         if data:
-            return self.ssh(f"wget -qO- {header_args} --post-data='{data}' '{path}'")
-        return self.ssh(f"wget -qO- {header_args} '{path}'")
+            return self.ssh(f"wget -qO- {header_args} --post-data='{data}' '{path}' 2>/dev/null || true")
+        return self.ssh(f"wget -qO- {header_args} '{path}' 2>/dev/null || true")
 
     def pay_direct(self, token: str, ip: str | None = None) -> dict:
         ip = ip or self.phone_ip

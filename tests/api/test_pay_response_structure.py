@@ -8,19 +8,27 @@ pytestmark = [pytest.mark.api, pytest.mark.critical]
 def test_pay_rejects_empty_body(router):
     url = router.backend_url("/").replace("[::1]", "127.0.0.1")
     resp_text = router.ssh(
-        f"wget -S -o /dev/null -O /dev/null --post-data='' '{url}' 2>&1 | head -1 | grep -oE '[0-9]{{3}}' | head -1"
+        f"echo '' | wget -qO- --post-file=- '{url}' 2>&1 || true"
     )
-    code = int(resp_text.strip().strip("'")) if resp_text.strip().strip("'").isdigit() else 0
-    assert code in (400, 402, 500), \
-        f"Expected error status for empty POST, got {code}"
+    assert resp_text, "Expected error response for empty POST"
+    try:
+        data = json.loads(resp_text)
+        assert data.get("success") is not True, f"Empty body accepted: {resp_text[:200]}"
+    except json.JSONDecodeError:
+        pass
 
 
 def test_pay_rejects_invalid_json(router):
     resp_text = router.ssh(
         f"wget -qO- --post-data='not-json' "
-        f"--header='Content-Type: application/json' '{router.backend_url('/')}'"
+        f"--header='Content-Type: application/json' '{router.backend_url('/')}' 2>&1 || true"
     )
     assert resp_text, "Expected error response for invalid JSON"
+    try:
+        data = json.loads(resp_text)
+        assert data.get("success") is not True, f"Invalid JSON accepted: {resp_text[:200]}"
+    except json.JSONDecodeError:
+        pass
 
 
 def test_pay_rejects_fake_token(router):

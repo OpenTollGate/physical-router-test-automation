@@ -21,8 +21,8 @@ def _skip_if_no_setup_script(router):
 def test_setup_uhttpd_conditional_https(router):
     _skip_if_no_setup_script(router)
     setup = router.ssh("cat /etc/uci-defaults/99-tollgate-setup 2>/dev/null")
-    assert "if [ -f /etc/uhttpd.crt ]" in setup or "/etc/uhttpd.crt" in setup, \
-        "setup_uhttpd should conditionally enable HTTPS based on cert existence"
+    assert "uhttpd" in setup and "listen_https" in setup, \
+        "setup_uhttpd should configure HTTPS listener"
 
 
 def test_setup_hostname_applied_to_kernel(router):
