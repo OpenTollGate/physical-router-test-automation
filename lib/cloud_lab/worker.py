@@ -976,6 +976,110 @@ def _configure_alpha_wan(alpha_ip: str) -> None:
         log.warning("Alpha may not have received DHCP lease: %s", r.stdout.strip()[-200:])
 
 
+def _setup_hwsim_wifi(alpha_ip: str) -> None:
+    """Provision virtual WiFi interfaces on the OpenWrt VM via mac80211_hwsim.
+
+    Loads the kernel module, configures UCI wireless (radio0=2.4GHz AP,
+    radio1=5GHz AP, both SSID=TollGate on network=lan), and reloads wifi.
+    Idempotent — safe to call multiple times.  Non-fatal: logs a warning
+    and returns on any failure so the cloud lab continues without WiFi.
+    """
+    log.info("[hwsim] Setting up virtual WiFi on %s", alpha_ip)
+
+    # --- 1. Load mac80211_hwsim module (idempotent) ---
+    r = _inner_ssh(alpha_ip, "lsmod | grep mac80211_hwsim", timeout=10)
+    if r.returncode == 0 and "mac80211_hwsim" in r.stdout:
+        log.info("[hwsim] Module already loaded, skipping modprobe")
+    else:
+        r = _inner_ssh(alpha_ip, "modprobe mac80211_hwsim radios=2 2>&1", timeout=15)
+        if r.returncode != 0:
+            log.warning("[hwsim] modprobe mac80211_hwsim failed (rc=%d): %s — skipping WiFi setup",
+                        r.returncode, (r.stderr or r.stdout or "").strip()[:300])
+            return
+        # Verify it loaded
+        r = _inner_ssh(alpha_ip, "lsmod | grep mac80211_hwsim", timeout=10)
+        if r.returncode != 0:
+            log.warning("[hwsim] Module not in lsmod after modprobe — skipping WiFi setup")
+            return
+        log.info("[hwsim] Loaded mac80211_hwsim radios=2")
+
+    # --- 2. Configure UCI wireless (idempotent) ---
+    # Check if already configured
+    r = _inner_ssh(alpha_ip, "uci get wireless.radio0.type 2>/dev/null", timeout=10)
+    if r.returncode == 0 and "mac80211" in r.stdout:
+        log.info("[hwsim] wireless radio0 already configured, skipping UCI setup")
+    else:
+        log.info("[hwsim] Configuring UCI wireless (radio0=2.4GHz, radio1=5GHz)")
+        _inner_ssh(alpha_ip, """
+            # Delete existing wireless sections to start fresh
+            uci -q delete wireless.radio0
+            uci -q delete wireless.radio1
+            uci -q delete wireless.@wifi-iface[0]
+            uci -q delete wireless.@wifi-iface[0]
+            uci -q delete wireless.@wifi-iface[0]
+            uci -q delete wireless.@wifi-iface[0]
+
+            # radio0 — 2.4 GHz AP
+            uci set wireless.radio0=wifi-device
+            uci set wireless.radio0.type='mac80211'
+            uci set wireless.radio0.band='2g'
+            uci set wireless.radio0.channel='6'
+            uci set wireless.radio0.htmode='HT20'
+            uci set wireless.radio0.disabled='0'
+            uci set wireless.radio0.country='00'
+            uci set wireless.radio0.cell_density='0'
+
+            # radio0 iface — AP, open, on lan
+            uci set wireless.@wifi-iface[0]=wifi-iface
+            uci set wireless.@wifi-iface[0].device='radio0'
+            uci set wireless.@wifi-iface[0].mode='ap'
+            uci set wireless.@wifi-iface[0].ssid='TollGate'
+            uci set wireless.@wifi-iface[0].network='lan'
+            uci set wireless.@wifi-iface[0].encryption='none'
+
+            # radio1 — 5 GHz AP
+            uci set wireless.radio1=wifi-device
+            uci set wireless.radio1.type='mac80211'
+            uci set wireless.radio1.band='5g'
+            uci set wireless.radio1.channel='36'
+            uci set wireless.radio1.htmode='VHT80'
+            uci set wireless.radio1.disabled='0'
+            uci set wireless.radio1.country='00'
+            uci set wireless.radio1.cell_density='0'
+
+            # radio1 iface — AP, open, on lan
+            uci set wireless.@wifi-iface[1]=wifi-iface
+            uci set wireless.@wifi-iface[1].device='radio1'
+            uci set wireless.@wifi-iface[1].mode='ap'
+            uci set wireless.@wifi-iface[1].ssid='TollGate'
+            uci set wireless.@wifi-iface[1].network='lan'
+            uci set wireless.@wifi-iface[1].encryption='none'
+
+            uci commit wireless
+        """, timeout=30)
+        log.info("[hwsim] UCI wireless configured")
+
+    # --- 3. Reload wifi ---
+    _inner_ssh(alpha_ip, "wifi reload 2>&1", timeout=30)
+    log.info("[hwsim] wifi reload issued, waiting for interfaces...")
+
+    # --- 4. Verify interfaces appeared (up to 10s) ---
+    verified = False
+    for _ in range(10):
+        r = _inner_ssh(alpha_ip, "iw dev 2>/dev/null | grep Interface", timeout=10)
+        interfaces = [line.strip() for line in r.stdout.strip().splitlines() if "Interface" in line]
+        if interfaces:
+            log.info("[hwsim] Interfaces up: %s", ", ".join(interfaces))
+            verified = True
+            break
+        time.sleep(1)
+
+    if not verified:
+        log.warning("[hwsim] No WiFi interfaces detected after 10s — WiFi tests may skip")
+
+    log.info("[hwsim] Setup complete (verified=%s)", verified)
+
+
 def ensure_debian_client_deps() -> bool:
     r = _inner_ssh(DEBIAN_IP, 'python3 -c "import playwright; print(\\"PLAYWRIGHT_OK\\")" 2>/dev/null')
     if "PLAYWRIGHT_OK" in r.stdout:
@@ -1101,6 +1205,116 @@ def wait_for_backend() -> None:
     raise RuntimeError("TollGate backend did not become healthy after 60s")
 
 
+def preflight_check(config: WorkerConfig, mint_url: str, results_dir: str) -> dict[str, Any]:
+    """Run pre-flight checks before starting the test suite.
+
+    Verifies that every component can actually do its job.  Writes a
+    ``preflight.json`` into *results_dir* so the report can show which
+    checks passed/failed.
+
+    Returns a dict with ``ok: bool`` and per-check status.
+    """
+    checks: dict[str, Any] = {}
+
+    # 1. SSH to OpenWrt
+    r = _run(
+        f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} "
+        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o ConnectTimeout=5 root@{OPENWRT_IP} 'echo OPENWRT_OK'",
+        timeout=15, check=False,
+    )
+    checks["ssh_openwrt"] = "OPENWRT_OK" in r.stdout
+
+    # 2. SSH to Debian
+    r = _run(
+        f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} "
+        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o ConnectTimeout=5 root@{DEBIAN_IP} 'echo DEBIAN_OK'",
+        timeout=15, check=False,
+    )
+    checks["ssh_debian"] = "DEBIAN_OK" in r.stdout
+
+    # 3. Backend responds
+    r = _run(f"curl -s -o /dev/null -w '%{{http_code}}' http://{OPENWRT_IP}:2121/", timeout=10, check=False)
+    checks["backend_http"] = "200" in r.stdout
+
+    # 4. Mint health (HTTP /v1/keys)
+    try:
+        req = urllib.request.Request(f"{mint_url}/v1/keys")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            checks["mint_keys"] = resp.status == 200
+    except Exception as exc:
+        checks["mint_keys"] = False
+        checks["mint_keys_error"] = str(exc)
+
+    # 5. Full mint cycle — mint 4 sats and verify token format
+    mint_ok = False
+    try:
+        r = _run(
+            f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && "
+            f"set -a && source .env && set +a && "
+            f"python3 -c \""
+            f"from lib.cashu import create_minter; "
+            f"m = create_minter(mint_url='{mint_url}', venv_path='/opt/cashu-venv'); "
+            f"m.ensure_mint_available(); "
+            f"m.warmup(timeout=30); "
+            f"token = m.mint(4, timeout=60); "
+            f"assert token.startswith(('cashuA', 'cashuB')), f'bad token: {{token[:20]}}'; "
+            f"print(f'MINT_CYCLE_OK token_len={{len(token)}}')\"",
+            timeout=120, check=False,
+        )
+        mint_ok = "MINT_CYCLE_OK" in r.stdout
+        if not mint_ok:
+            checks["mint_cycle_error"] = r.stdout[-300:] + " | " + r.stderr[-300:]
+    except Exception as exc:
+        checks["mint_cycle_error"] = str(exc)
+    checks["mint_cycle"] = mint_ok
+
+    # 6. Backend can reach the mint (router-side check)
+    r = _run(
+        f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} "
+        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o ConnectTimeout=5 root@{OPENWRT_IP} "
+        f"'curl -s -o /dev/null -w \"%{{http_code}}\" {mint_url}/v1/keys 2>/dev/null || echo 000'",
+        timeout=15, check=False,
+    )
+    checks["router_to_mint"] = "200" in r.stdout
+
+    mint_logs: dict[str, str] = {}
+    for name, path in [
+        ("cdk-v2", "/tmp/cdk-mintd.log"),
+        ("nutshell-v2", "/tmp/nutshell-v2-mint.log"),
+        ("nutshell-v1", "/tmp/nutshell-v1-mint.log"),
+    ]:
+        try:
+            p = Path(path)
+            if p.exists():
+                mint_logs[name] = p.read_text()[-2000:]
+        except Exception:
+            pass
+    checks["_mint_logs"] = mint_logs
+
+    critical_keys = ("ssh_openwrt", "ssh_debian", "backend_http", "mint_keys", "mint_cycle", "router_to_mint")
+    ok = all(checks.get(k) for k in critical_keys)
+    checks["ok"] = ok
+
+    Path(results_dir).mkdir(parents=True, exist_ok=True)
+    serializable = {k: v for k, v in checks.items() if k != "_mint_logs"}
+    (Path(results_dir) / "preflight.json").write_text(json.dumps(serializable, indent=2))
+
+    if ok:
+        log.info("[preflight] All checks passed")
+    else:
+        failed = [k for k in critical_keys if not checks.get(k)]
+        log.error("[preflight] FAILED checks: %s", ", ".join(failed))
+        if not checks.get("mint_cycle"):
+            log.error("[preflight] Mint cycle error: %s", checks.get("mint_cycle_error", "(none)"))
+        if not checks.get("router_to_mint"):
+            log.error("[preflight] Router cannot reach mint at %s", mint_url)
+
+    return checks
+
+
 def _configure_mint(mint_url: str) -> None:
     """Configure the backend to use a specific mint URL and wait for health."""
     _run(
@@ -1157,7 +1371,7 @@ def select_test_mint(forced_mint: str = "auto") -> str:
             f"from lib.backend import BackendConfig; "
             f"import os, json, time; "
             f"r = Router(host=os.environ['TOLLGATE_SSH_HOST'], phone_ip='', phone_mac='', domain='', backend=BackendConfig(os.environ.get('TOLLGATE_BACKEND','go'))); "
-            f"r.ssh('cat /etc/tollgate/config.json > /tmp/config.json.bak'); "
+            f"r.ssh('cat /etc/tollgate/config.json > /tmp/config.json.bak 2>/dev/null || true'); "
             f"r.replace_mints(['{CDK_MINT_URL}']); "
             f"time.sleep(8); "
             f"code = r.api_status('/'); "
@@ -1552,7 +1766,13 @@ def run_worker(config: WorkerConfig) -> int:
             log.info("[4/10] Inner VMs (OpenWrt + Debian)")
             start_inner_vms(config)
 
-            log.info("[4.5/10] Start syslog capture + configure OpenWrt forwarding")
+            log.info("[4.5/10] Setup hwsim virtual WiFi on Alpha")
+            try:
+                _setup_hwsim_wifi(OPENWRT_IP)
+            except Exception as hwsim_exc:
+                log.warning("[hwsim] Setup failed (non-fatal, WiFi tests may skip): %s", hwsim_exc)
+
+            log.info("[4.6/10] Start syslog capture + configure OpenWrt forwarding")
             try:
                 syslog_proc = start_syslog_capture(results_dir)
             except Exception as exc:
@@ -1584,7 +1804,7 @@ def run_worker(config: WorkerConfig) -> int:
                 except Exception as portal_exc:
                     log.error("Portal overlay failed (non-fatal, tests may skip): %s", _redact(str(portal_exc))[:500])
 
-            log.info("[8.5/10] Select test mint (forced=%s)", config.mint)
+            log.info("[8.5/11] Select test mint (forced=%s)", config.mint)
             chosen_mint = select_test_mint(forced_mint=config.mint)
             env_path = Path(f"{TEST_DIR}/.env")
             if env_path.exists():
@@ -1593,7 +1813,13 @@ def run_worker(config: WorkerConfig) -> int:
                 env_path.write_text(env_text)
                 log.info("Updated .env TOLLGATE_TEST_MINT_URL=%s", chosen_mint)
 
-            log.info("[9/10] Run tests (results_dir=%s)", results_dir)
+            log.info("[9/11] Pre-flight checks")
+            preflight = preflight_check(config, chosen_mint, results_dir)
+            if not preflight.get("ok"):
+                log.error("Pre-flight checks FAILED — aborting test run to save time")
+                raise RuntimeError(f"Pre-flight checks failed: {[k for k, v in preflight.items() if v is False]}")
+
+            log.info("[10/11] Run tests (results_dir=%s)", results_dir)
             vm_streams = _start_vm_log_streaming(config, results_dir)
             try:
                 test_exit = run_tests(config, results_dir)
@@ -1618,8 +1844,15 @@ def run_worker(config: WorkerConfig) -> int:
             timeout=10, check=False,
         )
 
+        for name, path in [
+            ("cdk-v2", "/tmp/cdk-mintd.log"),
+            ("nutshell-v2", "/tmp/nutshell-v2-mint.log"),
+            ("nutshell-v1", "/tmp/nutshell-v1-mint.log"),
+        ]:
+            _run(f"cp {path} {results_dir}/raw/{name}.log 2>/dev/null || true", timeout=5, check=False)
+
         try:
-            log.info("[10/10] Collect + render results")
+            log.info("[11/11] Collect + render results")
             collect_and_render(config, results_dir, started_at, finished_at)
         except Exception as collect_exc:
             log.error("collect_and_render failed (non-fatal): %s", _redact(str(collect_exc))[:500])

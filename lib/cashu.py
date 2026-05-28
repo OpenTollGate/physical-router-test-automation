@@ -87,18 +87,27 @@ class CashuMint:
         return r.stdout.count("Mint quote")
 
     def _wait_and_claim(self, quote_id, amount, timeout=30):
-        for _ in range(timeout // 3):
-            time.sleep(3)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(2, remaining))
             try:
                 r = subprocess.run(
                     [self._cashu, "-h", self.mint_url, "-t",
                      "invoice", str(amount), "--id", quote_id],
-                    capture_output=True, text=True, timeout=30, env=self._env(),
+                    capture_output=True, text=True,
+                    timeout=min(15, max(5, remaining)),
+                    env=self._env(),
                 )
                 if "Invoice paid" in r.stdout:
                     return True
-            except subprocess.TimeoutExpired as exc:
-                raise MintUnavailableError("cashu mint unavailable") from exc
+            except subprocess.TimeoutExpired:
+                if time.monotonic() >= deadline:
+                    raise MintUnavailableError(
+                        f"cashu claim timed out after {timeout}s"
+                    )
             except Exception:
                 pass
         return False
