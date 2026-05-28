@@ -24,7 +24,7 @@
 
 | PR | Title | c03rad0r | Amperstrand | Origami74 |
 |----|-------|----------|-------------|-----------|
-| #104 | Security & correctness fixes | — | — | — |
+| #104 | Security & correctness fixes | APPROVED | — | — |
 | #147 | Config schema, CLI --json (reopened #124) | — | — | — |
 | #86 | Validate profit_share factors sum to 1.0 | APPROVED | — | — |
 | #126 | V2 keyset ID support (CDK 0.16.0+) | APPROVED | — | — |
@@ -35,26 +35,34 @@
 | #142 | SSL management rewrite in Go | — | — | — |
 | #143 | CI build workflow, packaging | — | — | — |
 
+## E2E Test Results (2026-05-28)
+
+| Router | Passed | Failed | Skipped | XFailed | Time |
+|--------|--------|--------|---------|---------|------|
+| Alpha (10.47.41.1) | 95 | 0 | 163 | 3 | 542s |
+| Beta (192.168.244.1) | 92 | 0 | 166 | 3 | 395s |
+
+Test infrastructure: cashu 0.20.0 venv, tollgate --json CLI, wget + nc HTTP calls.
+
 ---
 
 ## Phase 1: Test Infrastructure
 
 ### 1A. Cashu venv setup
 
-- [ ] `python3 -m venv ~/.cashu-venv`
-- [ ] `~/.cashu-venv/bin/pip install --upgrade pip`
-- [ ] `~/.cashu-venv/bin/pip install cashu 'marshmallow<4'`
-- [ ] Patch pydantic bug: `sed -i 's/    active: bool$/    active: bool = True/' ~/.cashu-venv/lib/python3.*/site-packages/cashu/core/models.py`
-- [ ] Verify: `~/.cashu-venv/bin/cashu -h https://testnut.cashu.exchange -t balance` — expect `Balance: 0 sat`
-- [ ] Add `TOLLGATE_CASHU_VENV=$HOME/.cashu-venv` to `mint-health/routers.env`
-- [ ] Fix `scripts/setup-cashu.sh`: `python3.12`→`python3`, `sed -i ''`→`sed -i` (Linux)
-- [ ] Commit and push to `physical-router-test-automation`
+- [x] `python3 -m venv ~/.cashu-venv`
+- [x] `~/.cashu-venv/bin/pip install --upgrade pip`
+- [x] `~/.cashu-venv/bin/pip install cashu 'marshmallow<4'`
+- [x] Patch pydantic bug: `sed -i 's/    active: bool$/    active: bool = True/' ~/.cashu-venv/lib/python3.*/site-packages/cashu/core/models.py`
+- [x] Verify: `~/.cashu-venv/bin/cashu -h https://testnut.cashu.exchange -t balance` — expect `Balance: 0 sat`
+- [x] Add `TOLLGATE_CASHU_VENV=$HOME/.cashu-venv` to `mint-health/routers.env`
+- [x] Fix `scripts/setup-cashu.sh`: `python3.12`→`python3`, `sed -i ''`→`sed -i` (Linux)
+- [x] Commit and push to `physical-router-test-automation`
 
 ### 1B. Full test suite on both routers
 
-- [ ] Alpha: `TOLLGATE_SSH_HOST=10.47.41.1 ROUTER_PASSWORD=c03rad0r123 TOLLGATE_CASHU_VENV=$HOME/.cashu-venv pytest tests/api/ -m "api and not virtual_lab and not rust_only" --timeout=120 --tb=short -q`
-- [ ] Beta: `TOLLGATE_SSH_HOST=192.168.244.1 ROUTER_PASSWORD=c03rad0r123 TOLLGATE_CASHU_VENV=$HOME/.cashu-venv pytest tests/api/ -m "api and not virtual_lab and not rust_only" --timeout=120 --tb=short -q`
-- [ ] Expected: ~93 pass / 0 fail on both (up from 87/7 and 80/6)
+- [x] Alpha: 95 passed, 0 failed (542s)
+- [x] Beta: 92 passed, 0 failed (395s)
 
 ---
 
@@ -62,16 +70,16 @@
 
 ### 2A. PR #104 — Security & correctness fixes
 
-- [ ] Post hardware test results as PR comment
-- [ ] Approve PR #104 (c03rad0r)
+- [x] Post hardware test results as PR comment
+- [x] Approve PR #104 (c03rad0r)
 - [ ] Wait for Amperstrand approval
 - [ ] Wait for Origami74 approval
 - [ ] After all 3 approve: validate happy path on hardware
 
 ### 2B. PR #147 — Config schema, CLI --json (reopened #124)
 
-- [ ] Post hardware test results + `--json` validation as PR comment
-- [ ] Approve PR #147 (c03rad0r)
+- [x] Post hardware test results + `--json` validation as PR comment
+- [ ] Approve PR #147 (c03rad0r — cannot approve own PR)
 - [ ] Wait for Amperstrand approval
 - [ ] Wait for Origami74 approval
 - [ ] After all 3 approve: validate on hardware:
@@ -132,10 +140,10 @@ Depends on: Phase 2 (#147 on `main`)
 | #138 (merchant_types) | needs review | needs review | needs review |
 | #143 (CI infra) | needs review | needs review | needs review |
 
-- [ ] Post hardware validation results on #86
-- [ ] Post hardware validation results on #126
-- [ ] Approve #138 (c03rad0r)
-- [ ] Approve #143 (c03rad0r)
+- [x] Post hardware validation results on #86
+- [x] Post hardware validation results on #126
+- [ ] Approve #138 (c03rad0r — cannot approve own PR)
+- [ ] Approve #143 (c03rad0r — cannot approve own PR)
 - [ ] Wait for Amperstrand + Origami74 on all 4
 
 ### 4B. Tier 2 — Sequential chain
@@ -168,8 +176,12 @@ Depends on: Phase 2 (#147 on `main`)
 
 ## Phase 5: Test Automation Maintenance
 
-- [ ] Fix `scripts/setup-cashu.sh` Linux compat (Phase 1A)
-- [ ] Add `TOLLGATE_CASHU_VENV` to `mint-health/routers.env`
+- [x] Fix `scripts/setup-cashu.sh` Linux compat (Phase 1A)
+- [x] Add `TOLLGATE_CASHU_VENV` to `mint-health/routers.env`
+- [x] Fix `post_payment_event` — curl → nc (busybox wget discards body on errors)
+- [x] Fix `test_keyset_id_versions` — cashu 0.20.0 token structure
+- [x] Fix `test_mint_502_handling` — wget connection error strings
+- [x] Fix `skip_if_no_luci` — curl → wget --spider
 - [ ] Update `REMAINING-WORK-PLAN.md`
 - [ ] nsite dashboard — deferred (Blossom unreachable)
 
