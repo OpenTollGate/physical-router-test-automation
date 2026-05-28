@@ -963,8 +963,22 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
         timeout=30,
     )
 
+    # Wait for netifd to create wireless interfaces on the hwsim PHYs
     r = _inner_ssh(alpha_ip, """
+        for i in $(seq 1 15); do
+            iw dev 2>/dev/null | grep -q Interface && break
+            sleep 1
+        done
         iw dev 2>/dev/null | grep Interface || echo 'NO_INTERFACES'
+    """, timeout=30)
+
+    has_interfaces = any("Interface" in line for line in r.stdout.splitlines())
+    if not has_interfaces:
+        log.warning("[vwifi] No WiFi interfaces on OpenWrt alpha after 15s wait")
+    else:
+        log.info("[vwifi] OpenWrt alpha WiFi interfaces ready")
+
+    r = _inner_ssh(alpha_ip, """
         vwifi-client &
         sleep 3
         echo "VWIFI_CLIENT_STARTED"
@@ -999,9 +1013,9 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
         sleep 3
         iw dev 2>/dev/null | grep Interface || echo 'NO_INTERFACES'
         vwifi-client &
-        sleep 3
+        sleep 5
         iw dev 2>/dev/null | grep Interface || echo 'NO_INTERFACES_AFTER_CLIENT'
-    """, timeout=30)
+    """, timeout=60)
 
     debian_iface = None
     saw_after_client = False
