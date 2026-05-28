@@ -1050,6 +1050,8 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
     # --- Debian VM ---
     log.info("[vwifi] Setting up vwifi-client on Debian (%s)", debian_ip)
 
+    _inner_ssh(debian_ip, "apt-get install -y -qq iw 2>&1 | tail -1", timeout=60)
+
     _run(
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} scp -O "
         f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
@@ -1324,29 +1326,35 @@ def _setup_hwsim_wifi(alpha_ip: str, *, vwifi_mode: bool = False) -> None:
         phy_count = r2.stdout.strip() if r2.returncode == 0 else "?"
         log.info("[hwsim] vwifi mode: using existing hwsim (phy_count=%s)", phy_count)
 
-        r = _inner_ssh(alpha_ip, "uci get wireless.radio0.type 2>/dev/null", timeout=10)
-        if r.returncode != 0 or "mac80211" not in r.stdout:
-            _inner_ssh(alpha_ip, """
-                while uci -q delete wireless.@wifi-device[0]; do true; done
-                while uci -q delete wireless.@wifi-iface[0]; do true; done
+        _inner_ssh(alpha_ip, """
+            uci set wireless.radio0.type='mac80211'
+            uci set wireless.radio0.band='2g'
+            uci set wireless.radio0.channel='6'
+            uci set wireless.radio0.htmode='HT20'
+            uci set wireless.radio0.disabled='0'
 
-                uci set wireless.radio0=wifi-device
-                uci set wireless.radio0.type='mac80211'
-                uci set wireless.radio0.band='2g'
-                uci set wireless.radio0.channel='6'
-                uci set wireless.radio0.htmode='HT20'
-                uci set wireless.radio0.disabled='0'
+            uci set wireless.default_radio0.device='radio0'
+            uci set wireless.default_radio0.mode='ap'
+            uci set wireless.default_radio0.ssid='TollGate-ALPHA'
+            uci set wireless.default_radio0.network='lan'
+            uci set wireless.default_radio0.encryption='none'
 
-                uci set wireless.default_radio0=wifi-iface
-                uci set wireless.default_radio0.device='radio0'
-                uci set wireless.default_radio0.mode='ap'
-                uci set wireless.default_radio0.ssid='TollGate-ALPHA'
-                uci set wireless.default_radio0.network='lan'
-                uci set wireless.default_radio0.encryption='none'
+            uci set wireless.radio1.type='mac80211'
+            uci set wireless.radio1.band='5g'
+            uci set wireless.radio1.channel='36'
+            uci set wireless.radio1.htmode='VHT80'
+            uci set wireless.radio1.disabled='0'
 
-                uci commit wireless 2>/dev/null
-            """, timeout=30)
-            log.info("[hwsim] UCI wireless configured (vwifi mode)")
+            uci set wireless.default_radio1.device='radio1'
+            uci set wireless.default_radio1.mode='ap'
+            uci set wireless.default_radio1.ssid='TollGate-ALPHA'
+            uci set wireless.default_radio1.network='lan'
+            uci set wireless.default_radio1.encryption='none'
+
+            uci commit wireless 2>/dev/null
+            wifi reload 2>/dev/null || true
+        """, timeout=30)
+        log.info("[hwsim] UCI wireless configured (vwifi mode)")
         log.info("[hwsim] Setup complete (vwifi mode)")
         return
 
