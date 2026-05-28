@@ -1067,8 +1067,8 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
     log.info("[vwifi] Debian hwsim radios=1: %s", r_mod.stdout.strip()[:200] or "(ok)")
 
     time.sleep(2)
-    r_iw = _inner_ssh(debian_ip, "iw dev 2>/dev/null | grep Interface || echo NO_INTERFACES", timeout=15)
-    log.info("[vwifi] Debian interfaces after add: %s", r_iw.stdout.strip()[:200])
+    r_iw = _inner_ssh(debian_ip, "iw phy 2>/dev/null | grep -E 'wiphy|Wiphy' || echo NO_PHYS; iw dev 2>/dev/null | grep Interface || echo NO_INTERFACES", timeout=15)
+    log.info("[vwifi] Debian after modprobe: %s", r_iw.stdout.strip()[:300])
 
     r_client = _inner_ssh(debian_ip, """
         vwifi-client 10.99.99.2 2>&1 &
@@ -2359,10 +2359,11 @@ def run_worker(config: WorkerConfig) -> int:
         if force_delete:
             log.info("Force-deleting VM (1h lifetime exceeded)")
             delete_self(config)
-        elif config.keep_vm_on_failure:
-            log.warning("Keeping VM alive for debugging (keep_vm_on_failure=true). "
+        elif config.keep_vm_on_failure and exit_code != 0:
+            log.warning("Keeping VM + inner VMs alive for debugging (keep_vm_on_failure=true). "
                         "Kill switch will shut it down at 1h if still running.")
         else:
+            stop_inner_vms()
             log.info("Self-deleting VM %s", config.vm_name)
             delete_self(config)
 
