@@ -139,9 +139,12 @@ def metering_test_setup(router, adb, wifi, cashu, test_pricing_fn,
 def post_payment_event(router, token):
     payload = json.dumps({"kind": 21000, "tags": [["payment", token]], "content": ""})
     return router.ssh(
-        f"wget -qO- --post-data='{payload}' "
+        f"wget -O /tmp/tg-post-resp.txt --timeout=20 "
+        f"--post-data='{payload}' "
         f"--header='Content-Type: application/json' "
-        f"'{router.backend_url('/')}' 2>/dev/null || true"
+        f"'{router.backend_url('/')}' 2>/dev/null; "
+        f"cat /tmp/tg-post-resp.txt 2>/dev/null; "
+        f"rm -f /tmp/tg-post-resp.txt"
     )
 
 
