@@ -110,6 +110,7 @@ class WorkerConfig:
     portal: str
     quick: bool
     hwsim_enabled: bool
+    smoke: bool
 
 
 def _metadata_get(key: str) -> str:
@@ -152,11 +153,12 @@ def load_config_from_metadata() -> WorkerConfig:
         portal=_metadata_get_optional("tollgate-portal", "builtin"),
         hwsim_enabled=_metadata_get_optional("tollgate-hwsim").lower() in ("true", "1", "yes"),
         quick=_metadata_get_optional("tollgate-quick").lower() in ("true", "1", "yes"),
+        smoke=_metadata_get_optional("tollgate-smoke").lower() in ("true", "1", "yes"),
     )
     log.info(
-        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s portal=%s hwsim=%s quick=%s",
+        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s portal=%s hwsim=%s quick=%s smoke=%s",
         cfg.run_id, cfg.sut_branch, cfg.artifact_repo, cfg.backend,
-        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure, cfg.mint, cfg.portal, cfg.hwsim_enabled, cfg.quick,
+        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure, cfg.mint, cfg.portal, cfg.hwsim_enabled, cfg.quick, cfg.smoke,
     )
     log.info(
         "Artifact: run_id=%s suite_ref=%s reseller=%s secondary=%s",
@@ -1444,6 +1446,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
     backend = config.backend
     run_scenarios = config.reseller_scenarios
     quick = config.quick
+    smoke = config.smoke
 
     if quick:
         log.info("QUICK MODE: running visual happy path only")
@@ -1459,6 +1462,44 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         )
         r = _run(test_cmd, timeout=600, check=False)
         log.info("Quick test stdout (%d bytes): %s", len(r.stdout), _redact(r.stdout[-2000:]))
+        return r.returncode
+
+    if smoke:
+        log.info("SMOKE MODE: visual + smoke API + hwsim (if enabled)")
+        hwsim_cmd = ""
+        if config.hwsim_enabled:
+            hwsim_cmd = (
+                f"hwsim_exit=0; "
+                f"python3 -m pytest tests/api/test_mac80211_hwsim.py "
+                f"-v --tb=short --timeout=120 --backend={backend} "
+                f"{expected_pr}--client=container --results {results_dir} "
+                f"--junitxml={results_dir}/raw/hwsim/junit.xml "
+                f"--html={results_dir}/raw/hwsim/report.html --self-contained-html "
+                f">{results_dir}/raw/hwsim/output.log 2>&1; hwsim_exit=$?; "
+            )
+        test_cmd = (
+            f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
+            f"mkdir -p {results_dir}/raw/visual {results_dir}/raw/smoke-api {results_dir}/raw/hwsim {results_dir}/report && "
+            "visual_exit=0; smoke_exit=0; "
+            f"python3 -m pytest tests/api/test_visual_happy_path.py -v --tb=short --timeout=300 --backend={backend} "
+            f"{expected_pr}--client=container --results {results_dir} "
+            f"--junitxml={results_dir}/raw/visual/junit.xml "
+            f"--html={results_dir}/raw/visual/report.html --self-contained-html "
+            f">{results_dir}/raw/visual/output.log 2>&1; visual_exit=$?; "
+            f"python3 -m pytest tests/api/ -v --tb=short --timeout=120 -m smoke --backend={backend} "
+            f"{expected_pr}--client=container --results {results_dir} "
+            f"--ignore=tests/api/test_visual_happy_path.py "
+            f"--junitxml={results_dir}/raw/smoke-api/junit.xml "
+            f"--html={results_dir}/raw/smoke-api/report.html --self-contained-html "
+            f">{results_dir}/raw/smoke-api/output.log 2>&1; smoke_exit=$?; "
+            f"{hwsim_cmd}"
+            "worst_exit=0; "
+            "for e in \"$visual_exit\" \"$smoke_exit\" \"${hwsim_exit:-0}\"; do "
+            "  if [ \"$e\" -ne 0 ] && [ \"$e\" -gt \"$worst_exit\" ]; then worst_exit=$e; fi; done; "
+            "exit \"$worst_exit\""
+        )
+        r = _run(test_cmd, timeout=1200, check=False)
+        log.info("Smoke test stdout (%d bytes): %s", len(r.stdout), _redact(r.stdout[-2000:]))
         return r.returncode
     # Virtual-lab scenario tests (captive portal browser, mint health, hwsim)
     # Runs alongside the main API suite. Excludes reseller/two-router which
@@ -1528,9 +1569,13 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
 def collect_and_render(config: WorkerConfig, results_dir: str, started_at: str, finished_at: str) -> None:
     commit_arg = f"--sut-commit {config.sut_commit} " if config.sut_commit else ""
     pr_arg = f"--sut-pr {config.sut_pr} " if config.sut_pr else ""
-    scope = "quick" if config.quick else "full"
+    scope = "quick" if config.quick else ("smoke" if config.smoke else "full")
     pytest_runners = "--pytest visual=raw/visual/junit.xml "
-    if not config.quick:
+    if config.smoke:
+        pytest_runners += "--pytest smoke-api=raw/smoke-api/junit.xml "
+        if config.hwsim_enabled:
+            pytest_runners += "--pytest hwsim=raw/hwsim/junit.xml "
+    elif not config.quick:
         pytest_runners += "--pytest api=raw/api/junit.xml "
         if config.reseller_scenarios:
             pytest_runners += "--pytest scenarios=raw/scenarios/junit.xml "

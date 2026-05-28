@@ -165,15 +165,19 @@ def cmd_submit(args: argparse.Namespace) -> int:
         mint=cast(str, args.mint),
         portal=cast(str, args.portal),
         quick=cast(bool, args.quick),
+        smoke=cast(bool, getattr(args, "smoke", False)),
+        hwsim=cast(bool, getattr(args, "hwsim", False)),
     )
     pr_line = f"  PR:           {target.pr} ({target.repo}@{target.branch})\n" if target.pr else f"  Branch:       {target.repo}@{target.branch}\n"
     mint_line = f"  Mint:         {cast(str, args.mint)}\n" if cast(str, args.mint) != "auto" else ""
     portal_line = f"  Portal:       {cast(str, args.portal)}\n" if cast(str, args.portal) != "builtin" else ""
     quick_line = "  Mode:         QUICK (visual happy path only)\n" if cast(bool, args.quick) else ""
+    smoke_line = "  Mode:         SMOKE (visual + smoke API + hwsim)\n" if cast(bool, getattr(args, "smoke", False)) and not cast(bool, args.quick) else ""
+    hwsim_line = "  hwsim:        enabled\n" if cast(bool, getattr(args, "hwsim", False)) else ""
     print(f"""
 Submitted run {info['run_id']}
 {pr_line}  SUT commit:   {target.sut_commit or '(branch head)'}
-{quick_line}{mint_line}{portal_line}  VM:           {info['vm_name']} ({info['zone']})
+{quick_line}{smoke_line}{mint_line}{portal_line}{hwsim_line}  VM:           {info['vm_name']} ({info['zone']})
   Artifact run: {info['artifact_run_id']}
   Suite ref:    {info['suite_ref']} (must exist on github.com/{SUITE_REPO})
   Logs:         {info['log_hint']}
@@ -338,19 +342,9 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--zone", default=DEFAULT_ZONE)
     submit.add_argument("--machine-type", default=DEFAULT_MACHINE_TYPE)
     submit.add_argument("--disk-size", type=int, default=DEFAULT_DISK_SIZE_GB)
+    submit.add_argument("--smoke", action="store_true",
+        help="Smoke mode: visual happy path + smoke API tests + hwsim (if --hwsim) (~8min)")
     submit.add_argument("--quick", action="store_true", help="Quick mode: only run visual happy path (~5min total)")
-    submit.add_argument("--publish", action="store_true", help="Publish report to gh-pages when done")
-    submit.add_argument("--wait", action="store_true", help="Block until VM self-deletes")
-    submit.add_argument("--reseller-scenarios", action="store_true", help="Run virtualizable reseller-mode scenario tests")
-    submit.add_argument("--two-router", action="store_true", help="Boot second OpenWrt VM for two-router degraded-mode tests")
-    submit.add_argument("--secondary-router-host", default="", help="Seller/secondary router IP or host for reseller scenarios")
-    submit.add_argument("--secondary-router-port", default="", help="Optional SSH port for the seller/secondary router")
-    submit.add_argument("--self-delete", action="store_true", help="Self-delete VM after tests complete (default: keep alive for debugging, 1h kill switch)")
-    submit.add_argument("--artifact-timeout", type=int, default=1800, help="Seconds to wait for CI artifact")
-    submit.add_argument("--mint", default="auto", choices=["auto", "cdk-v2", "nutshell-v2", "nutshell-v1"],
-                        help="Force a specific mint type instead of auto-detection. Use 'submit-all-mints' for parallel runs.")
-    submit.add_argument("--portal", default="builtin", choices=["builtin", "net4sats"],
-        help="Captive portal to deploy (default: builtin). 'net4sats' deploys the configurationwizzard SPA.")
     submit.add_argument("--hwsim", action="store_true",
         help="Enable mac80211_hwsim virtual WiFi on the OpenWrt VM (experimental)")
     target_flags(submit)
