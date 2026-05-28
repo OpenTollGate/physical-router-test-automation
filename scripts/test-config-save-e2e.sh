@@ -195,8 +195,15 @@ $SSH 'tollgate --json config save "$(tollgate --json config get | jsonfilter -e 
 
 echo "  Restarting tollgate-wrt service..."
 $SSH "/etc/init.d/tollgate-wrt restart" 2>&1 || true
-echo "  Waiting 18s for service startup..."
-sleep 18
+echo "  Waiting for service startup (up to 60s)..."
+for i in $(seq 1 30); do
+    HEALTH_CHECK=$($SSH "tollgate --json health 2>&1" 2>&1) || true
+    if echo "$HEALTH_CHECK" | grep -q '"ok"'; then
+        echo "  Service healthy after $((i * 2))s"
+        break
+    fi
+    sleep 2
+done
 
 GET_LEVEL=$($SSH "tollgate --json config get" 2>&1 | grep -oP '"log_level"\s*:\s*"\K[^"]*' | head -1) || true
 if [ "$GET_LEVEL" = "warn" ]; then

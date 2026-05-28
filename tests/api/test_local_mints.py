@@ -66,5 +66,5 @@ def test_cdk_v2_mint_info():
 
 def test_local_mints_reachable_from_openwrt(router):
     _skip_if_no_local_mints()
-    result = router.ssh("curl -sf http://v2.testnut.cdk.lan:8383/v1/keys | head -c 100")
+    result = router.ssh("wget -qO- http://v2.testnut.cdk.lan:8383/v1/keys 2>/dev/null | head -c 100")
     assert "keysets" in result, f"OpenWrt should reach CDK mint, got: {result}"

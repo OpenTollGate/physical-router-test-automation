@@ -165,7 +165,7 @@ def test_welcome_html_served_by_nds(router):
         result = _client_exec("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", url)
         code = result.stdout.strip()
     else:
-        code = router.ssh(f"curl -s -o /dev/null -w '%{{http_code}}' {url} 2>/dev/null").strip()
+        code = router.router_fetch_status(url).strip()
 
     # 500 is expected when curling from the router itself (not a preauthenticated client).
     # This is NOT a failure — NDS correctly refuses to serve to non-captive IPs.

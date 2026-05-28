@@ -328,21 +328,20 @@ fi
 section "Phase 4: configurationwizzard SPA files"
 
 # 4.1 Admin SPA files
-ADMIN_EXISTS=$($SSH "test -f /www/net4sats/admin.html && echo yes || echo no" 2>&1)
+ADMIN_EXISTS=$($SSH "test -f /www/net4sats/admin.html -o -f /www/tollgate/admin.html && echo yes || echo no" 2>&1)
 if [ "$ADMIN_EXISTS" = "yes" ]; then
-    pass "admin SPA deployed at /www/net4sats/"
+    ADMIN_PATH=$($SSH "test -f /www/net4sats/admin.html && echo /www/net4sats || echo /www/tollgate" 2>&1)
+    pass "admin SPA deployed at $ADMIN_PATH/"
 else
-    # Check for index.html (old layout)
-    INDEX_EXISTS=$($SSH "test -f /www/net4sats/index.html && echo yes || echo no" 2>&1)
+    INDEX_EXISTS=$($SSH "test -f /www/net4sats/index.html -o -f /www/tollgate/index.html && echo yes || echo no" 2>&1)
     if [ "$INDEX_EXISTS" = "yes" ]; then
         skip "admin SPA uses old index.html layout (not yet re-deployed)"
     else
-        fail "admin SPA not found at /www/net4sats/"
+        fail "admin SPA not found at /www/net4sats/ or /www/tollgate/"
     fi
 fi
 
-# 4.2 Check admin JS bundle
-ADMIN_JS=$($SSH "ls /www/net4sats/assets/admin-*.js 2>/dev/null | head -1" 2>&1) || true
+ADMIN_JS=$($SSH "ls /www/net4sats/assets/admin-*.js /www/tollgate/assets/admin-*.js 2>/dev/null | head -1" 2>&1) || true
 if [ -n "$ADMIN_JS" ]; then
     pass "admin JS bundle found: $ADMIN_JS"
 else

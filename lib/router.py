@@ -165,6 +165,14 @@ class Router:
         port = self._detect_cgi_port()
         return f"http://127.0.0.1:{port}/cgi-bin/{endpoint}"
 
+    def router_fetch(self, url: str, method: str = "GET", data: str | None = None, timeout: int = 10) -> str:
+        if data is not None:
+            return self.ssh(f"wget -qO- --post-data='{data}' '{url}'", timeout=timeout)
+        return self.ssh(f"wget -qO- '{url}'", timeout=timeout)
+
+    def router_fetch_status(self, url: str, timeout: int = 10) -> str:
+        return self.ssh(f"wget -S -o /dev/null -O /dev/null '{url}' 2>&1 | head -1 | grep -oE '[0-9]{{3}}' | head -1", timeout=timeout)
+
     def _ssh_env(self):
         env = os.environ.copy()
         if self._ssh_pw:
@@ -617,11 +625,11 @@ class Router:
     def cli_command(self, command: str, args: list[str] | None = None, timeout: int = 10) -> dict:
         if not self.backend.has_cli_socket:
             raise NotImplementedError("Rust backend has no CLI socket")
-        payload: dict[str, object] = {"command": command}
+        cmd_parts = ["tollgate", "--json", command]
         if args:
-            payload["args"] = args
+            cmd_parts.extend(args)
         raw = self.ssh(
-            f"echo '{json.dumps(payload)}' | socat - UNIX-CONNECT:/var/run/tollgate.sock",
+            " ".join(cmd_parts),
             timeout=timeout,
         )
         try:
