@@ -110,6 +110,9 @@ else
     git clone --depth 1 --branch "${VWIFI_BRANCH}" "${VWIFI_REPO}" "${BUILD_DIR}"
 fi
 
+# Clean stale build dirs (may have wrong permissions from previous runs)
+rm -rf "${BUILD_DIR}/build-host" "${BUILD_DIR}/build-guest"
+
 # --- Build host binaries (vwifi-server, vwifi-ctrl) ---
 echo ""
 echo "Building host binaries (vwifi-server, vwifi-ctrl)..."
@@ -139,13 +142,18 @@ GUEST_BUILD="${BUILD_DIR}/build-guest"
 mkdir -p "${GUEST_BUILD}"
 cd "${GUEST_BUILD}"
 
-# vwifi client binaries don't need vwifi-server specific flags.
-# Build with static linking for portability.
 cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_EXE_LINKER_FLAGS="-static" \
     2>&1 | tail -5
-make -j"$(nproc)" 2>&1 | tail -5
+if ! make -j"$(nproc)" 2>&1 | tail -5; then
+    echo "  Static build failed, trying dynamic..."
+    rm -rf "${GUEST_BUILD}"
+    mkdir -p "${GUEST_BUILD}"
+    cd "${GUEST_BUILD}"
+    cmake .. -DCMAKE_BUILD_TYPE=Release 2>&1 | tail -5
+    make -j"$(nproc)" 2>&1 | tail -5
+fi
 
 mkdir -p "${DEBIAN_DIR}" "${OPENWRT_DIR}"
 for bin in vwifi-client vwifi-add-interfaces; do
