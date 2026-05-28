@@ -1063,11 +1063,8 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
         timeout=30,
     )
 
-    r_mod = _inner_ssh(debian_ip, "modprobe mac80211_hwsim radios=0 2>&1 || true", timeout=15)
-    log.info("[vwifi] Debian hwsim radios=0: %s", r_mod.stdout.strip()[:200] or "(ok)")
-
-    r_add = _inner_ssh(debian_ip, "timeout 15 vwifi-add-interfaces 1 0a:0b:0c:03:02 2>&1", timeout=30)
-    log.info("[vwifi] Debian vwifi-add-interfaces: rc=%d out=%s", r_add.returncode, r_add.stdout.strip()[:200])
+    r_mod = _inner_ssh(debian_ip, "modprobe mac80211_hwsim radios=1 2>&1 || true", timeout=15)
+    log.info("[vwifi] Debian hwsim radios=1: %s", r_mod.stdout.strip()[:200] or "(ok)")
 
     time.sleep(2)
     r_iw = _inner_ssh(debian_ip, "iw dev 2>/dev/null | grep Interface || echo NO_INTERFACES", timeout=15)
