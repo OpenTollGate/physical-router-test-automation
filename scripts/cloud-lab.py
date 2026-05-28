@@ -347,6 +347,18 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--quick", action="store_true", help="Quick mode: only run visual happy path (~5min total)")
     submit.add_argument("--hwsim", action="store_true",
         help="Enable mac80211_hwsim virtual WiFi on the OpenWrt VM (experimental)")
+    submit.add_argument("--publish", action="store_true", help="Publish report to gh-pages when done")
+    submit.add_argument("--wait", action="store_true", help="Block until VM self-deletes")
+    submit.add_argument("--reseller-scenarios", action="store_true", help="Run virtualizable reseller-mode scenario tests")
+    submit.add_argument("--two-router", action="store_true", help="Boot second OpenWrt VM for two-router degraded-mode tests")
+    submit.add_argument("--secondary-router-host", default="", help="Seller/secondary router IP or host for reseller scenarios")
+    submit.add_argument("--secondary-router-port", default="", help="Optional SSH port for the seller/secondary router")
+    submit.add_argument("--self-delete", action="store_true", help="Self-delete VM after tests complete (default: keep alive for debugging, 1h kill switch)")
+    submit.add_argument("--artifact-timeout", type=int, default=1800, help="Seconds to wait for CI artifact")
+    submit.add_argument("--mint", default="auto", choices=["auto", "cdk-v2", "nutshell-v2", "nutshell-v1"],
+        help="Force a specific mint type instead of auto-detection. Use 'submit-all-mints' for parallel runs.")
+    submit.add_argument("--portal", default="builtin", choices=["builtin", "net4sats"],
+        help="Captive portal to deploy (default: builtin). 'net4sats' deploys the configurationwizzard SPA.")
     target_flags(submit)
     submit.set_defaults(func=cmd_submit)
 
