@@ -80,7 +80,7 @@ def test_local_502_mint_returns_502(router):
     output = router.ssh(
         f"wget --spider --timeout=10 '{LOCAL_502_MINT_URL}/v1/keysets' 2>&1"
     )
-    if "Failed to send request" in output or "Connection refused" in output or "timed out" in output:
+    if "Failed to send request" in output or "Connection refused" in output or "timed out" in output or "Connection failed" in output or "Connection error" in output:
         pytest.skip(f"Local 502 mint at {LOCAL_502_MINT_URL} not reachable — not deployed in this environment")
     code = ""
     if "HTTP error" in output:

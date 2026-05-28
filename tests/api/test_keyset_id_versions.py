@@ -231,7 +231,13 @@ def test_minted_token_keyset_id_matches_mint(router, cashu, mint_keyset_ids):
     token = cashu.mint(amount=4)
     decoded = _decode_cashuA_token(token)
 
-    proofs = decoded.get("proofs", [])
+    if "token" in decoded and isinstance(decoded["token"], list):
+        all_proofs = []
+        for entry in decoded["token"]:
+            all_proofs.extend(entry.get("proofs", []))
+        proofs = all_proofs
+    else:
+        proofs = decoded.get("proofs", [])
     assert proofs, f"No proofs in decoded token: {decoded}"
 
     for proof in proofs:

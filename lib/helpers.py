@@ -137,10 +137,11 @@ def metering_test_setup(router, adb, wifi, cashu, test_pricing_fn,
 
 
 def post_payment_event(router, token):
+    payload = json.dumps({"kind": 21000, "tags": [["payment", token]], "content": ""})
     return router.ssh(
-        f"curl -s -X POST '{router.backend_url('/')}' "
-        f"-H 'Content-Type: application/json' "
-        f"-d '{{\"kind\":21000,\"tags\":[[\"payment\",\"{token}\"]],\"content\":\"\"}}'"
+        f"wget -qO- --post-data='{payload}' "
+        f"--header='Content-Type: application/json' "
+        f"'{router.backend_url('/')}' 2>/dev/null || true"
     )
 
 
@@ -155,11 +156,11 @@ def skip_if_no_cli_socket(router):
 
 def skip_if_no_luci(router):
     try:
-        code = router.ssh(
-            "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/ 2>/dev/null",
+        out = router.ssh(
+            "wget --spider --timeout=5 http://127.0.0.1:8080/ 2>&1",
             timeout=5,
         )
-        if not code.strip().startswith("2"):
+        if "200 OK" not in out and "Remote file exists" not in out:
             pytest.skip("LuCI admin UI not available on port 8080")
     except Exception:
         pytest.skip("Cannot check LuCI availability")
