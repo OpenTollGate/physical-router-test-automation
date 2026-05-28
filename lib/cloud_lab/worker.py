@@ -937,8 +937,10 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
 
     # Copy binaries to OpenWrt
     _run(
-        f"scp -O {shlex.quote(str(openwrt_client))} root@{alpha_ip}:/usr/bin/vwifi-client && "
-        f"scp -O {shlex.quote(str(openwrt_add_if))} root@{alpha_ip}:/usr/bin/vwifi-add-interfaces && "
+        f"scp -O -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"{shlex.quote(str(openwrt_client))} root@{alpha_ip}:/usr/bin/vwifi-client && "
+        f"scp -O -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"{shlex.quote(str(openwrt_add_if))} root@{alpha_ip}:/usr/bin/vwifi-add-interfaces && "
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
         f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{alpha_ip} "
         "'chmod +x /usr/bin/vwifi-client /usr/bin/vwifi-add-interfaces'",
@@ -1022,8 +1024,10 @@ HOSTAPD
     log.info("[vwifi] Setting up vwifi-client on Debian (%s)", debian_ip)
 
     _run(
-        f"scp -O {shlex.quote(str(debian_client))} root@{debian_ip}:/usr/local/bin/vwifi-client && "
-        f"scp -O {shlex.quote(str(debian_add_if))} root@{debian_ip}:/usr/local/bin/vwifi-add-interfaces && "
+        f"scp -O -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"{shlex.quote(str(debian_client))} root@{debian_ip}:/usr/local/bin/vwifi-client && "
+        f"scp -O -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"{shlex.quote(str(debian_add_if))} root@{debian_ip}:/usr/local/bin/vwifi-add-interfaces && "
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
         f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{debian_ip} "
         "'chmod +x /usr/local/bin/vwifi-client /usr/local/bin/vwifi-add-interfaces'",
