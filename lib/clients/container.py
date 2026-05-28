@@ -346,6 +346,18 @@ class ContainerClient:
         * Legacy state recording: the test writes /tmp/tg-paid after out-of-band
           payment, then Playwright reloads the portal to capture the paid state.
         """
+        # Pre-warm Chromium to avoid cold-start timeout on first launch.
+        # Compiles shader cache, builds font config, etc.
+        self._exec(
+            "python3 -c \""
+            "from playwright.sync_api import sync_playwright; "
+            "p = sync_playwright().start(); "
+            "b = p.chromium.launch(headless=True, args=['--no-sandbox']); "
+            "b.close(); p.stop()"
+            "\" 2>/dev/null",
+            timeout=30,
+        )
+
         portal_url = f"http://{POC_GATEWAY}:{NDS_PORTAL_PORT}/"
         script = (
             "from playwright.sync_api import sync_playwright\n"

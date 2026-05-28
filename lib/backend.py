@@ -49,5 +49,10 @@ class BackendConfig:
         return self.is_go
 
     @property
+    def has_config_json(self) -> bool:
+        """Whether the backend uses /etc/tollgate/config.json for configuration."""
+        return self.is_go
+
+    @property
     def service_name(self) -> str:
         return "tollgate-wrt"

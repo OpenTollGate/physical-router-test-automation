@@ -530,7 +530,7 @@ def _rerun_arch_job(repo: str, run_id: str, arch: str) -> bool:
     return True
 
 
-def deploy(router, ipk_path: Path, reboot: bool = False) -> dict[str, object]:
+def deploy(router, ipk_path: Path, reboot: bool = False, backend=None) -> dict[str, object]:
     ipk_path = Path(ipk_path)
     if not ipk_path.exists():
         raise FileNotFoundError(f"IPK not found: {ipk_path}")
@@ -554,8 +554,15 @@ def deploy(router, ipk_path: Path, reboot: bool = False) -> dict[str, object]:
     if reboot:
         return reboot_router(router)
 
-    log.info("Waiting for backend health on port 2121")
-    healthy = _wait_for_health(router)
+    router.ssh(
+        "iptables -C ndsRTR -p tcp --dport 2121 -j ACCEPT 2>/dev/null"
+        " || iptables -I ndsRTR 11 -p tcp --dport 2121 -j ACCEPT",
+        timeout=10,
+    )
+
+    health_timeout = 120 if backend and backend.is_rust else 60
+    log.info("Waiting for backend health on port 2121 (timeout=%ds)", health_timeout)
+    healthy = _wait_for_health(router, timeout=health_timeout)
     version_out = router.ssh("opkg list-installed | grep tollgate-wrt", timeout=10)
     installed_version = _parse_version(version_out)
     health_code = 200 if healthy else router.api_status("/")
@@ -814,4 +821,4 @@ def deploy_branch(router, branch: str, arch: str | None = None,
     artifact_workflow = backend.workflow if backend else None
     ipk_path = download_artifact(branch, arch, run_id=run_id,
                                  repo=artifact_repo, workflow=artifact_workflow)
-    return deploy(router, ipk_path, reboot=reboot)
+    return deploy(router, ipk_path, reboot=reboot, backend=backend)

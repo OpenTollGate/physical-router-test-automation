@@ -261,6 +261,83 @@ Defined in `pytest.ini`. Key markers:
 
 **Timeouts**: Default 60s per test. Phone tests 300s. Hardware scenarios up to 1500s.
 
+## Environment Detection
+
+The framework runs in three environments. Detection is automatic — no manual configuration needed.
+
+### How it works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Environment Detection Chain                                  │
+│                                                              │
+│  TOLLGATE_LAB_TYPE env var set?                              │
+│       │                                                      │
+│       ├── "gcloud"     → Cloud lab (GCP nested-KVM)         │
+│       ├── "virtual-lab" → Virtual lab (local QEMU)          │
+│       ├── "physical"   → Physical lab (real routers)        │
+│       │                                                      │
+│       └── (not set)                                          │
+│            │                                                 │
+│            ├── TOLLGATE_VIRTUAL_LAB=1? → "virtual-lab"      │
+│            └── (default) → "physical"                        │
+│                                                              │
+│  Cloud lab worker sets BOTH:                                 │
+│    TOLLGATE_VIRTUAL_LAB=1  (legacy compatibility)           │
+│    TOLLGATE_LAB_TYPE=gcloud (explicit)                       │
+│                                                              │
+│  Virtual lab (scripts/virtual-lab.py) sets:                  │
+│    TOLLGATE_VIRTUAL_LAB=1                                    │
+│    TOLLGATE_SSH_JUMP_HOST=<jump-host>                        │
+│                                                              │
+│  Physical lab: neither set → defaults to "physical"          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Markers that gate on environment
+
+| Marker | Effect |
+|--------|--------|
+| `virtual_lab` | Only runs when `TOLLGATE_VIRTUAL_LAB=1` (cloud + local virtual lab) |
+| `virtual_lab_only` | Only runs when `TOLLGATE_LAB_TYPE == "virtual-lab"` (NOT gcloud) |
+| `gcloud_only` | Only runs when `TOLLGATE_LAB_TYPE == "gcloud"` |
+| `physical_only` | Only runs when `TOLLGATE_LAB_TYPE == "physical"` |
+| `physical_hardware` | Requires physical router/radio behavior |
+| `hardware` | Auto-added to `tests/scenarios/*`; skipped in virtual lab unless also `virtual_lab` |
+| `requires_wifi` | Skipped with `--client=container` (no WiFi adapter) |
+| `android_only` | Skipped without physical Android device |
+
+### Per-environment behavior
+
+| Feature | Physical Lab | Virtual Lab | Cloud Lab |
+|---------|-------------|-------------|-----------|
+| Router access | SSH direct | SSH via jump host | SSH to QEMU VM |
+| Client type | ADB / Mac / Linux | Container (Debian QEMU) | Container (Debian QEMU) |
+| WiFi | Real radios | None by default | hwsim (opt-in with `--hwsim`) |
+| Phone tests | Yes (ADB) | No | No |
+| LuCI Playwright | Yes | No | No |
+| Local mints | Public testnut | Optional | 3 local mints (CDK + Nutshell) |
+| Mints | `testnut.cashu.exchange` | Configurable | Auto-selected (V2 probe → V1 fallback) |
+| Auto-deploy | Manual / `--tollgate-branch` | Manual | CI artifact (auto) |
+| Results publish | Manual `--publish` | Manual | `--publish` (fire-and-forget) |
+
+### Environment-specific env vars
+
+**All environments** read `TOLLGATE_SSH_HOST`, `TOLLGATE_SSH_PASSWORD`, `TOLLGATE_LUCI_PASSWORD`, `TOLLGATE_BACKEND`.
+
+**Cloud lab worker** writes to `.env` (via `write_env_file()`):
+- `TOLLGATE_VIRTUAL_LAB=1`, `TOLLGATE_LAB_TYPE=gcloud`
+- `TOLLGATE_CLIENT_TYPE=container`, `TOLLGATE_CONTAINER_HOST=10.99.99.100`
+- `TOLLGATE_SSH_HOST=10.99.99.1`, `TOLLGATE_CASHU_VENV=/opt/cashu-venv`
+- `TOLLGATE_ENABLE_HWSIM=1` (only when `--hwsim` flag passed)
+- `TOLLGATE_ENABLE_RESELLER_SCENARIOS=1` (only when `--reseller-scenarios` passed)
+
+**Virtual lab** (`scripts/virtual-lab.py start-poc`) sets:
+- `TOLLGATE_VIRTUAL_LAB=1`, `TOLLGATE_SSH_JUMP_HOST`
+- `TOLLGATE_CLIENT_TYPE=container`
+
+**Physical lab**: just `TOLLGATE_SSH_HOST` + `TOLLGATE_LUCI_PASSWORD`.
+
 ## Lessons Learned
 
 ### `chpasswd` does not exist on OpenWrt BusyBox
@@ -522,17 +599,21 @@ After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check tha
 │  OpenWrt VM (alpha):                                            │
 │    ├── hwsim radios: kmod-mac80211-hwsim (pre-installed in v8)  │
 │    ├── wpad-basic, iw-full, iwinfo (pre-installed in v8)        │
+│    ├── radio0: 2.4GHz AP (phy0-ap0, SSID=TollGate, br-lan)     │
+│    ├── radio1: 5GHz AP (phy1-ap0, SSID=TollGate, br-lan)       │
+│    ├── nodogsplash: manages br-lan (captive portal on :2050)    │
 │    └── /etc/hosts maps mint DNS → 10.99.99.2                   │
 │                                                                  │
 │  Test flow (worker.py):                                         │
 │    [1] Boot GCP VM from snapshot                                │
 │    [2] Clone test repo, install deps (baked)                    │
 │    [3] Boot OpenWrt + Debian QEMU VMs                           │
-│    [4] Start 3 local mints (CDK + Nutshell V1 + V2)            │
-│    [5] Deploy TollGate .ipk to OpenWrt                          │
-│    [6] Select mint (CDK V2 if backend supports it, else V1)     │
-│    [7] Run tests: visual → API → vl-scenarios → scenarios       │
-│    [8] Collect results, publish to gh-pages, self-delete        │
+│    [4] Setup hwsim virtual WiFi (2 radios, AP on br-lan)        │
+│    [5] Start 3 local mints (CDK + Nutshell V1 + V2)            │
+│    [6] Deploy TollGate .ipk to OpenWrt                          │
+│    [7] Select mint (CDK V2 if backend supports it, else V1)     │
+│    [8] Run tests: visual → API → vl-scenarios → scenarios       │
+│    [9] Collect results, publish to gh-pages, self-delete        │
 │                                                                  │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -630,21 +711,47 @@ The worker (`lib/cloud_lab/worker.py`) detects pre-provisioned OpenWrt bases aut
 | Collect + publish | ~30s | |
 | **Total** | **~25min** | Was ~10min before local mints (fewer tests ran) |
 
-### mac80211_hwsim virtual WiFi (v8+)
+### mac80211_hwsim virtual WiFi (experimental, opt-in)
 
-The v8 snapshot includes WiFi simulation packages. Tests in `tests/api/test_mac80211_hwsim.py` verify:
+The v8 snapshot includes WiFi simulation packages (`kmod-mac80211-hwsim`, `wpad-basic`, `iw-full`, `iwinfo`). Virtual WiFi is **disabled by default** — enable with `--hwsim` flag on `cloud-lab.py submit`.
 
-| Test | What it verifies | Status |
-|------|-----------------|--------|
-| `test_install_hwsim_module` | Package pre-installed (baked) | SKIPPED (already loaded) |
-| `test_load_hwsim_radios` | `modprobe mac80211_hwsim radios=2` | **PASSED** |
-| `test_iw_list_shows_virtual_radios` | `iw list` shows ≥2 Wiphy | **PASSED** |
-| `test_wlan_interface_ap_pears_after_ap_config` | UCI AP config → hostapd brings up interface | In progress (naming fix applied) |
-| `test_iw_scan_executes` | `iw <iface> scan` runs without error | Depends on AP bringup |
+**Why opt-in**: hwsim creates virtual radios on the OpenWrt VM but they cannot propagate beacons between PHYs. STA scan/association tests always skip in hwsim. The AP interfaces are useful for router-side config verification only. Portal testing works over wired br-lan without hwsim.
 
-OpenWrt names hwsim interfaces `phy<N>-ap0` (not `wlan0`). Tests must check `iw dev` output for interface names, not hardcoded `wlan0`.
+**How to enable**:
+```bash
+# Cloud lab with virtual WiFi
+./scripts/cloud-lab.py submit --pr 42 --hwsim --publish
 
-hwsim supports STA mode — each radio can be AP, STA, or both simultaneously (2048 concurrent interfaces). Future work: configure radio1 as STA to enable upstream WiFi scan/connect tests in the cloud lab.
+# Without hwsim (default) — portal tests still work over wired br-lan
+./scripts/cloud-lab.py submit --pr 42 --publish
+```
+
+**Worker-provisioned topology** (`_setup_hwsim_wifi()` in `worker.py`):
+
+| Component | Config | Mirrors |
+|-----------|--------|---------|
+| radio0 | 2.4GHz AP, channel 6, HT20, SSID=TollGate-ALPHA | MT3000 radio0 (2.4GHz) |
+| radio1 | 5GHz AP, channel 36, VHT80, SSID=TollGate-ALPHA | MT3000 radio1 (5GHz) |
+| Interface names | `phy0-ap0`, `phy1-ap0` | OpenWrt netifd naming |
+| Bridge membership | Both AP interfaces in `br-lan` | Same as real MT3000 |
+| nodogsplash | Manages `br-lan` (intercepts wired + wireless) | Same as real router |
+
+The worker creates AP interfaces **manually** via `iw phy phy0 interface add phy0-ap0 type __ap` (bypasses netifd's mac80211.sh which fails with hwsim due to HOSTAPD_START_FAILED). It then adds them to br-lan and writes UCI wireless config for SSID/metadata. Non-fatal — if hwsim fails, the cloud lab continues without WiFi.
+
+**Test gating**: `tests/api/test_mac80211_hwsim.py` skips entirely unless `TOLLGATE_ENABLE_HWSIM=1` is set. When enabled:
+- AP tests (interface existence, bridge membership, SSID) pass
+- STA tests (scan, association, DHCP) skip — hwsim PHYs cannot see each other's beacons
+- Set `HWSIM_STA_ENABLED=1` to force-run STA tests (only useful on physical hardware with real radios)
+
+**Debian container (10.99.99.100)** connects over wired ethernet on `br-lan`. Nodogsplash intercepts ALL traffic on `br-lan` regardless of whether the client arrived via WiFi or ethernet — the captive portal flow works without cross-VM WiFi. Playwright navigates to `http://10.99.99.1:2050/` directly.
+
+OpenWrt names hwsim interfaces `phy<N>-ap0` (not `wlan0`). Tests must check `iw dev` output for interface names, not hardcoded names.
+
+**Known limitations**:
+
+- **No cross-PHY beacon propagation**: hwsim PHYs exist in separate kernel namespaces and do not simulate RF propagation. radio1's STA cannot see radio0's AP beacons.
+- **No cross-VM WiFi**: QEMU guests run separate kernels — hwsim radios don't share RF state across VM boundaries.
+- **STA mode is read-only config verification**: reconfigures radio1 to STA mode on a dedicated `wwan` network, but association always fails in hwsim.
 
 ### What works in the cloud lab
 
@@ -653,7 +760,9 @@ hwsim supports STA mode — each radio can be AP, STA, or both simultaneously (2
 - Scenario tests: captive portal browser, mint health, boot hygiene, upstream WiFi CLI
 - Reseller mode scenarios (with `--reseller-scenarios`)
 - Two-router tests (with `--two-router`)
-- Virtual WiFi: module load, radio detection, AP bringup
+- Virtual WiFi: worker-provisioned hwsim (opt-in via `--hwsim`, 2 radios, AP bringup, STA tests skip)
+- NDS portal tests (over wired br-lan, no cross-VM WiFi needed)
+- Portal verify tests (gated by `_skip_unless_nds_responsive()`)
 - Local mints: CDK V2, Nutshell V1, Nutshell V2 (all FakeWallet)
 
 ### Debian Container Client Cashu Token Flow
@@ -729,9 +838,8 @@ The cloud lab uses a Debian QEMU VM (`10.99.99.100`) as the test client. Visual 
 
 ### What needs improvement
 
-- **hwsim AP bringup test**: Interface naming fix applied but not yet verified in cloud run (interface is `phy2-ap0` not `wlan0`)
-- **hwsim STA mode**: Second radio configured as station to enable `tollgate upstream scan` tests
-- **Portal browser tests**: Nodogsplash doesn't serve `splash.html` without a preauthenticated client — tests skip correctly but could be improved
+- **hwsim STA mode**: Currently reconfigures radio1 to STA. Could use a 3rd radio for dedicated STA while keeping both AP radios stable.
+- **Cross-VM WiFi**: Not possible with current QEMU topology. Portal testing works via wired ethernet through nodogsplash on br-lan.
 - **Mint health/degraded tests**: Most skip in cloud lab because feature detection gates are conservative — could be relaxed with local mint manipulation
 - **Multi-VM topology**: Currently limited to 2 OpenWrt VMs. Future: per-environment bridge isolation for dozens of VMs
 

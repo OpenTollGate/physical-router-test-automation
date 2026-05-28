@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-DEFAULT_ZONE = "europe-west1-b"
+DEFAULT_ZONE = "us-central1-a"
 DEFAULT_MACHINE_TYPE = "n2-standard-2"
 DEFAULT_DISK_SIZE_GB = 50
 VM_NAME = "tollgate-test-runner"

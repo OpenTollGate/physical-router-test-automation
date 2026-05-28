@@ -578,7 +578,8 @@ def connected_wifi(router, wifi, adb, request):
 
 @pytest.fixture
 def test_pricing(router):
-    router.ssh("cp /etc/tollgate/config.json /etc/tollgate/config.json.test-backup")
+    if router.backend.has_config_json:
+        router.ssh("cp /etc/tollgate/config.json /etc/tollgate/config.json.test-backup")
 
     def apply(step_size: int = DEFAULT_STEP_SIZE_MS, metric: str = "milliseconds"):
         router.apply_pricing(step_size=step_size, metric=metric)

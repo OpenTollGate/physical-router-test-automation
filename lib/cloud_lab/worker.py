@@ -151,16 +151,12 @@ def load_config_from_metadata() -> WorkerConfig:
         mint=_metadata_get_optional("tollgate-mint", "auto"),
         portal=_metadata_get_optional("tollgate-portal", "builtin"),
         hwsim_enabled=_metadata_get_optional("tollgate-hwsim").lower() in ("true", "1", "yes"),
+        quick=_metadata_get_optional("tollgate-quick").lower() in ("true", "1", "yes"),
     )
     log.info(
-        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s portal=%s hwsim=%s",
+        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s portal=%s hwsim=%s quick=%s",
         cfg.run_id, cfg.sut_branch, cfg.artifact_repo, cfg.backend,
-        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure, cfg.mint, cfg.portal, cfg.hwsim_enabled,
-    )
-    log.info(
-        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s portal=%s quick=%s",
-        cfg.run_id, cfg.sut_branch, cfg.artifact_repo, cfg.backend,
-        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure, cfg.mint, cfg.portal, cfg.quick,
+        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure, cfg.mint, cfg.portal, cfg.hwsim_enabled, cfg.quick,
     )
     log.info(
         "Artifact: run_id=%s suite_ref=%s reseller=%s secondary=%s",
