@@ -204,6 +204,7 @@ def _gh_token() -> str:
 
 _OVERLAY_ALLOWLIST = {
     "docs/virtual-lab.md",
+    "docs/virtual-wifi-architecture.md",
     "lib/backend.py",
     "lib/constants.py",
     "lib/cloud_lab/constants.py",
@@ -217,6 +218,8 @@ _OVERLAY_ALLOWLIST = {
     "lib/reseller_mode.py",
     "pytest.ini",
     "scripts/cloud-lab.py",
+    "scripts/build-vwifi.sh",
+    "scripts/hwsim-netns-poc.py",
     "scripts/virtual-lab.py",
     "scripts/collect-results.py",
     "scripts/render-report.py",
@@ -227,6 +230,7 @@ _OVERLAY_ALLOWLIST = {
     "tests/api/test_lightning_portal.py",
     "tests/api/test_portal_verify.py",
     "tests/api/test_mac80211_hwsim.py",
+    "tests/api/test_virtual_wifi_hwsim_netns.py",
     "tests/api/test_dual_mint.py",
     "tests/scenarios/test_reseller_mode.py",
     "tests/scenarios/test_two_router_cloud.py",
@@ -375,6 +379,8 @@ def submit_run(
     quick: bool = False,
     smoke: bool = False,
     hwsim: bool = False,
+    vwifi: bool = False,
+    wifi_plane: str = "tap",
 ) -> dict[str, str]:
     """Pre-flight artifact check, then create fire-and-forget GCP VM. Returns run metadata."""
     cleanup_stale(max_age_hours=2)
@@ -422,6 +428,8 @@ def submit_run(
         "tollgate-quick": "true" if quick else "false",
         "tollgate-smoke": "true" if smoke else "false",
         "tollgate-hwsim": "true" if hwsim else "false",
+        "tollgate-vwifi": "true" if vwifi else "false",
+        "tollgate-wifi-plane": wifi_plane,
     }
     metadata_payload = ",".join(f"{k}={v}" for k, v in metadata.items())
 

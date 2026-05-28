@@ -1,6 +1,6 @@
 """mac80211_hwsim virtual WiFi tests.
 
-Two provisioning modes:
+Three provisioning modes:
 
 - **Worker-provisioned (cloud lab)**: the worker loads mac80211_hwsim, creates
   AP interfaces manually via ``iw phy … interface add … type __ap``, adds them
@@ -9,8 +9,14 @@ Two provisioning modes:
 - **Self-provisioned (local virtual lab)**: tests install the kmod package,
   load the module, and create interfaces manually (same approach as worker).
 
-Critical limitation: hwsim PHYs do NOT propagate beacons between each other.
-STA scan/association/DBCP tests skip unless ``HWSIM_STA_ENABLED=1`` is set.
+- **vwifi cross-VM relay (cloud lab with --vwifi)**: vwifi relays 802.11 frames
+  between QEMU VMs via vsock.  The Debian guest can actually scan and see the
+  OpenWrt AP's SSID.  STA tests run instead of skipping when
+  ``TOLLGATE_ENABLE_VWIFI=1`` is set.
+
+Critical limitation (non-vwifi only): hwsim PHYs do NOT propagate beacons
+between each other.  STA scan/association/DHCP tests skip unless
+``HWSIM_STA_ENABLED=1`` or ``TOLLGATE_ENABLE_VWIFI=1`` is set.
 Only runs on x86_64 targets where the kmod package is available.
 """
 
@@ -26,10 +32,11 @@ _HWSIM_MODULE = "mac80211_hwsim"
 _HWSIM_KMOD_PKG = "kmod-mac80211-hwsim"
 
 HWSIM_STA_ENABLED = os.environ.get("HWSIM_STA_ENABLED", "").lower() in ("1", "true", "yes")
+VWIFI_ENABLED = os.environ.get("TOLLGATE_ENABLE_VWIFI", "").lower() in ("1", "true", "yes")
 
-if not os.environ.get("TOLLGATE_ENABLE_HWSIM"):
+if not os.environ.get("TOLLGATE_ENABLE_HWSIM") and not VWIFI_ENABLED:
     pytest.skip(
-        "hwsim tests require TOLLGATE_ENABLE_HWSIM=1 (experimental, opt-in via --hwsim)",
+        "hwsim tests require TOLLGATE_ENABLE_HWSIM=1 or TOLLGATE_ENABLE_VWIFI=1 (experimental, opt-in via --hwsim or --vwifi)",
         allow_module_level=True,
     )
 
@@ -74,11 +81,11 @@ def _find_sta_interface(router):
 
 
 def _skip_unless_sta_supported():
-    if HWSIM_STA_ENABLED:
+    if HWSIM_STA_ENABLED or VWIFI_ENABLED:
         return
     pytest.skip(
         "hwsim STA tests skipped (PHYs don't propagate beacons). "
-        "Set HWSIM_STA_ENABLED=1 to force-run."
+        "Set HWSIM_STA_ENABLED=1 to force-run, or use --vwifi for cross-VM relay."
     )
 
 

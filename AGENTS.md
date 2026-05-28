@@ -719,7 +719,7 @@ The v8 snapshot includes WiFi simulation packages (`kmod-mac80211-hwsim`, `wpad-
 
 **How to enable**:
 ```bash
-# Cloud lab with virtual WiFi
+# Cloud lab with virtual WiFi (AP verification only, no cross-VM scan)
 ./scripts/cloud-lab.py submit --pr 42 --hwsim --publish
 
 # Without hwsim (default) — portal tests still work over wired br-lan
@@ -738,9 +738,10 @@ The v8 snapshot includes WiFi simulation packages (`kmod-mac80211-hwsim`, `wpad-
 
 The worker creates AP interfaces **manually** via `iw phy phy0 interface add phy0-ap0 type __ap` (bypasses netifd's mac80211.sh which fails with hwsim due to HOSTAPD_START_FAILED). It then adds them to br-lan and writes UCI wireless config for SSID/metadata. Non-fatal — if hwsim fails, the cloud lab continues without WiFi.
 
-**Test gating**: `tests/api/test_mac80211_hwsim.py` skips entirely unless `TOLLGATE_ENABLE_HWSIM=1` is set. When enabled:
+**Test gating**: `tests/api/test_mac80211_hwsim.py` skips entirely unless `TOLLGATE_ENABLE_HWSIM=1` or `TOLLGATE_ENABLE_VWIFI=1` is set. When enabled:
 - AP tests (interface existence, bridge membership, SSID) pass
-- STA tests (scan, association, DHCP) skip — hwsim PHYs cannot see each other's beacons
+- STA tests (scan, association, DHCP) skip with hwsim — PHYs cannot see each other's beacons
+- STA tests **run and pass** with `--vwifi` — vwifi relays frames between VMs
 - Set `HWSIM_STA_ENABLED=1` to force-run STA tests (only useful on physical hardware with real radios)
 
 **Debian container (10.99.99.100)** connects over wired ethernet on `br-lan`. Nodogsplash intercepts ALL traffic on `br-lan` regardless of whether the client arrived via WiFi or ethernet — the captive portal flow works without cross-VM WiFi. Playwright navigates to `http://10.99.99.1:2050/` directly.
@@ -750,8 +751,40 @@ OpenWrt names hwsim interfaces `phy<N>-ap0` (not `wlan0`). Tests must check `iw 
 **Known limitations**:
 
 - **No cross-PHY beacon propagation**: hwsim PHYs exist in separate kernel namespaces and do not simulate RF propagation. radio1's STA cannot see radio0's AP beacons.
-- **No cross-VM WiFi**: QEMU guests run separate kernels — hwsim radios don't share RF state across VM boundaries.
-- **STA mode is read-only config verification**: reconfigures radio1 to STA mode on a dedicated `wwan` network, but association always fails in hwsim.
+- **No cross-VM WiFi**: QEMU guests run separate kernels — hwsim radios don't share RF state across VM boundaries (use `--vwifi` to solve this).
+- **STA mode is read-only config verification**: reconfigures radio1 to STA mode on a dedicated `wwan` network, but association always fails in hwsim (unless `--vwifi` is used).
+
+### vwifi cross-VM WiFi frame relay (experimental, opt-in)
+
+[vwifi](https://github.com/Raizo62/vwifi) relays 802.11 frames between QEMU VMs via vsock, enabling real `iw scan` from the Debian guest to see SSIDs on the OpenWrt guest. This solves the cross-kernel hwsim limitation.
+
+**How to enable**:
+```bash
+# Cloud lab with cross-VM WiFi relay (real STA scan/association)
+./scripts/cloud-lab.py submit --pr 42 --vwifi --publish
+```
+
+**Architecture**: A `vwifi-server` runs on the GCP host. Each QEMU guest gets a `vhost-vsock-pci` device (OpenWrt cid=10, Debian cid=20). Inside each guest, `vwifi-client` connects to the host server via vsock. Guests load `mac80211_hwsim radios=0` (empty), then `vwifi-add-interfaces` creates real wlan interfaces backed by the relay.
+
+**Worker pipeline** (when `--vwifi` is passed):
+1. `_setup_vwifi_host()` — starts vwifi-server on host, loads `vhost_vsock` module
+2. `start_inner_vms()` — passes `vsock_cid=10` (alpha), `vsock_cid=20` (debian) to QEMU
+3. `_setup_hwsim_wifi(vwifi_mode=True)` — loads hwsim radios=0, skips manual AP creation
+4. `_setup_vwifi_guests()` — SCPs binaries, starts vwifi-client, configures hostapd on OpenWrt
+
+**What works with vwifi**:
+- Debian guest `iw scan` sees `TollGate-ALPHA` from OpenWrt
+- STA scan and association tests in `test_mac80211_hwsim.py` pass instead of skipping
+- Real 802.11 management frame relay between VMs
+
+**Build requirements**: `cmake make g++ pkg-config libnl-3-dev libnl-genl-3-dev`. Build script: `scripts/build-vwifi.sh`. Snapshot baking includes vwifi binaries at `/opt/vwifi/bin/`.
+
+**CID assignments**:
+| VM | vsock CID |
+|----|-----------|
+| Alpha OpenWrt | 10 |
+| Debian client | 20 |
+| Beta OpenWrt (two-router) | 11 |
 
 ### What works in the cloud lab
 
@@ -761,6 +794,7 @@ OpenWrt names hwsim interfaces `phy<N>-ap0` (not `wlan0`). Tests must check `iw 
 - Reseller mode scenarios (with `--reseller-scenarios`)
 - Two-router tests (with `--two-router`)
 - Virtual WiFi: worker-provisioned hwsim (opt-in via `--hwsim`, 2 radios, AP bringup, STA tests skip)
+- vwifi cross-VM WiFi relay (opt-in via `--vwifi`, real STA scan/association between VMs)
 - NDS portal tests (over wired br-lan, no cross-VM WiFi needed)
 - Portal verify tests (gated by `_skip_unless_nds_responsive()`)
 - Local mints: CDK V2, Nutshell V1, Nutshell V2 (all FakeWallet)

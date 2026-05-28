@@ -110,7 +110,9 @@ class WorkerConfig:
     portal: str
     quick: bool
     hwsim_enabled: bool
+    vwifi_enabled: bool
     smoke: bool
+    wifi_plane: str
 
 
 def _metadata_get(key: str) -> str:
@@ -152,13 +154,15 @@ def load_config_from_metadata() -> WorkerConfig:
         mint=_metadata_get_optional("tollgate-mint", "auto"),
         portal=_metadata_get_optional("tollgate-portal", "builtin"),
         hwsim_enabled=_metadata_get_optional("tollgate-hwsim").lower() in ("true", "1", "yes"),
+        vwifi_enabled=_metadata_get_optional("tollgate-vwifi").lower() in ("true", "1", "yes"),
         quick=_metadata_get_optional("tollgate-quick").lower() in ("true", "1", "yes"),
         smoke=_metadata_get_optional("tollgate-smoke").lower() in ("true", "1", "yes"),
+        wifi_plane=_metadata_get_optional("tollgate-wifi-plane", "tap"),
     )
     log.info(
-        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s portal=%s hwsim=%s quick=%s smoke=%s",
+        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s portal=%s hwsim=%s vwifi=%s quick=%s smoke=%s wifi_plane=%s",
         cfg.run_id, cfg.sut_branch, cfg.artifact_repo, cfg.backend,
-        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure, cfg.mint, cfg.portal, cfg.hwsim_enabled, cfg.quick, cfg.smoke,
+        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure, cfg.mint, cfg.portal, cfg.hwsim_enabled, cfg.vwifi_enabled, cfg.quick, cfg.smoke, cfg.wifi_plane,
     )
     log.info(
         "Artifact: run_id=%s suite_ref=%s reseller=%s secondary=%s",
@@ -204,6 +208,7 @@ def _launch_qemu(
     mac: str,
     wan_tap: str | None = None,
     wan_mac: str | None = None,
+    vsock_cid: int | None = None,
 ) -> subprocess.Popen[str]:
     workdir = _virt_lab_workdir()
     run_dir = workdir / "run"
@@ -239,6 +244,10 @@ def _launch_qemu(
         "-pidfile",
         str(pidfile),
     ]
+    if vsock_cid is not None:
+        cmd += [
+            "-device", f"vhost-vsock-pci,id=vsock0,guest-cid={vsock_cid}",
+        ]
     if wan_tap:
         cmd += [
             "-netdev", f"tap,id=net1,ifname={wan_tap},script=no,downscript=no",
@@ -418,6 +427,8 @@ def write_env_file(config: WorkerConfig) -> None:
         f"TOLLGATE_SECONDARY_ROUTER_PASSWORD={VIRT_LAB_PASSWORD}\n"
         f"TOLLGATE_PORTAL={config.portal}\n"
         f"TOLLGATE_ENABLE_HWSIM={'1' if config.hwsim_enabled else ''}\n"
+        f"TOLLGATE_ENABLE_VWIFI={'1' if config.vwifi_enabled else ''}\n"
+        f"TOLLGATE_WIFI_PLANE={config.wifi_plane}\n"
         f"GH_TOKEN={os.environ.get('GH_TOKEN', '')}\n"
     )
     Path(TEST_DIR, ".env").write_text(env_content)
@@ -824,9 +835,244 @@ def setup_bridge() -> None:
     )
 
 
+_VWIFI_BIN_DIR = Path("/opt/vwifi/bin")
+
+
+def _ensure_vwifi_binaries() -> Path:
+    """Ensure vwifi binaries are available on the host. Returns binary dir."""
+    server = _VWIFI_BIN_DIR / "vwifi-server"
+    if server.exists() and os.access(server, os.X_OK):
+        log.info("[vwifi] Binaries already present at %s", _VWIFI_BIN_DIR)
+        return _VWIFI_BIN_DIR
+
+    log.info("[vwifi] Building vwifi from source...")
+    build_script = Path(TEST_DIR) / "scripts" / "build-vwifi.sh"
+    if build_script.exists():
+        _run(
+            f"bash {shlex.quote(str(build_script))} --output-dir {shlex.quote(str(_VWIFI_BIN_DIR.parent))}",
+            timeout=300,
+        )
+    else:
+        # Fallback: clone and build inline
+        _run(
+            "apt-get update -qq && "
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
+            "cmake make g++ pkg-config libnl-3-dev libnl-genl-3-dev git >/dev/null 2>&1 || true && "
+            "rm -rf /tmp/vwifi-build && "
+            "git clone --depth 1 https://github.com/Raizo62/vwifi.git /tmp/vwifi-build && "
+            f"mkdir -p {_VWIFI_BIN_DIR} && "
+            "cd /tmp/vwifi-build && "
+            "mkdir -p build-host && cd build-host && "
+            f"cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) && "
+            f"cp vwifi-server vwifi-ctrl {_VWIFI_BIN_DIR}/ && "
+            "cd /tmp/vwifi-build && "
+            "mkdir -p build-guest && cd build-guest && "
+            "cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS='-static' && "
+            f"make -j$(nproc) && "
+            f"mkdir -p {_VWIFI_BIN_DIR}/debian {_VWIFI_BIN_DIR}/openwrt && "
+            f"cp vwifi-client vwifi-add-interfaces {_VWIFI_BIN_DIR}/debian/ && "
+            f"cp vwifi-client vwifi-add-interfaces {_VWIFI_BIN_DIR}/openwrt/",
+            timeout=600,
+        )
+
+    if not server.exists():
+        raise RuntimeError(f"vwifi-server binary not found at {server}")
+    log.info("[vwifi] Binaries ready at %s", _VWIFI_BIN_DIR)
+    return _VWIFI_BIN_DIR
+
+
+def _setup_vwifi_host() -> int | None:
+    """Start vwifi-server on the GCP host. Returns server PID or None on failure."""
+    log.info("[vwifi] Setting up host-side vwifi-server")
+
+    # Load vhost_vsock kernel module
+    _run("modprobe vhost_vsock 2>/dev/null || true", timeout=10)
+    _run("chmod a+rw /dev/vhost-vsock 2>/dev/null || true", timeout=5)
+
+    # Ensure binaries exist
+    bin_dir = _ensure_vwifi_binaries()
+    server_bin = bin_dir / "vwifi-server"
+    if not server_bin.exists():
+        log.warning("[vwifi] vwifi-server binary not found, skipping vwifi setup")
+        return None
+
+    # Start vwifi-server in background
+    server_log = Path("/tmp/vwifi-server.log")
+    proc = subprocess.Popen(
+        [str(server_bin)],
+        stdout=server_log.open("w"),
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    time.sleep(2)
+
+    if proc.poll() is not None:
+        log.error("[vwifi] vwifi-server exited early (rc=%d). Log: %s",
+                  proc.returncode, server_log.read_text()[-500:] if server_log.exists() else "(no log)")
+        return None
+
+    log.info("[vwifi] vwifi-server started (pid=%d)", proc.pid)
+
+    # Verify it's listening (check log for startup message)
+    time.sleep(1)
+    if server_log.exists():
+        log_text = server_log.read_text()[-500:]
+        log.info("[vwifi] Server log: %s", log_text[:200])
+
+    return proc.pid
+
+
+def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> None:
+    """Install vwifi-client on OpenWrt and Debian VMs and set up virtual WiFi.
+
+    Called AFTER start_inner_vms() and AFTER _setup_hwsim_wifi().
+    Replaces the hwsim-managed interfaces with vwifi-relayed ones.
+    """
+    bin_dir = _VWIFI_BIN_DIR
+    openwrt_client = bin_dir / "openwrt" / "vwifi-client"
+    openwrt_add_if = bin_dir / "openwrt" / "vwifi-add-interfaces"
+    debian_client = bin_dir / "debian" / "vwifi-client"
+    debian_add_if = bin_dir / "debian" / "vwifi-add-interfaces"
+
+    # --- OpenWrt VM (alpha) ---
+    log.info("[vwifi] Setting up vwifi-client on OpenWrt alpha (%s)", alpha_ip)
+
+    # Copy binaries to OpenWrt
+    _run(
+        f"scp -O {shlex.quote(str(openwrt_client))} root@{alpha_ip}:/usr/bin/vwifi-client && "
+        f"scp -O {shlex.quote(str(openwrt_add_if))} root@{alpha_ip}:/usr/bin/vwifi-add-interfaces && "
+        f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
+        f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{alpha_ip} "
+        "'chmod +x /usr/bin/vwifi-client /usr/bin/vwifi-add-interfaces'",
+        timeout=30,
+    )
+
+    # Remove existing hwsim, load empty hwsim, add vwifi interfaces
+    r = _inner_ssh(alpha_ip, """
+        # Unload existing hwsim if loaded with radios
+        rmmod mac80211_hwsim 2>/dev/null || true
+        sleep 1
+        # Load empty hwsim (vwifi-add-interfaces will create the PHYs)
+        modprobe mac80211_hwsim radios=0 2>&1 || insmod mac80211_hwsim radios=0 2>&1 || true
+        sleep 1
+        # Add 1 virtual radio via vwifi
+        vwifi-add-interfaces 1 2>&1
+        sleep 2
+        # Start vwifi-client in background (connects to host vwifi-server via vsock)
+        vwifi-client &
+        sleep 3
+        # Check interfaces
+        iw dev 2>/dev/null | grep Interface || echo 'NO_INTERFACES'
+    """, timeout=30)
+
+    # Find the vwifi-created interface name
+    alpha_iface = None
+    for line in r.stdout.strip().splitlines():
+        if "Interface" in line:
+            alpha_iface = line.strip().split()[-1]
+            break
+
+    if not alpha_iface:
+        log.warning("[vwifi] No vwifi interface found on OpenWrt alpha. iw dev: %s",
+                    r.stdout[:300])
+        # Non-fatal — tests will skip
+        return
+
+    log.info("[vwifi] OpenWrt alpha vwifi interface: %s", alpha_iface)
+
+    # Configure the vwifi interface as AP with SSID TollGate-ALPHA
+    _inner_ssh(alpha_ip, f"""
+        # Add to br-lan
+        brctl addif br-lan {alpha_iface} 2>/dev/null || true
+        ip link set {alpha_iface} up 2>/dev/null || true
+
+        # Write a minimal hostapd config for the vwifi interface
+        mkdir -p /tmp/vwifi
+        cat > /tmp/vwifi/hostapd.conf <<'HOSTAPD'
+interface={alpha_iface}
+driver=nl80211
+ssid=TollGate-ALPHA
+hw_mode=g
+channel=6
+ieee80211n=1
+ht_capab=[HT20]
+HOSTAPD
+
+        # Start hostapd in background
+        hostapd -B /tmp/vwifi/hostapd.conf 2>&1 || true
+        sleep 2
+
+        # Update UCI wireless for consistency
+        uci set wireless.radio0=wifi-device 2>/dev/null || true
+        uci set wireless.radio0.type='mac80211' 2>/dev/null || true
+        uci set wireless.radio0.band='2g' 2>/dev/null || true
+        uci set wireless.radio0.channel='6' 2>/dev/null || true
+        uci set wireless.radio0.htmode='HT20' 2>/dev/null || true
+        uci set wireless.radio0.disabled='0' 2>/dev/null || true
+        uci set wireless.default_radio0=wifi-iface 2>/dev/null || true
+        uci set wireless.default_radio0.device='radio0' 2>/dev/null || true
+        uci set wireless.default_radio0.mode='ap' 2>/dev/null || true
+        uci set wireless.default_radio0.ssid='TollGate-ALPHA' 2>/dev/null || true
+        uci set wireless.default_radio0.network='lan' 2>/dev/null || true
+        uci set wireless.default_radio0.encryption='none' 2>/dev/null || true
+        uci commit wireless 2>/dev/null || true
+    """, timeout=30)
+
+    log.info("[vwifi] OpenWrt alpha AP configured with SSID TollGate-ALPHA on %s", alpha_iface)
+
+    # --- Debian VM ---
+    log.info("[vwifi] Setting up vwifi-client on Debian (%s)", debian_ip)
+
+    _run(
+        f"scp -O {shlex.quote(str(debian_client))} root@{debian_ip}:/usr/local/bin/vwifi-client && "
+        f"scp -O {shlex.quote(str(debian_add_if))} root@{debian_ip}:/usr/local/bin/vwifi-add-interfaces && "
+        f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
+        f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{debian_ip} "
+        "'chmod +x /usr/local/bin/vwifi-client /usr/local/bin/vwifi-add-interfaces'",
+        timeout=30,
+    )
+
+    r = _inner_ssh(debian_ip, """
+        modprobe mac80211_hwsim radios=0 2>/dev/null || true
+        sleep 1
+        vwifi-add-interfaces 1 2>&1
+        sleep 2
+        vwifi-client &
+        sleep 3
+        iw dev 2>/dev/null | grep Interface || echo 'NO_INTERFACES'
+    """, timeout=30)
+
+    debian_iface = None
+    for line in r.stdout.strip().splitlines():
+        if "Interface" in line:
+            debian_iface = line.strip().split()[-1]
+            break
+
+    if debian_iface:
+        log.info("[vwifi] Debian vwifi interface: %s", debian_iface)
+
+        # Verify scan can see the AP
+        r_scan = _inner_ssh(debian_ip, f"iw {debian_iface} scan 2>&1", timeout=15)
+        if "TollGate-ALPHA" in r_scan.stdout:
+            log.info("[vwifi] Debian scan sees TollGate-ALPHA — cross-VM WiFi relay working!")
+        else:
+            log.warning("[vwifi] Debian scan did NOT find TollGate-ALPHA. Output: %s",
+                        r_scan.stdout[:300])
+    else:
+        log.warning("[vwifi] No vwifi interface found on Debian VM. iw dev: %s",
+                    r.stdout[:300])
+
+    log.info("[vwifi] Guest setup complete")
+
+
 def start_inner_vms(config: WorkerConfig) -> None:
     setup_bridge()
     reset_openwrt_overlay_only()
+
+    if config.vwifi_enabled:
+        log.info("[vwifi] Loading vhost_vsock module for cross-VM WiFi")
+        _run("modprobe vhost_vsock 2>/dev/null || true && chmod a+rw /dev/vhost-vsock 2>/dev/null || true", timeout=10)
 
     if config.two_router:
         log.info("Starting Beta OpenWrt VM (upstream router)...")
@@ -839,6 +1085,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
             mac=SELLER_OPENWRT_MAC,
             wan_tap=UPSTREAM_TAP_BETA,
             wan_mac=BETA_WAN_MAC,
+            vsock_cid=11 if config.vwifi_enabled else None,
         )
         if _wait_inner_ssh(SELLER_OPENWRT_IP, timeout=15):
             log.info("Beta OpenWrt base pre-provisioned, skipping serial")
@@ -885,6 +1132,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
         mac="52:54:00:12:34:56",
         wan_tap=UPSTREAM_TAP_ALPHA if config.two_router else None,
         wan_mac=ALPHA_WAN_MAC if config.two_router else None,
+        vsock_cid=10 if config.vwifi_enabled else None,
     )
     if _wait_inner_ssh(OPENWRT_IP, timeout=15):
         log.info("OpenWrt base pre-provisioned, skipping serial")
@@ -916,6 +1164,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
         disk_name="debian-client.qcow2",
         tap_name="tg-poc-tap2",
         mac=DEBIAN_MAC,
+        vsock_cid=20 if config.vwifi_enabled else None,
     )
     time.sleep(25)
     if debian_proc.poll() is not None:
@@ -984,28 +1233,31 @@ def _configure_alpha_wan(alpha_ip: str) -> None:
         log.warning("Alpha may not have received DHCP lease: %s", r.stdout.strip()[-200:])
 
 
-def _setup_hwsim_wifi(alpha_ip: str) -> None:
+def _setup_hwsim_wifi(alpha_ip: str, *, vwifi_mode: bool = False) -> None:
     """Provision virtual WiFi interfaces on the OpenWrt VM via mac80211_hwsim.
 
-    Creates AP interfaces manually (bypasses netifd's mac80211.sh which fails
-    with hwsim due to HOSTAPD_START_FAILED).  The manual path:
+    When *vwifi_mode* is True, loads hwsim with ``radios=0`` (empty) and skips
+    manual interface creation — ``_setup_vwifi_guests()`` handles interface
+    creation via vwifi-add-interfaces.  Still configures UCI wireless for
+    SSID/metadata consistency.
+
+    When *vwifi_mode* is False (default), creates AP interfaces manually
+    (bypasses netifd's mac80211.sh which fails with hwsim due to
+    HOSTAPD_START_FAILED).  The manual path:
       modprobe → iw phy … interface add … type __ap → brctl addif → ip link up
 
     Idempotent — safe to call multiple times.  Non-fatal: logs a warning
     and returns on any failure so the cloud lab continues without WiFi.
-
-    Limitation: hwsim PHYs do not propagate beacons between each other,
-    so STA scan/association tests will skip in the cloud lab.  The AP
-    interfaces are created for router-side config verification only.
     """
-    log.info("[hwsim] Setting up virtual WiFi on %s", alpha_ip)
+    log.info("[hwsim] Setting up virtual WiFi on %s (vwifi=%s)", alpha_ip, vwifi_mode)
 
     # --- 1. Load mac80211_hwsim module (idempotent) ---
     r = _inner_ssh(alpha_ip, "lsmod | grep mac80211_hwsim", timeout=10)
     if r.returncode == 0 and "mac80211_hwsim" in r.stdout:
         log.info("[hwsim] Module already loaded, skipping modprobe")
     else:
-        r = _inner_ssh(alpha_ip, "modprobe mac80211_hwsim radios=2 2>&1", timeout=15)
+        radios = "0" if vwifi_mode else "2"
+        r = _inner_ssh(alpha_ip, f"modprobe mac80211_hwsim radios={radios} 2>&1", timeout=15)
         if r.returncode != 0:
             log.warning("[hwsim] modprobe mac80211_hwsim failed (rc=%d): %s — skipping WiFi setup",
                         r.returncode, (r.stderr or r.stdout or "").strip()[:300])
@@ -1014,7 +1266,37 @@ def _setup_hwsim_wifi(alpha_ip: str) -> None:
         if r.returncode != 0:
             log.warning("[hwsim] Module not in lsmod after modprobe — skipping WiFi setup")
             return
-        log.info("[hwsim] Loaded mac80211_hwsim radios=2")
+        log.info("[hwsim] Loaded mac80211_hwsim radios=%s", radios)
+
+    # In vwifi mode, skip manual interface creation — vwifi-add-interfaces handles it
+    if vwifi_mode:
+        log.info("[hwsim] vwifi mode: skipping manual interface creation")
+        # Still configure UCI wireless for consistency (iwinfo reads SSID from UCI)
+        r = _inner_ssh(alpha_ip, "uci get wireless.radio0.type 2>/dev/null", timeout=10)
+        if r.returncode != 0 or "mac80211" not in r.stdout:
+            _inner_ssh(alpha_ip, """
+                while uci -q delete wireless.@wifi-device[0]; do true; done
+                while uci -q delete wireless.@wifi-iface[0]; do true; done
+
+                uci set wireless.radio0=wifi-device
+                uci set wireless.radio0.type='mac80211'
+                uci set wireless.radio0.band='2g'
+                uci set wireless.radio0.channel='6'
+                uci set wireless.radio0.htmode='HT20'
+                uci set wireless.radio0.disabled='0'
+
+                uci set wireless.default_radio0=wifi-iface
+                uci set wireless.default_radio0.device='radio0'
+                uci set wireless.default_radio0.mode='ap'
+                uci set wireless.default_radio0.ssid='TollGate-ALPHA'
+                uci set wireless.default_radio0.network='lan'
+                uci set wireless.default_radio0.encryption='none'
+
+                uci commit wireless 2>/dev/null
+            """, timeout=30)
+            log.info("[hwsim] UCI wireless configured (vwifi mode)")
+        log.info("[hwsim] Setup complete (vwifi mode, interface creation deferred to vwifi)")
+        return
 
     # --- 2. Remove stale tmp interfaces left by netifd ---
     _inner_ssh(alpha_ip, "iw dev tmp.radio0 del 2>/dev/null; iw dev tmp.radio1 del 2>/dev/null", timeout=5)
@@ -1447,6 +1729,17 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
     run_scenarios = config.reseller_scenarios
     quick = config.quick
     smoke = config.smoke
+    virtual_wifi_cmd = ""
+    if config.wifi_plane == "hwsim-netns":
+        virtual_wifi_cmd = (
+            f"virtual_wifi_exit=0; "
+            f"python3 -m pytest tests/api/test_virtual_wifi_hwsim_netns.py "
+            f"-v --tb=short --timeout=180 --backend={backend} "
+            f"{expected_pr}--client=container --results {results_dir} "
+            f"--junitxml={results_dir}/raw/virtual-wifi/junit.xml "
+            f"--html={results_dir}/raw/virtual-wifi/report.html --self-contained-html "
+            f">{results_dir}/raw/virtual-wifi/output.log 2>&1; virtual_wifi_exit=$?; "
+        )
 
     if quick:
         log.info("QUICK MODE: running visual happy path only")
@@ -1479,7 +1772,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
             )
         test_cmd = (
             f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
-            f"mkdir -p {results_dir}/raw/visual {results_dir}/raw/smoke-api {results_dir}/raw/hwsim {results_dir}/report && "
+            f"mkdir -p {results_dir}/raw/visual {results_dir}/raw/smoke-api {results_dir}/raw/hwsim {results_dir}/raw/virtual-wifi {results_dir}/report && "
             "visual_exit=0; smoke_exit=0; "
             f"python3 -m pytest tests/api/test_visual_happy_path.py -v --tb=short --timeout=300 --backend={backend} "
             f"{expected_pr}--client=container --results {results_dir} "
@@ -1493,8 +1786,9 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
             f"--html={results_dir}/raw/smoke-api/report.html --self-contained-html "
             f">{results_dir}/raw/smoke-api/output.log 2>&1; smoke_exit=$?; "
             f"{hwsim_cmd}"
+            f"{virtual_wifi_cmd}"
             "worst_exit=0; "
-            "for e in \"$visual_exit\" \"$smoke_exit\" \"${hwsim_exit:-0}\"; do "
+            "for e in \"$visual_exit\" \"$smoke_exit\" \"${hwsim_exit:-0}\" \"${virtual_wifi_exit:-0}\"; do "
             "  if [ \"$e\" -ne 0 ] && [ \"$e\" -gt \"$worst_exit\" ]; then worst_exit=$e; fi; done; "
             "exit \"$worst_exit\""
         )
@@ -1540,7 +1834,7 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
     test_cmd = (
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
         f"mkdir -p {results_dir}/raw/api {results_dir}/raw/visual {results_dir}/raw/scenarios "
-        f"{results_dir}/raw/vl-scenarios {results_dir}/raw/two-router {results_dir}/report && "
+        f"{results_dir}/raw/vl-scenarios {results_dir}/raw/two-router {results_dir}/raw/virtual-wifi {results_dir}/report && "
         "visual_exit=0; api_exit=0; "
         f"python3 -m pytest tests/api/test_visual_happy_path.py -v --tb=short --timeout=300 --backend={backend} "
         f"{expected_pr}--client=container --results {results_dir} "
@@ -1556,8 +1850,9 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         f"{vl_scenario_cmd}"
         f"{scenario_cmd}"
         f"{two_router_cmd}"
+        f"{virtual_wifi_cmd}"
         "worst_exit=0; "
-        "for e in \"$visual_exit\" \"$api_exit\" \"${vl_scenario_exit:-0}\" \"${scenario_exit:-0}\" \"${two_router_exit:-0}\"; do "
+        "for e in \"$visual_exit\" \"$api_exit\" \"${vl_scenario_exit:-0}\" \"${scenario_exit:-0}\" \"${two_router_exit:-0}\" \"${virtual_wifi_exit:-0}\"; do "
         "  if [ \"$e\" -ne 0 ] && [ \"$e\" -gt \"$worst_exit\" ]; then worst_exit=$e; fi; done; "
         "exit \"$worst_exit\""
     )
@@ -1575,6 +1870,8 @@ def collect_and_render(config: WorkerConfig, results_dir: str, started_at: str, 
         pytest_runners += "--pytest smoke-api=raw/smoke-api/junit.xml "
         if config.hwsim_enabled:
             pytest_runners += "--pytest hwsim=raw/hwsim/junit.xml "
+        if config.wifi_plane == "hwsim-netns":
+            pytest_runners += "--pytest virtual-wifi=raw/virtual-wifi/junit.xml "
     elif not config.quick:
         pytest_runners += "--pytest api=raw/api/junit.xml "
         if config.reseller_scenarios:
@@ -1582,6 +1879,8 @@ def collect_and_render(config: WorkerConfig, results_dir: str, started_at: str, 
         if config.two_router:
             pytest_runners += "--pytest two-router=raw/two-router/junit.xml "
         pytest_runners += "--pytest vl-scenarios=raw/vl-scenarios/junit.xml "
+        if config.wifi_plane == "hwsim-netns":
+            pytest_runners += "--pytest virtual-wifi=raw/virtual-wifi/junit.xml "
     _run(
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
         f"python3 scripts/collect-results.py --run-dir {results_dir} "
@@ -1844,17 +2143,30 @@ def run_worker(config: WorkerConfig) -> int:
             log.info("[3/10] GitHub CLI auth (token=***%s)", config.gh_token[-4:] if len(config.gh_token) > 8 else "***")
             ensure_github_cli(config.gh_token)
 
+            if config.vwifi_enabled:
+                log.info("[3.5/10] Starting vwifi-server on host for cross-VM WiFi relay")
+                _setup_vwifi_host()
+            else:
+                log.info("[vwifi] Skipped (not enabled — use --vwifi to opt in)")
+
             log.info("[4/10] Inner VMs (OpenWrt + Debian)")
             start_inner_vms(config)
 
-            log.info("[4.5/10] Setup hwsim virtual WiFi on Alpha (enabled=%s)", config.hwsim_enabled)
-            if config.hwsim_enabled:
+            log.info("[4.5/10] Setup hwsim virtual WiFi on Alpha (enabled=%s vwifi=%s)", config.hwsim_enabled, config.vwifi_enabled)
+            if config.hwsim_enabled or config.vwifi_enabled:
                 try:
-                    _setup_hwsim_wifi(OPENWRT_IP)
+                    _setup_hwsim_wifi(OPENWRT_IP, vwifi_mode=config.vwifi_enabled)
                 except Exception as hwsim_exc:
                     log.warning("[hwsim] Setup failed (non-fatal, WiFi tests may skip): %s", hwsim_exc)
             else:
-                log.info("[hwsim] Skipped (not enabled — use --hwsim to opt in)")
+                log.info("[hwsim] Skipped (not enabled — use --hwsim or --vwifi to opt in)")
+
+            if config.vwifi_enabled:
+                log.info("[4.55/10] Setting up vwifi guests for cross-VM WiFi relay")
+                try:
+                    _setup_vwifi_guests(OPENWRT_IP, DEBIAN_IP, config)
+                except Exception as vwifi_exc:
+                    log.warning("[vwifi] Guest setup failed (non-fatal, WiFi tests may skip): %s", vwifi_exc)
 
             log.info("[4.6/10] Start syslog capture + configure OpenWrt forwarding")
             try:

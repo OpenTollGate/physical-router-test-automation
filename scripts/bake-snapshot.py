@@ -427,6 +427,38 @@ def cmd_bake(args: argparse.Namespace) -> int:
         )
         _gcloud_ssh(vm_name, shutdown_cmd, zone, project, timeout=30)
 
+        # Step 8c: Build and install vwifi binaries for cross-VM WiFi relay
+        _step(8, total_steps, "Building vwifi binaries for cross-VM WiFi relay")
+        t0_vwifi = time.monotonic()
+        vwifi_build_cmd = (
+            "apt-get update -qq && "
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
+            "cmake make g++ pkg-config libnl-3-dev libnl-genl-3-dev git >/dev/null 2>&1 || true && "
+            "rm -rf /tmp/vwifi-build && "
+            "git clone --depth 1 https://github.com/Raizo62/vwifi.git /tmp/vwifi-build && "
+            "mkdir -p /opt/vwifi/bin/host /opt/vwifi/bin/debian /opt/vwifi/bin/openwrt && "
+            "cd /tmp/vwifi-build && "
+            "mkdir -p build-host && cd build-host && "
+            "cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) && "
+            "cp vwifi-server vwifi-ctrl /opt/vwifi/bin/host/ && "
+            "cd /tmp/vwifi-build && "
+            "mkdir -p build-guest && cd build-guest && "
+            "cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS='-static' && "
+            "make -j$(nproc) && "
+            "cp vwifi-client vwifi-add-interfaces /opt/vwifi/bin/debian/ && "
+            "cp vwifi-client vwifi-add-interfaces /opt/vwifi/bin/openwrt/ && "
+            "ls -la /opt/vwifi/bin/host/ /opt/vwifi/bin/debian/ /opt/vwifi/bin/openwrt/ && "
+            "modprobe vhost_vsock 2>/dev/null || true && "
+            "echo VWIFI_BUILD_OK"
+        )
+        r = _gcloud_ssh(vm_name, vwifi_build_cmd, zone, project, timeout=600)
+        if "VWIFI_BUILD_OK" in (r.stdout or ""):
+            print("  vwifi binaries built and installed to /opt/vwifi/bin/")
+            print("  Done in {:.1f}s".format(time.monotonic() - t0_vwifi))
+        else:
+            print(f"  WARNING: vwifi build failed (non-fatal): {(r.stdout or '')[:200]}", file=sys.stderr)
+            print(f"  stderr: {(r.stderr or '')[:300]}", file=sys.stderr)
+
         # Step 9: Stop QEMU and copy overlay as new base
         _step(9, total_steps, "Stopping QEMU and replacing base image with provisioned overlay")
         t0 = time.monotonic()

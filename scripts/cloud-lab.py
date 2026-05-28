@@ -167,6 +167,8 @@ def cmd_submit(args: argparse.Namespace) -> int:
         quick=cast(bool, args.quick),
         smoke=cast(bool, getattr(args, "smoke", False)),
         hwsim=cast(bool, getattr(args, "hwsim", False)),
+        vwifi=cast(bool, getattr(args, "vwifi", False)),
+        wifi_plane=cast(str, getattr(args, "wifi_plane", "tap")),
     )
     pr_line = f"  PR:           {target.pr} ({target.repo}@{target.branch})\n" if target.pr else f"  Branch:       {target.repo}@{target.branch}\n"
     mint_line = f"  Mint:         {cast(str, args.mint)}\n" if cast(str, args.mint) != "auto" else ""
@@ -174,10 +176,12 @@ def cmd_submit(args: argparse.Namespace) -> int:
     quick_line = "  Mode:         QUICK (visual happy path only)\n" if cast(bool, args.quick) else ""
     smoke_line = "  Mode:         SMOKE (visual + smoke API + hwsim)\n" if cast(bool, getattr(args, "smoke", False)) and not cast(bool, args.quick) else ""
     hwsim_line = "  hwsim:        enabled\n" if cast(bool, getattr(args, "hwsim", False)) else ""
+    vwifi_line = "  vwifi:        enabled (cross-VM WiFi relay)\n" if cast(bool, getattr(args, "vwifi", False)) else ""
+    wifi_plane_line = f"  WiFi plane:   {cast(str, getattr(args, 'wifi_plane', 'tap'))}\n" if cast(str, getattr(args, "wifi_plane", "tap")) != "tap" else ""
     print(f"""
 Submitted run {info['run_id']}
 {pr_line}  SUT commit:   {target.sut_commit or '(branch head)'}
-{quick_line}{smoke_line}{mint_line}{portal_line}{hwsim_line}  VM:           {info['vm_name']} ({info['zone']})
+{quick_line}{smoke_line}{mint_line}{portal_line}{hwsim_line}{vwifi_line}{wifi_plane_line}  VM:           {info['vm_name']} ({info['zone']})
   Artifact run: {info['artifact_run_id']}
   Suite ref:    {info['suite_ref']} (must exist on github.com/{SUITE_REPO})
   Logs:         {info['log_hint']}
@@ -237,6 +241,8 @@ def cmd_submit_all_mints(args: argparse.Namespace) -> int:
             keep_vm_on_failure=not getattr(args, "self_delete", False),
             mint=mint,
             hwsim=cast(bool, getattr(args, "hwsim", False)),
+            vwifi=cast(bool, getattr(args, "vwifi", False)),
+            wifi_plane=cast(str, getattr(args, "wifi_plane", "tap")),
         )
         infos.append((mint, info))
 
@@ -347,6 +353,10 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--quick", action="store_true", help="Quick mode: only run visual happy path (~5min total)")
     submit.add_argument("--hwsim", action="store_true",
         help="Enable mac80211_hwsim virtual WiFi on the OpenWrt VM (experimental)")
+    submit.add_argument("--vwifi", action="store_true",
+        help="Enable vwifi cross-VM WiFi frame relay (experimental, enables real STA scan/association)")
+    submit.add_argument("--wifi-plane", default="tap", choices=["tap", "hwsim-netns"],
+        help="Radio-plane mode. Default tap keeps existing VM/TAP cloud lab; hwsim-netns runs optional shared-kernel Wi-Fi POC.")
     submit.add_argument("--publish", action="store_true", help="Publish report to gh-pages when done")
     submit.add_argument("--wait", action="store_true", help="Block until VM self-deletes")
     submit.add_argument("--reseller-scenarios", action="store_true", help="Run virtualizable reseller-mode scenario tests")
@@ -375,6 +385,10 @@ def build_parser() -> argparse.ArgumentParser:
     all_mints.add_argument("--artifact-timeout", type=int, default=1800, help="Seconds to wait for CI artifact")
     all_mints.add_argument("--hwsim", action="store_true",
         help="Enable mac80211_hwsim virtual WiFi on the OpenWrt VM (experimental)")
+    all_mints.add_argument("--vwifi", action="store_true",
+        help="Enable vwifi cross-VM WiFi frame relay (experimental)")
+    all_mints.add_argument("--wifi-plane", default="tap", choices=["tap", "hwsim-netns"],
+        help="Radio-plane mode. Default tap keeps existing VM/TAP cloud lab; hwsim-netns runs optional shared-kernel Wi-Fi POC.")
     target_flags(all_mints)
     all_mints.set_defaults(func=cmd_submit_all_mints)
 
@@ -413,6 +427,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Force a specific mint type instead of auto-detection")
     run.add_argument("--hwsim", action="store_true",
         help="Enable mac80211_hwsim virtual WiFi on the OpenWrt VM (experimental)")
+    run.add_argument("--vwifi", action="store_true",
+        help="Enable vwifi cross-VM WiFi frame relay (experimental)")
+    run.add_argument("--wifi-plane", default="tap", choices=["tap", "hwsim-netns"],
+        help="Radio-plane mode. Default tap keeps existing VM/TAP cloud lab; hwsim-netns runs optional shared-kernel Wi-Fi POC.")
     target_flags(run)
     run.set_defaults(func=cmd_run_tests)
 
