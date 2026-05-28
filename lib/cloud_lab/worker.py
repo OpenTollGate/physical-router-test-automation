@@ -294,7 +294,7 @@ def _launch_qemu(
 
 
 def _configure_mgmt_nic(guest_ip: str, mgmt_ip: str, mgmt_mac: str) -> None:
-    _run(
+    r = _run(
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
         f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
         f"-o ConnectTimeout=5 root@{guest_ip} "
@@ -304,7 +304,13 @@ def _configure_mgmt_nic(guest_ip: str, mgmt_ip: str, mgmt_mac: str) -> None:
         f"ip link set \\$IFACE up; "
         f"echo 'mgmt nic {mgmt_ip} on '\\$IFACE\"",
         timeout=15,
+        check=False,
     )
+    out = (r.stdout or "").strip()
+    if "mgmt nic" in out:
+        log.info("[mgmt] %s: %s", guest_ip, out)
+    else:
+        log.warning("[mgmt] %s: no output (rc=%d)", guest_ip, r.returncode)
 
 
 def _recv_serial(conn: socket.socket, timeout: float = 2.0) -> str:
@@ -1054,28 +1060,34 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
         timeout=30,
     )
 
-    r = _inner_ssh(debian_ip, """
-        modprobe mac80211_hwsim radios=0 2>&1 || true
-        sleep 1
-        vwifi-add-interfaces 1 2>&1
-        sleep 3
-        iw dev 2>/dev/null | grep Interface || echo 'NO_INTERFACES'
+    r_mod = _inner_ssh(debian_ip, "modprobe mac80211_hwsim radios=0 2>&1 || true", timeout=15)
+    log.info("[vwifi] Debian hwsim radios=0: %s", r_mod.stdout.strip()[:200] or "(ok)")
+
+    r_add = _inner_ssh(debian_ip, "timeout 15 vwifi-add-interfaces 1 2>&1", timeout=30)
+    log.info("[vwifi] Debian vwifi-add-interfaces: rc=%d out=%s", r_add.returncode, r_add.stdout.strip()[:200])
+
+    time.sleep(2)
+    r_iw = _inner_ssh(debian_ip, "iw dev 2>/dev/null | grep Interface || echo NO_INTERFACES", timeout=15)
+    log.info("[vwifi] Debian interfaces after add: %s", r_iw.stdout.strip()[:200])
+
+    r_client = _inner_ssh(debian_ip, """
         vwifi-client 10.99.99.2 2>&1 &
         sleep 5
-        iw dev 2>/dev/null | grep Interface || echo 'NO_INTERFACES_AFTER_CLIENT'
-    """, timeout=60)
+        echo VWIFI_CLIENT_DONE
+    """, timeout=30)
+    log.info("[vwifi] Debian vwifi-client output: %s", r_client.stdout.strip()[:300])
+
+    r_iw2 = _inner_ssh(debian_ip, "iw dev 2>/dev/null | grep Interface || echo NO_INTERFACES_AFTER_CLIENT", timeout=15)
+    log.info("[vwifi] Debian interfaces after client: %s", r_iw2.stdout.strip()[:200])
 
     debian_iface = None
-    saw_after_client = False
-    for line in r.stdout.strip().splitlines():
-        if saw_after_client and "Interface" in line:
+    for line in r_iw2.stdout.strip().splitlines():
+        if "Interface" in line and "wlan" in line:
             debian_iface = line.strip().split()[-1]
             break
-        if "NO_INTERFACES_AFTER_CLIENT" in line or "Connection to Server Ok" in line:
-            saw_after_client = True
 
     if not debian_iface:
-        for line in r.stdout.strip().splitlines():
+        for line in r_iw.stdout.strip().splitlines():
             if "Interface" in line and "wlan" in line:
                 debian_iface = line.strip().split()[-1]
                 break
@@ -1091,7 +1103,7 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
                         r_scan.stdout[:300])
     else:
         log.warning("[vwifi] No vwifi interface found on Debian VM. iw dev: %s",
-                    r.stdout[:300])
+                    r_iw2.stdout[:300])
 
     log.info("[vwifi] Guest setup complete")
 
