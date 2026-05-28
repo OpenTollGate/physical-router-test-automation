@@ -164,14 +164,16 @@ def cmd_submit(args: argparse.Namespace) -> int:
         keep_vm_on_failure=not getattr(args, "self_delete", False),
         mint=cast(str, args.mint),
         portal=cast(str, args.portal),
+        quick=cast(bool, args.quick),
     )
     pr_line = f"  PR:           {target.pr} ({target.repo}@{target.branch})\n" if target.pr else f"  Branch:       {target.repo}@{target.branch}\n"
     mint_line = f"  Mint:         {cast(str, args.mint)}\n" if cast(str, args.mint) != "auto" else ""
     portal_line = f"  Portal:       {cast(str, args.portal)}\n" if cast(str, args.portal) != "builtin" else ""
+    quick_line = "  Mode:         QUICK (visual happy path only)\n" if cast(bool, args.quick) else ""
     print(f"""
 Submitted run {info['run_id']}
 {pr_line}  SUT commit:   {target.sut_commit or '(branch head)'}
-{mint_line}{portal_line}  VM:           {info['vm_name']} ({info['zone']})
+{quick_line}{mint_line}{portal_line}  VM:           {info['vm_name']} ({info['zone']})
   Artifact run: {info['artifact_run_id']}
   Suite ref:    {info['suite_ref']} (must exist on github.com/{SUITE_REPO})
   Logs:         {info['log_hint']}
@@ -230,6 +232,7 @@ def cmd_submit_all_mints(args: argparse.Namespace) -> int:
             secondary_router_port=cast(str, args.secondary_router_port or ""),
             keep_vm_on_failure=not getattr(args, "self_delete", False),
             mint=mint,
+            hwsim=cast(bool, getattr(args, "hwsim", False)),
         )
         infos.append((mint, info))
 
@@ -335,6 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--zone", default=DEFAULT_ZONE)
     submit.add_argument("--machine-type", default=DEFAULT_MACHINE_TYPE)
     submit.add_argument("--disk-size", type=int, default=DEFAULT_DISK_SIZE_GB)
+    submit.add_argument("--quick", action="store_true", help="Quick mode: only run visual happy path (~5min total)")
     submit.add_argument("--publish", action="store_true", help="Publish report to gh-pages when done")
     submit.add_argument("--wait", action="store_true", help="Block until VM self-deletes")
     submit.add_argument("--reseller-scenarios", action="store_true", help="Run virtualizable reseller-mode scenario tests")
@@ -346,7 +350,9 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--mint", default="auto", choices=["auto", "cdk-v2", "nutshell-v2", "nutshell-v1"],
                         help="Force a specific mint type instead of auto-detection. Use 'submit-all-mints' for parallel runs.")
     submit.add_argument("--portal", default="builtin", choices=["builtin", "net4sats"],
-                        help="Captive portal to deploy (default: builtin). 'net4sats' deploys the configurationwizzard SPA.")
+        help="Captive portal to deploy (default: builtin). 'net4sats' deploys the configurationwizzard SPA.")
+    submit.add_argument("--hwsim", action="store_true",
+        help="Enable mac80211_hwsim virtual WiFi on the OpenWrt VM (experimental)")
     target_flags(submit)
     submit.set_defaults(func=cmd_submit)
 
@@ -361,6 +367,8 @@ def build_parser() -> argparse.ArgumentParser:
     all_mints.add_argument("--secondary-router-port", default="", help="Optional SSH port for the seller/secondary router")
     all_mints.add_argument("--self-delete", action="store_true", help="Self-delete VM after tests complete (default: keep alive for debugging, 1h kill switch)")
     all_mints.add_argument("--artifact-timeout", type=int, default=1800, help="Seconds to wait for CI artifact")
+    all_mints.add_argument("--hwsim", action="store_true",
+        help="Enable mac80211_hwsim virtual WiFi on the OpenWrt VM (experimental)")
     target_flags(all_mints)
     all_mints.set_defaults(func=cmd_submit_all_mints)
 
@@ -397,6 +405,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--artifact-timeout", type=int, default=1800)
     run.add_argument("--mint", default="auto", choices=["auto", "cdk-v2", "nutshell-v2", "nutshell-v1"],
                      help="Force a specific mint type instead of auto-detection")
+    run.add_argument("--hwsim", action="store_true",
+        help="Enable mac80211_hwsim virtual WiFi on the OpenWrt VM (experimental)")
     target_flags(run)
     run.set_defaults(func=cmd_run_tests)
 

@@ -108,6 +108,8 @@ class WorkerConfig:
     gh_token: str
     mint: str
     portal: str
+    quick: bool
+    hwsim_enabled: bool
 
 
 def _metadata_get(key: str) -> str:
@@ -148,11 +150,17 @@ def load_config_from_metadata() -> WorkerConfig:
         gh_token=_metadata_get("tollgate-gh-token"),
         mint=_metadata_get_optional("tollgate-mint", "auto"),
         portal=_metadata_get_optional("tollgate-portal", "builtin"),
+        hwsim_enabled=_metadata_get_optional("tollgate-hwsim").lower() in ("true", "1", "yes"),
     )
     log.info(
-        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s portal=%s",
+        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s portal=%s hwsim=%s",
         cfg.run_id, cfg.sut_branch, cfg.artifact_repo, cfg.backend,
-        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure, cfg.mint, cfg.portal,
+        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure, cfg.mint, cfg.portal, cfg.hwsim_enabled,
+    )
+    log.info(
+        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s portal=%s quick=%s",
+        cfg.run_id, cfg.sut_branch, cfg.artifact_repo, cfg.backend,
+        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure, cfg.mint, cfg.portal, cfg.quick,
     )
     log.info(
         "Artifact: run_id=%s suite_ref=%s reseller=%s secondary=%s",
@@ -388,6 +396,7 @@ def write_env_file(config: WorkerConfig) -> None:
         f"TOLLGATE_ROUTER_ARCH={CLOUD_ARCH}\n"
         f"TOLLGATE_CLIENT_TYPE=container\n"
         f"TOLLGATE_VIRTUAL_LAB=1\n"
+        f"TOLLGATE_LAB_TYPE=gcloud\n"
         f"TOLLGATE_VIRTUAL_GATEWAY={OPENWRT_IP}\n"
         f"TOLLGATE_NDS_PORTAL_PORT=80\n"
         f"TOLLGATE_TEST_MINT_URL={CDK_MINT_URL}\n"
@@ -410,6 +419,7 @@ def write_env_file(config: WorkerConfig) -> None:
         f"TOLLGATE_SECONDARY_ROUTER_PORT={config.secondary_router_port}\n"
         f"TOLLGATE_SECONDARY_ROUTER_PASSWORD={VIRT_LAB_PASSWORD}\n"
         f"TOLLGATE_PORTAL={config.portal}\n"
+        f"TOLLGATE_ENABLE_HWSIM={'1' if config.hwsim_enabled else ''}\n"
         f"GH_TOKEN={os.environ.get('GH_TOKEN', '')}\n"
     )
     Path(TEST_DIR, ".env").write_text(env_content)
@@ -979,10 +989,16 @@ def _configure_alpha_wan(alpha_ip: str) -> None:
 def _setup_hwsim_wifi(alpha_ip: str) -> None:
     """Provision virtual WiFi interfaces on the OpenWrt VM via mac80211_hwsim.
 
-    Loads the kernel module, configures UCI wireless (radio0=2.4GHz AP,
-    radio1=5GHz AP, both SSID=TollGate on network=lan), and reloads wifi.
+    Creates AP interfaces manually (bypasses netifd's mac80211.sh which fails
+    with hwsim due to HOSTAPD_START_FAILED).  The manual path:
+      modprobe → iw phy … interface add … type __ap → brctl addif → ip link up
+
     Idempotent — safe to call multiple times.  Non-fatal: logs a warning
     and returns on any failure so the cloud lab continues without WiFi.
+
+    Limitation: hwsim PHYs do not propagate beacons between each other,
+    so STA scan/association tests will skip in the cloud lab.  The AP
+    interfaces are created for router-side config verification only.
     """
     log.info("[hwsim] Setting up virtual WiFi on %s", alpha_ip)
 
@@ -996,86 +1012,91 @@ def _setup_hwsim_wifi(alpha_ip: str) -> None:
             log.warning("[hwsim] modprobe mac80211_hwsim failed (rc=%d): %s — skipping WiFi setup",
                         r.returncode, (r.stderr or r.stdout or "").strip()[:300])
             return
-        # Verify it loaded
         r = _inner_ssh(alpha_ip, "lsmod | grep mac80211_hwsim", timeout=10)
         if r.returncode != 0:
             log.warning("[hwsim] Module not in lsmod after modprobe — skipping WiFi setup")
             return
         log.info("[hwsim] Loaded mac80211_hwsim radios=2")
 
-    # --- 2. Configure UCI wireless (idempotent) ---
-    # Check if already configured
-    r = _inner_ssh(alpha_ip, "uci get wireless.radio0.type 2>/dev/null", timeout=10)
-    if r.returncode == 0 and "mac80211" in r.stdout:
-        log.info("[hwsim] wireless radio0 already configured, skipping UCI setup")
-    else:
-        log.info("[hwsim] Configuring UCI wireless (radio0=2.4GHz, radio1=5GHz)")
-        _inner_ssh(alpha_ip, """
-            # Delete existing wireless sections to start fresh
-            uci -q delete wireless.radio0
-            uci -q delete wireless.radio1
-            uci -q delete wireless.@wifi-iface[0]
-            uci -q delete wireless.@wifi-iface[0]
-            uci -q delete wireless.@wifi-iface[0]
-            uci -q delete wireless.@wifi-iface[0]
+    # --- 2. Remove stale tmp interfaces left by netifd ---
+    _inner_ssh(alpha_ip, "iw dev tmp.radio0 del 2>/dev/null; iw dev tmp.radio1 del 2>/dev/null", timeout=5)
 
-            # radio0 — 2.4 GHz AP
+    # --- 3. Create AP interfaces manually (bypasses broken netifd wifi reload) ---
+    r = _inner_ssh(alpha_ip, "iw dev 2>/dev/null | grep -c 'phy0-ap0'", timeout=10)
+    if r.returncode == 0 and "1" in r.stdout.strip():
+        log.info("[hwsim] phy0-ap0 already exists, skipping manual creation")
+    else:
+        log.info("[hwsim] Creating AP interfaces manually")
+        r = _inner_ssh(alpha_ip, """
+            iw phy phy0 interface add phy0-ap0 type __ap 2>&1 && \
+            iw phy phy1 interface add phy1-ap0 type __ap 2>&1
+        """, timeout=15)
+        if r.returncode != 0:
+            log.warning("[hwsim] Manual interface creation failed: %s", (r.stdout or r.stderr or "").strip()[:300])
+            return
+
+    # --- 4. Add to br-lan and bring up ---
+    _inner_ssh(alpha_ip, """
+        brctl addif br-lan phy0-ap0 2>/dev/null
+        brctl addif br-lan phy1-ap0 2>/dev/null
+        ip link set phy0-ap0 up 2>/dev/null
+        ip link set phy1-ap0 up 2>/dev/null
+    """, timeout=10)
+
+    # --- 5. Configure UCI wireless for consistency (iwinfo reads SSID from UCI) ---
+    r = _inner_ssh(alpha_ip, "uci get wireless.radio0.type 2>/dev/null", timeout=10)
+    if r.returncode != 0 or "mac80211" not in r.stdout:
+        _inner_ssh(alpha_ip, """
+            while uci -q delete wireless.@wifi-device[0]; do true; done
+            while uci -q delete wireless.@wifi-iface[0]; do true; done
+
+            PHY0_PATH=$(readlink -f /sys/class/ieee80211/phy0/device 2>/dev/null)
+            PHY1_PATH=$(readlink -f /sys/class/ieee80211/phy1/device 2>/dev/null)
+
             uci set wireless.radio0=wifi-device
             uci set wireless.radio0.type='mac80211'
+            uci set wireless.radio0.path="${PHY0_PATH#*/sys/devices/}"
             uci set wireless.radio0.band='2g'
             uci set wireless.radio0.channel='6'
             uci set wireless.radio0.htmode='HT20'
             uci set wireless.radio0.disabled='0'
-            uci set wireless.radio0.country='00'
-            uci set wireless.radio0.cell_density='0'
 
-            # radio0 iface — AP, open, on lan
-            uci set wireless.@wifi-iface[0]=wifi-iface
-            uci set wireless.@wifi-iface[0].device='radio0'
-            uci set wireless.@wifi-iface[0].mode='ap'
-            uci set wireless.@wifi-iface[0].ssid='TollGate'
-            uci set wireless.@wifi-iface[0].network='lan'
-            uci set wireless.@wifi-iface[0].encryption='none'
+            uci set wireless.default_radio0=wifi-iface
+            uci set wireless.default_radio0.device='radio0'
+            uci set wireless.default_radio0.mode='ap'
+            uci set wireless.default_radio0.ssid='TollGate-ALPHA'
+            uci set wireless.default_radio0.network='lan'
+            uci set wireless.default_radio0.encryption='none'
 
-            # radio1 — 5 GHz AP
             uci set wireless.radio1=wifi-device
             uci set wireless.radio1.type='mac80211'
+            uci set wireless.radio1.path="${PHY1_PATH#*/sys/devices/}"
             uci set wireless.radio1.band='5g'
             uci set wireless.radio1.channel='36'
             uci set wireless.radio1.htmode='VHT80'
             uci set wireless.radio1.disabled='0'
-            uci set wireless.radio1.country='00'
-            uci set wireless.radio1.cell_density='0'
 
-            # radio1 iface — AP, open, on lan
-            uci set wireless.@wifi-iface[1]=wifi-iface
-            uci set wireless.@wifi-iface[1].device='radio1'
-            uci set wireless.@wifi-iface[1].mode='ap'
-            uci set wireless.@wifi-iface[1].ssid='TollGate'
-            uci set wireless.@wifi-iface[1].network='lan'
-            uci set wireless.@wifi-iface[1].encryption='none'
+            uci set wireless.default_radio1=wifi-iface
+            uci set wireless.default_radio1.device='radio1'
+            uci set wireless.default_radio1.mode='ap'
+            uci set wireless.default_radio1.ssid='TollGate-ALPHA'
+            uci set wireless.default_radio1.network='lan'
+            uci set wireless.default_radio1.encryption='none'
 
-            uci commit wireless
+            uci commit wireless 2>/dev/null
         """, timeout=30)
         log.info("[hwsim] UCI wireless configured")
 
-    # --- 3. Reload wifi ---
-    _inner_ssh(alpha_ip, "wifi reload 2>&1", timeout=30)
-    log.info("[hwsim] wifi reload issued, waiting for interfaces...")
+    # --- 6. Verify interfaces ---
+    r = _inner_ssh(alpha_ip, "iw dev 2>/dev/null | grep Interface", timeout=10)
+    interfaces = [line.strip() for line in r.stdout.strip().splitlines() if "Interface" in line]
+    verified = any("ap0" in iface for iface in interfaces)
 
-    # --- 4. Verify interfaces appeared (up to 10s) ---
-    verified = False
-    for _ in range(10):
-        r = _inner_ssh(alpha_ip, "iw dev 2>/dev/null | grep Interface", timeout=10)
-        interfaces = [line.strip() for line in r.stdout.strip().splitlines() if "Interface" in line]
-        if interfaces:
-            log.info("[hwsim] Interfaces up: %s", ", ".join(interfaces))
-            verified = True
-            break
-        time.sleep(1)
-
-    if not verified:
-        log.warning("[hwsim] No WiFi interfaces detected after 10s — WiFi tests may skip")
+    if verified:
+        log.info("[hwsim] AP interfaces verified: %s", ", ".join(interfaces))
+    else:
+        log.warning("[hwsim] No AP interfaces detected — WiFi tests may skip. iw dev: %s",
+                    r.stdout.strip()[:300])
 
     log.info("[hwsim] Setup complete (verified=%s)", verified)
 
@@ -1426,6 +1447,23 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
     expected_pr = f"--expected-pr={config.sut_pr} " if config.sut_pr else ""
     backend = config.backend
     run_scenarios = config.reseller_scenarios
+    quick = config.quick
+
+    if quick:
+        log.info("QUICK MODE: running visual happy path only")
+        test_cmd = (
+            f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
+            f"mkdir -p {results_dir}/raw/visual {results_dir}/report && "
+            f"python3 -m pytest tests/api/test_visual_happy_path.py::test_visual_happy_path "
+            f"-v --tb=short --timeout=300 --backend={backend} "
+            f"{expected_pr}--client=container --results {results_dir} "
+            f"--junitxml={results_dir}/raw/visual/junit.xml "
+            f"--html={results_dir}/raw/visual/report.html --self-contained-html "
+            f">{results_dir}/raw/visual/output.log 2>&1; exit $?"
+        )
+        r = _run(test_cmd, timeout=600, check=False)
+        log.info("Quick test stdout (%d bytes): %s", len(r.stdout), _redact(r.stdout[-2000:]))
+        return r.returncode
     # Virtual-lab scenario tests (captive portal browser, mint health, hwsim)
     # Runs alongside the main API suite. Excludes reseller/two-router which
     # have their own dedicated runners.
@@ -1494,17 +1532,19 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
 def collect_and_render(config: WorkerConfig, results_dir: str, started_at: str, finished_at: str) -> None:
     commit_arg = f"--sut-commit {config.sut_commit} " if config.sut_commit else ""
     pr_arg = f"--sut-pr {config.sut_pr} " if config.sut_pr else ""
-    vl_scenario_pytest = "--pytest vl-scenarios=raw/vl-scenarios/junit.xml "
-    scenario_pytest = ""
-    if config.reseller_scenarios:
-        scenario_pytest = "--pytest scenarios=raw/scenarios/junit.xml "
-    two_router_pytest = ""
-    if config.two_router:
-        two_router_pytest = "--pytest two-router=raw/two-router/junit.xml "
+    scope = "quick" if config.quick else "full"
+    pytest_runners = "--pytest visual=raw/visual/junit.xml "
+    if not config.quick:
+        pytest_runners += "--pytest api=raw/api/junit.xml "
+        if config.reseller_scenarios:
+            pytest_runners += "--pytest scenarios=raw/scenarios/junit.xml "
+        if config.two_router:
+            pytest_runners += "--pytest two-router=raw/two-router/junit.xml "
+        pytest_runners += "--pytest vl-scenarios=raw/vl-scenarios/junit.xml "
     _run(
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
         f"python3 scripts/collect-results.py --run-dir {results_dir} "
-        f"--pytest visual=raw/visual/junit.xml --pytest api=raw/api/junit.xml {vl_scenario_pytest}{scenario_pytest}{two_router_pytest}"
+        f"{pytest_runners}"
         f"--run-id {config.run_id} "
         f"--sut-repo {config.artifact_repo} --sut-branch {shlex.quote(config.sut_branch)} "
         f"{commit_arg}{pr_arg}--sut-backend {config.backend} "
@@ -1512,7 +1552,7 @@ def collect_and_render(config: WorkerConfig, results_dir: str, started_at: str, 
         f"--portal {config.portal} "
         f"--router-id gcp-cloud --router-model gcp-n2-standard-2 --router-arch {CLOUD_ARCH} "
         f"--viewport desktop --test-plan cloud-api --query-router {OPENWRT_IP} --virtual-lab "
-        f"--lab-type gcloud --tier api --scope full --profile gcloud-api "
+        f"--lab-type gcloud --tier api --scope {scope} --profile gcloud-api "
         f"--started-at {started_at} --finished-at {finished_at} --allow-failures",
         timeout=60,
     )
@@ -1766,11 +1806,14 @@ def run_worker(config: WorkerConfig) -> int:
             log.info("[4/10] Inner VMs (OpenWrt + Debian)")
             start_inner_vms(config)
 
-            log.info("[4.5/10] Setup hwsim virtual WiFi on Alpha")
-            try:
-                _setup_hwsim_wifi(OPENWRT_IP)
-            except Exception as hwsim_exc:
-                log.warning("[hwsim] Setup failed (non-fatal, WiFi tests may skip): %s", hwsim_exc)
+            log.info("[4.5/10] Setup hwsim virtual WiFi on Alpha (enabled=%s)", config.hwsim_enabled)
+            if config.hwsim_enabled:
+                try:
+                    _setup_hwsim_wifi(OPENWRT_IP)
+                except Exception as hwsim_exc:
+                    log.warning("[hwsim] Setup failed (non-fatal, WiFi tests may skip): %s", hwsim_exc)
+            else:
+                log.info("[hwsim] Skipped (not enabled — use --hwsim to opt in)")
 
             log.info("[4.6/10] Start syslog capture + configure OpenWrt forwarding")
             try:

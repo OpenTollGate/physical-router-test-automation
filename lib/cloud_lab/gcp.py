@@ -204,6 +204,7 @@ def _gh_token() -> str:
 
 _OVERLAY_ALLOWLIST = {
     "docs/virtual-lab.md",
+    "lib/backend.py",
     "lib/constants.py",
     "lib/cloud_lab/constants.py",
     "lib/cloud_lab/gcp.py",
@@ -371,6 +372,8 @@ def submit_run(
     keep_vm_on_failure: bool = False,
     mint: str = "auto",
     portal: str = "builtin",
+    quick: bool = False,
+    hwsim: bool = False,
 ) -> dict[str, str]:
     """Pre-flight artifact check, then create fire-and-forget GCP VM. Returns run metadata."""
     cleanup_stale(max_age_hours=2)
@@ -415,6 +418,8 @@ def submit_run(
         "tollgate-keep-vm-on-failure": "true" if keep_vm_on_failure else "false",
         "tollgate-mint": mint,
         "tollgate-portal": portal,
+        "tollgate-quick": "true" if quick else "false",
+        "tollgate-hwsim": "true" if hwsim else "false",
     }
     metadata_payload = ",".join(f"{k}={v}" for k, v in metadata.items())
 
