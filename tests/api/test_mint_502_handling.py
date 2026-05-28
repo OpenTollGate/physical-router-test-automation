@@ -77,13 +77,18 @@ def local_502_config(router):
 
 
 def test_local_502_mint_returns_502(router):
-    code = router.ssh(
-        f"wget -S -o /dev/null -O /dev/null --timeout=10 "
-        f"'{LOCAL_502_MINT_URL}/v1/keysets' 2>&1 | head -1 | grep -oE '[0-9]{{3}}' | head -1"
-    ).strip()
-    if code in ("000", "001"):
-        pytest.skip(f"Local 502 mint at {LOCAL_502_MINT_URL} not reachable (HTTP {code}) — not deployed in this environment")
-    assert code == "502", f"Expected 502 from local 502 mint, got {code}"
+    output = router.ssh(
+        f"wget --spider --timeout=10 '{LOCAL_502_MINT_URL}/v1/keysets' 2>&1"
+    )
+    if "Failed to send request" in output or "Connection refused" in output or "timed out" in output:
+        pytest.skip(f"Local 502 mint at {LOCAL_502_MINT_URL} not reachable — not deployed in this environment")
+    code = ""
+    if "HTTP error" in output:
+        import re
+        m = re.search(r'HTTP error (\d{3})', output)
+        if m:
+            code = m.group(1)
+    assert code == "502", f"Expected 502 from local 502 mint, got '{code}' (output: {output[:200]})"
 
 
 def test_service_stays_up_with_502_mint(router):

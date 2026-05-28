@@ -171,7 +171,17 @@ class Router:
         return self.ssh(f"wget -qO- '{url}'", timeout=timeout)
 
     def router_fetch_status(self, url: str, timeout: int = 10) -> str:
-        return self.ssh(f"wget --spider '{url}' 2>&1 | grep -oE 'HTTP error [0-9]{{3}}|HTTP/[0-9.]+ [0-9]{{3}}' | grep -oE '[0-9]{{3}}' | tail -1", timeout=timeout)
+        out = self.ssh(f"wget --spider '{url}' 2>&1", timeout=timeout)
+        if "HTTP error" in out:
+            import re
+            m = re.search(r'HTTP error (\d{3})', out)
+            if m:
+                return m.group(1)
+        if "Download completed" in out or "Writing to" in out:
+            return "200"
+        if "Failed" in out or "timed out" in out or "Connection refused" in out:
+            return "000"
+        return ""
 
     def _ssh_env(self):
         env = os.environ.copy()
