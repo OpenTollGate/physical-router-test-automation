@@ -191,6 +191,26 @@ def _parse_version(opkg_line):
     return parts[2] if len(parts) >= 3 else (parts[1] if len(parts) >= 2 else opkg_line)
 
 
+def _write_rust_compat_config(router):
+    from lib.constants import TEST_MINT_URL, DEFAULT_STEP_SIZE_MS
+    config = {
+        "accepted_mints": [{
+            "url": TEST_MINT_URL,
+            "min_balance": 0,
+            "balance_tolerance_percent": 0,
+            "payout_interval_seconds": 60,
+            "min_payout_amount": 0,
+            "price_per_step": 1,
+            "price_unit": "sats",
+            "purchase_min_steps": 0,
+        }],
+        "step_size": DEFAULT_STEP_SIZE_MS,
+        "metric": "milliseconds",
+    }
+    router.write_remote_json("/etc/tollgate/config.json", config)
+    log.info("Wrote Rust-compat config.json with mint=%s", TEST_MINT_URL)
+
+
 def _wait_for_health(router, timeout=60):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -566,6 +586,9 @@ def deploy(router, ipk_path: Path, reboot: bool = False, backend=None) -> dict[s
     version_out = router.ssh("opkg list-installed | grep tollgate-wrt", timeout=10)
     installed_version = _parse_version(version_out)
     health_code = 200 if healthy else router.api_status("/")
+
+    if backend and backend.is_rust and health_code == 200:
+        _write_rust_compat_config(router)
 
     return {
         "installed_version": installed_version,

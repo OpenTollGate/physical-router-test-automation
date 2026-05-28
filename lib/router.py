@@ -112,7 +112,8 @@ class Router:
         return ""
 
     def backend_url(self, path="/"):
-        return f"http://[::1]:{BACKEND_PORT}{path}"
+        host = "127.0.0.1" if self.backend.is_rust else "[::1]"
+        return f"http://{host}:{BACKEND_PORT}{path}"
 
     def get_nds_portal_port(self) -> int:
         """NDS gatewayport from UCI, cached. Falls back to 2050."""
@@ -310,7 +311,7 @@ class Router:
             log.warning(f"Could not disable IPv6 on LAN: {e}")
 
     def api_status(self, path: str) -> int:
-        url = f"http://[::1]:{BACKEND_PORT}{path}"
+        url = self.backend_url(path)
         if self.jump_host:
             try:
                 out = self.ssh(f"wget -S -o /dev/null -O /dev/null '{url}' 2>&1 | head -1 | grep -oE '[0-9]{{3}}' | head -1", timeout=15)
@@ -326,7 +327,7 @@ class Router:
         return int(code) if code.isdigit() else 0
 
     def api_body(self, path: str) -> str:
-        url = f"http://[::1]:{BACKEND_PORT}{path}"
+        url = self.backend_url(path)
         if self.jump_host:
             try:
                 return self.ssh(f"wget -qO- '{url}'", timeout=15)
@@ -395,7 +396,7 @@ class Router:
         mac = mac or self.phone_mac
         return self.ssh(
             f"wget -qO- --header='X-Cashu: {token}' "
-            f"'http://[::1]:{BACKEND_PORT}/pay?mac={mac}'"
+            f"'{self.backend_url(f'/pay?mac={mac}')}'"
         )
 
     def get_client_ip_from_nds(self, mac: str | None = None) -> str:
@@ -633,7 +634,7 @@ class Router:
 
     def cli_command(self, command: str, args: list[str] | None = None, timeout: int = 10) -> dict:
         if not self.backend.has_cli_socket:
-            raise NotImplementedError("Rust backend has no CLI socket")
+            return {"success": False, "error": "no CLI socket (rust backend)"}
         cmd_parts = ["tollgate", "--json", command]
         if args:
             cmd_parts.extend(args)
