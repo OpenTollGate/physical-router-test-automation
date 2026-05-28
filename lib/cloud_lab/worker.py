@@ -935,99 +935,46 @@ def _setup_vwifi_host() -> int | None:
 
 
 def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> None:
-    """Install vwifi-client on OpenWrt and Debian VMs and set up virtual WiFi.
+    """Install vwifi-client on OpenWrt and Debian VMs for cross-VM frame relay.
 
     Called AFTER start_inner_vms() and AFTER _setup_hwsim_wifi().
-    Replaces the hwsim-managed interfaces with vwifi-relayed ones.
+
+    OpenWrt: vwifi-client auto-discovers existing hwsim interfaces (netifd
+    holds refs so we keep them).  Just copy binary and start client.
+
+    Debian: load hwsim radios=0, vwifi-add-interfaces creates PHYs, then
+    vwifi-client connects to host vwifi-server via vsock.
     """
     bin_dir = _VWIFI_BIN_DIR
     openwrt_client = bin_dir / "openwrt" / "vwifi-client"
-    openwrt_add_if = bin_dir / "openwrt" / "vwifi-add-interfaces"
     debian_client = bin_dir / "debian" / "vwifi-client"
     debian_add_if = bin_dir / "debian" / "vwifi-add-interfaces"
 
     # --- OpenWrt VM (alpha) ---
     log.info("[vwifi] Setting up vwifi-client on OpenWrt alpha (%s)", alpha_ip)
 
-    # Copy binaries to OpenWrt
     _run(
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} scp -O "
         f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
         f"{shlex.quote(str(openwrt_client))} root@{alpha_ip}:/usr/bin/vwifi-client && "
-        f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} scp -O "
-        f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-        f"{shlex.quote(str(openwrt_add_if))} root@{alpha_ip}:/usr/bin/vwifi-add-interfaces && "
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
         f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{alpha_ip} "
-        "'chmod +x /usr/bin/vwifi-client /usr/bin/vwifi-add-interfaces'",
+        "'chmod +x /usr/bin/vwifi-client'",
         timeout=30,
     )
 
-    # _setup_hwsim_wifi() already loaded hwsim with radios=0 for vwifi mode.
-    # Create vwifi interfaces and start client.
     r = _inner_ssh(alpha_ip, """
-        iw phy 2>/dev/null | grep -c 'Wiphy' || echo '0'
-        vwifi-add-interfaces 1 2>&1
-        sleep 2
+        iw dev 2>/dev/null | grep Interface || echo 'NO_INTERFACES'
         vwifi-client &
         sleep 3
-        iw dev 2>/dev/null | grep Interface || echo 'NO_INTERFACES'
+        echo "VWIFI_CLIENT_STARTED"
     """, timeout=30)
 
-    # Find the vwifi-created interface name
-    alpha_iface = None
-    for line in r.stdout.strip().splitlines():
-        if "Interface" in line:
-            alpha_iface = line.strip().split()[-1]
-            break
-
-    if not alpha_iface:
-        log.warning("[vwifi] No vwifi interface found on OpenWrt alpha. iw dev: %s",
-                    r.stdout[:300])
-        # Non-fatal — tests will skip
-        return
-
-    log.info("[vwifi] OpenWrt alpha vwifi interface: %s", alpha_iface)
-
-    # Configure the vwifi interface as AP with SSID TollGate-ALPHA
-    _inner_ssh(alpha_ip, f"""
-        # Add to br-lan
-        brctl addif br-lan {alpha_iface} 2>/dev/null || true
-        ip link set {alpha_iface} up 2>/dev/null || true
-
-        # Write a minimal hostapd config for the vwifi interface
-        mkdir -p /tmp/vwifi
-        cat > /tmp/vwifi/hostapd.conf <<'HOSTAPD'
-interface={alpha_iface}
-driver=nl80211
-ssid=TollGate-ALPHA
-hw_mode=g
-channel=6
-ieee80211n=1
-ht_capab=[HT20]
-HOSTAPD
-
-        # Start hostapd in background
-        hostapd -B /tmp/vwifi/hostapd.conf 2>&1 || true
-        sleep 2
-
-        # Update UCI wireless for consistency
-        uci set wireless.radio0=wifi-device 2>/dev/null || true
-        uci set wireless.radio0.type='mac80211' 2>/dev/null || true
-        uci set wireless.radio0.band='2g' 2>/dev/null || true
-        uci set wireless.radio0.channel='6' 2>/dev/null || true
-        uci set wireless.radio0.htmode='HT20' 2>/dev/null || true
-        uci set wireless.radio0.disabled='0' 2>/dev/null || true
-        uci set wireless.default_radio0=wifi-iface 2>/dev/null || true
-        uci set wireless.default_radio0.device='radio0' 2>/dev/null || true
-        uci set wireless.default_radio0.mode='ap' 2>/dev/null || true
-        uci set wireless.default_radio0.ssid='TollGate-ALPHA' 2>/dev/null || true
-        uci set wireless.default_radio0.network='lan' 2>/dev/null || true
-        uci set wireless.default_radio0.encryption='none' 2>/dev/null || true
-        uci commit wireless 2>/dev/null || true
-    """, timeout=30)
-
-    log.info("[vwifi] OpenWrt alpha AP configured with SSID TollGate-ALPHA on %s", alpha_iface)
+    has_interfaces = any("Interface" in line for line in r.stdout.splitlines())
+    if not has_interfaces:
+        log.warning("[vwifi] No WiFi interfaces on OpenWrt alpha. iw dev: %s", r.stdout[:300])
+    else:
+        log.info("[vwifi] OpenWrt alpha vwifi-client started (existing interfaces relayed)")
 
     # --- Debian VM ---
     log.info("[vwifi] Setting up vwifi-client on Debian (%s)", debian_ip)
@@ -1046,25 +993,34 @@ HOSTAPD
     )
 
     r = _inner_ssh(debian_ip, """
-        modprobe mac80211_hwsim radios=0 2>/dev/null || true
+        modprobe mac80211_hwsim radios=0 2>&1 || true
         sleep 1
         vwifi-add-interfaces 1 2>&1
-        sleep 2
-        vwifi-client &
         sleep 3
         iw dev 2>/dev/null | grep Interface || echo 'NO_INTERFACES'
+        vwifi-client &
+        sleep 3
+        iw dev 2>/dev/null | grep Interface || echo 'NO_INTERFACES_AFTER_CLIENT'
     """, timeout=30)
 
     debian_iface = None
+    saw_after_client = False
     for line in r.stdout.strip().splitlines():
-        if "Interface" in line:
+        if saw_after_client and "Interface" in line:
             debian_iface = line.strip().split()[-1]
             break
+        if "NO_INTERFACES_AFTER_CLIENT" in line or "Connection to Server Ok" in line:
+            saw_after_client = True
+
+    if not debian_iface:
+        for line in r.stdout.strip().splitlines():
+            if "Interface" in line and "wlan" in line:
+                debian_iface = line.strip().split()[-1]
+                break
 
     if debian_iface:
         log.info("[vwifi] Debian vwifi interface: %s", debian_iface)
 
-        # Verify scan can see the AP
         r_scan = _inner_ssh(debian_ip, f"iw {debian_iface} scan 2>&1", timeout=15)
         if "TollGate-ALPHA" in r_scan.stdout:
             log.info("[vwifi] Debian scan sees TollGate-ALPHA — cross-VM WiFi relay working!")
@@ -1248,10 +1204,10 @@ def _configure_alpha_wan(alpha_ip: str) -> None:
 def _setup_hwsim_wifi(alpha_ip: str, *, vwifi_mode: bool = False) -> None:
     """Provision virtual WiFi interfaces on the OpenWrt VM via mac80211_hwsim.
 
-    When *vwifi_mode* is True, loads hwsim with ``radios=0`` (empty) and skips
-    manual interface creation — ``_setup_vwifi_guests()`` handles interface
-    creation via vwifi-add-interfaces.  Still configures UCI wireless for
-    SSID/metadata consistency.
+    When *vwifi_mode* is True, keeps existing hwsim PHYs (netifd holds
+    references so rmmod fails).  ``_setup_vwifi_guests()`` runs vwifi-client
+    which auto-discovers all hwsim interfaces and relays frames through the
+    vsock server.  Still configures UCI wireless for SSID/metadata consistency.
 
     When *vwifi_mode* is False (default), creates AP interfaces manually
     (bypasses netifd's mac80211.sh which fails with hwsim due to
@@ -1263,50 +1219,20 @@ def _setup_hwsim_wifi(alpha_ip: str, *, vwifi_mode: bool = False) -> None:
     """
     log.info("[hwsim] Setting up virtual WiFi on %s (vwifi=%s)", alpha_ip, vwifi_mode)
 
-    # --- 1. Load mac80211_hwsim module (idempotent) ---
     r = _inner_ssh(alpha_ip, "lsmod | grep mac80211_hwsim", timeout=10)
     already_loaded = r.returncode == 0 and "mac80211_hwsim" in r.stdout
 
     if vwifi_mode:
-        # vwifi needs hwsim loaded with radios=0 (empty) so vwifi-add-interfaces
-        # can create PHYs itself.  If already loaded (from baked snapshot with
-        # default radios), force-unload first.
-        if already_loaded:
-            log.info("[hwsim] vwifi mode: unloading existing hwsim (has default radios)")
-            r = _inner_ssh(alpha_ip, """
-                killall hostapd 2>/dev/null || true
-                wifi down 2>/dev/null || true
-                for iface in $(iw dev 2>/dev/null | grep Interface | awk '{print $2}'); do
-                    iw dev $iface del 2>/dev/null || true
-                done
-                rmmod mac80211_hwsim 2>&1
-                lsmod | grep mac80211_hwsim || echo 'HWSIM_UNLOADED'
-            """, timeout=15)
-            if "HWSIM_UNLOADED" not in r.stdout:
-                log.warning("[hwsim] rmmod mac80211_hwsim failed — output: %s",
-                            r.stdout.strip()[:300])
-        r = _inner_ssh(alpha_ip, "modprobe mac80211_hwsim radios=0 2>&1", timeout=15)
+        if not already_loaded:
+            r = _inner_ssh(alpha_ip, "modprobe mac80211_hwsim radios=2 2>&1", timeout=15)
+            if r.returncode != 0:
+                log.warning("[hwsim] modprobe failed (rc=%d): %s — skipping WiFi",
+                            r.returncode, (r.stderr or r.stdout or "").strip()[:300])
+                return
         r2 = _inner_ssh(alpha_ip, "iw phy 2>/dev/null | grep -c 'Wiphy'", timeout=10)
         phy_count = r2.stdout.strip() if r2.returncode == 0 else "?"
-        log.info("[hwsim] Loaded mac80211_hwsim radios=0 (vwifi mode, phy_count=%s)", phy_count)
-    elif already_loaded:
-        log.info("[hwsim] Module already loaded, skipping modprobe")
-    else:
-        r = _inner_ssh(alpha_ip, "modprobe mac80211_hwsim radios=2 2>&1", timeout=15)
-        if r.returncode != 0:
-            log.warning("[hwsim] modprobe mac80211_hwsim failed (rc=%d): %s — skipping WiFi setup",
-                        r.returncode, (r.stderr or r.stdout or "").strip()[:300])
-            return
-        r = _inner_ssh(alpha_ip, "lsmod | grep mac80211_hwsim", timeout=10)
-        if r.returncode != 0:
-            log.warning("[hwsim] Module not in lsmod after modprobe — skipping WiFi setup")
-            return
-        log.info("[hwsim] Loaded mac80211_hwsim radios=2")
+        log.info("[hwsim] vwifi mode: using existing hwsim (phy_count=%s)", phy_count)
 
-    # In vwifi mode, skip manual interface creation — vwifi-add-interfaces handles it
-    if vwifi_mode:
-        log.info("[hwsim] vwifi mode: skipping manual interface creation")
-        # Still configure UCI wireless for consistency (iwinfo reads SSID from UCI)
         r = _inner_ssh(alpha_ip, "uci get wireless.radio0.type 2>/dev/null", timeout=10)
         if r.returncode != 0 or "mac80211" not in r.stdout:
             _inner_ssh(alpha_ip, """
@@ -1330,8 +1256,23 @@ def _setup_hwsim_wifi(alpha_ip: str, *, vwifi_mode: bool = False) -> None:
                 uci commit wireless 2>/dev/null
             """, timeout=30)
             log.info("[hwsim] UCI wireless configured (vwifi mode)")
-        log.info("[hwsim] Setup complete (vwifi mode, interface creation deferred to vwifi)")
+        log.info("[hwsim] Setup complete (vwifi mode)")
         return
+
+    # Non-vwifi: load hwsim with 2 radios if not already loaded
+    if already_loaded:
+        log.info("[hwsim] Module already loaded, skipping modprobe")
+    else:
+        r = _inner_ssh(alpha_ip, "modprobe mac80211_hwsim radios=2 2>&1", timeout=15)
+        if r.returncode != 0:
+            log.warning("[hwsim] modprobe mac80211_hwsim failed (rc=%d): %s — skipping WiFi setup",
+                        r.returncode, (r.stderr or r.stdout or "").strip()[:300])
+            return
+        r = _inner_ssh(alpha_ip, "lsmod | grep mac80211_hwsim", timeout=10)
+        if r.returncode != 0:
+            log.warning("[hwsim] Module not in lsmod after modprobe — skipping WiFi setup")
+            return
+        log.info("[hwsim] Loaded mac80211_hwsim radios=2")
 
     # --- 2. Remove stale tmp interfaces left by netifd ---
     _inner_ssh(alpha_ip, "iw dev tmp.radio0 del 2>/dev/null; iw dev tmp.radio1 del 2>/dev/null", timeout=5)
