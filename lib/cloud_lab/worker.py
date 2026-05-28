@@ -294,23 +294,26 @@ def _launch_qemu(
 
 
 def _configure_mgmt_nic(guest_ip: str, mgmt_ip: str, mgmt_mac: str) -> None:
-    r = _run(
+    ssh_prefix = (
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
         f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-        f"-o ConnectTimeout=5 root@{guest_ip} "
-        f"\"IFACE=$(ip -o link | grep '{mgmt_mac}' | awk '{{print \\$2}}' | tr -d ':'); "
-        f"[ -z \\\"\\$IFACE\\\" ] && echo 'mgmt nic not found' && exit 0; "
-        f"ip addr add {mgmt_ip}/24 dev \\$IFACE 2>/dev/null || true; "
-        f"ip link set \\$IFACE up; "
-        f"echo 'mgmt nic {mgmt_ip} on '\\$IFACE\"",
-        timeout=15,
-        check=False,
+        f"-o ConnectTimeout=5 root@{guest_ip}"
     )
+    guest_script = (
+        f"IFACE=$(ip -o link | grep '{mgmt_mac}' | awk '{{print $2}}' | tr -d ':'); "
+        f"[ -z \"$IFACE\" ] && echo mgmt_nic_not_found && exit 0; "
+        f"ip addr add {mgmt_ip}/24 dev $IFACE 2>/dev/null || true; "
+        f"ip link set $IFACE up; "
+        f"echo mgmt_ok_$IFACE"
+    )
+    r = _run(f"{ssh_prefix} {shlex.quote(guest_script)}", timeout=15, check=False)
     out = (r.stdout or "").strip()
-    if "mgmt nic" in out:
-        log.info("[mgmt] %s: %s", guest_ip, out)
+    if "mgmt_ok_" in out:
+        log.info("[mgmt] %s: configured %s", guest_ip, out.replace("mgmt_ok_", ""))
+    elif "mgmt_nic_not_found" in out:
+        log.warning("[mgmt] %s: mgmt NIC (mac=%s) not found", guest_ip, mgmt_mac)
     else:
-        log.warning("[mgmt] %s: no output (rc=%d)", guest_ip, r.returncode)
+        log.warning("[mgmt] %s: unexpected (rc=%d): %s", guest_ip, r.returncode, out[:200])
 
 
 def _recv_serial(conn: socket.socket, timeout: float = 2.0) -> str:
@@ -1063,7 +1066,7 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
     r_mod = _inner_ssh(debian_ip, "modprobe mac80211_hwsim radios=0 2>&1 || true", timeout=15)
     log.info("[vwifi] Debian hwsim radios=0: %s", r_mod.stdout.strip()[:200] or "(ok)")
 
-    r_add = _inner_ssh(debian_ip, "timeout 15 vwifi-add-interfaces 1 2>&1", timeout=30)
+    r_add = _inner_ssh(debian_ip, "timeout 15 vwifi-add-interfaces 1 0a:0b:0c:03:02 2>&1", timeout=30)
     log.info("[vwifi] Debian vwifi-add-interfaces: rc=%d out=%s", r_add.returncode, r_add.stdout.strip()[:200])
 
     time.sleep(2)
