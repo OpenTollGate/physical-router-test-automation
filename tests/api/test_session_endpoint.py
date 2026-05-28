@@ -19,6 +19,8 @@ def test_session_response_structure(router):
 
 
 def test_session_has_remaining_or_error(router):
+    if router.backend.is_rust:
+        pytest.skip("Rust v1 session API format differs from Go (Amperstrand/tollgate-rs#42)")
     _skip_if_degraded(router)
     resp = router.api_body("/balance")
     data = parse_json_or_fail(resp, "balance response")

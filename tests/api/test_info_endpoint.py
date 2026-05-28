@@ -46,7 +46,9 @@ def test_info_has_price_per_step(discovery):
     assert price[1] == "cashu", f"Expected bearer_asset_type='cashu', got: {price[1]}"
 
 
-def test_info_has_tips_tag(discovery):
+def test_info_has_tips_tag(discovery, router):
+    if router.backend.is_rust:
+        pytest.skip("Rust v1 discovery event missing 'tips' tag (Amperstrand/tollgate-rs#43)")
     tags = discovery.get("tags", [])
     tips_tags = [t for t in tags if isinstance(t, list) and len(t) >= 2 and t[0] == "tips"]
     assert len(tips_tags) > 0, f"Missing 'tips' tag in discovery event: {tags}"

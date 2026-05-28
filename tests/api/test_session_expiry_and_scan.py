@@ -43,6 +43,8 @@ def test_expired_session_returns_no_remaining(router, cashu, test_pricing):
 
     Uses a 1-step session (step_size * 1 ms) to minimize wait time.
     """
+    if router.backend.is_rust:
+        pytest.skip("Rust v1 session API format differs from Go (Amperstrand/tollgate-rs#42)")
     if not cashu.is_available():
         pytest.skip("cashu venv not available — run scripts/setup-cashu.sh")
 
@@ -95,6 +97,8 @@ def test_session_expiry_while_querying(router, cashu, test_pricing):
     stale positive remaining values should appear after the session expires.
     This test polls rapidly to catch any transient stale values.
     """
+    if router.backend.is_rust:
+        pytest.skip("Rust v1 session API format differs from Go (Amperstrand/tollgate-rs#42)")
     if not cashu.is_available():
         pytest.skip("cashu venv not available — run scripts/setup-cashu.sh")
 

@@ -50,8 +50,14 @@ class BackendConfig:
 
     @property
     def has_config_json(self) -> bool:
-        """Whether the backend uses /etc/tollgate/config.json for configuration."""
-        return self.is_go
+        """Whether the backend uses /etc/tollgate/config.json for configuration.
+
+        Both Go and Rust backends read config.json when present. The Rust init
+        script passes ``--config /etc/tollgate/config.json`` to the binary when
+        the file exists (falling back to CLI flags otherwise). We always write
+        a compat config for Rust via ``_write_rust_compat_config()``.
+        """
+        return True
 
     @property
     def service_name(self) -> str:

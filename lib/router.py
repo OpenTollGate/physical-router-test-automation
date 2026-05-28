@@ -483,8 +483,6 @@ class Router:
         self.ssh("echo '' > /www/pending-token.txt")
 
     def apply_pricing(self, step_size: int | None = None, metric: str = "milliseconds"):
-        if not self.backend.has_config_json:
-            raise NotImplementedError("Pricing modification not supported for Rust backend (no config.json)")
         if step_size is None:
             from lib.constants import DEFAULT_STEP_SIZE_MS
             step_size = DEFAULT_STEP_SIZE_MS
@@ -500,9 +498,6 @@ class Router:
         self._wait_for_backend()
 
     def restore_pricing(self):
-        if not self.backend.has_config_json:
-            log.warning("Rust backend does not use config.json; skipping restore_pricing()")
-            return
         self.ssh("cp /etc/tollgate/config.json.test-backup /etc/tollgate/config.json")
         self.restart_backend()
         self._wait_for_backend()
@@ -569,17 +564,6 @@ class Router:
         self.ssh("rm -f /etc/tollgate/debug-portal")
 
     def ensure_test_mint(self):
-        if not self.backend.has_config_json:
-            # Rust backend: check advertisement for mint URL
-            try:
-                resp = self.ssh(f"wget -qO- --timeout=5 http://127.0.0.1:{BACKEND_PORT}/")
-                if TEST_MINT_URL in resp:
-                    log.info(f"Rust backend already has test mint: {TEST_MINT_URL}")
-                    return
-            except Exception:
-                pass
-            log.warning("Rust backend does not use config.json; skipping ensure_test_mint()")
-            return
         cfg_raw = self.ssh("cat /etc/tollgate/config.json")
         cfg = json.loads(cfg_raw)
         if any(m.get("url") == TEST_MINT_URL for m in cfg.get("accepted_mints", [])):
@@ -610,11 +594,7 @@ class Router:
         """
         if mint_urls is None:
             mint_urls = [TEST_MINT_URL]
-        
-        if not self.backend.has_config_json:
-            log.warning("Rust backend does not use config.json; skipping replace_mints()")
-            return
-        
+
         # Read current config
         cfg_raw = self.ssh("cat /etc/tollgate/config.json")
         cfg = json.loads(cfg_raw)
