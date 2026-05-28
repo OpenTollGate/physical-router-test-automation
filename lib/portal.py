@@ -5,9 +5,10 @@ The built-in portal is shipped inside tollgate-wrt.ipk at
 /etc/nodogsplash/htdocs during install.  It is the default and requires
 no extra deployment step.
 
-Alternative portals (e.g. configurationwizzard) ship as separate .ipk
-packages that PROVIDE tollgate-captive-portal-site and CONFLICT with
-the built-in one.  Installing them replaces the symlink automatically.
+Alternative portals ship as separate .ipk packages that PROVIDE
+tollgate-captive-portal-site and CONFLICT with the built-in one.
+Installing them replaces the portal files in /etc/nodogsplash/htdocs
+automatically.
 """
 
 import os
@@ -19,9 +20,9 @@ log = logging.getLogger("tollgate.portal")
 _PORTAL_REGISTRY: dict[str, dict[str, str]] = {
     "builtin": {},
     "net4sats": {
-        "repo": "net4sats/configurationwizzard",
+        "repo": "Amperstrand/net4sats-captive-portal",
         "workflow": "build-package.yml",
-        "package_name": "configurationwizzard",
+        "package_name": "net4sats-captive-portal",
     },
 }
 
