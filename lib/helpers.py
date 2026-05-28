@@ -4,6 +4,8 @@ import logging
 
 import pytest
 
+from lib.constants import BACKEND_PORT
+
 from lib.constants import PING_HOST
 
 log = logging.getLogger("tollgate.helpers")
@@ -136,16 +138,27 @@ def metering_test_setup(router, adb, wifi, cashu, test_pricing_fn,
     return {"allotment": allotment, "metric": metric}, token
 
 
-def post_payment_event(router, token):
+def post_payment_event(router, token, ip=None):
+    ip = ip or router.phone_ip
     payload = json.dumps({"kind": 21000, "tags": [["payment", token]], "content": ""})
-    return router.ssh(
-        f"wget -O /tmp/tg-post-resp.txt --timeout=20 "
-        f"--post-data='{payload}' "
-        f"--header='Content-Type: application/json' "
-        f"'{router.backend_url('/')}' 2>/dev/null; "
-        f"cat /tmp/tg-post-resp.txt 2>/dev/null; "
-        f"rm -f /tmp/tg-post-resp.txt"
+    payload_bytes = payload.encode("utf-8")
+    host = router.backend_url("/").replace("http://", "").rstrip("/")
+    request = (
+        f"POST / HTTP/1.0\r\n"
+        f"Host: {host}\r\n"
+        f"Content-Type: application/json\r\n"
+        f"Content-Length: {len(payload_bytes)}\r\n"
+        f"X-Forwarded-For: {ip}\r\n"
+        f"Connection: close\r\n"
+        f"\r\n"
+        f"{payload}"
     )
+    raw = router.ssh(f"printf '%s' '{request}' | nc ::1 {BACKEND_PORT} 2>/dev/null", timeout=30)
+    if not raw:
+        return ""
+    normalized = raw.replace("\r\n", "\n")
+    parts = normalized.split("\n\n", 1)
+    return parts[1].strip() if len(parts) > 1 else raw.strip()
 
 
 def skip_if_no_cli_socket(router):
