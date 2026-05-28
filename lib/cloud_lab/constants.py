@@ -26,6 +26,20 @@ RESULTS_ROOT = "/tmp/tollgate-results"
 WORKER_LOG = "/var/log/tollgate-run.log"
 STALE_VM_HOURS = 2
 
+# Management bridge — separate from test network so SSH survives network changes
+MGMT_BRIDGE = "mgmt-br"
+MGMT_HOST_IP = "10.99.97.2"
+MGMT_SUBNET = "10.99.97.0/24"
+MGMT_ALPHA_IP = "10.99.97.1"
+MGMT_DEBIAN_IP = "10.99.97.100"
+MGMT_BETA_IP = "10.99.97.11"
+MGMT_TAP_ALPHA = "mgmt-tap"
+MGMT_TAP_DEBIAN = "mgmt-tap2"
+MGMT_TAP_BETA = "mgmt-tap3"
+MGMT_ALPHA_MAC = "52:54:00:c0:01:01"
+MGMT_DEBIAN_MAC = "52:54:00:c0:02:64"
+MGMT_BETA_MAC = "52:54:00:c0:03:0b"
+
 # Two-router upstream bridge
 UPSTREAM_BRIDGE = "tg-upstream-br"
 UPSTREAM_TAP_ALPHA = "tg-upst-tap-a"

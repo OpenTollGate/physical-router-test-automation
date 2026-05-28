@@ -534,13 +534,27 @@ class Router:
         return False
 
     def restart_backend(self, timeout: int = 30):
-        """Restart the backend service and wait for CLI socket to be ready.
+        """Restart the backend service and wait for readiness.
 
-        Raises RuntimeError if the socket doesn't come back within timeout seconds.
+        For Go backend: waits for CLI socket at /var/run/tollgate.sock.
+        For Rust backend: waits for HTTP health endpoint to return 200.
+
+        Raises RuntimeError if the backend doesn't become ready within timeout seconds.
         """
         self.ssh("service tollgate-wrt restart", timeout=15)
-        if not self.wait_for_cli_socket(timeout=timeout):
-            raise RuntimeError("Backend CLI socket did not become ready after restart")
+        if self.backend.is_rust:
+            start = time.time()
+            while time.time() - start < timeout:
+                try:
+                    if self.api_status("/") == 200:
+                        return
+                except Exception:
+                    pass
+                time.sleep(1)
+            raise RuntimeError("Rust backend did not become healthy after restart")
+        else:
+            if not self.wait_for_cli_socket(timeout=timeout):
+                raise RuntimeError("Backend CLI socket did not become ready after restart")
 
     def get_portal_log(self) -> str:
         return self.ssh("cat /tmp/tollgate-portal.log 2>/dev/null")

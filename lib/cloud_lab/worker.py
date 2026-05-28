@@ -29,6 +29,18 @@ from lib.cloud_lab.constants import (
     DEBIAN_IP,
     DEBIAN_MAC,
     LOCAL_MINT_HOST,
+    MGMT_ALPHA_IP,
+    MGMT_ALPHA_MAC,
+    MGMT_BETA_IP,
+    MGMT_BETA_MAC,
+    MGMT_BRIDGE,
+    MGMT_DEBIAN_IP,
+    MGMT_DEBIAN_MAC,
+    MGMT_HOST_IP,
+    MGMT_SUBNET,
+    MGMT_TAP_ALPHA,
+    MGMT_TAP_BETA,
+    MGMT_TAP_DEBIAN,
     NUTSHELL_V1_MINT_PORT,
     NUTSHELL_V1_MINT_URL,
     NUTSHELL_V1_MINT_LAN,
@@ -209,6 +221,8 @@ def _launch_qemu(
     wan_tap: str | None = None,
     wan_mac: str | None = None,
     vsock_cid: int | None = None,
+    mgmt_tap: str | None = None,
+    mgmt_mac: str | None = None,
 ) -> subprocess.Popen[str]:
     workdir = _virt_lab_workdir()
     run_dir = workdir / "run"
@@ -253,6 +267,11 @@ def _launch_qemu(
             "-netdev", f"tap,id=net1,ifname={wan_tap},script=no,downscript=no",
             "-device", f"virtio-net-pci,netdev=net1,mac={wan_mac}",
         ]
+    if mgmt_tap:
+        cmd += [
+            "-netdev", f"tap,id=mgmt,ifname={mgmt_tap},script=no,downscript=no",
+            "-device", f"virtio-net-pci,netdev=mgmt,mac={mgmt_mac}",
+        ]
     log.info("Launching %s QEMU: disk=%s tap=%s mac=%s", name, disk_name, tap_name, mac)
     with qemu_log.open("w") as log_file:
         proc = subprocess.Popen(
@@ -272,6 +291,20 @@ def _launch_qemu(
             return proc
         time.sleep(0.5)
     raise RuntimeError(f"{name} QEMU did not create serial socket at {serial_sock}")
+
+
+def _configure_mgmt_nic(guest_ip: str, mgmt_ip: str, mgmt_mac: str) -> None:
+    _run(
+        f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
+        f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o ConnectTimeout=5 root@{guest_ip} "
+        f"\"IFACE=$(ip -o link | grep '{mgmt_mac}' | awk '{{print \\$2}}' | tr -d ':'); "
+        f"[ -z \\\"\\$IFACE\\\" ] && echo 'mgmt nic not found' && exit 0; "
+        f"ip addr add {mgmt_ip}/24 dev \\$IFACE 2>/dev/null || true; "
+        f"ip link set \\$IFACE up; "
+        f"echo 'mgmt nic {mgmt_ip} on '\\$IFACE\"",
+        timeout=15,
+    )
 
 
 def _recv_serial(conn: socket.socket, timeout: float = 2.0) -> str:
@@ -830,7 +863,19 @@ def setup_bridge() -> None:
         f"ip link set {UPSTREAM_TAP_ALPHA} up; "
         f"ip tuntap add dev {UPSTREAM_TAP_BETA} mode tap user root 2>/dev/null || true; "
         f"ip link set {UPSTREAM_TAP_BETA} master {UPSTREAM_BRIDGE} 2>/dev/null || true; "
-        f"ip link set {UPSTREAM_TAP_BETA} up",
+        f"ip link set {UPSTREAM_TAP_BETA} up; "
+        f"ip link add name {MGMT_BRIDGE} type bridge 2>/dev/null || true; "
+        f"ip addr add {MGMT_HOST_IP}/24 dev {MGMT_BRIDGE} 2>/dev/null || true; "
+        f"ip link set {MGMT_BRIDGE} up; "
+        f"ip tuntap add dev {MGMT_TAP_ALPHA} mode tap user root 2>/dev/null || true; "
+        f"ip link set {MGMT_TAP_ALPHA} master {MGMT_BRIDGE} 2>/dev/null || true; "
+        f"ip link set {MGMT_TAP_ALPHA} up; "
+        f"ip tuntap add dev {MGMT_TAP_DEBIAN} mode tap user root 2>/dev/null || true; "
+        f"ip link set {MGMT_TAP_DEBIAN} master {MGMT_BRIDGE} 2>/dev/null || true; "
+        f"ip link set {MGMT_TAP_DEBIAN} up; "
+        f"ip tuntap add dev {MGMT_TAP_BETA} mode tap user root 2>/dev/null || true; "
+        f"ip link set {MGMT_TAP_BETA} master {MGMT_BRIDGE} 2>/dev/null || true; "
+        f"ip link set {MGMT_TAP_BETA} up",
         timeout=20,
     )
 
@@ -939,11 +984,15 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
 
     Called AFTER start_inner_vms() and AFTER _setup_hwsim_wifi().
 
+    Uses TCP transport (vwifi-client <host_ip>) instead of vsock — vsock
+    has kernel issues (zombie processes on server, connection reset on guests)
+    that make it unreliable.  TCP runs on the existing mgmt bridge (10.99.99.2).
+
     OpenWrt: vwifi-client auto-discovers existing hwsim interfaces (netifd
     holds refs so we keep them).  Just copy binary and start client.
 
     Debian: load hwsim radios=0, vwifi-add-interfaces creates PHYs, then
-    vwifi-client connects to host vwifi-server via vsock.
+    vwifi-client connects to host vwifi-server via TCP.
     """
     bin_dir = _VWIFI_BIN_DIR
     openwrt_client = bin_dir / "openwrt" / "vwifi-client"
@@ -979,16 +1028,15 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
         log.info("[vwifi] OpenWrt alpha WiFi interfaces ready")
 
     r = _inner_ssh(alpha_ip, """
-        vwifi-client &
+        vwifi-client 10.99.99.2 2>&1 &
         sleep 3
         echo "VWIFI_CLIENT_STARTED"
     """, timeout=30)
 
-    has_interfaces = any("Interface" in line for line in r.stdout.splitlines())
-    if not has_interfaces:
-        log.warning("[vwifi] No WiFi interfaces on OpenWrt alpha. iw dev: %s", r.stdout[:300])
+    if "Connection to Server Ok" in r.stdout:
+        log.info("[vwifi] OpenWrt alpha vwifi-client connected via TCP")
     else:
-        log.info("[vwifi] OpenWrt alpha vwifi-client started (existing interfaces relayed)")
+        log.warning("[vwifi] OpenWrt alpha vwifi-client may not be connected. Output: %s", r.stdout[:300])
 
     # --- Debian VM ---
     log.info("[vwifi] Setting up vwifi-client on Debian (%s)", debian_ip)
@@ -1012,7 +1060,7 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
         vwifi-add-interfaces 1 2>&1
         sleep 3
         iw dev 2>/dev/null | grep Interface || echo 'NO_INTERFACES'
-        vwifi-client &
+        vwifi-client 10.99.99.2 2>&1 &
         sleep 5
         iw dev 2>/dev/null | grep Interface || echo 'NO_INTERFACES_AFTER_CLIENT'
     """, timeout=60)
@@ -1068,6 +1116,8 @@ def start_inner_vms(config: WorkerConfig) -> None:
             wan_tap=UPSTREAM_TAP_BETA,
             wan_mac=BETA_WAN_MAC,
             vsock_cid=11 if config.vwifi_enabled else None,
+            mgmt_tap=MGMT_TAP_BETA,
+            mgmt_mac=MGMT_BETA_MAC,
         )
         if _wait_inner_ssh(SELLER_OPENWRT_IP, timeout=15):
             log.info("Beta OpenWrt base pre-provisioned, skipping serial")
@@ -1082,6 +1132,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
 
         config.secondary_router_host = SELLER_OPENWRT_IP
         log.info("Beta OpenWrt VM SSH OK at %s", SELLER_OPENWRT_IP)
+        _configure_mgmt_nic(SELLER_OPENWRT_IP, MGMT_BETA_IP, MGMT_BETA_MAC)
 
     if config.reseller_scenarios and not config.secondary_router_host:
         log.info("Starting managed seller OpenWrt VM for reseller scenarios...")
@@ -1092,6 +1143,8 @@ def start_inner_vms(config: WorkerConfig) -> None:
             disk_name="tollgate-seller.qcow2",
             tap_name="tg-poc-tap3",
             mac=SELLER_OPENWRT_MAC,
+            mgmt_tap=MGMT_TAP_BETA,
+            mgmt_mac=MGMT_BETA_MAC,
         )
         if _wait_inner_ssh(SELLER_OPENWRT_IP, timeout=15):
             log.info("Seller OpenWrt base pre-provisioned, skipping serial")
@@ -1103,6 +1156,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
             raise RuntimeError("Seller OpenWrt VM did not become reachable at managed IP")
         config.secondary_router_host = SELLER_OPENWRT_IP
         log.info("Seller OpenWrt VM SSH OK at %s", SELLER_OPENWRT_IP)
+        _configure_mgmt_nic(SELLER_OPENWRT_IP, MGMT_BETA_IP, MGMT_BETA_MAC)
 
     log.info("Starting Alpha OpenWrt VM...")
     reseller_proc = _launch_qemu(
@@ -1115,6 +1169,8 @@ def start_inner_vms(config: WorkerConfig) -> None:
         wan_tap=UPSTREAM_TAP_ALPHA if config.two_router else None,
         wan_mac=ALPHA_WAN_MAC if config.two_router else None,
         vsock_cid=10 if config.vwifi_enabled else None,
+        mgmt_tap=MGMT_TAP_ALPHA,
+        mgmt_mac=MGMT_ALPHA_MAC,
     )
     if _wait_inner_ssh(OPENWRT_IP, timeout=15):
         log.info("OpenWrt base pre-provisioned, skipping serial")
@@ -1129,6 +1185,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
         _configure_alpha_wan(OPENWRT_IP)
 
     log.info("Alpha OpenWrt VM SSH OK")
+    _configure_mgmt_nic(OPENWRT_IP, MGMT_ALPHA_IP, MGMT_ALPHA_MAC)
 
     _run(
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
@@ -1147,6 +1204,8 @@ def start_inner_vms(config: WorkerConfig) -> None:
         tap_name="tg-poc-tap2",
         mac=DEBIAN_MAC,
         vsock_cid=20 if config.vwifi_enabled else None,
+        mgmt_tap=MGMT_TAP_DEBIAN,
+        mgmt_mac=MGMT_DEBIAN_MAC,
     )
     time.sleep(25)
     if debian_proc.poll() is not None:
@@ -1154,6 +1213,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
     if not _wait_inner_ssh(DEBIAN_IP):
         raise RuntimeError("Debian VM did not become reachable")
     log.info("Debian VM SSH OK")
+    _configure_mgmt_nic(DEBIAN_IP, MGMT_DEBIAN_IP, MGMT_DEBIAN_MAC)
 
 
 def _configure_beta_upstream(beta_ip: str) -> None:

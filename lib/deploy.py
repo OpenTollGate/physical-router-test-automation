@@ -206,6 +206,9 @@ def _write_rust_compat_config(router):
         }],
         "step_size": DEFAULT_STEP_SIZE_MS,
         "metric": "milliseconds",
+        "profit_share": [
+            {"factor": 1.0, "label": "operator"},
+        ],
     }
     router.write_remote_json("/etc/tollgate/config.json", config)
     log.info("Wrote Rust-compat config.json with mint=%s", TEST_MINT_URL)
