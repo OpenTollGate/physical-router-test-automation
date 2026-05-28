@@ -1273,20 +1273,22 @@ def _setup_hwsim_wifi(alpha_ip: str, *, vwifi_mode: bool = False) -> None:
         # default radios), force-unload first.
         if already_loaded:
             log.info("[hwsim] vwifi mode: unloading existing hwsim (has default radios)")
-            _inner_ssh(alpha_ip, """
-                # Remove any interfaces that hold a reference to hwsim PHYs
-                for iface in $(iw dev | grep Interface | awk '{print $2}'); do
+            r = _inner_ssh(alpha_ip, """
+                killall hostapd 2>/dev/null || true
+                wifi down 2>/dev/null || true
+                for iface in $(iw dev 2>/dev/null | grep Interface | awk '{print $2}'); do
                     iw dev $iface del 2>/dev/null || true
                 done
-                rmmod mac80211_hwsim 2>/dev/null || true
-                sleep 1
+                rmmod mac80211_hwsim 2>&1
+                lsmod | grep mac80211_hwsim || echo 'HWSIM_UNLOADED'
             """, timeout=15)
+            if "HWSIM_UNLOADED" not in r.stdout:
+                log.warning("[hwsim] rmmod mac80211_hwsim failed — output: %s",
+                            r.stdout.strip()[:300])
         r = _inner_ssh(alpha_ip, "modprobe mac80211_hwsim radios=0 2>&1", timeout=15)
-        if r.returncode != 0:
-            log.warning("[hwsim] modprobe mac80211_hwsim radios=0 failed (rc=%d): %s — skipping WiFi setup",
-                        r.returncode, (r.stderr or r.stdout or "").strip()[:300])
-            return
-        log.info("[hwsim] Loaded mac80211_hwsim radios=0 (vwifi mode)")
+        r2 = _inner_ssh(alpha_ip, "iw phy 2>/dev/null | grep -c 'Wiphy'", timeout=10)
+        phy_count = r2.stdout.strip() if r2.returncode == 0 else "?"
+        log.info("[hwsim] Loaded mac80211_hwsim radios=0 (vwifi mode, phy_count=%s)", phy_count)
     elif already_loaded:
         log.info("[hwsim] Module already loaded, skipping modprobe")
     else:
