@@ -128,8 +128,8 @@ def test_profit_share_boot_with_invalid_config(router, profit_share_config_guard
     """
     cfg = _read_config(router)
     cfg["profit_share"] = [
-        {"factor": 0.3, "pubkey": "aa" * 32},
-        {"factor": 0.2, "pubkey": "bb" * 32},
+        {"factor": 0.3, "identity": "aa" * 32},
+        {"factor": 0.2, "identity": "bb" * 32},
     ]
     _write_config(router, cfg)
     _restart_service(router)
@@ -178,8 +178,8 @@ def test_profit_share_boot_with_negative_factor(router, profit_share_config_guar
     """
     cfg = _read_config(router)
     cfg["profit_share"] = [
-        {"factor": 1.5, "pubkey": "aa" * 32},
-        {"factor": -0.5, "pubkey": "bb" * 32},
+        {"factor": 1.5, "identity": "aa" * 32},
+        {"factor": -0.5, "identity": "bb" * 32},
     ]
     _write_config(router, cfg)
     _restart_service(router)
@@ -192,9 +192,9 @@ def test_profit_share_multiple_shares_sum_correctly(router, profit_share_config_
     """Write 3 shares (0.5, 0.3, 0.2), restart, verify they survived or were reset."""
     cfg = _read_config(router)
     cfg["profit_share"] = [
-        {"factor": 0.5, "pubkey": "aa" * 32},
-        {"factor": 0.3, "pubkey": "bb" * 32},
-        {"factor": 0.2, "pubkey": "cc" * 32},
+        {"factor": 0.5, "identity": "aa" * 32},
+        {"factor": 0.3, "identity": "bb" * 32},
+        {"factor": 0.2, "identity": "cc" * 32},
     ]
     _write_config(router, cfg)
     _restart_service(router)
