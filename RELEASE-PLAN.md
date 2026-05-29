@@ -197,28 +197,35 @@ Depends on: Phase 2 (#147 on `main`)
 
 ### 6A. Fix PR #143 CI — revert artifact action downgrade
 
-- [ ] In `/tmp/pr118-worktrees/pr-i-ci-infra/`, edit `.github/workflows/build-package.yml`
-- [ ] 3x `upload-artifact@v3` → `@v7`, 3x `download-artifact@v3` → `@v8`
-- [ ] Commit and force-push to `pr-i-ci-infra` via `github` remote
-- [ ] Verify CI passes
+- [x] In `/tmp/pr118-worktrees/pr-i-ci-infra/`, edit `.github/workflows/build-package.yml`
+- [x] 3x `upload-artifact@v3` → `@v7`, 3x `download-artifact@v3` → `@v8`
+- [x] Commit and force-push to `pr-i-ci-infra` via `github` remote
+- [x] Verify CI passes (compile+package green, publish-metadata fails on Blossom 502 — infra issue)
 
 ### 6B. Draft PR for v3 downgrade (act compatibility)
 
-- [ ] Create branch `fix/artifact-actions-v3-act-compat` from `main`
-- [ ] Apply 6x v3 downgrades
-- [ ] Open as DRAFT PR with body explaining act compatibility
-- [ ] Create issue: "act local CI requires artifact actions v3, but GitHub auto-fails v3"
+- [x] Create branch `fix/artifact-actions-v3-act-compat` from `main`
+- [x] Apply 6x v3 downgrades
+- [x] Open as DRAFT PR #150 with body explaining act compatibility
+- [x] Create issue #151: "act local CI requires artifact actions v3, but GitHub auto-fails v3"
 
 ### 6C. Issue #149 — Lightning invoice "amount 0 sats" reproduction
 
-- [ ] Write `tests/api/test_lightning_invoice.py` with setup/teardown
-- [ ] Test cases:
-  - [ ] POST `{ amount: 0, mint_url }` → expect "amount must be greater than zero"
-  - [ ] POST `{ amount: 4, device }` (missing mint_url) → expect "amount and mint_url are required"
-  - [ ] POST `{ amount: 4, mint_url }` → expect success (quote + invoice)
-  - [ ] POST `{ amount: "", mint_url }` (string amount) → verify behavior
-- [ ] Run on Alpha + Beta
-- [ ] Post root cause analysis + results on issue #149
+- [x] Write `tests/api/test_lightning_invoice.py` with setup/teardown
+- [x] Test cases (all pass on both routers):
+  - [x] POST `{ amount: 0, mint_url }` → error "amount must be greater than zero"
+  - [x] POST `{ amount: 4, device }` (missing mint_url) → error "amount and mint_url are required"
+  - [x] POST `{ amount: "", mint_url }` (string amount) → error (Go uint64 zero value)
+  - [x] POST `{ amount: 4, mint_url }` → skip (no WiFi client for MAC resolution)
+  - [x] POST `{ amount: 4, mint }` (alias) → skip (no WiFi client)
+- [x] Run on Alpha + Beta (3P/2S each)
+- [x] Post root cause analysis + results on issue #149
+
+### 6D. PR #147 review feedback — unknown config keys
+
+- [x] Origami74 feedback: `SetDotPath` silently accepts unknown keys
+- [x] Fix `validateAgainstSchema` in `config_dotpath.go` — return `fmt.Errorf` for unknown keys
+- [x] Push to `develop` (commit `fc9190e`), CI running
 
 ---
 
