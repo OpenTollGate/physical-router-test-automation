@@ -382,7 +382,7 @@ def _configure_mgmt_nic(guest_ip: str, mgmt_ip: str, mgmt_mac: str) -> None:
         f"[ -z \"$IFACE\" ] && echo mgmt_nic_not_found && exit 0; "
         f"ip addr add {mgmt_ip}/24 dev $IFACE 2>/dev/null || true; "
         f"ip link set $IFACE up; "
-        f"uci add_list firewall.@zone[0].device='$IFACE' 2>/dev/null || true; "
+        f"uci add_list firewall.@zone[0].device=$IFACE 2>/dev/null || true; "
         f"uci commit firewall 2>/dev/null || true; "
         f"fw4 restart 2>/dev/null || true; "
         f"echo mgmt_ok_$IFACE"
