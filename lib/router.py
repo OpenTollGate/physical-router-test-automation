@@ -355,9 +355,9 @@ class Router:
     def pay_direct(self, token: str, ip: str | None = None) -> dict:
         ip = ip or self.phone_ip
         cmd = (
-            f"wget -qO- --timeout=20 --post-file=- "
-            f"--header='Content-Type: text/plain' "
-            f"--header='X-Forwarded-For: {ip}' "
+            f"curl -s --max-time 20 -d @- "
+            f"-H 'Content-Type: text/plain' "
+            f"-H 'X-Forwarded-For: {ip}' "
             f"'{self.backend_url('/')}'"
         )
         result = self.ssh_stdin(cmd, token, timeout=60)
@@ -368,21 +368,14 @@ class Router:
             return {"raw": resp}
 
     def pay_direct_mac(self, token: str, mac: str | None = None, ip: str | None = None) -> dict:
-        """Pay via backend /pay endpoint with MAC-based client identification.
-
-        The backend resolves the client MAC by looking up the requester IP
-        in /tmp/dhcp.leases (NOT from the ?mac= query parameter).  We must
-        send X-Forwarded-For so the backend uses the real client IP instead
-        of RemoteAddr (which is [::1] when curl runs on the router itself).
-        """
         mac = mac or self.phone_mac
         ip = ip or self.phone_ip
         escaped = token.replace("'", "'\\''")
         resp = self.ssh(
             f"printf '%s' '{escaped}' > /tmp/tg-pay-token.txt && "
-            f"wget -qO- --timeout=20 --post-file=/tmp/tg-pay-token.txt "
-            f"--header='Content-Type: text/plain' "
-            f"--header='X-Forwarded-For: {ip}' "
+            f"curl -s --max-time 20 -d @/tmp/tg-pay-token.txt "
+            f"-H 'Content-Type: text/plain' "
+            f"-H 'X-Forwarded-For: {ip}' "
             f"'{self.backend_url('/')}'; "
             f"rm -f /tmp/tg-pay-token.txt",
             timeout=60,
