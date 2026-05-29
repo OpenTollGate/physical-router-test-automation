@@ -988,7 +988,7 @@ def _setup_vwifi_host() -> int | None:
     return proc.pid
 
 
-def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> None:
+def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig, results_dir: str = "") -> None:
     """Install vwifi on OpenWrt and Debian VMs for cross-VM frame relay.
 
     Correct vwifi procedure (from README):
@@ -1145,12 +1145,40 @@ HOSTAPD
             debian_iface = line.strip().split()[-1]
             break
 
+    # --- Capture iw scan proof artifacts from both VMs ---
+    scan_dir = Path(f"{results_dir}/raw/virtual-wifi") if results_dir else None
+    if scan_dir:
+        scan_dir.mkdir(parents=True, exist_ok=True)
+
+    # OpenWrt scan (from local AP interface — shows own beacons + any nearby)
+    owrt_ap_ifaces = _inner_ssh(
+        alpha_ip,
+        "iw dev 2>/dev/null | grep -E 'Interface|type' | head -10",
+        timeout=10,
+    )
+    owrt_scan_output = "(no AP interface found)\n" + owrt_ap_ifaces.stdout
+    for line in owrt_ap_ifaces.stdout.strip().splitlines():
+        if "Interface" in line:
+            iface = line.strip().split()[-1]
+            r_owrt_scan = _inner_ssh(alpha_ip, f"iw {iface} scan trigger 2>/dev/null; sleep 2; iw {iface} scan dump 2>&1 | head -200", timeout=20)
+            if r_owrt_scan.stdout.strip():
+                owrt_scan_output = r_owrt_scan.stdout
+                break
+
+    if scan_dir:
+        (scan_dir / "iw-scan-openwrt.txt").write_text(owrt_scan_output)
+        log.info("[vwifi] Saved OpenWrt scan to %s/iw-scan-openwrt.txt", scan_dir)
+    log.info("[vwifi] OpenWrt scan preview: %s", owrt_scan_output[:300].replace("\n", " | "))
+
+    # Debian scan (from relayed interface — the cross-VM proof)
+    debian_scan_output = "(no relayed interface)"
     if debian_iface:
         log.info("[vwifi] Debian relayed interface: %s", debian_iface)
 
         _inner_ssh(debian_ip, f"ip link set {debian_iface} up", timeout=10)
         time.sleep(3)  # give hostapd time to broadcast beacons through relay
         r_scan = _inner_ssh(debian_ip, f"iw {debian_iface} scan 2>&1", timeout=15)
+        debian_scan_output = r_scan.stdout
         if "TollGate-ALPHA" in r_scan.stdout:
             log.info("[vwifi] ✅ Debian scan sees TollGate-ALPHA — cross-VM WiFi relay working!")
         else:
@@ -1159,6 +1187,10 @@ HOSTAPD
     else:
         log.warning("[vwifi] No relayed interface on Debian. iw dev: %s",
                     r_iw.stdout[:300])
+
+    if scan_dir:
+        (scan_dir / "iw-scan-debian.txt").write_text(debian_scan_output)
+        log.info("[vwifi] Saved Debian scan to %s/iw-scan-debian.txt", scan_dir)
 
     log.info("[vwifi] Guest setup complete")
 
@@ -2291,7 +2323,7 @@ def run_worker(config: WorkerConfig) -> int:
             if config.vwifi_enabled:
                 log.info("[4.55/10] Setting up vwifi guests for cross-VM WiFi relay")
                 try:
-                    _setup_vwifi_guests(OPENWRT_IP, DEBIAN_IP, config)
+                    _setup_vwifi_guests(OPENWRT_IP, DEBIAN_IP, config, results_dir)
                 except Exception as vwifi_exc:
                     log.warning("[vwifi] Guest setup failed (non-fatal, WiFi tests may skip): %s", vwifi_exc)
 
@@ -2420,7 +2452,7 @@ def run_worker(config: WorkerConfig) -> int:
             log.info("Force-deleting VM (1h lifetime exceeded)")
             stop_inner_vms()
             delete_self(config)
-        elif config.keep_vm_on_failure and exit_code != 0:
+        elif config.keep_vm_on_failure and test_exit != 0:
             log.warning("Keeping VM + inner VMs alive for debugging (keep_vm_on_failure=true). "
                         "Kill switch will shut it down at 1h if still running.")
         else:
