@@ -414,7 +414,7 @@ def _serial_send_wait(conn: socket.socket, command: str, wait: float = 2.0) -> s
     return _recv_serial(conn, timeout=2.0)
 
 
-def _provision_openwrt_serial(name: str, ip: str, timeout: int = 90) -> None:
+def _provision_openwrt_serial(name: str, ip: str, timeout: int = 90, *, gateway: str = "10.99.99.2") -> None:
     serial_sock = _virt_lab_workdir() / "run" / f"{name}.serial.sock"
     deadline = time.time() + timeout
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
@@ -457,7 +457,7 @@ def _provision_openwrt_serial(name: str, ip: str, timeout: int = 90) -> None:
             "fw4 restart",
             f"uci set network.lan.ipaddr='{ip}'",
             "uci set network.lan.netmask='255.255.255.0'",
-            "uci set network.lan.gateway='10.99.99.2'",
+            f"uci set network.lan.gateway='{gateway}'",
             "uci set network.lan.dns='8.8.8.8'",
             "uci commit network",
             "/etc/init.d/network restart",
@@ -1303,16 +1303,16 @@ def start_inner_vms(config: WorkerConfig) -> None:
             mgmt_tap=MGMT_TAP_BETA,
             mgmt_mac=MGMT_BETA_MAC,
         )
-        if _wait_inner_ssh(SELLER_OPENWRT_IP, timeout=15):
-            log.info("Beta OpenWrt base pre-provisioned, skipping serial")
-        else:
-            _provision_openwrt_serial("openwrt-beta", SELLER_OPENWRT_IP)
+        # Beta is on isolated tg-beta-br — always needs serial provisioning
+        # because the pre-provisioned base has IP 10.99.99.1 (on tg-poc-br)
+        # and there's no DHCP server on tg-beta-br to give it SELLER_OPENWRT_IP.
+        _provision_openwrt_serial("openwrt-beta", BETA_LAN_IP, gateway=BETA_LAN_HOST_IP)
         if beta_proc.poll() is not None:
             raise RuntimeError(f"Beta OpenWrt VM exited during provisioning with rc={beta_proc.returncode}")
-        if not _wait_inner_ssh(SELLER_OPENWRT_IP):
+        if not _wait_inner_ssh(BETA_LAN_IP):
             raise RuntimeError("Beta OpenWrt VM did not become reachable")
 
-        _configure_mgmt_nic(SELLER_OPENWRT_IP, MGMT_BETA_IP, MGMT_BETA_MAC)
+        _configure_mgmt_nic(BETA_LAN_IP, MGMT_BETA_IP, MGMT_BETA_MAC)
         _configure_beta_lan(BETA_LAN_IP)
         _configure_beta_upstream(MGMT_BETA_IP)
 
