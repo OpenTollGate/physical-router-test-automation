@@ -63,7 +63,7 @@ source ~/.tollgate-test-venv/bin/activate
 
 Run API + container E2E + virtual WiFi tests in a nested-virt GCP VM (OpenWrt + Debian client). No physical router required.
 
-**Prerequisites:** `gcloud` CLI (authenticated), `gh` CLI (authenticated), `GH_TOKEN` or `gh auth login`, and a GCP runner snapshot. `tollgate-runner-baked-v8` is the current snapshot (local mints, WiFi packages, 90min timeout).
+**Prerequisites:** `gcloud` CLI (authenticated), `gh` CLI (authenticated), `GH_TOKEN` or `gh auth login`, and a GCP runner snapshot. `tollgate-runner-baked-v9` is the current snapshot (local mints, WiFi packages, vwifi binaries, management network, ~25min total).
 
 ```bash
 # Wait for upstream CI x86_64 artifact, spawn autonomous VM, exit immediately
@@ -98,12 +98,17 @@ Cloud runs are designed to be fire-and-forget and parallelizable: each run gets 
 
 ```
 GCP Host VM (n2-standard-2)
-  ├── tg-poc-br (10.99.99.0/24) — management LAN
+  ├── tg-poc-br (10.99.99.0/24) — test LAN
   │     ├── host: 10.99.99.2 (mints, NAT, syslog capture)
   │     ├── alpha: 10.99.99.1 (OpenWrt QEMU — TollGate under test)
   │     └── debian: 10.99.99.100 (Debian QEMU — Playwright, cashu)
+  ├── mgmt-br (10.99.97.0/24) — management (SSH independent of test bridges)
+  │     ├── host: 10.99.97.2
+  │     ├── alpha: 10.99.97.1
+  │     └── debian: 10.99.97.100
   ├── Local mints: CDK V2 (:8383), Nutshell V2 (:8384), Nutshell V1 (:8385)
-  └── mac80211_hwsim: virtual WiFi radios for AP/STA testing
+  ├── mac80211_hwsim: virtual WiFi radios for AP/STA testing
+  └── vwifi: cross-VM 802.11 frame relay (TCP, port 8212)
 ```
 
 ### Baking a GCP runner snapshot
@@ -112,7 +117,7 @@ GCP Host VM (n2-standard-2)
 ./scripts/bake-snapshot.py bake
 ```
 
-The baker installs `gh`, `gcloud`, `/opt/tollgate-venv`, `/opt/cashu-venv`, `/opt/cdk-mintd`, WiFi packages (`kmod-mac80211-hwsim`, `wpad-basic`, `iw-full`, `iwinfo`), and pre-provisioned OpenWrt/Debian base images. It runs with `HOME=/root`, matching the GCP startup worker. After baking, verify the snapshot with a throwaway run before updating `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py`.
+The baker installs `gh`, `gcloud`, `/opt/tollgate-venv`, `/opt/cashu-venv`, `/opt/cdk-mintd`, WiFi packages (`kmod-mac80211-hwsim`, `wpad-basic`, `iw-full`, `iwinfo`), vwifi binaries (`/opt/vwifi/bin/`), and pre-provisioned OpenWrt/Debian base images. It runs with `HOME=/root`, matching the GCP startup worker. After baking, verify the snapshot with a throwaway run before updating `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py`.
 
 ## Deploy to Router
 

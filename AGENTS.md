@@ -743,7 +743,7 @@ The worker (`lib/cloud_lab/worker.py`) detects pre-provisioned OpenWrt bases aut
 ./scripts/bake-snapshot.py bake         # create new snapshot with deps pre-installed
 ```
 
-### Timing (v8 snapshot with local mints)
+### Timing (v9 snapshot with local mints)
 
 | Phase | Duration | Notes |
 |---|---|---|
@@ -759,7 +759,7 @@ The worker (`lib/cloud_lab/worker.py`) detects pre-provisioned OpenWrt bases aut
 
 ### mac80211_hwsim virtual WiFi (experimental, opt-in)
 
-The v8 snapshot includes WiFi simulation packages (`kmod-mac80211-hwsim`, `wpad-basic`, `iw-full`, `iwinfo`). Virtual WiFi is **disabled by default** — enable with `--hwsim` flag on `cloud-lab.py submit`.
+The v9 snapshot includes WiFi simulation packages (`kmod-mac80211-hwsim`, `wpad-basic`, `iw-full`, `iwinfo`), vwifi cross-VM relay binaries (`/opt/vwifi/bin/`), and management network UCI. Virtual WiFi is **disabled by default** — enable with `--hwsim` flag on `cloud-lab.py submit`.
 
 **Why opt-in**: hwsim creates virtual radios on the OpenWrt VM but they cannot propagate beacons between PHYs. STA scan/association tests always skip in hwsim. The AP interfaces are useful for router-side config verification only. Portal testing works over wired br-lan without hwsim.
 
