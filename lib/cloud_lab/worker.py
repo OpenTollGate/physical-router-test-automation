@@ -1029,40 +1029,45 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
         timeout=30,
     )
 
+    # Wait for existing netifd-managed interfaces to be ready
+    _inner_ssh(alpha_ip, """
+        for i in $(seq 1 15); do
+            iw dev 2>/dev/null | grep -q Interface && break
+            sleep 1
+        done
+    """, timeout=30)
+
     # Create relayed wlan interface on OpenWrt via vwifi-add-interfaces
-    # This creates an interface that vwifi-client will relay to the server
     r_owrt_add = _inner_ssh(alpha_ip, """
-        vwifi-add-interfaces 1 0a:0b:0c:01:01 2>&1
+        vwifi-add-interfaces 1 0a:0b:0c:01:01 2>&1; echo "EXIT=$?"
         sleep 2
         iw dev 2>/dev/null | grep Interface || echo NO_INTERFACES
     """, timeout=15)
-    log.info("[vwifi] OpenWrt vwifi-add-interfaces: %s", r_owrt_add.stdout.strip()[:300])
+    log.info("[vwifi] OpenWrt vwifi-add-interfaces: %s", r_owrt_add.stdout.strip()[:400])
 
-    # Find the relayed interface (should be a new wlan beyond existing phy0-ap0/phy1-ap0)
     owrt_vwifi_iface = None
+    add_if_ok = "EXIT=0" in r_owrt_add.stdout
     for line in r_owrt_add.stdout.strip().splitlines():
-        if "Interface" in line and "wlan" in line.lower():
+        if "Interface" in line:
             iface = line.strip().split()[-1]
-            # Skip the netifd-managed hwsim interfaces (phy0-ap0, phy1-ap0)
-            if not iface.startswith("phy"):
+            if "wlan" in iface.lower() and not iface.startswith("phy"):
                 owrt_vwifi_iface = iface
                 break
 
     if not owrt_vwifi_iface:
-        # Try to find any wlan interface that isn't phy*-ap0
-        r_all = _inner_ssh(alpha_ip, "iw dev 2>/dev/null | grep Interface", timeout=10)
+        r_all = _inner_ssh(alpha_ip, "iw dev 2>/dev/null | grep Interface || echo NONE", timeout=10)
+        log.warning("[vwifi] OpenWrt interfaces after add-interfaces: %s", r_all.stdout.strip()[:300])
         for line in r_all.stdout.strip().splitlines():
-            iface = line.strip().split()[-1]
-            if "wlan" in iface:
-                owrt_vwifi_iface = iface
-                break
+            if "Interface" in line:
+                iface = line.strip().split()[-1]
+                if "wlan" in iface.lower() and not iface.startswith("phy"):
+                    owrt_vwifi_iface = iface
+                    break
 
     if owrt_vwifi_iface:
         log.info("[vwifi] OpenWrt relayed interface: %s", owrt_vwifi_iface)
-        # Bring it up and start a simple hostapd on it for SSID broadcast
         _inner_ssh(alpha_ip, f"""
             ip link set {owrt_vwifi_iface} up 2>/dev/null
-            # Write a minimal hostapd config for the relayed interface
             cat > /tmp/vwifi-hostapd.conf << 'HOSTAPD'
 interface={owrt_vwifi_iface}
 driver=nl80211
@@ -1070,17 +1075,14 @@ ssid=TollGate-ALPHA
 hw_mode=g
 channel=6
 HOSTAPD
-            killall hostapd 2>/dev/null || true
             hostapd -B /tmp/vwifi-hostapd.conf 2>&1 || echo HOSTAPD_FAILED
         """, timeout=15)
     else:
-        log.warning("[vwifi] No relayed wlan interface on OpenWrt. Available:")
-        _inner_ssh(alpha_ip, "iw dev 2>/dev/null | grep Interface || echo NONE", timeout=10)
+        log.warning("[vwifi] vwifi-add-interfaces did not create relayed iface on OpenWrt (ok=%s)", add_if_ok)
 
-    # Start vwifi-client on OpenWrt (relays only vwifi-created interfaces)
+    # Start vwifi-client on OpenWrt (BusyBox ash has no nohup — use bare &)
     r_owrt_client = _inner_ssh(alpha_ip, """
-        nohup vwifi-client 10.99.99.2 >/tmp/vwifi-client.log 2>&1 &
-        disown
+        vwifi-client 10.99.99.2 >/tmp/vwifi-client.log 2>&1 &
         sleep 3
         cat /tmp/vwifi-client.log
         echo VWIFI_CLIENT_OPENWRT_DONE
