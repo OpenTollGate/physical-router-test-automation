@@ -977,7 +977,10 @@ def setup_bridge() -> None:
         f"ip link set {BETA_BRIDGE} up; "
         f"ip tuntap add dev {BETA_TAP} mode tap user root 2>/dev/null || true; "
         f"ip link set {BETA_TAP} master {BETA_BRIDGE} 2>/dev/null || true; "
-        f"ip link set {BETA_TAP} up",
+        f"ip link set {BETA_TAP} up; "
+        # NAT for Beta's isolated LAN (needed for two-router internet access)
+        f"iptables -t nat -C POSTROUTING -s {BETA_LAN_SUBNET} ! -o {BETA_BRIDGE} -j MASQUERADE 2>/dev/null || "
+        f"iptables -t nat -A POSTROUTING -s {BETA_LAN_SUBNET} ! -o {BETA_BRIDGE} -j MASQUERADE",
         timeout=20,
     )
 
@@ -1456,11 +1459,13 @@ def _configure_beta_upstream(beta_ip: str) -> None:
         uci add_list firewall.@zone[0].network='upstream'
         uci commit firewall
 
+        uci set network.lan.gateway='10.99.96.2'
+        uci commit network
+
         /etc/init.d/network restart
         /etc/init.d/firewall restart
         /etc/init.d/dnsmasq restart
 
-        # NAT masquerading for Alpha's internet access through Beta
         nft add table ip tollgate-nat 2>/dev/null || true
         nft add chain ip tollgate-nat postrouting "{ type nat hook postrouting priority srcnat ; policy accept ; }" 2>/dev/null || true
         nft add rule ip tollgate-nat postrouting ip saddr 10.99.98.0/24 oifname "br-lan" masquerade 2>/dev/null || true
