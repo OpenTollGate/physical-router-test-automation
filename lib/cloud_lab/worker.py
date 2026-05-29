@@ -2515,7 +2515,7 @@ def run_worker(config: WorkerConfig) -> int:
     started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     test_exit = 1
     wall_t0 = time.monotonic()
-    MAX_WALL_SECONDS = 3600
+    MAX_WALL_SECONDS = 5400  # 90 min (two-router needs ~60min for setup+tests, ~10min publish)
     vm_streams: list[tuple[threading.Thread, subprocess.Popen[str], Any]] = []
     local_mints: dict[str, subprocess.Popen[str]] = {}
     syslog_proc: subprocess.Popen[str] | None = None
