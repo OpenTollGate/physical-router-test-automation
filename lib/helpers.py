@@ -137,10 +137,13 @@ def metering_test_setup(router, adb, wifi, cashu, test_pricing_fn,
 
 
 def post_payment_event(router, token):
+    from lib.nostr import payment_event
+    event = payment_event(token)
+    body = json.dumps(event, separators=(",", ":"))
     return router.ssh(
         f"curl -s -X POST '{router.backend_url('/')}' "
         f"-H 'Content-Type: application/json' "
-        f"-d '{{\"kind\":21000,\"tags\":[[\"payment\",\"{token}\"]],\"content\":\"\"}}'"
+        f"-d '{body}'"
     )
 
 
