@@ -627,15 +627,24 @@ After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check tha
 ```
 ┌─ GCP Host VM (n2-standard-2, nested KVM) ──────────────────────┐
 │                                                                  │
-│  tg-poc-br (10.99.99.0/24) — management LAN                    │
+│  tg-poc-br (10.99.99.0/24) — test LAN                           │
 │    ├── host: 10.99.99.2 (mints, NAT, orchestration)            │
 │    ├── alpha: 10.99.99.1 (OpenWrt QEMU, TollGate under test)   │
-│    ├── beta: 10.99.99.11 (optional second OpenWrt for 2-router) │
 │    └── debian: 10.99.99.100 (Debian QEMU, Playwright, cashu)   │
+│                                                                  │
+│  tg-beta-br (10.99.96.0/24) — isolated Beta LAN (2-router)     │
+│    ├── host: 10.99.96.2 (routes to mint at 10.99.99.2)         │
+│    └── beta: 10.99.96.11 (upstream TollGate merchant)           │
 │                                                                  │
 │  tg-upstream-br (10.99.98.0/24) — simulated WAN (2-router)     │
 │    ├── alpha WAN: DHCP from beta                                │
 │    └── beta WAN: 10.99.98.1 (static, DHCP server)              │
+│                                                                  │
+│  mgmt-br (10.99.97.0/24) — management SSH                      │
+│    ├── host: 10.99.97.2                                         │
+│    ├── alpha: 10.99.97.1                                        │
+│    ├── beta: 10.99.97.11                                        │
+│    └── debian: 10.99.97.100                                     │
 │                                                                  │
 │  Local mints (on host):                                         │
 │    ├── CDK V2:      :8383 (V2 keysets, 01-prefix)              │
@@ -658,6 +667,7 @@ After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check tha
 │    [5] Start 3 local mints (CDK + Nutshell V1 + V2)            │
 │    [6] Deploy TollGate .ipk to OpenWrt                          │
 │    [7] Select mint (CDK V2 if backend supports it, else V1)     │
+│    [7.5] If --two-router: configure Beta merchant + Alpha reseller + fund wallet
 │    [8] Run tests: visual → API → vl-scenarios → scenarios       │
 │    [9] Collect results, publish to gh-pages, self-delete        │
 │                                                                  │
@@ -684,7 +694,7 @@ Tests run sequentially in a single shell command with a 90-minute timeout:
 | **api** | `tests/api/` (89 tests with local mint) | ~15min |
 | **vl-scenarios** | Captive portal browser, mint health, boot hygiene, upstream WiFi | ~2min |
 | **scenarios** | Reseller mode (only with `--reseller-scenarios`) | ~3min |
-| **two-router** | Two-router cloud (only with `--two-router`) | ~5min |
+| **two-router** | Two-router cloud + upstream payment (only with `--two-router`) | ~5min |
 
 Each runner writes junit.xml + report.html to `raw/<runner>/`. The overall exit code is the worst of all runners.
 

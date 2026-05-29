@@ -4,164 +4,176 @@
 
 The two-router cloud tests verify TollGate's upstream payment flow in the GCP cloud lab using two OpenWrt QEMU VMs connected via dedicated network bridges. No physical hardware is required.
 
+**Two test files cover different aspects:**
+- `tests/scenarios/test_two_router_cloud.py` — L3 connectivity, health, degraded mode lifecycle
+- `tests/scenarios/test_two_router_payment.py` — Full upstream payment protocol (discovery, session, usage tracking, internet access)
+
 ## Topology
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    GCP VM (nested KVM)                          │
-│                                                                 │
-│  ┌──────────────────┐  tg-poc-br  ┌──────────────────┐        │
-│  │  Alpha (OpenWrt) │◄───────────►│  Host / Debian   │        │
-│  │  br-lan: 10.99.99.1           │  10.99.99.2       │        │
-│  │                                │  (NAT to internet)│        │
-│  └──────────────────┘             └──────────────────┘        │
-│         │ eth1 (DHCP)                                         │
-│         │ 10.99.98.x                                          │
-│  tg-upstream-br (L2 only)                                     │
-│         │ 10.99.98.1                                          │
-│  ┌──────────────────┐                                         │
-│  │  Beta (OpenWrt)  │◄── tg-poc-br ──► Host                  │
-│  │  br-lan: 10.99.99.11                                       │
-│  │  eth1: 10.99.98.1 (static, dnsmasq DHCP)                  │
-│  └──────────────────┘                                         │
-│                                                                 │
-│  Local mint: http://v1.testnut.lan:8385 → 10.99.99.2:8385     │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                       GCP VM (nested KVM)                            │
+│                                                                      │
+│  ┌──────────────────┐  tg-poc-br   ┌──────────────────┐             │
+│  │  Alpha (OpenWrt) │◄────────────►│  Host / Debian   │             │
+│  │  br-lan: 10.99.99.1             │  10.99.99.2       │             │
+│  │  reseller_mode: true            │  (NAT, mints)     │             │
+│  └──────────────────┘              └──────────────────┘             │
+│         │ eth1 (DHCP from Beta)                                     │
+│         │ 10.99.98.x                                                │
+│  tg-upstream-br (L2 only, no host port)                             │
+│         │ 10.99.98.1                                                │
+│  ┌──────────────────┐  tg-beta-br  ┌────────────────┐              │
+│  │  Beta (OpenWrt)  │◄────────────►│ Host port       │              │
+│  │  br-lan: 10.99.96.11           │ 10.99.96.2       │              │
+│  │  eth1: 10.99.98.1 (DHCP srv)   │ (route to mint)  │              │
+│  └──────────────────┘              └────────────────┘              │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────┐               │
+│  │  mgmt-br (10.99.97.0/24) — SSH independent       │               │
+│  │    host: 10.99.97.2                               │               │
+│  │    alpha: 10.99.97.1    beta: 10.99.97.11         │               │
+│  │    debian: 10.99.97.100                           │               │
+│  └──────────────────────────────────────────────────┘               │
+│                                                                      │
+│  Local mints (on host):                                             │
+│    CDK V2:      :8383    Nutshell V2: :8384    Nutshell V1: :8385  │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Network Details
 
 | Bridge | Subnet | Purpose |
 |--------|--------|---------|
-| `tg-poc-br` | 10.99.99.0/24 | Management LAN. Both routers + host connected. |
+| `tg-poc-br` | 10.99.99.0/24 | Test LAN. Alpha + Host + Debian. **Beta is NOT on this bridge.** |
+| `tg-beta-br` | 10.99.96.0/24 | Beta's isolated br-lan. Host port (10.99.96.2) for routing to mint. |
 | `tg-upstream-br` | 10.99.98.0/24 | L2-only bridge for Alpha↔Beta upstream link. No host port. |
+| `mgmt-br` | 10.99.97.0/24 | Management. All VMs connected for SSH independent of test bridges. |
 
 | Host | Interface | IP | Role |
 |------|-----------|-----|------|
-| Alpha | br-lan | 10.99.99.1 | Primary TollGate under test |
+| Alpha | br-lan | 10.99.99.1 | Primary TollGate under test (reseller) |
 | Alpha | eth1 | DHCP from Beta | WAN/upstream interface |
-| Beta | br-lan | 10.99.99.11 | Upstream TollGate (seller) |
+| Beta | br-lan | 10.99.96.11 | Upstream TollGate merchant (isolated) |
 | Beta | eth1 | 10.99.98.1 (static) | DHCP server for Alpha's WAN |
-| Host/Debian | — | 10.99.99.2 | NAT gateway, mint host |
+| Host | tg-beta-br | 10.99.96.2 | Routes Beta traffic to mint at 10.99.99.2 |
 
-### Beta's Upstream Configuration
+### Why isolated Beta?
 
-The cloud worker (`lib/cloud_lab/worker.py:_configure_beta_upstream()`) configures Beta as a DHCP server + NAT gateway for Alpha:
+Beta runs on its own bridge (`tg-beta-br`) instead of sharing `tg-poc-br` with Alpha:
 
-1. **eth1 static IP**: `10.99.98.1/24`
-2. **dnsmasq**: DHCP range `10.99.98.10–60`
-3. **nftables NAT**: Masquerade `10.99.98.0/24` → br-lan (`10.99.99.0/24`)
-4. **nftables forward**: Accept traffic from `10.99.98.0/24`
+1. **No DHCP conflicts** — each router serves its own subnet
+2. **No broadcast cross-talk** — Alpha's clients never see Beta's beacons
+3. **Unambiguous testing** — if traffic reaches 10.99.98.x, it went through Beta
+4. **Matches real topology** — in production, downstream and upstream routers don't share a LAN
 
-This gives Alpha internet access through Beta — the foundation for the TollGate upstream payment model.
+### Worker pipeline steps (two-router mode)
 
-## Test Suite
+When `--two-router` is passed, the worker adds these steps between `select-mint` and `preflight`:
 
-File: `tests/scenarios/test_two_router_cloud.py`
+1. **Launch Beta VM** on `tg-beta-br` (not `tg-poc-br`)
+2. **Configure mgmt NIC** on Beta (10.99.97.11)
+3. **Configure Beta br-lan** to isolated 10.99.96.11/24, add static route to mint
+4. **Configure Beta upstream** — DHCP server + NAT on eth1 for Alpha's WAN
+5. **Deploy TollGate** to both Alpha and Beta
+6. **Configure Beta as merchant** — accepted_mints, metric=milliseconds, step_size=60s, pricing
+7. **Configure Alpha as reseller** — reseller_mode=true, upstream_detector watching eth1
+8. **Fund Alpha wallet** — mint 100 sats from local mint, run `tollgate wallet fund`
 
-### test_alpha_wan_link_to_beta
+### Upstream payment protocol
 
-Verifies the L3 link between Alpha and Beta:
+```
+1. Alpha upstream_detector probes eth1 gateway → GET http://10.99.98.1:2121/
+2. Beta returns kind 10021 advertisement with price_per_step tags
+3. Alpha selects compatible mint/pricing, mints a Cashu token
+4. Alpha POSTs token as text/plain to POST http://10.99.98.1:2121/
+5. Beta validates token, credits wallet, returns kind 1022 session event
+6. Alpha tracks usage via GET /usage on Beta, auto-renews before exhaustion
+7. Alpha's traffic routes: eth1 → Beta eth1 → Beta NAT → internet
+```
 
-1. Alpha's eth1 has a DHCP lease in 10.99.98.0/24
-2. Alpha can ping 10.99.98.1 (Beta's upstream IP)
-3. SSH to Beta works
+## Test Suites
 
-This is the foundation — without this link, no upstream TollGate flow is possible.
+### Infrastructure tests: `tests/scenarios/test_two_router_cloud.py`
 
-### test_block_mint_enters_degraded_mode
+| Test | What it verifies |
+|------|-----------------|
+| `test_alpha_wan_link_to_beta` | Alpha has DHCP lease from Beta, can ping it, SSH works |
+| `test_block_mint_enters_degraded_mode` | Mint block → Alpha enters degraded (kind 21023) |
+| `test_unblock_mint_recovers_from_degraded` | Mint unblock → Alpha recovers to full merchant (kind 10021) |
+| `test_both_routers_healthy` | Both TollGate instances respond on :2121 |
 
-Verifies degraded mode when the configured mint is blocked:
+### Payment protocol tests: `tests/scenarios/test_two_router_payment.py`
 
-1. Read the first mint URL from `/etc/tollgate/config.json`
-2. Block it via `/etc/hosts` (`0.0.0.0 <hostname>`)
-3. Restart `tollgate-wrt`
-4. Poll the HTTP API until it returns kind 21023 (degraded notice)
-5. Unblock mint in finally block
+| Test | What it verifies |
+|------|-----------------|
+| `test_beta_advertisement_visible_from_alpha` | Alpha fetches Beta's kind 10021 ad with pricing tags |
+| `test_alpha_upstream_detector_sees_beta` | Log evidence upstream_detector found Beta |
+| `test_alpha_wallet_funded` | Alpha wallet balance > 0 (worker funding worked) |
+| `test_alpha_pays_beta_and_gets_session` | Kind 1022 session evidence in logs/CLI |
+| `test_alpha_usage_tracking_on_beta` | Beta tracks session for Alpha's WAN IP |
+| `test_internet_through_beta` | Alpha can ping 1.1.1.1 through Beta |
+| `test_beta_session_on_alpha_disconnect` | Beta's NDS state is valid for Alpha |
+| `test_both_routers_healthy_after_payment` | Both return valid kinds; Beta is full merchant |
 
-Uses HTTP API-based detection (`is_degraded()`, `wait_for_degraded()`) instead of CLI socket so it works on any backend version.
-
-### test_unblock_mint_recovers_from_degraded
-
-Verifies recovery from degraded mode:
-
-1. Block mint → wait for degraded (same as above)
-2. Unblock mint
-3. Poll HTTP API until it returns kind 10021 (full merchant) with `price_per_step` tags
-4. Assert recovery within 60s
-
-### test_both_routers_healthy
-
-Verifies both routers have running TollGate instances via HTTP API:
-
-1. GET `/` on Alpha → expect kind 10021 (merchant) or 21023 (degraded)
-2. GET `/` on Beta → expect kind 10021 or 21023
-
-Both kinds are acceptable — the test only verifies TollGate is running and responding, not that it's in a specific state.
+All tests use feature detection (`pytest.skip()`) and run independently — no ordering dependencies.
 
 ## Running
 
 ```bash
-# Submit two-router cloud run
+# Submit two-router cloud run (full test suite including payment tests)
 ./scripts/cloud-lab.py submit --branch main --two-router --publish
+
+# Two-router with reseller scenarios
+./scripts/cloud-lab.py submit --branch main --two-router --reseller-scenarios --publish
 
 # Check status
 ./scripts/cloud-lab.py status-run --run-id <run-id>
 ```
 
 The `--two-router` flag triggers:
-1. A second OpenWrt VM (Beta) is launched alongside Alpha
-2. `tg-upstream-br` bridge is created
-3. Beta is configured as upstream DHCP server + NAT gateway
-4. `TOLLGATE_SECONDARY_ROUTER_HOST` is set in the test `.env`
-5. `test_two_router_cloud.py` is included in the pytest run
+1. A second OpenWrt VM (Beta) is launched on `tg-beta-br`
+2. `tg-upstream-br` bridge is created for Alpha↔Beta link
+3. Beta is configured as upstream DHCP server + NAT gateway + TollGate merchant
+4. Alpha is configured as reseller with funded wallet
+5. `TOLLGATE_SECONDARY_ROUTER_HOST` is set to Beta's mgmt IP (10.99.97.11)
+6. Both `test_two_router_cloud.py` and `test_two_router_payment.py` are included in the pytest run
 
 ## Design Decisions
 
+### Isolated Beta bridge
+
+Beta runs on `tg-beta-br` (10.99.96.0/24) instead of sharing `tg-poc-br`. The host has a port on `tg-beta-br` (10.99.96.2) and a static route is added on Beta so it can reach the local mint at 10.99.99.2 via the host.
+
+### Mint reachability
+
+The local mints listen on `10.99.99.2` (the host's `tg-poc-br` IP). Beta reaches the mint via:
+- Static route: `ip route add 10.99.99.0/24 via 10.99.96.2`
+- /etc/hosts entries for mint DNS names pointing to 10.99.99.2
+
 ### HTTP API over CLI Socket
 
-The degraded mode tests use HTTP API responses (`GET /`, kind 10021/21023) instead of the CLI socket (`/var/run/tollgate.sock`). This is because:
-
+The degraded mode tests use HTTP API responses (`GET /`, kind 10021/21023) instead of the CLI socket. This is because:
 - The CLI socket may not exist on all backend versions
 - The HTTP API is always available when TollGate is running
-- `is_degraded()` and `wait_for_degraded()` from `lib/helpers.py` provide reusable HTTP-based detection
 - The tests can run against both Go and Rust backends
 
-### No External Internet Requirement
+### Wallet funding via CLI
 
-Tests verify link-layer connectivity, not external internet access. Alpha pings Beta (10.99.98.1), not 8.8.8.8. This keeps the test self-contained and avoids dependencies on the GCP VM's external NAT.
+Alpha's wallet is funded by minting tokens from the local mint using the `cashu` CLI on the host, then running `tollgate wallet fund '<token>'` on Alpha. This loads tokens into the internal gonuts wallet that the upstream_session_manager uses for payments.
 
-### Mint Blocking via /etc/hosts
+### Millisecond metric for faster tests
 
-Instead of iptables (which would block all traffic to the mint IP), the tests add `0.0.0.0 <hostname>` to `/etc/hosts`. This is:
-- Reversible (remove the line)
-- Non-destructive (doesn't affect other routes)
-- Consistent with the `router.block_mint()` / `router.unblock_mint()` API
-
-## Previous Issues & Fixes
-
-### CLI Socket Gating (commit bbf11ed)
-
-The `test_status_command_works` test in `test_mint_health.py` was failing because it used `get_tollgate_status()` (CLI socket) unconditionally. Fixed by gating on CLI socket availability — now skips cleanly in cloud lab.
-
-### Visual Test Timeout (commit bbf11ed)
-
-`test_visual_happy_path` was timing out at 180s in QEMU cloud lab because Playwright/Chromium startup is slower. Fixed by:
-- Increasing test timeout to 300s
-- Increasing portal_ready timeout to 90s
-- Adding early Playwright health check to skip cleanly if Chromium can't start
-
-### HTTP-Based Degraded Detection (commit bbf11ed)
-
-The three degraded/status tests were all skipping because `_skip_if_no_degraded_support()` relied on the CLI socket. Rewrote to use HTTP API (`is_degraded()`, `is_full_merchant()`, `wait_for_degraded()`) as primary detection mechanism, with CLI socket as secondary check.
+Beta is configured with `metric: "milliseconds"` and `step_size: 60000` (1 minute) for faster test cycles. In production, routers typically use `bytes` with much larger step sizes.
 
 ## Related Files
 
 | File | Purpose |
 |------|---------|
-| `tests/scenarios/test_two_router_cloud.py` | Test suite |
-| `lib/cloud_lab/worker.py` | Cloud worker (VM setup, Beta configuration) |
-| `lib/cloud_lab/constants.py` | `SELLER_OPENWRT_IP`, bridge names, mint URLs |
+| `tests/scenarios/test_two_router_cloud.py` | Infrastructure health + degraded mode tests |
+| `tests/scenarios/test_two_router_payment.py` | Upstream payment protocol tests |
+| `lib/cloud_lab/worker.py` | Cloud worker (VM setup, Beta config, payment config, wallet funding) |
+| `lib/cloud_lab/constants.py` | Bridge names, IPs, mint URLs |
 | `lib/helpers.py` | `is_degraded()`, `wait_for_degraded()`, `is_full_merchant()` |
-| `lib/router.py` | `block_mint()`, `unblock_mint()`, `api_body()` |
+| `lib/router.py` | `block_mint()`, `unblock_mint()`, `api_body()`, `cli_command()` |
 | `scripts/cloud-lab.py` | CLI for submitting runs |
