@@ -46,18 +46,52 @@ class WiFi:
     def _tap_ssid(self, xml: str, ssid: str) -> bool:
         if _is_desktop_client(self.adb):
             return False
-        node_match = re.search(f'<node[^>]*"{re.escape(ssid)}"[^>]*>', xml)
+        esc = re.escape(ssid)
+
+        # Strategy 1: Find the clickable parent row node.
+        # Android WiFi settings wraps each network in a clickable LinearLayout
+        # with content-desc="SSID,...". The parent has full-row bounds.
+        # e.g. content-desc="TollGate-101B,Sign in to network,..."
+        parent_match = re.search(
+            rf'<node[^>]*content-desc="{esc}[,"][^>]*clickable="true"[^>]*'
+            rf'bounds="\[([^]]*)\]\[([^]]*)\]"[^>]*>',
+            xml,
+        )
+        if not parent_match:
+            # Try bounds before clickable (attribute order varies)
+            parent_match = re.search(
+                rf'<node[^>]*content-desc="{esc}[,"][^>]*'
+                rf'bounds="\[([^]]*)\]\[([^]]*)\]"[^>]*clickable="true"[^>]*>',
+                xml,
+            )
+        if parent_match:
+            bounds_str = f"[{parent_match.group(1)}][{parent_match.group(2)}]"
+            log.info(f"Tapping parent row for {ssid}: {bounds_str}")
+            self.adb.tap_bounds(bounds_str)
+            return True
+
+        # Strategy 2: Find child node with text="SSID" and tap its bounds.
+        # The child is usually inside the clickable parent so taps bubble up.
+        node_match = re.search(
+            rf'<node[^>]*text="{esc}"[^>]*bounds="\[([^]]*)\]\[([^]]*)\]"[^>]*>',
+            xml,
+        )
         if not node_match:
+            # Fallback: any node containing the SSID as a full quoted attribute value
+            node_match = re.search(rf'<node[^>]*"{esc}"[^>]*>', xml)
+            if node_match:
+                node = node_match.group(0)
+                bounds_match = re.search(r'bounds="\[([^]]*)\]\[([^]]*)\]"', node)
+                if bounds_match:
+                    self.adb.tap_bounds(
+                        f"[{bounds_match.group(1)}][{bounds_match.group(2)}]"
+                    )
+                    return True
             return False
-        node = node_match.group(0)
-        bounds_match = re.search(r'bounds="\[([^]]*)\]\[([^]]*)\]"', node)
-        if not bounds_match:
-            return False
-        nums1 = re.findall(r"\d+", bounds_match.group(1))
-        nums2 = re.findall(r"\d+", bounds_match.group(2))
-        x1, y1 = int(nums1[0]), int(nums1[1])
-        x2, y2 = int(nums2[0]), int(nums2[1])
-        self.adb.tap((x1 + x2) // 2, (y1 + y2) // 2)
+
+        bounds_str = f"[{node_match.group(1)}][{node_match.group(2)}]"
+        log.info(f"Tapping child text node for {ssid}: {bounds_str}")
+        self.adb.tap_bounds(bounds_str)
         return True
 
     def open_wifi_settings(self):
@@ -97,6 +131,10 @@ class WiFi:
             return self._connect_to_wifi_desktop()
 
         self._ensure_phone_can_connect()
+
+        if self.adb.is_wifi_connected(self.ssid):
+            log.info(f"Already connected to {self.ssid}, skipping reconnect")
+            return True
 
         log.info("Ensuring airplane mode is off")
         self.adb.shell("settings put global airplane_mode_on 0")
