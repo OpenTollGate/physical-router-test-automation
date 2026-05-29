@@ -1462,6 +1462,10 @@ def _configure_beta_upstream(beta_ip: str) -> None:
         uci set network.lan.gateway='10.99.96.2'
         uci commit network
 
+        uci add_list dhcp.@dnsmasq[0].server='8.8.8.8'
+        uci add_list dhcp.@dnsmasq[0].server='8.8.4.4'
+        uci commit dhcp
+
         /etc/init.d/network restart
         /etc/init.d/firewall restart
         /etc/init.d/dnsmasq restart
