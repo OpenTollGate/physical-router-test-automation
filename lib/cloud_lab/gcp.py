@@ -289,7 +289,7 @@ def _build_startup_script(suite_overlay_b64: str = "") -> str:
         exec >> /var/log/tollgate-run.log 2>&1
         echo "=== TollGate cloud worker started $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
-         # Hard kill switch: VM self-deletes after 90 min regardless of test state.
+         # Hard kill switch: VM self-deletes after 2h regardless of test state.
          # This prevents runaway costs from forgotten VMs.
          # The worker also has its own timeout (MAX_WALL_SECONDS), but this is the last line of defense.
          # Uses gcloud delete (not shutdown) to fully remove the VM and its disks.
@@ -297,9 +297,9 @@ def _build_startup_script(suite_overlay_b64: str = "") -> str:
          KILL_SWITCH_ZONE=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/zone || true)
          KILL_SWITCH_ZONE_BASE=$(basename "$KILL_SWITCH_ZONE" 2>/dev/null || echo "")
          KILL_SWITCH_NAME=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/name || true)
-         setsid bash -c 'sleep 5400 && echo "90min kill switch triggered — self-deleting VM" >> /var/log/tollgate-run.log && gcloud compute instances delete "$0" --project="$1" --zone="$2" --delete-disks=all --quiet >> /var/log/tollgate-run.log 2>&1 || shutdown -h now "TollGate self-delete failed, forcing shutdown"' "$KILL_SWITCH_NAME" "$KILL_SWITCH_PROJECT" "$KILL_SWITCH_ZONE_BASE" </dev/null >/dev/null 2>&1 &
+         setsid bash -c 'sleep 7200 && echo "2h kill switch triggered — self-deleting VM" >> /var/log/tollgate-run.log && gcloud compute instances delete "$0" --project="$1" --zone="$2" --delete-disks=all --quiet >> /var/log/tollgate-run.log 2>&1 || shutdown -h now "TollGate self-delete failed, forcing shutdown"' "$KILL_SWITCH_NAME" "$KILL_SWITCH_PROJECT" "$KILL_SWITCH_ZONE_BASE" </dev/null >/dev/null 2>&1 &
          KILL_SWITCH_PID=$!
-         echo "Kill switch armed: PID=$KILL_SWITCH_PID (self-delete in 5400s)"
+         echo "Kill switch armed: PID=$KILL_SWITCH_PID (self-delete in 7200s)"
 
         export HOME="/root"
         export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

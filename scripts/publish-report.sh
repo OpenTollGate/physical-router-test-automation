@@ -141,7 +141,7 @@ WORK=$(mktemp -d /tmp/tollgate-report-XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
 CLONE_LOG="$WORK/gh-pages-clone.log"
-if git clone --single-branch -b gh-pages "$REMOTE_URL" "$WORK/gh-pages" 2>"$CLONE_LOG"; then
+if git clone --depth 1 --single-branch -b gh-pages "$REMOTE_URL" "$WORK/gh-pages" 2>"$CLONE_LOG"; then
   echo "==> Cloned existing gh-pages branch"
 else
   echo "==> gh-pages branch not found or clone failed (creating fresh)"
@@ -346,7 +346,7 @@ for attempt in $(seq 1 10); do
     sleep "$delay"
   fi
 
-  git fetch origin gh-pages 2>/dev/null || true
+  git fetch --depth 1 origin gh-pages 2>/dev/null || true
   git pull --ff-only origin gh-pages 2>/dev/null || git pull --rebase origin gh-pages 2>/dev/null || true
 
   git add -A

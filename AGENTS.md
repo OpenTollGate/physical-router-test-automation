@@ -764,8 +764,32 @@ The worker (`lib/cloud_lab/worker.py`) detects pre-provisioned OpenWrt bases aut
 | Deploy TollGate | ~50s | Download + install .ipk |
 | Select test mint | ~5s | V2 probe, then V1 fallback |
 | Run tests | ~20m | 94 tests with local mint (no timeouts) |
-| Collect + publish | ~30s | |
-| **Total** | **~25min** | Was ~10min before local mints (fewer tests ran) |
+| Collect + publish | ~2m | Shallow clone gh-pages + push |
+| **Total (single-router)** | **~30min** | |
+| **Total (two-router)** | **~50min** | Extra Beta VM + serial provisioning + deploy |
+
+### VM lifecycle and kill switch
+
+Cloud lab VMs use a two-layer safety mechanism:
+
+1. **Worker `MAX_WALL_SECONDS`** (7200s / 2h): The Python worker force-deletes the VM if the pipeline runs longer than 2 hours. This handles hung test suites, stuck SSH sessions, or runaway processes.
+
+2. **Startup script kill switch** (7200s / 2h): A background `sleep 7200 && gcloud compute instances delete` process runs independently of the worker. This is the last line of defense — it kills the VM even if the Python worker crashes or hangs.
+
+**VM retention policy**: By default, VMs stay alive after the pipeline finishes (successful or failed). The `keep_vm_on_failure` metadata flag defaults to `True`. Only when explicitly set to `"false"` or `"0"` does the worker self-delete immediately. The 2h kill switch ensures no VM runs longer than 2 hours regardless.
+
+**Operational rule**: Do not kill VMs until you have either:
+- Verified the publish step completed (check `tests.tollgate.me` or gh-pages branch)
+- Examined the logs via `gcloud compute ssh <vm> --command='cat /var/log/tollgate-run.log'`
+
+### Publish to gh-pages — known pitfalls
+
+The publish step (`publish-report.sh`) clones the `gh-pages` branch, copies the report, and pushes. Common failure modes:
+
+1. **Large repo clone timeout**: The repo is ~1.4GB. Without `--depth 1`, a full clone can take 3-5 minutes from a GCP VM. Always use shallow clones.
+2. **`collect_and_render` failure**: If this step fails, no `report/index.html` exists, and `publish-report.sh` exits immediately with "report/index.html not found". Check the worker log for "collect_and_render failed".
+3. **gh-pages push race**: Multiple concurrent VMs pushing to gh-pages can cause git conflicts. The script retries 10 times with random backoff, but the worker publish timeout (1200s) may not be enough for many retries.
+4. **`gh auth setup-git` failure**: If the GitHub token is invalid or expired, git operations fail. The `|| true` suppresses the error, but subsequent git push fails.
 
 ### mac80211_hwsim virtual WiFi (experimental, opt-in)
 

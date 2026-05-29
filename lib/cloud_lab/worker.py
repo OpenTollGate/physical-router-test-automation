@@ -2377,7 +2377,7 @@ def publish_results(config: WorkerConfig, results_dir: str) -> str:
             f"gh auth setup-git 2>/dev/null || true && "
             f"cd {TEST_DIR} && TOLLGATE_GH_PAGES_CNAME=tests.tollgate.me "
             f"./scripts/publish-report.sh {shlex.quote(results_dir)}",
-            timeout=600,
+            timeout=1200,
         )
     except RuntimeError as exc:
         log.error("publish-report.sh failed: %s", _redact(str(exc))[:500])
@@ -2515,7 +2515,7 @@ def run_worker(config: WorkerConfig) -> int:
     started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     test_exit = 1
     wall_t0 = time.monotonic()
-    MAX_WALL_SECONDS = 5400  # 90 min (two-router needs ~60min for setup+tests, ~10min publish)
+    MAX_WALL_SECONDS = 7200  # 2h hard limit — VMs self-delete to prevent runaway costs
     vm_streams: list[tuple[threading.Thread, subprocess.Popen[str], Any]] = []
     local_mints: dict[str, subprocess.Popen[str]] = {}
     syslog_proc: subprocess.Popen[str] | None = None
@@ -2725,17 +2725,17 @@ def run_worker(config: WorkerConfig) -> int:
         elapsed = time.monotonic() - wall_t0
         force_delete = elapsed >= MAX_WALL_SECONDS
         if force_delete:
-            log.warning("1h max lifetime reached (%.1fs) — forcing VM deletion regardless of self_delete setting", elapsed)
+            log.warning("2h max lifetime reached (%.1fs) — forcing VM deletion regardless of self_delete setting", elapsed)
         if syslog_proc and syslog_proc.poll() is None:
             syslog_proc.kill()
         stop_local_mints(local_mints)
         if force_delete:
-            log.info("Force-deleting VM (1h lifetime exceeded)")
+            log.info("Force-deleting VM (2h lifetime exceeded)")
             stop_inner_vms()
             delete_self(config)
-        elif config.keep_vm_on_failure and test_exit != 0:
-            log.warning("Keeping VM + inner VMs alive for debugging (keep_vm_on_failure=true). "
-                        "Kill switch will shut it down at 1h if still running.")
+        elif config.keep_vm_on_failure:
+            log.warning("Keeping VM + inner VMs alive for log inspection (keep_vm_on_failure=true). "
+                        "Kill switch will shut it down at 2h if still running.")
         else:
             stop_inner_vms()
             log.info("Self-deleting VM %s", config.vm_name)
