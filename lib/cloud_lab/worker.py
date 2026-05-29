@@ -989,69 +989,110 @@ def _setup_vwifi_host() -> int | None:
 
 
 def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> None:
-    """Install vwifi-client on OpenWrt and Debian VMs for cross-VM frame relay.
+    """Install vwifi on OpenWrt and Debian VMs for cross-VM frame relay.
 
-    Called AFTER start_inner_vms() and AFTER _setup_hwsim_wifi().
+    Correct vwifi procedure (from README):
+      1. modprobe mac80211_hwsim radios=0  (empty — no local radios)
+      2. vwifi-add-interfaces <n> <mac>     (creates relayed wlan interfaces)
+      3. vwifi-client <host_ip>             (relays frames for those interfaces)
 
-    Uses TCP transport (vwifi-client <host_ip>) instead of vsock — vsock
-    has kernel issues (zombie processes on server, connection reset on guests)
-    that make it unreliable.  TCP runs on the existing mgmt bridge (10.99.99.2).
+    vwifi-client controls ONLY interfaces created by vwifi-add-interfaces.
+    Local hwsim radios are invisible to the relay.
 
-    OpenWrt: vwifi-client auto-discovers existing hwsim interfaces (netifd
-    holds refs so we keep them).  Just copy binary and start client.
-
-    Debian: load hwsim radios=0, vwifi-add-interfaces creates PHYs, then
-    vwifi-client connects to host vwifi-server via TCP.
+    OpenWrt complication: baked snapshot has 2 local hwsim radios with netifd
+    holding refs.  We can't rmmod.  Instead we:
+      - Copy vwifi-add-interfaces + vwifi-client to OpenWrt
+      - Use vwifi-add-interfaces to ADD relayed interfaces alongside local ones
+      - Reconfigure hostapd to use the relayed interface for SSID broadcast
+      - Start vwifi-client (relays ONLY the vwifi-created interfaces)
     """
     bin_dir = _VWIFI_BIN_DIR
     openwrt_client = bin_dir / "openwrt" / "vwifi-client"
+    openwrt_add_if = bin_dir / "openwrt" / "vwifi-add-interfaces"
     debian_client = bin_dir / "debian" / "vwifi-client"
     debian_add_if = bin_dir / "debian" / "vwifi-add-interfaces"
 
     # --- OpenWrt VM (alpha) ---
-    log.info("[vwifi] Setting up vwifi-client on OpenWrt alpha (%s)", alpha_ip)
+    log.info("[vwifi] Setting up vwifi on OpenWrt alpha (%s)", alpha_ip)
 
+    # Copy both binaries to OpenWrt
     _run(
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} scp -O "
         f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
         f"{shlex.quote(str(openwrt_client))} root@{alpha_ip}:/usr/bin/vwifi-client && "
+        f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} scp -O "
+        f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"{shlex.quote(str(openwrt_add_if))} root@{alpha_ip}:/usr/bin/vwifi-add-interfaces && "
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
         f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{alpha_ip} "
-        "'chmod +x /usr/bin/vwifi-client'",
+        "'chmod +x /usr/bin/vwifi-client /usr/bin/vwifi-add-interfaces'",
         timeout=30,
     )
 
-    # Wait for netifd to create wireless interfaces on the hwsim PHYs
-    r = _inner_ssh(alpha_ip, """
-        for i in $(seq 1 15); do
-            iw dev 2>/dev/null | grep -q Interface && break
-            sleep 1
-        done
-        iw dev 2>/dev/null | grep Interface || echo 'NO_INTERFACES'
-    """, timeout=30)
+    # Create relayed wlan interface on OpenWrt via vwifi-add-interfaces
+    # This creates an interface that vwifi-client will relay to the server
+    r_owrt_add = _inner_ssh(alpha_ip, """
+        vwifi-add-interfaces 1 0a:0b:0c:01:01 2>&1
+        sleep 2
+        iw dev 2>/dev/null | grep Interface || echo NO_INTERFACES
+    """, timeout=15)
+    log.info("[vwifi] OpenWrt vwifi-add-interfaces: %s", r_owrt_add.stdout.strip()[:300])
 
-    has_interfaces = any("Interface" in line for line in r.stdout.splitlines())
-    if not has_interfaces:
-        log.warning("[vwifi] No WiFi interfaces on OpenWrt alpha after 15s wait")
+    # Find the relayed interface (should be a new wlan beyond existing phy0-ap0/phy1-ap0)
+    owrt_vwifi_iface = None
+    for line in r_owrt_add.stdout.strip().splitlines():
+        if "Interface" in line and "wlan" in line.lower():
+            iface = line.strip().split()[-1]
+            # Skip the netifd-managed hwsim interfaces (phy0-ap0, phy1-ap0)
+            if not iface.startswith("phy"):
+                owrt_vwifi_iface = iface
+                break
+
+    if not owrt_vwifi_iface:
+        # Try to find any wlan interface that isn't phy*-ap0
+        r_all = _inner_ssh(alpha_ip, "iw dev 2>/dev/null | grep Interface", timeout=10)
+        for line in r_all.stdout.strip().splitlines():
+            iface = line.strip().split()[-1]
+            if "wlan" in iface:
+                owrt_vwifi_iface = iface
+                break
+
+    if owrt_vwifi_iface:
+        log.info("[vwifi] OpenWrt relayed interface: %s", owrt_vwifi_iface)
+        # Bring it up and start a simple hostapd on it for SSID broadcast
+        _inner_ssh(alpha_ip, f"""
+            ip link set {owrt_vwifi_iface} up 2>/dev/null
+            # Write a minimal hostapd config for the relayed interface
+            cat > /tmp/vwifi-hostapd.conf << 'HOSTAPD'
+interface={owrt_vwifi_iface}
+driver=nl80211
+ssid=TollGate-ALPHA
+hw_mode=g
+channel=6
+HOSTAPD
+            killall hostapd 2>/dev/null || true
+            hostapd -B /tmp/vwifi-hostapd.conf 2>&1 || echo HOSTAPD_FAILED
+        """, timeout=15)
     else:
-        log.info("[vwifi] OpenWrt alpha WiFi interfaces ready")
+        log.warning("[vwifi] No relayed wlan interface on OpenWrt. Available:")
+        _inner_ssh(alpha_ip, "iw dev 2>/dev/null | grep Interface || echo NONE", timeout=10)
 
-    r = _inner_ssh(alpha_ip, """
-        vwifi-client 10.99.99.2 2>&1 &
+    # Start vwifi-client on OpenWrt (relays only vwifi-created interfaces)
+    r_owrt_client = _inner_ssh(alpha_ip, """
+        nohup vwifi-client 10.99.99.2 >/tmp/vwifi-client.log 2>&1 &
+        disown
         sleep 3
-        echo "VWIFI_CLIENT_STARTED"
-    """, timeout=30)
-
-    if "Connection to Server Ok" in r.stdout:
-        log.info("[vwifi] OpenWrt alpha vwifi-client connected via TCP")
-    else:
-        log.warning("[vwifi] OpenWrt alpha vwifi-client may not be connected. Output: %s", r.stdout[:300])
+        cat /tmp/vwifi-client.log
+        echo VWIFI_CLIENT_OPENWRT_DONE
+    """, timeout=20)
+    log.info("[vwifi] OpenWrt vwifi-client: %s", r_owrt_client.stdout.strip()[:300])
 
     # --- Debian VM ---
-    log.info("[vwifi] Setting up vwifi-client on Debian (%s)", debian_ip)
+    log.info("[vwifi] Setting up vwifi on Debian (%s)", debian_ip)
 
     _inner_ssh(debian_ip, "apt-get install -y -qq iw 2>&1 | tail -1", timeout=60)
 
+    # Copy both binaries to Debian
     _run(
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} scp -O "
         f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
@@ -1065,55 +1106,57 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
         timeout=30,
     )
 
+    # Load mac80211_hwsim with radios=0 (empty — vwifi creates interfaces via add-interfaces)
     r_mod = _inner_ssh(debian_ip, """
-        modprobe mac80211_hwsim 2>/dev/null && echo HWSIM_OK || {
-            apt-get install -y -qq linux-modules-extra-$(uname -r) 2>&1 | tail -3
-            modprobe mac80211_hwsim radios=1 2>&1 && echo HWSIM_INSTALLED || echo HWSIM_NOT_AVAILABLE
+        rmmod mac80211_hwsim 2>/dev/null || true
+        modprobe mac80211_hwsim radios=0 2>&1 && echo HWSIM_ZERO_OK || {
+            modprobe mac80211_hwsim 2>&1 && echo HWSIM_DEFAULT_OK || echo HWSIM_FAIL
         }
-    """, timeout=120)
-    log.info("[vwifi] Debian hwsim: %s", r_mod.stdout.strip()[:300])
+    """, timeout=60)
+    log.info("[vwifi] Debian hwsim radios=0: %s", r_mod.stdout.strip()[:300])
 
-    time.sleep(2)
-    r_iw = _inner_ssh(debian_ip, "iw phy 2>/dev/null | grep -E 'wiphy|Wiphy' || echo NO_PHYS; iw dev 2>/dev/null | grep Interface || echo NO_INTERFACES", timeout=15)
-    log.info("[vwifi] Debian after modprobe: %s", r_iw.stdout.strip()[:300])
+    # Create relayed wlan interface on Debian via vwifi-add-interfaces
+    r_deb_add = _inner_ssh(debian_ip, """
+        vwifi-add-interfaces 1 0a:0b:0c:02:01 2>&1
+        sleep 2
+        iw dev 2>/dev/null | grep Interface || echo NO_INTERFACES
+    """, timeout=15)
+    log.info("[vwifi] Debian vwifi-add-interfaces: %s", r_deb_add.stdout.strip()[:300])
 
-    r_client = _inner_ssh(debian_ip, """
+    # Start vwifi-client on Debian
+    r_deb_client = _inner_ssh(debian_ip, """
         nohup vwifi-client 10.99.99.2 >/tmp/vwifi-client.log 2>&1 &
         disown
         sleep 5
         cat /tmp/vwifi-client.log
-        echo VWIFI_CLIENT_DONE
+        echo VWIFI_CLIENT_DEBIAN_DONE
     """, timeout=30)
-    log.info("[vwifi] Debian vwifi-client output: %s", r_client.stdout.strip()[:300])
+    log.info("[vwifi] Debian vwifi-client: %s", r_deb_client.stdout.strip()[:300])
 
-    r_iw2 = _inner_ssh(debian_ip, "iw dev 2>/dev/null | grep Interface || echo NO_INTERFACES_AFTER_CLIENT", timeout=15)
-    log.info("[vwifi] Debian interfaces after client: %s", r_iw2.stdout.strip()[:200])
+    # Find relayed interface on Debian
+    r_iw = _inner_ssh(debian_ip, "iw dev 2>/dev/null | grep Interface || echo NO_INTERFACES", timeout=10)
+    log.info("[vwifi] Debian interfaces: %s", r_iw.stdout.strip()[:200])
 
     debian_iface = None
-    for line in r_iw2.stdout.strip().splitlines():
-        if "Interface" in line and "wlan" in line:
+    for line in r_iw.stdout.strip().splitlines():
+        if "Interface" in line and "wlan" in line.lower():
             debian_iface = line.strip().split()[-1]
             break
 
-    if not debian_iface:
-        for line in r_iw.stdout.strip().splitlines():
-            if "Interface" in line and "wlan" in line:
-                debian_iface = line.strip().split()[-1]
-                break
-
     if debian_iface:
-        log.info("[vwifi] Debian vwifi interface: %s", debian_iface)
+        log.info("[vwifi] Debian relayed interface: %s", debian_iface)
 
         _inner_ssh(debian_ip, f"ip link set {debian_iface} up", timeout=10)
+        time.sleep(3)  # give hostapd time to broadcast beacons through relay
         r_scan = _inner_ssh(debian_ip, f"iw {debian_iface} scan 2>&1", timeout=15)
         if "TollGate-ALPHA" in r_scan.stdout:
-            log.info("[vwifi] Debian scan sees TollGate-ALPHA — cross-VM WiFi relay working!")
+            log.info("[vwifi] ✅ Debian scan sees TollGate-ALPHA — cross-VM WiFi relay working!")
         else:
             log.warning("[vwifi] Debian scan did NOT find TollGate-ALPHA. Output: %s",
-                        r_scan.stdout[:300])
+                        r_scan.stdout[:500])
     else:
-        log.warning("[vwifi] No vwifi interface found on Debian VM. iw dev: %s",
-                    r_iw2.stdout[:300])
+        log.warning("[vwifi] No relayed interface on Debian. iw dev: %s",
+                    r_iw.stdout[:300])
 
     log.info("[vwifi] Guest setup complete")
 
