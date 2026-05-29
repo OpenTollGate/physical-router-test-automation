@@ -593,6 +593,14 @@ def main():
     if vwifi_scans:
         run_json["vwifi_scans"] = vwifi_scans
 
+    pipeline_timing_path = os.path.join(run_dir, "pipeline_timing.json")
+    if os.path.isfile(pipeline_timing_path):
+        try:
+            with open(pipeline_timing_path) as f:
+                run_json["pipeline_steps"] = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+
     failed_tests = [t for t in all_tests if t["outcome"] in ("failed", "error")]
     skipped_tests = [t for t in all_tests if t["outcome"] == "skipped"]
 

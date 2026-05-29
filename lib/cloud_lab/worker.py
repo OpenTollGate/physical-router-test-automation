@@ -206,6 +206,79 @@ def _run(cmd: str, timeout: int = 120, check: bool = True) -> subprocess.Complet
 
 
 
+# ---------------------------------------------------------------------------
+# Pipeline step timing
+# ---------------------------------------------------------------------------
+
+_pipeline_t0: float | None = None
+_pipeline_steps: list[dict[str, Any]] = []
+
+
+def _step_start(name: str) -> None:
+    global _pipeline_t0
+    now = time.monotonic()
+    if _pipeline_t0 is None:
+        _pipeline_t0 = now
+    _pipeline_steps.append({
+        "step": name,
+        "start_offset_ms": round((now - _pipeline_t0) * 1000),
+        "_start": now,
+    })
+
+
+def _step_end(name: str) -> None:
+    """Record the end of the most recent pipeline step matching *name*."""
+    now = time.monotonic()
+    for entry in reversed(_pipeline_steps):
+        if entry["step"] == name and "duration_ms" not in entry:
+            entry["duration_ms"] = round((now - entry["_start"]) * 1000)
+            entry.pop("_start", None)
+            return
+    # If no matching start found, add a bare entry
+    if _pipeline_t0 is not None:
+        _pipeline_steps.append({
+            "step": name,
+            "start_offset_ms": round((now - _pipeline_t0) * 1000),
+            "duration_ms": 0,
+        })
+
+
+def _log_pipeline_summary() -> None:
+    """Log a summary table of pipeline step durations."""
+    if not _pipeline_steps:
+        return
+    label_w = max(len(s["step"]) for s in _pipeline_steps)
+    lines = [f"  {'Step':<{label_w}}  {'Duration':>8}"]
+    lines.append(f"  {'-' * label_w}  --------")
+    for s in _pipeline_steps:
+        dur_s = f"{s.get('duration_ms', 0) / 1000:.1f}s"
+        lines.append(f"  {s['step']:<{label_w}}  {dur_s:>8}")
+    log.info("Pipeline timing summary:\n%s", "\n".join(lines))
+
+
+def _save_pipeline_timing(results_dir: str) -> None:
+    """Save pipeline timing to pipeline_timing.json. Non-invasive — never raises."""
+    try:
+        out = [
+            {k: v for k, v in s.items() if k != "_start"}
+            for s in _pipeline_steps
+        ]
+        path = Path(results_dir) / "pipeline_timing.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(out, indent=2) + "\n")
+    except Exception as exc:
+        log.warning("Failed to save pipeline_timing.json (non-fatal): %s", exc)
+
+
+def _finish_pending_step() -> None:
+    """Close any step that hasn't been ended yet (crash safety)."""
+    now = time.monotonic()
+    for entry in _pipeline_steps:
+        if "duration_ms" not in entry and "_start" in entry:
+            entry["duration_ms"] = round((now - entry["_start"]) * 1000)
+            entry.pop("_start", None)
+
+
 def _virt_lab_workdir() -> Path:
     return Path(os.path.expandvars(VIRT_LAB_WORKDIR))
 
@@ -2289,28 +2362,39 @@ def run_worker(config: WorkerConfig) -> int:
             log.info("=== Pipeline start ===")
 
             os.environ["GH_TOKEN"] = config.gh_token
+            _step_start("suite-checkout")
             log.info("[1/10] Suite checkout (ref=%s)", config.suite_ref[:7])
             ensure_suite_checkout(config)
+            _step_end("suite-checkout")
 
+            _step_start("outer-deps")
             log.info("[2/10] Outer deps (venv + cashu)")
             ensure_outer_deps()
+            _step_end("outer-deps")
 
+            _step_start("gh-cli-auth")
             log.info("[3/10] GitHub CLI auth (token=***%s)", config.gh_token[-4:] if len(config.gh_token) > 8 else "***")
             ensure_github_cli(config.gh_token)
+            _step_end("gh-cli-auth")
 
             if config.vwifi_enabled:
+                _step_start("vwifi-host")
                 log.info("[3.5/10] Starting vwifi-server on host for cross-VM WiFi relay")
                 try:
                     _setup_vwifi_host()
                 except Exception as vwifi_exc:
                     log.warning("[vwifi] Host setup failed (non-fatal, WiFi tests may skip): %s", vwifi_exc)
                     config.vwifi_enabled = False
+                _step_end("vwifi-host")
             else:
                 log.info("[vwifi] Skipped (not enabled — use --vwifi to opt in)")
 
+            _step_start("inner-vms")
             log.info("[4/10] Inner VMs (OpenWrt + Debian)")
             start_inner_vms(config)
+            _step_end("inner-vms")
 
+            _step_start("hwsim-wifi")
             log.info("[4.5/10] Setup hwsim virtual WiFi on Alpha (enabled=%s vwifi=%s)", config.hwsim_enabled, config.vwifi_enabled)
             if config.hwsim_enabled or config.vwifi_enabled:
                 try:
@@ -2319,14 +2403,18 @@ def run_worker(config: WorkerConfig) -> int:
                     log.warning("[hwsim] Setup failed (non-fatal, WiFi tests may skip): %s", hwsim_exc)
             else:
                 log.info("[hwsim] Skipped (not enabled — use --hwsim or --vwifi to opt in)")
+            _step_end("hwsim-wifi")
 
             if config.vwifi_enabled:
+                _step_start("vwifi-guests")
                 log.info("[4.55/10] Setting up vwifi guests for cross-VM WiFi relay")
                 try:
                     _setup_vwifi_guests(OPENWRT_IP, DEBIAN_IP, config, results_dir)
                 except Exception as vwifi_exc:
                     log.warning("[vwifi] Guest setup failed (non-fatal, WiFi tests may skip): %s", vwifi_exc)
+                _step_end("vwifi-guests")
 
+            _step_start("syslog-capture")
             log.info("[4.6/10] Start syslog capture + configure OpenWrt forwarding")
             try:
                 syslog_proc = start_syslog_capture(results_dir)
@@ -2338,27 +2426,39 @@ def run_worker(config: WorkerConfig) -> int:
                     configure_openwrt_syslog(config.secondary_router_host)
             except Exception as exc:
                 log.warning("OpenWrt syslog config failed (non-fatal): %s", exc)
+            _step_end("syslog-capture")
 
+            _step_start("local-mints")
             log.info("[5/10] Start local mints (CDK + Nutshell)")
             local_mints = start_local_mints(config)
+            _step_end("local-mints")
 
+            _step_start("env-debian-deps")
             log.info("[6/10] Write .env + Debian client deps")
             write_env_file(config)
             ensure_debian_client_deps()
+            _step_end("env-debian-deps")
 
+            _step_start("deploy-tollgate")
             log.info("[7/10] Deploy TollGate (branch=%s, artifact_run=%s)", config.sut_branch, config.artifact_run_id)
             deploy_tollgate(config)
+            _step_end("deploy-tollgate")
 
+            _step_start("backend-health")
             log.info("[8/10] Wait for backend health")
             wait_for_backend()
+            _step_end("backend-health")
 
             if config.portal != "builtin":
+                _step_start("portal-overlay")
                 log.info("[8.1/10] Deploy portal overlay (%s)", config.portal)
                 try:
                     deploy_portal_overlay(config)
                 except Exception as portal_exc:
                     log.error("Portal overlay failed (non-fatal, tests may skip): %s", _redact(str(portal_exc))[:500])
+                _step_end("portal-overlay")
 
+            _step_start("select-mint")
             log.info("[8.5/11] Select test mint (forced=%s)", config.mint)
             chosen_mint = select_test_mint(forced_mint=config.mint)
             env_path = Path(f"{TEST_DIR}/.env")
@@ -2367,13 +2467,17 @@ def run_worker(config: WorkerConfig) -> int:
                 env_text = env_text.replace(f"TOLLGATE_TEST_MINT_URL={CDK_MINT_URL}", f"TOLLGATE_TEST_MINT_URL={chosen_mint}")
                 env_path.write_text(env_text)
                 log.info("Updated .env TOLLGATE_TEST_MINT_URL=%s", chosen_mint)
+            _step_end("select-mint")
 
+            _step_start("preflight")
             log.info("[9/11] Pre-flight checks")
             preflight = preflight_check(config, chosen_mint, results_dir)
             if not preflight.get("ok"):
                 log.error("Pre-flight checks FAILED — aborting test run to save time")
                 raise RuntimeError(f"Pre-flight checks failed: {[k for k, v in preflight.items() if v is False]}")
+            _step_end("preflight")
 
+            _step_start("run-tests")
             log.info("[10/11] Run tests (results_dir=%s)", results_dir)
             vm_streams = _start_vm_log_streaming(config, results_dir)
             try:
@@ -2381,6 +2485,7 @@ def run_worker(config: WorkerConfig) -> int:
             finally:
                 _stop_vm_log_streaming(vm_streams)
             log.info("Tests finished with exit=%d (%.1fs elapsed)", test_exit, time.monotonic() - wall_t0)
+            _step_end("run-tests")
 
         except Exception as exc:
             elapsed = time.monotonic() - wall_t0
@@ -2389,6 +2494,8 @@ def run_worker(config: WorkerConfig) -> int:
             if elapsed >= MAX_WALL_SECONDS:
                 log.warning("1h max lifetime exceeded — will force-delete after collect/publish")
             test_exit = 1
+
+        _finish_pending_step()
 
         # ── Collect, render, publish (always attempted) ──────────────
         finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -2406,11 +2513,13 @@ def run_worker(config: WorkerConfig) -> int:
         ]:
             _run(f"cp {path} {results_dir}/raw/{name}.log 2>/dev/null || true", timeout=5, check=False)
 
+        _step_start("collect-render")
         try:
             log.info("[11/11] Collect + render results")
             collect_and_render(config, results_dir, started_at, finished_at)
         except Exception as collect_exc:
             log.error("collect_and_render failed (non-fatal): %s", _redact(str(collect_exc))[:500])
+        _step_end("collect-render")
 
         run_json = Path(results_dir) / "run.json"
         if not run_json.exists():
@@ -2430,6 +2539,9 @@ def run_worker(config: WorkerConfig) -> int:
                 post_pr_comment(config, report_url, counts)
             except Exception as pub_exc:
                 log.error("Publish failed (non-fatal): %s", _redact(str(pub_exc))[:500])
+
+        _save_pipeline_timing(results_dir)
+        _log_pipeline_summary()
 
         log.info(
             "=== Pipeline complete: passed=%s failed=%s skipped=%s exit=%d (%.1fs) ===",

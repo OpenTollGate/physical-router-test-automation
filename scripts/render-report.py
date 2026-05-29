@@ -205,6 +205,7 @@ def build_environment():
         render_failed=lambda run, summary: Markup(render_failed(run, summary)),
         render_skipped=lambda run, summary: Markup(render_skipped(run, summary)),
         render_native_links=lambda run: Markup(render_native_links(run)),
+        render_pipeline_timing=lambda run: Markup(render_pipeline_timing(run)),
         render_footer=lambda run, generated_at: Markup(render_footer(run, generated_at)),
     )
     return env
@@ -397,6 +398,39 @@ def render_skipped(run, summary):
     <summary>Skipped Tests ({len(skipped)})</summary>
     <table>
       <thead><tr><th>Runner</th><th>Test</th><th>Reason</th></tr></thead>
+      <tbody>{"".join(rows)}</tbody>
+    </table>
+  </details>
+</div>"""
+
+
+def render_pipeline_timing(run):
+    steps = run.get("pipeline_steps")
+    if not steps:
+        return ""
+    max_dur = max((s.get("duration_ms", 0) for s in steps), default=1) or 1
+    bar_color = "#4285f4"
+    bg_color = "#e8f0fe"
+    rows = []
+    for s in steps:
+        name = esc(s.get("step", ""))
+        dur_ms = s.get("duration_ms", 0)
+        dur_s = f"{dur_ms / 1000:.1f}s"
+        pct = round(dur_ms / max_dur * 100)
+        rows.append(
+            f'<tr>'
+            f'<td class="mono-cell">{name}</td>'
+            f'<td style="width:60%"><div style="background:{bg_color};border-radius:3px;height:18px;position:relative">'
+            f'<div style="background:{bar_color};border-radius:3px;height:18px;width:{pct}%"></div></div></td>'
+            f'<td style="text-align:right;white-space:nowrap;font-weight:600">{esc(dur_s)}</td>'
+            f'</tr>'
+        )
+    return f"""\
+<div class="card">
+  <details>
+    <summary>Pipeline Timing ({len(steps)} steps)</summary>
+    <table>
+      <thead><tr><th>Step</th><th></th><th style="text-align:right">Duration</th></tr></thead>
       <tbody>{"".join(rows)}</tbody>
     </table>
   </details>
