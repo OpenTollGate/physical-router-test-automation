@@ -19,6 +19,11 @@ from typing import Any
 
 from lib.cloud_lab.constants import (
     ALPHA_WAN_MAC,
+    BETA_BRIDGE,
+    BETA_LAN_HOST_IP,
+    BETA_LAN_IP,
+    BETA_LAN_SUBNET,
+    BETA_TAP,
     BETA_WAN_IP,
     BETA_WAN_MAC,
     CDK_MINT_DIR,
@@ -509,7 +514,7 @@ def write_env_file(config: WorkerConfig) -> None:
     if config.reseller_scenarios and not secondary_host:
         secondary_host = SELLER_OPENWRT_IP
     if config.two_router and not secondary_host:
-        secondary_host = SELLER_OPENWRT_IP
+        secondary_host = MGMT_BETA_IP
     env_content = (
         f"TOLLGATE_LUCI_PASSWORD={VIRT_LAB_PASSWORD}\n"
         f"TOLLGATE_SSH_PASSWORD={VIRT_LAB_PASSWORD}\n"
@@ -957,7 +962,14 @@ def setup_bridge() -> None:
         f"ip link set {MGMT_TAP_DEBIAN} up; "
         f"ip tuntap add dev {MGMT_TAP_BETA} mode tap user root 2>/dev/null || true; "
         f"ip link set {MGMT_TAP_BETA} master {MGMT_BRIDGE} 2>/dev/null || true; "
-        f"ip link set {MGMT_TAP_BETA} up",
+        f"ip link set {MGMT_TAP_BETA} up; "
+        # Beta isolated LAN bridge
+        f"ip link add name {BETA_BRIDGE} type bridge 2>/dev/null || true; "
+        f"ip addr add {BETA_LAN_HOST_IP}/24 dev {BETA_BRIDGE} 2>/dev/null || true; "
+        f"ip link set {BETA_BRIDGE} up; "
+        f"ip tuntap add dev {BETA_TAP} mode tap user root 2>/dev/null || true; "
+        f"ip link set {BETA_TAP} master {BETA_BRIDGE} 2>/dev/null || true; "
+        f"ip link set {BETA_TAP} up",
         timeout=20,
     )
 
@@ -1283,7 +1295,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
             memory_mb=512,
             cpus=1,
             disk_name="tollgate-seller.qcow2",
-            tap_name="tg-poc-tap3",
+            tap_name=BETA_TAP,
             mac=SELLER_OPENWRT_MAC,
             wan_tap=UPSTREAM_TAP_BETA,
             wan_mac=BETA_WAN_MAC,
@@ -1300,11 +1312,12 @@ def start_inner_vms(config: WorkerConfig) -> None:
         if not _wait_inner_ssh(SELLER_OPENWRT_IP):
             raise RuntimeError("Beta OpenWrt VM did not become reachable")
 
-        _configure_beta_upstream(SELLER_OPENWRT_IP)
-
-        config.secondary_router_host = SELLER_OPENWRT_IP
-        log.info("Beta OpenWrt VM SSH OK at %s", SELLER_OPENWRT_IP)
         _configure_mgmt_nic(SELLER_OPENWRT_IP, MGMT_BETA_IP, MGMT_BETA_MAC)
+        _configure_beta_lan(BETA_LAN_IP)
+        _configure_beta_upstream(MGMT_BETA_IP)
+
+        config.secondary_router_host = MGMT_BETA_IP
+        log.info("Beta OpenWrt VM SSH OK at %s (lan=%s, mgmt=%s)", MGMT_BETA_IP, BETA_LAN_IP, MGMT_BETA_IP)
 
     if config.reseller_scenarios and not config.secondary_router_host:
         log.info("Starting managed seller OpenWrt VM for reseller scenarios...")
@@ -1386,6 +1399,32 @@ def start_inner_vms(config: WorkerConfig) -> None:
         raise RuntimeError("Debian VM did not become reachable")
     log.info("Debian VM SSH OK")
     _configure_mgmt_nic(DEBIAN_IP, MGMT_DEBIAN_IP, MGMT_DEBIAN_MAC)
+
+
+def _configure_beta_lan(beta_lan_ip: str) -> None:
+    log.info("Configuring Beta br-lan to isolated subnet %s", beta_lan_ip)
+    _inner_ssh(MGMT_BETA_IP, f"""
+        uci set network.lan.ipaddr='{beta_lan_ip}'
+        uci set network.lan.netmask='255.255.255.0'
+        uci set network.lan.gateway=''
+        uci set network.lan.dns=''
+        uci commit network
+        /etc/init.d/network restart
+    """, timeout=30)
+    time.sleep(8)
+    r = _inner_ssh(MGMT_BETA_IP, f"ip addr show br-lan | grep '{beta_lan_ip}'", timeout=10)
+    if beta_lan_ip in r.stdout:
+        log.info("Beta br-lan confirmed at %s", beta_lan_ip)
+    else:
+        log.warning("Beta br-lan may not have %s: %s", beta_lan_ip, r.stdout.strip()[-200:])
+
+    _inner_ssh(MGMT_BETA_IP, f"""
+        ip route add {LOCAL_MINT_HOST}/32 via {BETA_LAN_HOST_IP} 2>/dev/null || true
+        ip route add 10.99.99.0/24 via {BETA_LAN_HOST_IP} 2>/dev/null || true
+        grep -q 'v1.testnut.nutshell.lan' /etc/hosts || \
+            echo '{LOCAL_MINT_HOST} v1.testnut.nutshell.lan v2.testnut.cdk.lan v2.testnut.nutshell.lan \
+testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan v1.testnut.lan' >> /etc/hosts
+    """, timeout=15)
 
 
 def _configure_beta_upstream(beta_ip: str) -> None:
@@ -1951,6 +1990,113 @@ def select_test_mint(forced_mint: str = "auto") -> str:
     return fallback_url
 
 
+def _configure_two_router_payment(config: WorkerConfig, chosen_mint_url: str) -> None:
+    """Configure Beta as merchant and Alpha as reseller with funded wallet."""
+    if not config.two_router:
+        return
+
+    log.info("[two-router] Configuring Beta as upstream merchant...")
+
+    beta_config = json.loads(
+        _inner_ssh(MGMT_BETA_IP, "cat /etc/tollgate/config.json 2>/dev/null || echo '{}'", timeout=10).stdout.strip()
+        or "{}"
+    )
+    beta_config["accepted_mints"] = [{
+        "url": chosen_mint_url,
+        "min_balance": 0,
+        "balance_tolerance_percent": 0,
+        "payout_interval_seconds": 60,
+        "min_payout_amount": 0,
+        "price_per_step": 1,
+        "price_unit": "sats",
+        "purchase_min_steps": 0,
+    }]
+    beta_config["metric"] = "milliseconds"
+    beta_config["step_size"] = 60000
+    beta_config["margin"] = 0
+    beta_config["profit_share"] = [{"factor": 1.0, "identity": "owner"}]
+
+    beta_config_json = json.dumps(beta_config)
+    _inner_ssh(
+        MGMT_BETA_IP,
+        f"cat > /etc/tollgate/config.json << 'BETACFG'\n{beta_config_json}\nBETACFG",
+        timeout=15,
+    )
+    _inner_ssh(MGMT_BETA_IP, "/etc/init.d/tollgate-wrt restart", timeout=30)
+    time.sleep(8)
+
+    for attempt in range(15):
+        r = _run(f"curl -s -o /dev/null -w '%{{http_code}}' http://{BETA_LAN_IP}:2121/ || true", timeout=10, check=False)
+        if "200" in r.stdout:
+            log.info("[two-router] Beta backend healthy (attempt %d)", attempt + 1)
+            break
+        time.sleep(2)
+    else:
+        log.warning("[two-router] Beta backend may not be healthy — continuing anyway")
+
+    log.info("[two-router] Configuring Alpha as reseller...")
+
+    alpha_config = json.loads(
+        _inner_ssh(OPENWRT_IP, "cat /etc/tollgate/config.json 2>/dev/null || echo '{}'", timeout=10).stdout.strip()
+        or "{}"
+    )
+    alpha_config["reseller_mode"] = True
+
+    ignore_ifaces = alpha_config.get("upstream_detector", {}).get("ignore_interfaces", [])
+    allowed = {"lo", "docker0", "br-lan", "hostap0"}
+    alpha_config.setdefault("upstream_detector", {})["ignore_interfaces"] = [
+        iface for iface in ignore_ifaces if iface in allowed
+    ]
+
+    alpha_config_json = json.dumps(alpha_config)
+    _inner_ssh(
+        OPENWRT_IP,
+        f"cat > /etc/tollgate/config.json << 'ALPHACFG'\n{alpha_config_json}\nALPHACFG",
+        timeout=15,
+    )
+    _inner_ssh(OPENWRT_IP, "/etc/init.d/tollgate-wrt restart", timeout=30)
+    time.sleep(8)
+
+    for attempt in range(15):
+        r = _run(f"curl -s -o /dev/null -w '%{{http_code}}' http://{OPENWRT_IP}:2121/ || true", timeout=10, check=False)
+        if "200" in r.stdout:
+            log.info("[two-router] Alpha backend healthy (attempt %d)", attempt + 1)
+            break
+        time.sleep(2)
+    else:
+        log.warning("[two-router] Alpha backend may not be healthy — continuing anyway")
+
+    log.info("[two-router] Funding Alpha's wallet via cashu CLI...")
+
+    mint_url_arg = shlex.quote(chosen_mint_url)
+    token_r = _run(
+        f"/opt/cashu-venv/bin/cashu -u {mint_url_arg} send 100 --legacy 2>&1",
+        timeout=60,
+        check=False,
+    )
+    token_lines = [line.strip() for line in (token_r.stdout or "").splitlines() if line.strip().startswith("cashu")]
+    if not token_lines:
+        log.error("[two-router] Failed to mint token for Alpha wallet: %s", (token_r.stdout or "")[-300:])
+        return
+
+    token = token_lines[0]
+    log.info("[two-router] Minted token (%d chars), funding Alpha wallet...", len(token))
+
+    fund_r = _inner_ssh(
+        OPENWRT_IP,
+        f"tollgate wallet fund '{token}'",
+        timeout=30,
+    )
+    log.info("[two-router] wallet fund result: %s", fund_r.stdout.strip()[-200:] if fund_r.stdout else "(no output)")
+
+    bal_r = _inner_ssh(OPENWRT_IP, "tollgate wallet balance", timeout=10)
+    balance = bal_r.stdout.strip() if bal_r.stdout else ""
+    if balance and any(c.isdigit() for c in balance):
+        log.info("[two-router] Alpha wallet balance: %s", balance)
+    else:
+        log.warning("[two-router] Could not verify Alpha wallet balance: %s", balance[-200:])
+
+
 def run_tests(config: WorkerConfig, results_dir: str) -> int:
     expected_pr = f"--expected-pr={config.sut_pr} " if config.sut_pr else ""
     backend = config.backend
@@ -2468,6 +2614,12 @@ def run_worker(config: WorkerConfig) -> int:
                 env_path.write_text(env_text)
                 log.info("Updated .env TOLLGATE_TEST_MINT_URL=%s", chosen_mint)
             _step_end("select-mint")
+
+            if config.two_router:
+                _step_start("two-router-payment")
+                log.info("[8.6/11] Configure two-router payment (Beta merchant + Alpha reseller)")
+                _configure_two_router_payment(config, chosen_mint)
+                _step_end("two-router-payment")
 
             _step_start("preflight")
             log.info("[9/11] Pre-flight checks")

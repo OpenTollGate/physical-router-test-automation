@@ -67,5 +67,12 @@ V1_TESTNUT_NUTSHELL_LAN = "http://v1.testnut.nutshell.lan:8385"
 V2_TESTNUT_CDK_LAN = "http://v2.testnut.cdk.lan:8383"
 V2_TESTNUT_NUTSHELL_LAN = "http://v2.testnut.nutshell.lan:8384"
 
+# Beta isolated LAN bridge — separate from tg-poc-br so Beta has its own subnet
+BETA_BRIDGE = "tg-beta-br"
+BETA_TAP = "tg-beta-tap"
+BETA_LAN_IP = "10.99.96.11"
+BETA_LAN_HOST_IP = "10.99.96.2"
+BETA_LAN_SUBNET = "10.99.96.0/24"
+
 # Backwards-compatible alias
 NUTSHELL_V1_MINT_LAN = V1_TESTNUT_NUTSHELL_LAN
