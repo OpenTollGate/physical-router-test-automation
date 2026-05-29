@@ -1104,6 +1104,7 @@ def _setup_vwifi_guests(alpha_ip: str, debian_ip: str, config: WorkerConfig) -> 
     if debian_iface:
         log.info("[vwifi] Debian vwifi interface: %s", debian_iface)
 
+        _inner_ssh(debian_ip, f"ip link set {debian_iface} up", timeout=10)
         r_scan = _inner_ssh(debian_ip, f"iw {debian_iface} scan 2>&1", timeout=15)
         if "TollGate-ALPHA" in r_scan.stdout:
             log.info("[vwifi] Debian scan sees TollGate-ALPHA — cross-VM WiFi relay working!")
