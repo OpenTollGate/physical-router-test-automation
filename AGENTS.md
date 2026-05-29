@@ -433,6 +433,52 @@ Combined, these require ~52 packages (including transitive deps like `iptables-n
 
 **Note:** Always use `scp -O` for OpenWrt (no sftp-server). The total dependency bundle for mipsel_24kc is ~1.8MB. The TollGate ipk itself is ~6.3MB.
 
+### gonuts-tollgate bolt11 decode tolerance (FakeWallet mints)
+
+**Status**: Hacky but working. Lightning payments confirmed with testnut.cashu.exchange.
+
+**The problem**: FakeWallet mints (testnut.cashu.exchange) return non-standard "invoice" strings in their NUT-04 mint quote responses — not valid bolt11 invoices. gonuts-tollgate's `Wallet.RequestMint()` called `decodepay.Decodepay()` on the response and treated any decode failure as fatal, rejecting the entire mint quote. This blocked all Lightning payments against testnut.
+
+**The fix** (in `Amperstrand/gonuts-tollgate` `feature/v2-keyset-ids`, commit `9b2b843`):
+```go
+// Before (fatal):
+bolt11, err := decodepay.Decodepay(mintResponse.Request)
+if err != nil {
+    return nil, fmt.Errorf("error decoding bolt11 invoice: %v", err)
+}
+quote := storage.MintQuote{..., CreatedAt: int64(bolt11.CreatedAt)}
+
+// After (tolerant):
+createdAt := time.Now().Unix()
+if bolt11, err := decodepay.Decodepay(mintResponse.Request); err == nil {
+    createdAt = int64(bolt11.CreatedAt)
+}
+quote := storage.MintQuote{..., CreatedAt: createdAt}
+```
+
+`decodepay.Decodepay()` is only used to extract `CreatedAt` from the invoice. When the mint returns garbage, we fall back to `time.Now()`. The quote is still stored, monitoring still works, tokens still get minted when paid — the entire Lightning flow works.
+
+**Why it couldn't be fixed at a higher layer**: The error occurs inside gonuts's `RequestMint()` before the quote is stored. The backend's `merchant/lightning.go` calls `tollwallet.RequestMintQuote()` which calls `wallet.RequestMint()`. If `RequestMint()` fails, no quote exists in gonuts's internal DB, so `MintQuoteState()` and `MintTokens()` can't find it later. The monitoring goroutine in `merchant/lightning.go` depends on gonuts having the quote. Duplicating this logic in the backend would require rearchitecting the wallet layer.
+
+**Portal-side fix** (in `net4sats-captive-portal`): Added `LN005` error code that detects bolt11/zpay32 errors and shows "Lightning payments are not available with this mint. Please use Cashu tokens instead." This is a fallback for any remaining edge cases.
+
+**Deployment**: The fix flows through CI. `tollgate-module-basic-go`'s `go.mod` replace directive points to the Amperstrand gonuts fork with this commit. The `main` branch on `Amperstrand/tollgate-module-basic-go` includes this fix.
+
+### TollGate init script uses `/usr/bin/`, not `/usr/sbin/`
+
+The tollgate-wrt init script (`/etc/init.d/tollgate-wrt`) runs the binary from `/usr/bin/tollgate-wrt`, NOT `/usr/sbin/tollgate-wrt`. If you SCP a custom binary, make sure you copy it to the correct path:
+
+```bash
+# CORRECT
+scp -O tollgate-wrt root@router:/tmp/tollgate-wrt
+ssh root@router "cp /tmp/tollgate-wrt /usr/bin/tollgate-wrt && /etc/init.d/tollgate-wrt restart"
+
+# WRONG — binary won't be picked up by the service
+scp -O tollgate-wrt root@router:/usr/sbin/tollgate-wrt
+```
+
+The opkg package installs to `/usr/bin/tollgate-wrt`. The `/usr/sbin/` path may have a stale copy from a previous manual deploy.
+
 ## Router Access Patterns
 
 ### GL-MT3000 Default IPs
@@ -754,37 +800,49 @@ OpenWrt names hwsim interfaces `phy<N>-ap0` (not `wlan0`). Tests must check `iw 
 - **No cross-VM WiFi**: QEMU guests run separate kernels — hwsim radios don't share RF state across VM boundaries (use `--vwifi` to solve this).
 - **STA mode is read-only config verification**: reconfigures radio1 to STA mode on a dedicated `wwan` network, but association always fails in hwsim (unless `--vwifi` is used).
 
-### vwifi cross-VM WiFi frame relay (experimental, opt-in)
+### vwifi cross-VM WiFi frame relay (opt-in)
 
-[vwifi](https://github.com/Raizo62/vwifi) relays 802.11 frames between QEMU VMs via vsock, enabling real `iw scan` from the Debian guest to see SSIDs on the OpenWrt guest. This solves the cross-kernel hwsim limitation.
+[vwifi](https://github.com/Raizo62/vwifi) relays 802.11 frames between QEMU VMs via TCP, enabling real `iw scan` from the Debian guest to see SSIDs on the OpenWrt guest. This solves the cross-kernel hwsim limitation.
 
 **How to enable**:
 ```bash
-# Cloud lab with cross-VM WiFi relay (real STA scan/association)
 ./scripts/cloud-lab.py submit --pr 42 --vwifi --publish
 ```
 
-**Architecture**: A `vwifi-server` runs on the GCP host. Each QEMU guest gets a `vhost-vsock-pci` device (OpenWrt cid=10, Debian cid=20). Inside each guest, `vwifi-client` connects to the host server via vsock. Guests load `mac80211_hwsim radios=0` (empty), then `vwifi-add-interfaces` creates real wlan interfaces backed by the relay.
+**Architecture**: A `vwifi-server` runs on the GCP host (TCP port 8212). Inside each guest, `vwifi-client` connects to the host via TCP. Guests load `mac80211_hwsim radios=0` (empty), then `vwifi-add-interfaces` creates relayed wlan interfaces. OpenWrt keeps its existing baked hwsim radios (can't rmmod — netifd holds refs) and gets an additional relayed interface via `vwifi-add-interfaces`.
+
+**Correct vwifi procedure** (from README, verified):
+1. `modprobe mac80211_hwsim radios=0` (empty — no local radios)
+2. `vwifi-add-interfaces 1 <mac>` (creates relayed wlan interface)
+3. `vwifi-client <host_ip>` (relays frames for vwifi-created interfaces only)
+
+Debian uses `radios=0` + `vwifi-add-interfaces` to get a clean relayed `wlan0`. OpenWrt skips `radios=0` (existing radios can't be removed) and uses `vwifi-add-interfaces` to add a relayed interface alongside the local ones, then reconfigures hostapd to broadcast `TollGate-ALPHA` on the relayed interface.
 
 **Worker pipeline** (when `--vwifi` is passed):
-1. `_setup_vwifi_host()` — starts vwifi-server on host, loads `vhost_vsock` module
-2. `start_inner_vms()` — passes `vsock_cid=10` (alpha), `vsock_cid=20` (debian) to QEMU
-3. `_setup_hwsim_wifi(vwifi_mode=True)` — loads hwsim radios=0, skips manual AP creation
-4. `_setup_vwifi_guests()` — SCPs binaries, starts vwifi-client, configures hostapd on OpenWrt
+1. `_setup_vwifi_host()` — starts vwifi-server on host (TCP mode, port 8212)
+2. `start_inner_vms()` — passes `mgmt_tap`/`mgmt_mac` for management NIC
+3. `_setup_hwsim_wifi(vwifi_mode=True)` — configures UCI wireless on existing hwsim radios
+4. `_setup_vwifi_guests()` — SCPs binaries to both VMs, creates relayed interfaces, starts vwifi-client, runs hostapd on OpenWrt, captures iw scan proof artifacts
 
-**What works with vwifi**:
-- Debian guest `iw scan` sees `TollGate-ALPHA` from OpenWrt
-- STA scan and association tests in `test_mac80211_hwsim.py` pass instead of skipping
-- Real 802.11 management frame relay between VMs
+**Scan proof artifacts**: Worker saves `iw scan` output from both VMs to `results/raw/virtual-wifi/iw-scan-openwrt.txt` and `iw-scan-debian.txt`. These appear as clickable links in the published report under "Native Reports".
 
-**Build requirements**: `cmake make g++ pkg-config libnl-3-dev libnl-genl-3-dev`. Build script: `scripts/build-vwifi.sh`. Snapshot baking includes vwifi binaries at `/opt/vwifi/bin/`.
+**Verified**: Debian `iw scan` sees `TollGate-ALPHA` — cross-VM 802.11 management frame relay confirmed.
 
-**CID assignments**:
-| VM | vsock CID |
-|----|-----------|
-| Alpha OpenWrt | 10 |
-| Debian client | 20 |
-| Beta OpenWrt (two-router) | 11 |
+**Key implementation details**:
+- **TCP mode** (not vsock) — vsock has zombie process kernel bugs on some kernels
+- **BusyBox `nohup`** — OpenWrt ash doesn't have `nohup`; use bare `&` for background processes
+- **`ip link set wlan0 up`** — vwifi-created interfaces are DOWN by default; must bring up before scan
+- **Debian `nohup + disown`** — bash keeps SSH sessions alive with bare `&`; need nohup + redirect + disown for clean detach
+- **Management network** — `mgmt-br` (10.99.97.0/24) provides SSH access independent of test network bridges
+
+**Build requirements**: `cmake make g++ pkg-config libnl-3-dev libnl-genl-3-dev`. Build script: `scripts/build-vwifi.sh` (Alpine Docker for static musl guest binaries, glibc for host). Snapshot v9 includes pre-built vwifi binaries at `/opt/vwifi/bin/`.
+
+**CID assignments** (legacy, now TCP):
+| VM | vsock CID (unused) | TCP target |
+|----|-----------|----------|
+| Alpha OpenWrt | 10 | `10.99.99.2:8212` |
+| Debian client | 20 | `10.99.99.2:8212` |
+| Beta OpenWrt (two-router) | 11 | `10.99.99.2:8212` |
 
 ### What works in the cloud lab
 
@@ -880,6 +938,11 @@ The cloud lab uses a Debian QEMU VM (`10.99.99.100`) as the test client. Visual 
 ### Out of scope for cloud
 
 Phone tests, physical-router LuCI Playwright, destructive sysupgrade — use `test-pr.sh` on lab hardware.
+
+## AI Agent Rules
+
+- **Bug reports filed by AI agents must go to the Amperstrand fork only** ([Amperstrand/tollgate-module-basic-go](https://github.com/Amperstrand/tollgate-module-basic-go)), NOT the upstream OpenTollGate repo. This avoids noise for upstream maintainers. Filing on OpenTollGate is acceptable only when a human explicitly requests it.
+- AI agents should not review PR #86 or ask @c0brador to merge it.
 
 ## Security Notes
 

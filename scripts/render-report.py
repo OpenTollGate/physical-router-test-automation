@@ -423,6 +423,10 @@ def render_native_links(run):
         if "log" in artifacts:
             links.append(f'<li><a href="../{esc(artifacts["log"])}">{esc(name)} Output Log</a></li>')
 
+    for scan_path in run.get("vwifi_scans", []):
+        label = Path(scan_path).stem.replace("-", " ").title()
+        links.append(f'<li><a href="../{esc(scan_path)}">📡 {esc(label)}</a></li>')
+
     links_html = ""
     if links:
         links_html = f'<ul class="native-links">{"".join(links)}</ul>'

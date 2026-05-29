@@ -585,6 +585,14 @@ def main():
     if e2e_artifacts["video"] or e2e_artifacts["screenshots"]:
         run_json["e2e_artifacts"] = e2e_artifacts
 
+    vwifi_scans = []
+    for scan_name in ("iw-scan-debian.txt", "iw-scan-openwrt.txt"):
+        scan_path = os.path.join(run_dir, "raw", "virtual-wifi", scan_name)
+        if os.path.isfile(scan_path):
+            vwifi_scans.append(os.path.join("raw", "virtual-wifi", scan_name))
+    if vwifi_scans:
+        run_json["vwifi_scans"] = vwifi_scans
+
     failed_tests = [t for t in all_tests if t["outcome"] in ("failed", "error")]
     skipped_tests = [t for t in all_tests if t["outcome"] == "skipped"]
 
