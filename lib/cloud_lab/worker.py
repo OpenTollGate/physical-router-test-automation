@@ -380,11 +380,15 @@ def _configure_mgmt_nic(guest_ip: str, mgmt_ip: str, mgmt_mac: str) -> None:
     guest_script = (
         f"IFACE=$(ip -o link | grep '{mgmt_mac}' | awk '{{print $2}}' | tr -d ':'); "
         f"[ -z \"$IFACE\" ] && echo mgmt_nic_not_found && exit 0; "
-        f"ip addr add {mgmt_ip}/24 dev $IFACE 2>/dev/null || true; "
-        f"ip link set $IFACE up; "
-        f"uci add_list firewall.@zone[0].device=$IFACE 2>/dev/null || true; "
+        f"uci set network.mgmt=interface 2>/dev/null || true; "
+        f"uci set network.mgmt.proto='static' 2>/dev/null || true; "
+        f"uci set network.mgmt.device=$IFACE 2>/dev/null || true; "
+        f"uci set network.mgmt.ipaddr='{mgmt_ip}' 2>/dev/null || true; "
+        f"uci set network.mgmt.netmask='255.255.255.0' 2>/dev/null || true; "
+        f"uci add_list firewall.@zone[0].network='mgmt' 2>/dev/null || true; "
+        f"uci commit network 2>/dev/null || true; "
         f"uci commit firewall 2>/dev/null || true; "
-        f"fw4 restart 2>/dev/null || true; "
+        f"/etc/init.d/network restart 2>/dev/null || true; "
         f"echo mgmt_ok_$IFACE"
     )
     r = _run(f"{ssh_prefix} {shlex.quote(guest_script)}", timeout=15, check=False)
@@ -458,6 +462,7 @@ def _provision_openwrt_serial(name: str, ip: str, timeout: int = 90, *, gateway:
             "uci set firewall.@rule[-1].target='ACCEPT'",
             "uci commit firewall",
             "fw4 restart",
+            "uci delete network.mgmt 2>/dev/null || true",
             f"uci set network.lan.ipaddr='{ip}'",
             "uci set network.lan.netmask='255.255.255.0'",
             f"uci set network.lan.gateway='{gateway}'",
