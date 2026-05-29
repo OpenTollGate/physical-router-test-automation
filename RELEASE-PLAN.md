@@ -72,16 +72,20 @@ Test infrastructure: cashu 0.20.0 venv, tollgate --json CLI, wget + nc HTTP call
 
 - [x] Post hardware test results as PR comment
 - [x] Approve PR #104 (c03rad0r)
-- [ ] Wait for Amperstrand approval
-- [ ] Wait for Origami74 approval
+- [x] Add `ready for review` label
+- [x] Request reviewer: Origami74 (Amperstrand is author)
+- [x] Post review guide comment
+- [ ] Wait for Amperstrand + Origami74 approval
 - [ ] After all 3 approve: validate happy path on hardware
 
 ### 2B. PR #147 — Config schema, CLI --json (reopened #124)
 
 - [x] Post hardware test results + `--json` validation as PR comment
 - [ ] Approve PR #147 (c03rad0r — cannot approve own PR)
-- [ ] Wait for Amperstrand approval
-- [ ] Wait for Origami74 approval
+- [x] Add `upcoming-release-lets-prioritize` + `ready for review` labels
+- [x] Request reviewers: Amperstrand + Origami74
+- [x] Post review guide comment
+- [ ] Wait for Amperstrand + Origami74 approval
 - [ ] After all 3 approve: validate on hardware:
   - [ ] `tollgate --json config schema` returns valid schema (67 entries)
   - [ ] `tollgate --json config get` returns full config JSON
@@ -142,6 +146,8 @@ Depends on: Phase 2 (#147 on `main`)
 
 - [x] Post hardware validation results on #86
 - [x] Post hardware validation results on #126
+- [x] Add `ready for review` labels to #86, #126, #138-#143
+- [x] Request reviewers on #86, #126, #138-#143
 - [ ] Approve #138 (c03rad0r — cannot approve own PR)
 - [ ] Approve #143 (c03rad0r — cannot approve own PR)
 - [ ] Wait for Amperstrand + Origami74 on all 4
@@ -187,15 +193,48 @@ Depends on: Phase 2 (#147 on `main`)
 
 ---
 
+## Phase 6: CI Fix & Lightning Invoice Investigation
+
+### 6A. Fix PR #143 CI — revert artifact action downgrade
+
+- [ ] In `/tmp/pr118-worktrees/pr-i-ci-infra/`, edit `.github/workflows/build-package.yml`
+- [ ] 3x `upload-artifact@v3` → `@v7`, 3x `download-artifact@v3` → `@v8`
+- [ ] Commit and force-push to `pr-i-ci-infra` via `github` remote
+- [ ] Verify CI passes
+
+### 6B. Draft PR for v3 downgrade (act compatibility)
+
+- [ ] Create branch `fix/artifact-actions-v3-act-compat` from `main`
+- [ ] Apply 6x v3 downgrades
+- [ ] Open as DRAFT PR with body explaining act compatibility
+- [ ] Create issue: "act local CI requires artifact actions v3, but GitHub auto-fails v3"
+
+### 6C. Issue #149 — Lightning invoice "amount 0 sats" reproduction
+
+- [ ] Write `tests/api/test_lightning_invoice.py` with setup/teardown
+- [ ] Test cases:
+  - [ ] POST `{ amount: 0, mint_url }` → expect "amount must be greater than zero"
+  - [ ] POST `{ amount: 4, device }` (missing mint_url) → expect "amount and mint_url are required"
+  - [ ] POST `{ amount: 4, mint_url }` → expect success (quote + invoice)
+  - [ ] POST `{ amount: "", mint_url }` (string amount) → verify behavior
+- [ ] Run on Alpha + Beta
+- [ ] Post root cause analysis + results on issue #149
+
+---
+
 ## Execution Order
 
 ```
-1. Cashu venv setup + script fix + commit
-2. Full test suite on Alpha + Beta
-3. Post results on PR #104, #147, #86, #126
-4. Approve all PRs (c03rad0r)
-5. Wait for Amperstrand + Origami74 reviews
-6. Hardware validation after merges
-7. Frontend validation (Phase 3)
-8. Tier 2 approvals (Phase 4B)
+1. Update RELEASE-PLAN.md with new phases                          ← now
+2. Fix PR #143 CI (revert v3→v7/v8, force-push)
+3. Create draft PR for v3 downgrade + issue
+4. Write test_lightning_invoice.py, run on both routers
+5. Create 'ready for review' label, apply to all PRs
+6. Request formal reviewers on all PRs
+7. Post review guides on #104 and #147
+8. Commit + push updated plan
+9. Wait for Amperstrand + Origami74 reviews
+10. Hardware validation after merges
+11. Frontend validation (Phase 3)
+12. Tier 2 approvals (Phase 4B)
 ```
