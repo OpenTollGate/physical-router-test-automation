@@ -462,7 +462,44 @@ quote := storage.MintQuote{..., CreatedAt: createdAt}
 
 **Portal-side fix** (in `net4sats-captive-portal`): Added `LN005` error code that detects bolt11/zpay32 errors and shows "Lightning payments are not available with this mint. Please use Cashu tokens instead." This is a fallback for any remaining edge cases.
 
-**Deployment**: The fix flows through CI. `tollgate-module-basic-go`'s `go.mod` replace directive points to the Amperstrand gonuts fork with this commit. The `main` branch on `Amperstrand/tollgate-module-basic-go` includes this fix.
+**Deployment regression**: PR #126 was merged as `2cb771f` but the merge commit resolved the gonuts version conflict to the **tagged `v0.7.0` release**, which does NOT include the bolt11 tolerance fix. The `v0.7.0` tag was created from gonuts `main` before the `9b2b843` commit was merged. The fix only exists on the `feature/v2-keyset-ids` branch as pseudo-version `v0.0.0-20260528233401-9b2b84344c3a`.
+
+**Tracked as**: https://github.com/OpenTollGate/tollgate-module-basic-go/issues/156
+
+**Workaround**: `scripts/patch-gonuts-version.sh` is called by `deploy.sh` after cloning. It sed-replaces `v0.7.0` → `v0.0.0-20260528233401-9b2b84344c3a` in all three `go.mod` files before building. **Remove this script and its call in `deploy.sh` when gonuts-tollgate includes the bolt11 fix in a tagged release and tollgate-module-basic-go updates to it.**
+
+### Lightning invoice flow and testnut bolt11 limitation
+
+**The `/ln-invoice` endpoint** was added to tollgate-module-basic-go for Lightning payment support through the captive portal. The flow:
+
+1. Portal calls `POST /ln-invoice` with `{amount, mint_url}` → `main.go:handleLightningInvoicePost()`
+2. Backend calls `Merchant.RequestLightningInvoice(mac, mintURL, amount)` → `merchant/lightning.go`
+3. Calls `tollwallet.RequestMintQuote(amount, mintURL)` → gonuts `RequestMint()` → NUT-04 on mint
+4. Mint returns `{request: "...", quote: "...", state: UNPAID}`
+5. Backend stores the quote, starts `monitorLightningQuote()` goroutine
+6. Returns `{invoice: request, quote, amount, expiry}` to portal
+7. Portal decodes the invoice as bolt11 for QR code display
+8. Monitoring goroutine polls `MintQuoteState()` every 2s, detects payment, mints tokens, grants access
+
+**testnut.cashu.exchange returns a dummy string, not bolt11**:
+
+```
+testnut.cashu.exchange → "dummy-mint-4-46876457c0684c65d07e993705706d7b84c528aa75be1c722b8970f37585c7ba-exp1780177644"
+testnut.cashu.space    → "lnbc40n1p4pkkhl9qypqqqdqqxqrrsssp5recjpm6q6q8dnjqh04gpqn5zt8hfrhrtkdwtpwynnenjnjtm5hkq..."
+```
+
+`testnut.cashu.exchange` returns a placeholder string (`dummy-mint-{amount}-{hash}-exp{timestamp}`) that is NOT a bolt11 invoice. `testnut.cashu.space` returns a proper signed bolt11 invoice. Both CDK FakeWallet and Nutshell FakeWallet have proper `InvoiceBuilder` implementations — the `.exchange` domain appears to run a different or customized version.
+
+**Impact on testing**:
+- The gonuts tolerant fix (above) allows the quote to be created and stored despite the invalid `request`
+- The monitoring goroutine works correctly — FakeWallet auto-pays, tokens get minted, access is granted
+- The portal cannot decode the dummy string as bolt11 → Lightning tab shows error
+- Cashu token payment flow is unaffected
+- This is ONLY an issue with `testnut.cashu.exchange`. Production mints and `testnut.cashu.space` return valid bolt11
+
+**Workaround for Lightning simulation with testnut**: Either switch to `testnut.cashu.space` (returns real bolt11), or add invoice validation in `merchant/lightning.go:RequestLightningInvoice()` that detects non-bolt11 and returns an empty invoice string, letting the portal enter "auto-pay polling" mode instead of trying to display a QR code.
+
+**The "amount 0 sats" log error is NOT from `/ln-invoice`**: The backend log message `"Error getting invoice: amount 0 sats is outside allowed range (1000-1000000000 msats)"` comes from `MeltToLightning()` → `GetInvoiceFromLightningAddress()` in the **profit-share payout routine**, which runs on a 60-second timer. It fires when `aimedPaymentAmount * factor` rounds to 0 via integer math. This is a separate issue (filed as physical-router-test-automation#25) — the fix is a zero-amount guard in `processPayout()` before calling `MeltToLightning`. Do not confuse this error with the `/ln-invoice` flow.
 
 ### TollGate init script uses `/usr/bin/`, not `/usr/sbin/`
 
