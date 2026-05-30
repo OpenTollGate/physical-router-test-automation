@@ -128,7 +128,7 @@ STARTED_AT="$(read_field started_at timestamp "")"
 # shellcheck disable=SC2034
 DURATION_MS="$(read_field duration_ms duration_ms 0)"
 
-KEEP="${TOLLGATE_GH_PAGES_KEEP:-50}"
+KEEP="${TOLLGATE_GH_PAGES_KEEP:-10}"
 
 echo "==> Publishing report for commit ${COMMIT_SHORT}..."
 
@@ -308,6 +308,25 @@ purge_old_runs() {
 }
 
 purge_old_runs "$WORK/gh-pages/reports" "$KEEP"
+
+for hash_dir in "$WORK/gh-pages/reports"/*/; do
+  [ ! -d "$hash_dir" ] && continue
+  count=0
+  for ts_dir in "$hash_dir"*/; do
+    [ ! -d "$ts_dir" ] && continue
+    count=$((count + 1))
+  done
+  if [ "$count" -gt 2 ]; then
+    to_delete=$((count - 2))
+    deleted=0
+    for ts_dir in $(ls -1d "$hash_dir"*/ | sort | head -n "$to_delete"); do
+      [ ! -d "$ts_dir" ] && continue
+      echo "==> Purging old timestamp: $(basename "$ts_dir") under $(basename "$hash_dir")"
+      rm -rf "${ts_dir:?}"
+      deleted=$((deleted + 1))
+    done
+  fi
+done
 
 # ── Generate dashboard index.html ────────────────────────────────────
 
