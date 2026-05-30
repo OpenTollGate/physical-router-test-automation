@@ -128,7 +128,7 @@ STARTED_AT="$(read_field started_at timestamp "")"
 # shellcheck disable=SC2034
 DURATION_MS="$(read_field duration_ms duration_ms 0)"
 
-KEEP="${TOLLGATE_GH_PAGES_KEEP:-10}"
+KEEP="${TOLLGATE_GH_PAGES_KEEP:-5}"
 
 echo "==> Publishing report for commit ${COMMIT_SHORT}..."
 
