@@ -316,8 +316,8 @@ def _build_startup_script(suite_overlay_b64: str = "") -> str:
                 http://metadata.google.internal/computeMetadata/v1/instance/name)
             KEEP=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/attributes/tollgate-keep-vm-on-failure || true)
             echo "=== Teardown $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
-            if [ "$STATUS" -ne 0 ] && [ "$KEEP" = "true" ]; then
-                echo "Keeping VM for debugging because startup failed and keep-vm-on-failure=true"
+            if [ "$KEEP" = "true" ]; then
+                echo "Keeping VM for log inspection (keep-vm-on-failure=true, exit=$STATUS)"
                 return
             fi
             gcloud compute instances delete "$NAME" --project="$PROJECT" --zone="$ZONE" \\
