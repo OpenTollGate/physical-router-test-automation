@@ -165,10 +165,26 @@ mkdir -p "$TARGET_DIR"
 
 cp -r "$RUN_DIR/report" "$TARGET_DIR/report"
 cp "$RUN_DIR/run.json" "$TARGET_DIR/run.json"
+cp "$RUN_DIR/summary.json" "$TARGET_DIR/summary.json" 2>/dev/null || true
 
-# Copy raw artifacts if present
+# Copy only lightweight artifacts from raw/ — skip syslog, backend logs, mint logs, and failure logs.
+# These are available on the VM for SSH inspection before the 2h kill switch.
 if [[ -d "$RUN_DIR/raw" ]]; then
-  cp -r "$RUN_DIR/raw" "$TARGET_DIR/raw"
+  for runner_dir in "$RUN_DIR/raw"/*/; do
+    [ ! -d "$runner_dir" ] && continue
+    runner_name="$(basename "$runner_dir")"
+    mkdir -p "$TARGET_DIR/raw/$runner_name"
+    cp "$runner_dir"/junit.xml "$TARGET_DIR/raw/$runner_name/" 2>/dev/null || true
+    cp "$runner_dir"/report.html "$TARGET_DIR/raw/$runner_name/" 2>/dev/null || true
+  done
+
+  for ext in png webm mp4; do
+    while IFS= read -r -d '' file; do
+      rel="${file#$RUN_DIR/raw/}"
+      mkdir -p "$TARGET_DIR/raw/$(dirname "$rel")"
+      cp "$file" "$TARGET_DIR/raw/$rel" 2>/dev/null || true
+    done < <(find "$RUN_DIR/raw" -name "*.$ext" -print0 2>/dev/null)
+  done
 fi
 
 # ── Sanitization ─────────────────────────────────────────────────────
