@@ -159,15 +159,25 @@ jobs:
 
       - name: Post PR comment with results
         if: always() && inputs.pr != '' && steps.submit.outputs.run_id != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           RUN_ID="${{ steps.submit.outputs.run_id }}"
-          REPORT_URL="https://tests.tollgate.me/${RUN_ID}/"
-          cat <<EOF | gh pr comment ${{ inputs.pr }} --body-file -
+          BACKEND="${{ inputs.backend }}"
+          REPO="OpenTollGate/tollgate-module-basic-go"
+          if [ "$BACKEND" = "rust" ]; then
+            REPO="Amperstrand/tollgate-rs-ai-research-and-experiments"
+          fi
+          COMMIT_SHORT=$(gh pr view "${{ inputs.pr }}" --repo "$REPO" --json headRefOid -q '.headRefOid' | cut -c1-7)
+          REPORT_URL="https://tests.tollgate.me/reports/${COMMIT_SHORT}/${RUN_ID}/report/index.html"
+          DASHBOARD_URL="https://tests.tollgate.me/"
+          cat <<EOF | gh pr comment "${{ inputs.pr }}" --repo "$REPO" --body-file -
           ## Cloud Lab Run: \`${RUN_ID}\`
 
           **Status**: ${{ job.status }}
-          **Backend**: ${{ inputs.backend }}
-          **Report**: ${REPORT_URL}
+          **Backend**: ${BACKEND}
+          **Report**: [${REPORT_URL}](${REPORT_URL})
+          **Dashboard**: [tests.tollgate.me](${DASHBOARD_URL})
 
           Triggered by @${{ github.actor }} via workflow dispatch.
           EOF

@@ -1,0 +1,237 @@
+"""Cloud lab worker — declarative pytest runner."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
+
+from lib.cloud_lab.constants import TEST_DIR
+from lib.cloud_lab.worker.config import WorkerConfig
+from lib.cloud_lab.worker.shell import _run, log
+
+VL_SCENARIO_PATHS = (
+    "tests/scenarios/test_captive_portal_browser.py",
+    "tests/scenarios/test_mint_health.py",
+    "tests/scenarios/test_boot_hygiene.py",
+    "tests/scenarios/test_upstream_wifi.py",
+)
+
+
+@dataclass(frozen=True)
+class RunnerSpec:
+    name: str
+    paths: tuple[str, ...]
+    timeout: int = 300
+    markers: str | None = None
+    ignore_paths: tuple[str, ...] = ()
+    pytest_node: str | None = None
+    enabled: Callable[[WorkerConfig], bool] = field(default=lambda _c: True)
+
+    def junit_rel(self) -> str:
+        return f"raw/{self.name}/junit.xml"
+
+    def raw_dir(self, results_dir: str) -> str:
+        return f"{results_dir}/raw/{self.name}"
+
+
+def _always(_config: WorkerConfig) -> bool:
+    return True
+
+
+def _hwsim_enabled(config: WorkerConfig) -> bool:
+    return config.hwsim_enabled
+
+
+def _reseller_enabled(config: WorkerConfig) -> bool:
+    return config.reseller_scenarios
+
+
+def _two_router_enabled(config: WorkerConfig) -> bool:
+    return config.two_router
+
+
+def _virtual_wifi_enabled(config: WorkerConfig) -> bool:
+    return config.wifi_plane == "hwsim-netns"
+
+
+def build_runners(config: WorkerConfig) -> list[RunnerSpec]:
+    """Return ordered pytest runners for the given worker mode."""
+    if config.quick:
+        return [
+            RunnerSpec(
+                name="visual",
+                paths=("tests/api/test_visual_happy_path.py",),
+                timeout=300,
+                pytest_node="tests/api/test_visual_happy_path.py::test_visual_happy_path",
+            ),
+        ]
+
+    if config.smoke:
+        runners = [
+            RunnerSpec(
+                name="visual",
+                paths=("tests/api/test_visual_happy_path.py",),
+                timeout=300,
+            ),
+            RunnerSpec(
+                name="smoke-api",
+                paths=("tests/api/",),
+                timeout=120,
+                markers="smoke",
+                ignore_paths=("tests/api/test_visual_happy_path.py",),
+            ),
+            RunnerSpec(
+                name="hwsim",
+                paths=("tests/api/test_mac80211_hwsim.py",),
+                timeout=120,
+                enabled=_hwsim_enabled,
+            ),
+            RunnerSpec(
+                name="virtual-wifi",
+                paths=("tests/api/test_virtual_wifi_hwsim_netns.py",),
+                timeout=180,
+                enabled=_virtual_wifi_enabled,
+            ),
+        ]
+        return [r for r in runners if r.enabled(config)]
+
+    runners = [
+        RunnerSpec(name="visual", paths=("tests/api/test_visual_happy_path.py",), timeout=300),
+        RunnerSpec(
+            name="api",
+            paths=("tests/api/",),
+            timeout=300,
+            ignore_paths=("tests/api/test_visual_happy_path.py",),
+        ),
+        RunnerSpec(name="vl-scenarios", paths=VL_SCENARIO_PATHS, timeout=600),
+        RunnerSpec(
+            name="scenarios",
+            paths=("tests/scenarios/test_reseller_mode.py",),
+            timeout=300,
+            enabled=_reseller_enabled,
+        ),
+        RunnerSpec(
+            name="two-router",
+            paths=("tests/scenarios/test_two_router_cloud.py",),
+            timeout=300,
+            enabled=_two_router_enabled,
+        ),
+        RunnerSpec(
+            name="virtual-wifi",
+            paths=("tests/api/test_virtual_wifi_hwsim_netns.py",),
+            timeout=180,
+            enabled=_virtual_wifi_enabled,
+        ),
+    ]
+    return [r for r in runners if r.enabled(config)]
+
+
+def runner_scope(config: WorkerConfig) -> str:
+    if config.quick:
+        return "quick"
+    if config.smoke:
+        return "smoke"
+    return "full"
+
+
+def pytest_collect_args(config: WorkerConfig) -> str:
+    """Build --pytest name=path args for collect-results.py."""
+    parts = [f"--pytest {spec.name}={spec.junit_rel()}" for spec in build_runners(config)]
+    return " ".join(parts) + (" " if parts else "")
+
+
+def _expected_pr_arg(config: WorkerConfig) -> str:
+    return f"--expected-pr={config.sut_pr} " if config.sut_pr else ""
+
+
+def _build_pytest_cmd(config: WorkerConfig, spec: RunnerSpec, results_dir: str) -> str:
+    raw = spec.raw_dir(results_dir)
+    expected_pr = _expected_pr_arg(config)
+    target = spec.pytest_node or " ".join(spec.paths)
+    marker = f"-m {spec.markers} " if spec.markers else ""
+    ignore = " ".join(f"--ignore={p}" for p in spec.ignore_paths)
+    ignore_sp = f"{ignore} " if ignore else ""
+    return (
+        f"python3 -m pytest {target} "
+        f"-v --tb=short --timeout={spec.timeout} {marker}"
+        f"--backend={config.backend} "
+        f"{expected_pr}--client=container --results {results_dir} "
+        f"{ignore_sp}"
+        f"--junitxml={raw}/junit.xml "
+        f"--html={raw}/report.html --self-contained-html "
+        f">{raw}/output.log 2>&1"
+    )
+
+
+def _aggregate_exit(codes: dict[str, int]) -> int:
+    worst = 0
+    for code in codes.values():
+        if code != 0 and code > worst:
+            worst = code
+    return worst
+
+
+def run_tests(config: WorkerConfig, results_dir: str) -> int:
+    """Execute all enabled runners and return worst exit code."""
+    runners = build_runners(config)
+    if not runners:
+        log.warning("No test runners enabled for config")
+        return 0
+
+    raw_dirs = " ".join(f"{results_dir}/raw/{spec.name}" for spec in runners)
+    prep = (
+        f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
+        f"mkdir -p {raw_dirs} {results_dir}/report"
+    )
+    _run(prep, timeout=30, check=False)
+
+    mode = runner_scope(config)
+    log.info("%s MODE: running %d runner(s): %s", mode.upper(), len(runners), ", ".join(r.name for r in runners))
+
+    exit_codes: dict[str, int] = {}
+    total_timeout = 600 if config.quick else (1200 if config.smoke else 3000)
+
+    for spec in runners:
+        cmd = _build_pytest_cmd(config, spec, results_dir)
+        log.info("Runner [%s] starting (timeout=%ds)", spec.name, spec.timeout)
+        r = _run(cmd, timeout=total_timeout, check=False)
+        exit_codes[spec.name] = r.returncode
+        if r.returncode != 0:
+            log.warning("Runner [%s] exit=%d", spec.name, r.returncode)
+        else:
+            log.info("Runner [%s] passed", spec.name)
+
+    worst = _aggregate_exit(exit_codes)
+    log.info(
+        "All runners finished: worst_exit=%d (%s)",
+        worst,
+        ", ".join(f"{k}={v}" for k, v in exit_codes.items()),
+    )
+    return worst
+
+
+def skip_summary_from_junit(junit_path: str) -> dict[str, Any]:
+    """Parse skip reasons from a junit.xml file (best-effort)."""
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
+
+    path = Path(junit_path)
+    if not path.exists():
+        return {"total_skipped": 0, "reasons": {}}
+
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError:
+        return {"total_skipped": 0, "reasons": {}}
+
+    reasons: dict[str, int] = {}
+    skipped = 0
+    for case in root.iter("testcase"):
+        skip_el = case.find("skipped")
+        if skip_el is None:
+            continue
+        skipped += 1
+        msg = (skip_el.get("message") or skip_el.text or "unknown").strip()[:120]
+        reasons[msg] = reasons.get(msg, 0) + 1
+    return {"total_skipped": skipped, "reasons": reasons}

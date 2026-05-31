@@ -604,6 +604,11 @@ def main():
     failed_tests = [t for t in all_tests if t["outcome"] in ("failed", "error")]
     skipped_tests = [t for t in all_tests if t["outcome"] == "skipped"]
 
+    skip_reason_summary: dict[str, int] = {}
+    for test in skipped_tests:
+        reason = (test.get("failure_message") or test.get("name") or "unknown").strip()[:160]
+        skip_reason_summary[reason] = skip_reason_summary.get(reason, 0) + 1
+
     summary_json = {
         "run_id": run_id,
         "status": overall_status,
@@ -615,6 +620,7 @@ def main():
         "tests": all_tests,
         "failed_tests": failed_tests,
         "skipped_tests": skipped_tests,
+        "skip_reason_summary": skip_reason_summary,
     }
 
     run_json_path = os.path.join(run_dir, "run.json")
@@ -633,6 +639,11 @@ def main():
         f"({counts['passed']} passed, {counts['failed']} failed, {counts['skipped']} skipped)",
         file=sys.stderr,
     )
+    if skip_reason_summary and counts.get("skipped", 0) > 0:
+        top = sorted(skip_reason_summary.items(), key=lambda kv: (-kv[1], kv[0]))[:8]
+        print("==> Top skip reasons:", file=sys.stderr)
+        for reason, n in top:
+            print(f"    ({n}x) {reason}", file=sys.stderr)
 
     if not runners:
         sys.exit(2)

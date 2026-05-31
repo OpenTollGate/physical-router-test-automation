@@ -1,0 +1,12 @@
+target-version = "py312"
+line-length = 120
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# Ignore style noise in extracted legacy modules; enforce F821 separately in CI.
+ignore = ["E501", "SIM", "B904", "I001", "F401", "UP017", "F841", "B007"]
+
+[lint.per-file-ignores]
+"lib/cloud_lab/worker/**/*.py" = ["SIM115"]
+"scripts/cloud-lab.py" = ["E402", "E741", "UP035"]
+"tests/**/*.py" = ["SIM"]

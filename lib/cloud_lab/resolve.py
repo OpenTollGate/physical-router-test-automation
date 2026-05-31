@@ -42,6 +42,8 @@ def _resolve_pr(pr_number: str, backend: str) -> RunTarget:
         "--repo", backend_cfg.repo,
         "--json", "headRefName,headRefOid,headRepository,headRepositoryOwner",
     ])
+    if not isinstance(data, dict):
+        raise RuntimeError(f"PR {pr_number}: unexpected gh response type")
     ref = data.get("headRefName")
     sha = data.get("headRefOid")
     head_repo = data.get("headRepository") or {}

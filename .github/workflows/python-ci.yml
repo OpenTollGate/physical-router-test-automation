@@ -1,0 +1,49 @@
+# =============================================================================
+# Python CI — pytest collection, unit tests, ruff, mypy
+# =============================================================================
+# Guards the pytest-first test framework (lib/, tests/api/, cloud lab).
+# Does NOT require hardware or GCP credentials.
+# =============================================================================
+
+name: Python CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  python:
+    name: Python framework checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Verify pytest collection (all test files)
+        run: pytest --collect-only -q tests/
+
+      - name: Run unit tests
+        run: pytest tests/unit -q
+
+      - name: Ruff lint
+        run: ruff check lib/cloud_lab scripts/cloud-lab.py scripts/collect-results.py
+
+      - name: Mypy (cloud lab + lib)
+        run: mypy lib/cloud_lab scripts/cloud-lab.py
