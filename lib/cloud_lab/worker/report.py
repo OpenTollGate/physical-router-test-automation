@@ -141,7 +141,7 @@ def post_pr_comment(config: WorkerConfig, report_url: str, counts: dict[str, Any
         f"| {counts.get('passed', '?')} | {counts.get('failed', '?')} | {counts.get('skipped', '?')} |\n\n"
         f"[View full report]({report_url})\n"
     )
-    repo = config.artifact_repo
+    repo = config.pr_repo or config.artifact_repo
     _run(
         f"gh pr comment {shlex.quote(config.sut_pr)} --repo {shlex.quote(repo)} "
         f"--body {shlex.quote(body)}",

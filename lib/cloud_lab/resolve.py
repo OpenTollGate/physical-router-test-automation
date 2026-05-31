@@ -16,6 +16,7 @@ class RunTarget:
     sut_commit: str
     pr: str | None
     backend: str
+    pr_repo: str = ""
 
     @property
     def workflow(self) -> str:
@@ -53,7 +54,14 @@ def _resolve_pr(pr_number: str, backend: str) -> RunTarget:
     if not isinstance(ref, str) or not isinstance(sha, str):
         raise RuntimeError(f"PR {pr_number} has no usable head ref/sha")
     repo = f"{owner}/{name}" if owner and name else backend_cfg.repo
-    return RunTarget(repo=repo, branch=ref, sut_commit=sha, pr=pr_number, backend=backend)
+    return RunTarget(
+        repo=repo,
+        branch=ref,
+        sut_commit=sha,
+        pr=pr_number,
+        backend=backend,
+        pr_repo=backend_cfg.repo,
+    )
 
 
 def _resolve_commit(commit: str, backend: str, branch_hint: str | None) -> RunTarget:
@@ -62,7 +70,9 @@ def _resolve_commit(commit: str, backend: str, branch_hint: str | None) -> RunTa
     short = commit[:7] if len(commit) >= 7 else commit
 
     if branch_hint:
-        return RunTarget(repo=repo, branch=branch_hint, sut_commit=commit, pr=None, backend=backend)
+        return RunTarget(
+            repo=repo, branch=branch_hint, sut_commit=commit, pr=None, backend=backend, pr_repo=repo,
+        )
 
     # Try to find an open PR whose head matches this commit
     try:
@@ -91,6 +101,7 @@ def _resolve_commit(commit: str, backend: str, branch_hint: str | None) -> RunTa
                         sut_commit=oid if isinstance(oid, str) else commit,
                         pr=pr_num or None,
                         backend=backend,
+                        pr_repo=repo,
                     )
     except RuntimeError:
         pass
@@ -125,7 +136,7 @@ def resolve_target(
             target = RunTarget(
                 repo=repo_override, branch=target.branch,
                 sut_commit=target.sut_commit, pr=target.pr,
-                backend=target.backend,
+                backend=target.backend, pr_repo=target.pr_repo,
             )
         return target
     if commit:
@@ -134,7 +145,7 @@ def resolve_target(
             target = RunTarget(
                 repo=repo_override, branch=target.branch,
                 sut_commit=target.sut_commit, pr=target.pr,
-                backend=target.backend,
+                backend=target.backend, pr_repo=target.pr_repo,
             )
         return target
     assert branch is not None
@@ -145,4 +156,5 @@ def resolve_target(
         sut_commit="",
         pr=None,
         backend=backend,
+        pr_repo=repo_override or backend_cfg.repo,
     )

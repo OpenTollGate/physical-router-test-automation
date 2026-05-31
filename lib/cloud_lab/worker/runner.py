@@ -152,7 +152,7 @@ def _build_pytest_cmd(config: WorkerConfig, spec: RunnerSpec, results_dir: str) 
     marker = f"-m {spec.markers} " if spec.markers else ""
     ignore = " ".join(f"--ignore={p}" for p in spec.ignore_paths)
     ignore_sp = f"{ignore} " if ignore else ""
-    return (
+    pytest_cmd = (
         f"python3 -m pytest {target} "
         f"-v --tb=short --timeout={spec.timeout} {marker}"
         f"--backend={config.backend} "
@@ -161,6 +161,10 @@ def _build_pytest_cmd(config: WorkerConfig, spec: RunnerSpec, results_dir: str) 
         f"--junitxml={raw}/junit.xml "
         f"--html={raw}/report.html --self-contained-html "
         f">{raw}/output.log 2>&1"
+    )
+    return (
+        f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
+        f"{pytest_cmd}"
     )
 
 

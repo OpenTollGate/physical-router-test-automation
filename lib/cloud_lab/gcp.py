@@ -426,6 +426,7 @@ def submit_run(
         "tollgate-sut-branch": target.branch,
         "tollgate-artifact-run-id": artifact_run_id,
         "tollgate-artifact-repo": target.repo,
+        "tollgate-pr-repo": target.pr_repo or target.repo,
         "tollgate-suite-ref": suite_ref,
         "tollgate-backend": target.backend,
         "tollgate-publish": "true" if publish else "false",

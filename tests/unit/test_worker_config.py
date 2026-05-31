@@ -15,6 +15,7 @@ def test_load_config_from_metadata_parses_flags():
         "tollgate-pr": "104",
         "tollgate-artifact-run-id": "999",
         "tollgate-artifact-repo": "OpenTollGate/tollgate-module-basic-go",
+        "tollgate-pr-repo": "OpenTollGate/tollgate-module-basic-go",
         "tollgate-suite-ref": "deadbeef",
         "tollgate-backend": "go",
         "tollgate-reseller-scenarios": "false",
@@ -53,3 +54,4 @@ def test_load_config_from_metadata_parses_flags():
     assert cfg.publish is True
     assert cfg.keep_vm_on_failure is True
     assert cfg.artifact_repo == "OpenTollGate/tollgate-module-basic-go"
+    assert cfg.pr_repo == "OpenTollGate/tollgate-module-basic-go"

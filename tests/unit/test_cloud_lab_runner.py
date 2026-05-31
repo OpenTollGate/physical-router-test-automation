@@ -6,6 +6,7 @@ from lib.cloud_lab.worker.config import WorkerConfig
 from lib.cloud_lab.worker.runner import (
     RunnerSpec,
     _aggregate_exit,
+    _build_pytest_cmd,
     build_runners,
     pytest_collect_args,
     runner_scope,
@@ -20,6 +21,7 @@ def _base_config(**overrides) -> WorkerConfig:
         sut_pr="104",
         artifact_run_id="12345",
         artifact_repo="OpenTollGate/tollgate-module-basic-go",
+        pr_repo="OpenTollGate/tollgate-module-basic-go",
         suite_ref="deadbeef",
         backend="go",
         reseller_scenarios=False,
@@ -104,3 +106,11 @@ def test_aggregate_exit_worst_of():
 def test_runner_spec_junit_rel():
     spec = RunnerSpec(name="api", paths=("tests/api/",))
     assert spec.junit_rel() == "raw/api/junit.xml"
+
+
+def test_build_pytest_cmd_activates_venv():
+    cfg = _base_config(smoke=True)
+    spec = build_runners(cfg)[0]
+    cmd = _build_pytest_cmd(cfg, spec, "/tmp/results")
+    assert "source /opt/tollgate-venv/bin/activate" in cmd
+    assert "python3 -m pytest" in cmd

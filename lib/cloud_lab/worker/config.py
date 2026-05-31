@@ -17,6 +17,7 @@ class WorkerConfig:
     sut_pr: str
     artifact_run_id: str
     artifact_repo: str
+    pr_repo: str
     suite_ref: str
     backend: str
     reseller_scenarios: bool
@@ -56,6 +57,7 @@ def load_config_from_metadata() -> WorkerConfig:
         sut_pr=_metadata_get("tollgate-pr"),
         artifact_run_id=_metadata_get("tollgate-artifact-run-id"),
         artifact_repo=_metadata_get("tollgate-artifact-repo"),
+        pr_repo=_metadata_get_optional("tollgate-pr-repo"),
         suite_ref=_metadata_get("tollgate-suite-ref"),
         backend=_metadata_get("tollgate-backend"),
         reseller_scenarios=_metadata_get_optional("tollgate-reseller-scenarios").lower() in ("true", "1", "yes"),
