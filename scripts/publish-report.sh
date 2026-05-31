@@ -132,10 +132,35 @@ KEEP="${TOLLGATE_GH_PAGES_KEEP:-5}"
 
 echo "==> Publishing report for commit ${COMMIT_SHORT}..."
 
+# ── Configure git auth ───────────────────────────────────────────────
+# Use GH_TOKEN (or GITHUB_TOKEN) for git push if available.
+if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
+  _token="${GH_TOKEN:-$GITHUB_TOKEN}"
+  # Rewrite SSH remotes to HTTPS so the token works
+  REPO_DIR_CANDIDATE="$(cd "$(dirname "$0")/.." && pwd)"
+  CURRENT_REMOTE="$(git -C "$REPO_DIR_CANDIDATE" remote get-url origin 2>/dev/null || true)"
+  if [[ "$CURRENT_REMOTE" == git@github.com:* ]]; then
+    REPO_SLUG="${CURRENT_REMOTE#git@github.com:}"
+    REPO_SLUG="${REPO_SLUG%.git}"
+    REMOTE_URL="https://x-access-token:${_token}@github.com/${REPO_SLUG}.git"
+  else
+    REMOTE_URL="${CURRENT_REMOTE%.git}.git"
+    # Inject token into HTTPS URL if not already present
+    if [[ "$REMOTE_URL" != *x-access-token* ]]; then
+      REMOTE_URL="${REMOTE_URL/https:\/\//https:\/\/x-access-token:${_token}@}"
+    fi
+  fi
+  unset _token
+else
+  REMOTE_URL="$(git -C "$(cd "$(dirname "$0")/.." && pwd)" remote get-url origin)"
+fi
+
 # ── Clone or create gh-pages ─────────────────────────────────────────
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-REMOTE_URL="$(git -C "$REPO_DIR" remote get-url origin)"
+if [ -z "${REMOTE_URL:-}" ]; then
+  REMOTE_URL="$(git -C "$REPO_DIR" remote get-url origin)"
+fi
 
 WORK=$(mktemp -d /tmp/tollgate-report-XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
@@ -175,7 +200,6 @@ if [[ -d "$RUN_DIR/raw" ]]; then
     runner_name="$(basename "$runner_dir")"
     mkdir -p "$TARGET_DIR/raw/$runner_name"
     cp "$runner_dir"/junit.xml "$TARGET_DIR/raw/$runner_name/" 2>/dev/null || true
-    cp "$runner_dir"/report.html "$TARGET_DIR/raw/$runner_name/" 2>/dev/null || true
   done
 
   for ext in png webm mp4; do

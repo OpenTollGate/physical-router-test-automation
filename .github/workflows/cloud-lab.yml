@@ -1,0 +1,181 @@
+# =============================================================================
+# Cloud Lab CI — GCP nested-virt test runner
+# =============================================================================
+# Triggers a TollGate cloud lab run on GCP. The workflow:
+#   1. Authenticates to GCP via service account
+#   2. Waits for an upstream CI artifact (x86_64 .ipk)
+#   3. Creates a GCP VM from the baked runner snapshot
+#   4. VM runs tests autonomously and publishes to gh-pages
+#   5. Optionally blocks until the VM finishes (--wait)
+#
+# Secrets required (Settings → Secrets and variables → Actions):
+#   GCP_SERVICE_ACCOUNT_KEY  — base64-encoded GCP service account JSON key
+#   GH_TOKEN                 — GitHub token for artifact download + gh-pages push
+#
+# One-off launch:
+#   gh workflow run cloud-lab.yml --field pr=42 --field publish=true
+#   gh workflow run cloud-lab.yml --field branch=main --field publish=true
+# =============================================================================
+
+name: Cloud Lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number to test (mutually exclusive with branch/commit)"
+        required: false
+        default: ""
+      branch:
+        description: "Branch to test (mutually exclusive with pr/commit)"
+        required: false
+        default: ""
+      commit:
+        description: "Commit hash to test (requires --branch)"
+        required: false
+        default: ""
+      backend:
+        description: "Backend to test"
+        type: choice
+        options: [go, rust]
+        default: go
+      repo:
+        description: "Override artifact repo (e.g. Amperstrand/tollgate-module-basic-go)"
+        required: false
+        default: ""
+      publish:
+        description: "Publish report to tests.tollgate.me"
+        type: boolean
+        default: true
+      wait:
+        description: "Block until VM finishes (else fire-and-forget)"
+        type: boolean
+        default: true
+      smoke:
+        description: "Smoke mode: visual + smoke API only (~8min)"
+        type: boolean
+        default: false
+      quick:
+        description: "Quick mode: visual happy path only (~5min)"
+        type: boolean
+        default: false
+      hwsim:
+        description: "Enable mac80211_hwsim virtual WiFi"
+        type: boolean
+        default: false
+      vwifi:
+        description: "Enable vwifi cross-VM WiFi relay"
+        type: boolean
+        default: false
+      two-router:
+        description: "Boot second OpenWrt VM for two-router tests"
+        type: boolean
+        default: false
+      reseller-scenarios:
+        description: "Run virtualizable reseller-mode scenario tests"
+        type: boolean
+        default: false
+      self-delete:
+        description: "Self-delete VM after tests (default: keep for debugging)"
+        type: boolean
+        default: false
+      artifact-timeout:
+        description: "Seconds to wait for upstream CI artifact"
+        type: number
+        default: 1800
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  submit:
+    name: "Submit cloud lab run"
+    runs-on: ubuntu-latest
+    timeout-minutes: 120  # 2h hard limit (matches VM kill switch)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure gcloud project
+        run: gcloud config set project tollgate-test-lab
+
+      - name: Authenticate GitHub CLI
+        run: echo "${{ secrets.GH_TOKEN }}" | gh auth login --with-token
+
+      - name: Build submit arguments
+        id: args
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.pr }}" ]; then
+            ARGS="$ARGS --pr ${{ inputs.pr }}"
+          elif [ -n "${{ inputs.commit }}" ]; then
+            ARGS="$ARGS --commit ${{ inputs.commit }}"
+            if [ -n "${{ inputs.branch }}" ]; then
+              ARGS="$ARGS --branch ${{ inputs.branch }}"
+            fi
+          elif [ -n "${{ inputs.branch }}" ]; then
+            ARGS="$ARGS --branch ${{ inputs.branch }}"
+          else
+            echo "ERROR: Must specify pr, branch, or commit"
+            exit 1
+          fi
+
+          ARGS="$ARGS --backend ${{ inputs.backend }}"
+          [ -n "${{ inputs.repo }}" ] && ARGS="$ARGS --repo ${{ inputs.repo }}"
+          [ "${{ inputs.publish }}" = "true" ] && ARGS="$ARGS --publish"
+          [ "${{ inputs.wait }}" = "true" ] && ARGS="$ARGS --wait"
+          [ "${{ inputs.smoke }}" = "true" ] && ARGS="$ARGS --smoke"
+          [ "${{ inputs.quick }}" = "true" ] && ARGS="$ARGS --quick"
+          [ "${{ inputs.hwsim }}" = "true" ] && ARGS="$ARGS --hwsim"
+          [ "${{ inputs.vwifi }}" = "true" ] && ARGS="$ARGS --vwifi"
+          [ "${{ inputs.two-router }}" = "true" ] && ARGS="$ARGS --two-router"
+          [ "${{ inputs.reseller-scenarios }}" = "true" ] && ARGS="$ARGS --reseller-scenarios"
+          [ "${{ inputs.self-delete }}" = "true" ] && ARGS="$ARGS --self-delete"
+          ARGS="$ARGS --artifact-timeout ${{ inputs.artifact-timeout }}"
+
+          echo "submit_args=$ARGS" >> "$GITHUB_OUTPUT"
+          echo "Submit args: $ARGS"
+
+      - name: Submit cloud lab run
+        id: submit
+        run: |
+          python3 scripts/cloud-lab.py submit ${{ steps.args.outputs.submit_args }} 2>&1 | tee submit-output.txt
+          # Extract run_id from output for downstream use
+          RUN_ID=$(grep -oP 'Submitted run \K[^\s]+' submit-output.txt || true)
+          [ -n "$RUN_ID" ] && echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Post PR comment with results
+        if: always() && inputs.pr != '' && steps.submit.outputs.run_id != ''
+        run: |
+          RUN_ID="${{ steps.submit.outputs.run_id }}"
+          REPORT_URL="https://tests.tollgate.me/${RUN_ID}/"
+          cat <<EOF | gh pr comment ${{ inputs.pr }} --body-file -
+          ## Cloud Lab Run: \`${RUN_ID}\`
+
+          **Status**: ${{ job.status }}
+          **Backend**: ${{ inputs.backend }}
+          **Report**: ${REPORT_URL}
+
+          Triggered by @${{ github.actor }} via workflow dispatch.
+          EOF
+
+      - name: Upload submit output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud-lab-submit-output
+          path: submit-output.txt
+          retention-days: 30
