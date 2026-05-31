@@ -2370,12 +2370,12 @@ def publish_results(config: WorkerConfig, results_dir: str) -> str:
     log.info("Publishing from results_dir=%s → expected_url=%s", results_dir, expected_url)
 
     try:
+        gh_token = os.environ.get("GH_TOKEN", "")
         _run(
             f"git config --global user.email 'tollgate-ci@users.noreply.github.com' && "
             f"git config --global user.name 'TollGate CI' && "
             f"git config --global --add safe.directory '*' && "
-            f"gh auth setup-git 2>/dev/null || true && "
-            f"cd {TEST_DIR} && TOLLGATE_GH_PAGES_CNAME=tests.tollgate.me "
+            f"cd {TEST_DIR} && GH_TOKEN={shlex.quote(gh_token)} TOLLGATE_GH_PAGES_CNAME=tests.tollgate.me "
             f"./scripts/publish-report.sh {shlex.quote(results_dir)}",
             timeout=1200,
         )
