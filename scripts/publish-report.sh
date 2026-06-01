@@ -132,6 +132,12 @@ KEEP="${TOLLGATE_GH_PAGES_KEEP:-5}"
 
 echo "==> Publishing report for commit ${COMMIT_SHORT}..."
 
+# Strip any embedded auth token from text on stdin (sed in stream mode).
+# Prevents git error messages from leaking x-access-token:TOKEN@github.com.
+scrub_token() {
+  sed -E 's#(https?://)x-access-token:[^@]*@#\1x-access-token:***@#g; s#(https?://)[^:/@]+:[^@]*@#\1***:***@#g'
+}
+
 # ── Configure git auth ───────────────────────────────────────────────
 # Use GH_TOKEN (or GITHUB_TOKEN) for git push if available.
 if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
@@ -171,7 +177,7 @@ if git clone --depth 1 --single-branch -b gh-pages "$REMOTE_URL" "$WORK/gh-pages
 else
   echo "==> gh-pages branch not found or clone failed (creating fresh)"
   if [ -s "$CLONE_LOG" ]; then
-    echo "    clone stderr: $(head -5 "$CLONE_LOG")"
+    echo "    clone stderr: $(head -5 "$CLONE_LOG" | scrub_token)"
   fi
   mkdir -p "$WORK/gh-pages"
   cd "$WORK/gh-pages"
@@ -415,7 +421,7 @@ for attempt in $(seq 1 10); do
     git commit -m "report: ${COMMIT_SHORT} ${DIR_TIMESTAMP}" || true
   fi
 
-  if git push origin gh-pages 2>&1; then
+  if git push origin gh-pages 2>&1 | scrub_token; then
     PUSH_OK=1
     break
   fi
@@ -427,7 +433,7 @@ done
 if [ "$PUSH_OK" -ne 1 ]; then
   echo "WARNING: Direct gh-pages push failed — falling back to ${RUN_BRANCH}"
   git branch -f "$RUN_BRANCH" HEAD 2>/dev/null || true
-  if git push origin "$RUN_BRANCH" 2>&1; then
+  if git push origin "$RUN_BRANCH" 2>&1 | scrub_token; then
     echo "==> Pushed report to ${RUN_BRANCH} (merge into gh-pages manually)"
     PUSH_OK=2
   else
