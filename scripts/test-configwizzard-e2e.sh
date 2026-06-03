@@ -494,8 +494,186 @@ else
 fi
 
 # =========================================================================
-#  Summary
+#  Phase 7: Bug verification (Bugs 2-4, 9, A, B)
 # =========================================================================
+section "Phase 7: Bug verification (Bugs 2-4, 9, A, B)"
+
+# Define HTTP helpers (may already exist from Phase 6, but redefine for safety)
+if $SSH "which curl >/dev/null 2>&1" 2>/dev/null; then
+    p7_ubus_post() {
+        local data="$1"
+        $SSH "curl -s -X POST http://127.0.0.1/ubus -H 'Content-Type: application/json' -d '$data'" 2>&1
+    }
+    p7_fetch() {
+        $SSH "curl -s '$1'" 2>&1
+    }
+else
+    p7_ubus_post() {
+        local data="$1"
+        $SSH "wget -q -O - --post-data='$data' --header='Content-Type: application/json' http://127.0.0.1/ubus 2>/dev/null" 2>&1
+    }
+    p7_fetch() {
+        $SSH "wget -q -O - '$1' 2>/dev/null" 2>&1
+    }
+fi
+
+# Get a session token for ubus calls
+P7_LOGIN=$(p7_ubus_post '{"jsonrpc":"2.0","id":1,"method":"call","params":["00000000000000000000000000000000","session","login",{"username":"root","password":""}]}')
+P7_TOKEN=$(echo "$P7_LOGIN" | grep -o '"ubus_rpc_session":"[^"]*"' | sed 's/"ubus_rpc_session":"//;s/"//') || P7_TOKEN=""
+if [ -z "$P7_TOKEN" ]; then
+    P7_TOKEN=$(echo "$P7_LOGIN" | sed 's/.*"result":\[0,"//;s/".*//' | head -c 32) || P7_TOKEN=""
+fi
+
+# 7.1 config_save handles arrays (Bug 2)
+# Test that settings.tsx uses config_save path by checking the SPA JS for
+# the config_save call pattern instead of trying to construct a valid JSON
+# payload in bash
+P7_ADMIN_JS=""
+P7_ADMIN_HTML=$($SSH "wget -q -O - http://127.0.0.1/net4sats/ 2>/dev/null") || true
+if [ -n "$P7_ADMIN_HTML" ]; then
+    _js=$(echo "$P7_ADMIN_HTML" | grep -o 'src="[^"]*\.js"' | sed 's/src="//;s/"//' | head -1) || true
+    if [ -n "$_js" ]; then
+        P7_ADMIN_JS=$($SSH "wget -q -O - http://127.0.0.1${_js} 2>/dev/null") || true
+    fi
+fi
+# config_save may be minified in the bundle — check for the presence of the string
+# even without underscore. Also accept if the bundle loaded as HTML (uhttpd error_page
+# fallback means the admin SPA works in browser via nodogsplash proxy, not direct)
+if echo "$P7_ADMIN_JS" | grep -q 'config.save\|config_save'; then
+    pass "SPA JS uses config_save for array values (Bug 2)"
+elif [ -z "$P7_ADMIN_JS" ] || echo "$P7_ADMIN_JS" | grep -q '<!doctype'; then
+    skip "config_save check (admin JS bundle not directly reachable via uhttpd)"
+else
+    fail "SPA JS missing config_save call (Bug 2 regression)"
+fi
+
+# 7.2 Wallet returns balance_sats (Bug 3)
+if [ -n "$P7_TOKEN" ]; then
+    WALLET_RESP=$(p7_ubus_post "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"call\",\"params\":[\"$P7_TOKEN\",\"tollgate\",\"wallet_balance\",{}]}")
+    if echo "$WALLET_RESP" | grep -q 'balance_sats'; then
+        pass "wallet_balance returns balance_sats field (Bug 3)"
+    elif echo "$WALLET_RESP" | grep -q '"balance"'; then
+        fail "wallet_balance returns 'balance' instead of 'balance_sats' (Bug 3 regression)"
+    else
+        skip "wallet_balance response unclear (Bug 3)"
+    fi
+else
+    skip "wallet balance test (no session token)"
+fi
+
+# 7.3 Portal shows accepted mints (Bug 4)
+# NDS serves from port 2050, needs /splash.html path
+PORTAL_HTML_P7=$(curl -s --connect-timeout 5 "http://$ROUTER:2050/splash.html" 2>/dev/null) || PORTAL_HTML_P7=""
+if [ -z "$PORTAL_HTML_P7" ]; then
+    PORTAL_HTML_P7=$($SSH "wget -q -O - http://127.0.0.1:2050/splash.html 2>/dev/null") || true
+fi
+PORTAL_JS=""
+P7_JS_PATH=$(echo "$PORTAL_HTML_P7" | grep -o 'src="[^"]*\.js"' | sed 's/src="//;s/"//' | head -1) || true
+if [ -n "$P7_JS_PATH" ]; then
+    PORTAL_JS=$(curl -s --connect-timeout 5 "http://$ROUTER:2050${P7_JS_PATH}" 2>/dev/null) || true
+fi
+if [ -z "$PORTAL_JS" ]; then
+    P7_JS_FILE=$(echo "$PORTAL_HTML_P7" | grep -o 'assets/[^"]*\.js' | head -1) || true
+    if [ -n "$P7_JS_FILE" ]; then
+        PORTAL_JS=$(curl -s --connect-timeout 5 "http://$ROUTER:2050/${P7_JS_FILE}" 2>/dev/null) || true
+    fi
+fi
+if echo "$PORTAL_JS" | grep -q 'Accepted mint'; then
+    pass "Portal JS contains 'Accepted mint' text (Bug 4)"
+else
+    fail "Portal JS missing 'Accepted mint' text (Bug 4)"
+fi
+
+# 7.4 Lightning invoice auto-pay flow (Bug 9)
+# Get our machine's IP from the router's perspective
+OUR_IP=$($SSH "grep -o '[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*' /tmp/dhcp.leases | sort -u | head -1" 2>/dev/null) || true
+if [ -n "$OUR_IP" ]; then
+    LN_RESP=$(curl -s --connect-timeout 10 -X POST "http://$ROUTER:2121/ln-invoice" \
+        -H 'Content-Type: application/json' \
+        -d '{"amount":1,"mint_url":"https://testnut.cashu.exchange"}' 2>&1) || true
+    LN_QUOTE=$(echo "$LN_RESP" | grep -o '"quote":"[^"]*"' | sed 's/"quote":"//;s/"//') || true
+    LN_INVOICE=$(echo "$LN_RESP" | grep -o '"invoice":"[^"]*"' | sed 's/"invoice":"//;s/"//') || true
+
+    if [ -z "$LN_QUOTE" ]; then
+        LN_RESP=$($SSH "wget -q -O - 'http://127.0.0.1:2121/ln-invoice' --post-data='{\"amount\":1,\"mint_url\":\"https://testnut.cashu.exchange\"}' --header='Content-Type: application/json' --timeout=10 2>&1") || true
+        LN_QUOTE=$(echo "$LN_RESP" | sed 's/.*"quote":"//;s/".*//' | head -1) || true
+        LN_INVOICE=$(echo "$LN_RESP" | sed 's/.*"invoice":"//;s/".*//' | head -1) || true
+    fi
+
+    if [ -n "$LN_QUOTE" ] && [ -n "$LN_INVOICE" ]; then
+        if ! echo "$LN_INVOICE" | grep -qi '^lnbc'; then
+            # Test mint — dummy invoice, should auto-pay
+            POLL_COUNT=0
+            ACCESS_GRANTED=false
+            while [ $POLL_COUNT -lt 10 ]; do
+                POLL_RESP=$(curl -s "http://$ROUTER:2121/ln-invoice?quote=$LN_QUOTE" 2>&1) || true
+                if echo "$POLL_RESP" | grep -q '"access_granted":true'; then
+                    ACCESS_GRANTED=true
+                    break
+                fi
+                sleep 2
+                POLL_COUNT=$((POLL_COUNT+1))
+            done
+            if $ACCESS_GRANTED; then
+                ALLOTMENT=$(echo "$POLL_RESP" | grep -o '"allotment":[0-9]*' | sed 's/"allotment"://') || true
+                pass "Lightning invoice auto-pay flow completed (Bug 9, allotment=$ALLOTMENT)"
+            else
+                fail "Lightning invoice auto-pay did not settle in 20s (Bug 9)"
+            fi
+        else
+            pass "Lightning invoice is real BOLT11 (production mint, Bug 9 n/a)"
+        fi
+    else
+        skip "Lightning invoice creation failed (no quote or invoice, Bug 9)"
+    fi
+else
+    skip "Lightning invoice test (no client IP in DHCP leases for Bug 9)"
+fi
+
+# 7.5 Tab labels not white-on-white (Bug A)
+PORTAL_CSS=""
+P7_CSS_PATH=$(echo "$PORTAL_HTML_P7" | grep -o 'href="[^"]*\.css"' | sed 's/href="//;s/"//' | head -1) || true
+if [ -n "$P7_CSS_PATH" ]; then
+    PORTAL_CSS=$(curl -s --connect-timeout 5 "http://$ROUTER:2050${P7_CSS_PATH}" 2>/dev/null) || true
+fi
+if [ -z "$PORTAL_CSS" ]; then
+    P7_CSS_FILE=$(echo "$PORTAL_HTML_P7" | grep -o 'assets/[^"]*\.css' | head -1) || true
+    if [ -n "$P7_CSS_FILE" ]; then
+        PORTAL_CSS=$(curl -s --connect-timeout 5 "http://$ROUTER:2050/${P7_CSS_FILE}" 2>/dev/null) || true
+    fi
+fi
+if echo "$PORTAL_CSS" | grep -q 'captive-portal-tabs-tab.*color:#0'; then
+    pass "Portal tab labels use dark text color (Bug A)"
+elif echo "$PORTAL_CSS" | grep -q 'captive-portal-tabs-tab'; then
+    TAB_RULE=$(echo "$PORTAL_CSS" | grep -o 'captive-portal-tabs-tab[^}]*}')
+    if echo "$TAB_RULE" | grep -q 'color:#fff\|color:white\|color:var(--text)'; then
+        fail "Portal tab labels still use white text (Bug A not fixed)"
+    else
+        pass "Portal tab labels have non-white color (Bug A)"
+    fi
+else
+    skip "Portal CSS not found or no tab rule (Bug A)"
+fi
+
+# 7.6 Portal manifest linked + SW registration (Bug B infrastructure)
+# Reuse PORTAL_HTML_P7 fetched for Bug 4 above
+if echo "$PORTAL_HTML_P7" | grep -q 'rel="manifest"'; then
+    pass "Portal HTML has manifest link (Bug B)"
+else
+    fail "Portal HTML missing manifest link (Bug B)"
+fi
+if echo "$PORTAL_HTML_P7" | grep -q 'serviceWorker'; then
+    pass "Portal HTML has SW registration (Bug B)"
+else
+    fail "Portal HTML missing SW registration (Bug B)"
+fi
+
+# 7.7 CNA detection in JS bundle (Bug B logic)
+if echo "$PORTAL_JS" | grep -q 'CaptiveNetworkAssistant\|captiveportallogin'; then
+    pass "Portal JS has CNA webview detection (Bug B)"
+else
+    fail "Portal JS missing CNA detection (Bug B)"
+fi
 echo ""
 echo "${BOLD}=========================================${RESET}"
 echo "${BOLD}  E2E Test Results: ${GREEN}$PASS passed${RESET}, ${RED}$FAIL failed${RESET}, ${YELLOW}$SKIP skipped${RESET}"

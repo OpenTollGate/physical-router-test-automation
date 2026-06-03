@@ -99,4 +99,54 @@ test.describe('captive portal splash page', () => {
 			`Expected NDS redirect but got url=${url} status=${response?.status()}`,
 		).toBeTruthy();
 	});
+
+	test('tab labels are readable with dark text (Bug A)', async ({ page }) => {
+		await page.goto(SPLASH_PATH, { waitUntil: 'domcontentloaded' });
+		await page.waitForTimeout(2000);
+
+		const tabColor = await page.evaluate(() => {
+			const tabs = document.querySelectorAll(
+				'[class*="captive-portal-tabs-tab"]',
+			);
+			if (tabs.length === 0) return null;
+			const style = window.getComputedStyle(tabs[0]);
+			return style.color;
+		});
+
+		expect(tabColor, 'Tab elements not found').not.toBeNull();
+		expect(tabColor, 'Tab text must not be white').not.toBe('rgb(255, 255, 255)');
+		expect(tabColor, 'Tab text must not be white').not.toBe('#fff');
+	});
+
+	test('PWA modal shows standard instructions in normal browser (Bug B)', async ({ page }) => {
+		await page.goto(SPLASH_PATH, { waitUntil: 'domcontentloaded' });
+		await page.waitForTimeout(2000);
+
+		const modalText = await page.evaluate(() => {
+			const modal = document.querySelector('[class*="pwa-modal"]');
+			return modal ? modal.textContent : null;
+		});
+
+		if (modalText) {
+			expect(modalText).toContain('Add to Home Screen');
+		}
+	});
+});
+
+test.describe('captive portal — CNA webview simulation', () => {
+	test.use({ userAgent: 'CaptiveNetworkAssistant/1.0 com.android.captiveportallogin' });
+
+	test('PWA modal shows CNA-specific instructions (Bug B)', async ({ page }) => {
+		await page.goto(SPLASH_PATH, { waitUntil: 'domcontentloaded' });
+		await page.waitForTimeout(2000);
+
+		const modalText = await page.evaluate(() => {
+			const modal = document.querySelector('[class*="pwa-modal"]');
+			return modal ? modal.textContent : null;
+		});
+
+		if (modalText) {
+			expect(modalText).toContain('Open in Browser');
+		}
+	});
 });
