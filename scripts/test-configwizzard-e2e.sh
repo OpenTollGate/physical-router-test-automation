@@ -404,6 +404,96 @@ else
 fi
 
 # =========================================================================
+#  Phase 6: Login/Auth (configurationwizzard Bugs 6 & 7)
+# =========================================================================
+section "Phase 6: Login/Auth (configurationwizzard Bugs 6 & 7)"
+
+# Detect available HTTP tool on router (BusyBox wget or curl)
+if $SSH "which curl >/dev/null 2>&1" 2>/dev/null; then
+    _ubus_post() {
+        local data="$1"
+        $SSH "curl -s -X POST http://127.0.0.1/ubus -H 'Content-Type: application/json' -d '$data'" 2>&1
+    }
+    _fetch_url() {
+        $SSH "curl -s '$1'" 2>&1
+    }
+else
+    _ubus_post() {
+        local data="$1"
+        $SSH "wget -q -O - --post-data='$data' --header='Content-Type: application/json' http://127.0.0.1/ubus 2>/dev/null" 2>&1
+    }
+    _fetch_url() {
+        $SSH "wget -q -O - '$1' 2>/dev/null" 2>&1
+    }
+fi
+
+# Save current password state
+HAS_PASSWORD=$($SSH "grep -c '^\$5\|^\$6\|^\$1' /etc/shadow 2>/dev/null | head -1" 2>&1) || HAS_PASSWORD="0"
+# Delete password so empty login works
+$SSH "passwd -d root 2>/dev/null" || true
+sleep 1
+
+# 6.1 Empty password login succeeds (Bug 6)
+EMPTY_LOGIN=$(_ubus_post '{"jsonrpc":"2.0","id":1,"method":"call","params":["00000000000000000000000000000000","session","login",{"username":"root","password":""}]}')
+if echo "$EMPTY_LOGIN" | grep -q '"result":\[0,'; then
+    pass "empty password login succeeds (Bug 6)"
+else
+    fail "empty password login failed (got: $(echo "$EMPTY_LOGIN" | head -c 200))"
+fi
+
+# 6.2 Invalid session returns error (Bug 8 — OpenWrt 25 JSON-RPC error format)
+INVALID_SESSION=$(_ubus_post '{"jsonrpc":"2.0","id":1,"method":"call","params":["invalidsession123","tollgate","status",{}]}')
+if echo "$INVALID_SESSION" | grep -q '"error":.*-32002'; then
+    pass "invalid session returns JSON-RPC error -32002 (OpenWrt 25 format, Bug 8)"
+elif echo "$INVALID_SESSION" | grep -q '"result":\[6\]'; then
+    pass "invalid session returns result code 6 (OpenWrt 24 format)"
+else
+    fail "unexpected response for invalid session ($(echo "$INVALID_SESSION" | head -c 200))"
+fi
+
+# 6.3 Wrong password handling (Bug 7)
+# Only test if router has a password set — skip on passwordless routers
+# because session.login accepts any password when root has none
+HAS_SHADOW=$($SSH "grep -c '^root:\$' /etc/shadow 2>/dev/null" 2>&1) || HAS_SHADOW="0"
+if [ "$HAS_SHADOW" != "0" ]; then
+    WRONG_LOGIN=$(_ubus_post '{"jsonrpc":"2.0","id":1,"method":"call","params":["00000000000000000000000000000000","session","login",{"username":"root","password":"definitely-wrong-password-12345"}]}')
+    if echo "$WRONG_LOGIN" | grep -q '"result":\[6\]'; then
+        pass "wrong password returns ubus error code 6 (Bug 7 backend)"
+    elif echo "$WRONG_LOGIN" | grep -q '"error"'; then
+        pass "wrong password returns JSON-RPC error (Bug 7 backend, OpenWrt 25)"
+    else
+        fail "wrong password unexpected response ($(echo "$WRONG_LOGIN" | head -c 200))"
+    fi
+else
+    skip "wrong password test (root has no password set)"
+fi
+
+# 6.4 Sign-In button enabled with empty password (Bug 6 SPA)
+# Try both / and /net4sats/ since SPA may be served from either
+ADMIN_HTML=""
+for _path in "/" "/net4sats/"; do
+    _html=$(_fetch_url "http://127.0.0.1${_path}") || _html=""
+    if echo "$_html" | grep -q 'net4sats'; then
+        ADMIN_HTML="$_html"
+        break
+    fi
+done
+JS_SRC=$(echo "$ADMIN_HTML" | grep -o 'src="[^"]*\.js"' | sed 's/src="//;s/"//' | head -1)
+if [ -n "$JS_SRC" ]; then
+    JS_URL="http://127.0.0.1${JS_SRC}"
+    JS_CONTENT=$(_fetch_url "$JS_URL") || JS_CONTENT=""
+    if echo "$JS_CONTENT" | grep -q 'disabled:[a-z]||![a-z]'; then
+        fail "SPA JS still has conditional disabled check (Bug 6 not deployed)"
+    elif [ -z "$JS_CONTENT" ]; then
+        skip "could not fetch SPA JS bundle"
+    else
+        pass "SPA JS does not disable button on empty password (Bug 6 SPA)"
+    fi
+else
+    skip "could not find admin JS bundle in HTML"
+fi
+
+# =========================================================================
 #  Summary
 # =========================================================================
 echo ""
