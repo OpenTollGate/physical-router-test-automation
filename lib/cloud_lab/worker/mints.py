@@ -163,11 +163,14 @@ max_delay_time = 0
     mints["nutshell-v1"] = ns_v1_proc
     log.info("Started Nutshell V1 mint (pid=%d, port=%d)", ns_v1_proc.pid, NUTSHELL_V1_MINT_PORT)
 
-    # /etc/hosts entries for local mint DNS
+    # /etc/hosts entries for local mint DNS (idempotent-by-value: remove stale, add correct)
+    mint_hosts_line = (
+        f"{LOCAL_MINT_HOST} v1.testnut.nutshell.lan v2.testnut.cdk.lan v2.testnut.nutshell.lan "
+        f"testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan v1.testnut.lan"
+    )
     _run(
-        "grep -q 'testnut.cdk.lan' /etc/hosts || "
-        "echo '10.99.99.2 v1.testnut.nutshell.lan v2.testnut.cdk.lan v2.testnut.nutshell.lan "
-        "testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan v1.testnut.lan' >> /etc/hosts",
+        f"sed -i '/v1\\.testnut\\.lan/d' /etc/hosts; "
+        f"echo '{mint_hosts_line}' >> /etc/hosts",
         check=False,
     )
 
@@ -202,14 +205,17 @@ max_delay_time = 0
         else:
             log.warning("Local mint %s not healthy after 30s, continuing anyway", name)
 
-    # Router-side /etc/hosts so the backend can resolve local mint DNS names
+    # Router-side /etc/hosts (idempotent-by-value: remove stale, add correct)
+    router_hosts_line = (
+        f"{LOCAL_MINT_HOST} v1.testnut.nutshell.lan v2.testnut.cdk.lan v2.testnut.nutshell.lan "
+        f"testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan v1.testnut.lan"
+    )
     _run(
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} "
         f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
         f"-o ControlPath=none root@{OPENWRT_IP} "
-        f"'grep -q v1.testnut.lan /etc/hosts || "
-        f"echo \"{LOCAL_MINT_HOST} v1.testnut.nutshell.lan v2.testnut.cdk.lan v2.testnut.nutshell.lan "
-        f"testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan v1.testnut.lan\" >> /etc/hosts; "
+        f"'sed -i \\\"/v1\\\\.testnut\\\\.lan/d\\\" /etc/hosts; "
+        f"echo \\\"{router_hosts_line}\\\" >> /etc/hosts; "
         f"killall -HUP dnsmasq 2>/dev/null || true'",
         timeout=15,
         check=False,
@@ -269,6 +275,7 @@ def select_test_mint(forced_mint: str = "auto") -> str:
         host_url, lan_url = urls
         log.info("Forced mint=%s → %s (LAN: %s)", forced_mint, host_url, lan_url)
         _configure_mint(lan_url)
+        _verify_router_mint_reachability(lan_url)
         return lan_url
 
     PUBLIC_TESTNUTS = "https://testnut.cashu.exchange"
@@ -303,6 +310,7 @@ def select_test_mint(forced_mint: str = "auto") -> str:
         log.warning("V2 probe failed: %s", exc)
 
     if cdk_ok:
+        _verify_router_mint_reachability(V2_TESTNUT_CDK_LAN)
         return V2_TESTNUT_CDK_LAN
 
     nutshell_v1_ok = False
@@ -329,4 +337,31 @@ def select_test_mint(forced_mint: str = "auto") -> str:
     log.info("Backend does not support V2 keysets — falling back to %s", fallback_url)
 
     _configure_mint(fallback_url)
+    _verify_router_mint_reachability(fallback_url)
     return fallback_url
+
+
+def _verify_router_mint_reachability(mint_url: str) -> None:
+    """Verify the OpenWrt router can resolve and reach the chosen mint URL."""
+    r = _run(
+        f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} "
+        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o ControlPath=none root@{OPENWRT_IP} "
+        f"'curl -s -o /dev/null -w \"%{{http_code}}\" {mint_url}/v1/keys 2>/dev/null || echo 000'",
+        timeout=15,
+        check=False,
+    )
+    code = r.stdout.strip()
+    if "200" in code:
+        log.info("Router-side mint reachability verified: %s → HTTP %s", mint_url, code)
+    else:
+        log.warning("Router-side mint reachability FAILED: %s → HTTP %s (tests may fail)", mint_url, code)
+        hosts_r = _run(
+            f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} "
+            f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+            f"-o ControlPath=none root@{OPENWRT_IP} "
+            f"'grep testnut /etc/hosts || echo NO_ENTRIES'",
+            timeout=10,
+            check=False,
+        )
+        log.warning("Router /etc/hosts mint entries: %s", hosts_r.stdout.strip()[-500:])

@@ -104,8 +104,8 @@ def configure_beta_lan(beta_lan_ip: str) -> None:
     inner_ssh(MGMT_BETA_IP, f"""
         ip route add {LOCAL_MINT_HOST}/32 via {BETA_LAN_HOST_IP} 2>/dev/null || true
         ip route add 10.99.99.0/24 via {BETA_LAN_HOST_IP} 2>/dev/null || true
-        grep -q 'v1.testnut.nutshell.lan' /etc/hosts || \
-            echo '{LOCAL_MINT_HOST} v1.testnut.nutshell.lan v2.testnut.cdk.lan v2.testnut.nutshell.lan \
+        sed -i '/v1\\.testnut\\.lan/d' /etc/hosts
+        echo '{LOCAL_MINT_HOST} v1.testnut.nutshell.lan v2.testnut.cdk.lan v2.testnut.nutshell.lan \
 testnut.cdk.lan testnut.nutshell.lan testnut.v1.nutshell.lan v1.testnut.lan' >> /etc/hosts
     """, timeout=15)
 def configure_beta_upstream(beta_ip: str) -> None:
