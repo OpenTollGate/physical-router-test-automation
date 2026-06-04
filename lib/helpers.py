@@ -317,6 +317,17 @@ def unblock_mints(router, rules):
                    f" 2>/dev/null || true")
 
 
+def skip_if_no_ssl_cli(router):
+    result = router.ssh("tollgate ssl status 2>&1 || true")
+    if "unknown command" in result.lower() or "not found" in result.lower():
+        pytest.skip("'tollgate ssl' subcommand not available")
+
+
+def ssl_is_applied(router):
+    result = router.ssh("tollgate ssl status 2>&1")
+    return any(kw in result.lower() for kw in ("active", "applied", "installed", "configured")) and "not configured" not in result.lower()
+
+
 def skip_if_no_degraded_support(router):
     resp = router.get_tollgate_status()
     if resp.get("success") is not True:
