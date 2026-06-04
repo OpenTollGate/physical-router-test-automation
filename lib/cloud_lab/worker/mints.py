@@ -342,26 +342,65 @@ def select_test_mint(forced_mint: str = "auto") -> str:
 
 
 def _verify_router_mint_reachability(mint_url: str) -> None:
-    """Verify the OpenWrt router can resolve and reach the chosen mint URL."""
-    r = _run(
+    """Verify the OpenWrt router can resolve and reach the chosen mint URL.
+
+    If the DNS-based URL fails, tries the IP-based URL to isolate DNS vs
+    network issues. Logs diagnostics and attempts a repair (add route, ping
+    to seed ARP) if connectivity is broken.
+    """
+    ssh_prefix = (
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} "
         f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
         f"-o ControlPath=none root@{OPENWRT_IP} "
-        f"'curl -s -o /dev/null -w \"%{{http_code}}\" {mint_url}/v1/keys 2>/dev/null || echo 000'",
-        timeout=15,
-        check=False,
     )
-    code = r.stdout.strip()
-    if "200" in code:
-        log.info("Router-side mint reachability verified: %s → HTTP %s", mint_url, code)
-    else:
-        log.warning("Router-side mint reachability FAILED: %s → HTTP %s (tests may fail)", mint_url, code)
-        hosts_r = _run(
-            f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} "
-            f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-            f"-o ControlPath=none root@{OPENWRT_IP} "
-            f"'grep testnut /etc/hosts || echo NO_ENTRIES'",
-            timeout=10,
+
+    def _router_curl(url: str) -> str:
+        r = _run(
+            f"{ssh_prefix}"
+            f"'curl -s -o /dev/null -w \"%{{http_code}}\" {url}/v1/keys 2>/dev/null || echo 000'",
+            timeout=15,
             check=False,
         )
-        log.warning("Router /etc/hosts mint entries: %s", hosts_r.stdout.strip()[-500:])
+        return r.stdout.strip()
+
+    # Try the chosen (possibly DNS-based) URL first
+    code = _router_curl(mint_url)
+    if "200" in code:
+        log.info("Router-side mint reachability verified: %s → HTTP %s", mint_url, code)
+        return
+
+    log.warning("Router-side mint reachability FAILED: %s → HTTP %s", mint_url, code)
+
+    # Diagnose: try IP-based URL to isolate DNS vs network
+    ip_url = f"http://{LOCAL_MINT_HOST}:{NUTSHELL_V1_MINT_PORT}"
+    ip_code = _router_curl(ip_url)
+    log.warning("Router-side IP reachability: %s → HTTP %s", ip_url, ip_code)
+
+    # Log diagnostics
+    diag_r = _run(
+        f"{ssh_prefix}"
+        f"'echo === hosts ===; grep testnut /etc/hosts; "
+        f"echo === route ===; ip route; "
+        f"echo === ping ===; ping -c 1 -W 2 {LOCAL_MINT_HOST} 2>&1; "
+        f"echo === arp ===; cat /proc/net/arp | head -5'",
+        timeout=20,
+        check=False,
+    )
+    log.warning("Router diagnostics:\n%s", diag_r.stdout.strip()[-1000:])
+
+    # Repair attempt: seed ARP table by pinging from router to host
+    if "200" not in ip_code:
+        log.info("Attempting repair: ping host from router to seed ARP...")
+        _run(
+            f"{ssh_prefix}"
+            f"'ping -c 3 -W 2 {LOCAL_MINT_HOST} 2>/dev/null; "
+            f"curl -s -o /dev/null -w \"%{{http_code}}\" {ip_url}/v1/keys 2>/dev/null || echo 000'",
+            timeout=20,
+            check=False,
+        )
+        repair_code = _router_curl(mint_url)
+        if "200" in repair_code:
+            log.info("Router-side mint reachability REPAIRED after ARP seeding: %s → HTTP %s", mint_url, repair_code)
+            return
+
+    log.error("Router-side mint reachability FAILED permanently — tests will likely fail")
