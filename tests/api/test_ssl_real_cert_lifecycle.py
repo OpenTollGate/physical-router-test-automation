@@ -15,7 +15,13 @@ import re
 
 import pytest
 
-from lib.helpers import skip_if_no_ssl_cli, skip_if_no_openssl, ssl_is_applied
+from lib.helpers import (
+    get_hostname,
+    get_lan_ip,
+    skip_if_no_openssl,
+    skip_if_no_ssl_cli,
+    ssl_is_applied,
+)
 
 log = logging.getLogger("tollgate.ssl_real_cert")
 
@@ -25,6 +31,8 @@ pytestmark = [pytest.mark.api, pytest.mark.extended]
 _skip_if_no_ssl_cli = skip_if_no_ssl_cli
 _skip_if_no_openssl = skip_if_no_openssl
 _ssl_is_applied = ssl_is_applied
+_get_lan_ip = get_lan_ip
+_get_hostname = get_hostname
 
 
 def _generate_self_signed_on_router(router, domain, ip):
@@ -61,14 +69,6 @@ def _get_nodogsplash_gatewayport(router):
     return router.ssh(
         "uci get nodogsplash.@nodogsplash[0].gatewayport 2>/dev/null || echo NOT_SET"
     ).strip()
-
-
-def _get_lan_ip(router):
-    return router.ssh("uci get network.lan.ipaddr 2>/dev/null || echo UNKNOWN").strip()
-
-
-def _get_hostname(router):
-    return router.ssh("uci get system.@system[0].hostname 2>/dev/null || echo TollGate").strip()
 
 
 @pytest.fixture(autouse=True)

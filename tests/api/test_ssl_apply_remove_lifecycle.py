@@ -18,7 +18,7 @@ import time
 
 import pytest
 
-from lib.helpers import skip_if_no_ssl_cli, ssl_is_applied
+from lib.helpers import get_uhttpd_cert, get_uhttpd_key, skip_if_no_ssl_cli, ssl_is_applied
 
 log = logging.getLogger("tollgate.ssl_lifecycle")
 
@@ -27,14 +27,8 @@ pytestmark = [pytest.mark.api, pytest.mark.extended]
 
 _skip_if_no_ssl_cli = skip_if_no_ssl_cli
 _ssl_is_applied = ssl_is_applied
-
-
-def _get_uhttpd_cert(router):
-    return router.ssh("uci get uhttpd.main.cert 2>/dev/null || echo NOT_SET").strip()
-
-
-def _get_uhttpd_key(router):
-    return router.ssh("uci get uhttpd.main.key 2>/dev/null || echo NOT_SET").strip()
+_get_uhttpd_cert = get_uhttpd_cert
+_get_uhttpd_key = get_uhttpd_key
 
 
 def _get_uhttpd_listen_https(router):

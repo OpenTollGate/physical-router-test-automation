@@ -333,6 +333,22 @@ def skip_if_no_openssl(router):
         pytest.skip("openssl not available on router")
 
 
+def get_uhttpd_cert(router):
+    return router.ssh("uci get uhttpd.main.cert 2>/dev/null || echo NOT_SET").strip()
+
+
+def get_uhttpd_key(router):
+    return router.ssh("uci get uhttpd.main.key 2>/dev/null || echo NOT_SET").strip()
+
+
+def get_lan_ip(router):
+    return router.ssh("uci get network.lan.ipaddr 2>/dev/null || echo UNKNOWN").strip()
+
+
+def get_hostname(router):
+    return router.ssh("uci get system.@system[0].hostname 2>/dev/null || echo TollGate").strip()
+
+
 def skip_if_no_degraded_support(router):
     resp = router.get_tollgate_status()
     if resp.get("success") is not True:

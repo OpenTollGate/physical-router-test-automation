@@ -16,7 +16,13 @@ import re
 
 import pytest
 
-from lib.helpers import skip_if_no_ssl_cli, ssl_is_applied
+from lib.helpers import (
+    get_hostname,
+    get_lan_ip,
+    get_uhttpd_cert,
+    skip_if_no_ssl_cli,
+    ssl_is_applied,
+)
 
 log = logging.getLogger("tollgate.ssl_backup_restore")
 
@@ -27,6 +33,9 @@ BACKUP_DIR = "/etc/tollgate/ssl/backup"
 
 _skip_if_no_ssl_cli = skip_if_no_ssl_cli
 _ssl_is_applied = ssl_is_applied
+_get_uhttpd_cert = get_uhttpd_cert
+_get_hostname = get_hostname
+_get_lan_ip = get_lan_ip
 
 
 def _backup_dir_exists(router):
@@ -36,10 +45,6 @@ def _backup_dir_exists(router):
 
 def _backup_file_content(router, filename):
     return router.ssh(f"cat {BACKUP_DIR}/{filename} 2>/dev/null || echo NOT_FOUND").strip()
-
-
-def _get_uhttpd_cert(router):
-    return router.ssh("uci get uhttpd.main.cert 2>/dev/null || echo NOT_SET").strip()
 
 
 def _get_uhttpd_listen_https(router):
@@ -55,14 +60,6 @@ def _get_uhttpd_list(router, key):
     if not items:
         items = raw.split()
     return items
-
-
-def _get_hostname(router):
-    return router.ssh("uci get system.@system[0].hostname 2>/dev/null || echo TollGate").strip()
-
-
-def _get_lan_ip(router):
-    return router.ssh("uci get network.lan.ipaddr 2>/dev/null || echo UNKNOWN").strip()
 
 
 @pytest.fixture(autouse=True)
