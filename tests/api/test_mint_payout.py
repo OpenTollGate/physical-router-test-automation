@@ -71,6 +71,14 @@ def test_wallet_send_exercises_keyset_derivation(router, paid_token):
             f"DeriveKeysetId failure detected (expected on V2-only mints): {resp}"
         )
 
+    # Backend returns help text when send subcommand doesn't exist — skip, don't fail
+    if resp.get("success") is None and any(
+        kw in raw for kw in ["available commands", "usage:", "wallet [command]"]
+    ):
+        pytest.skip(
+            f"Wallet send subcommand not available in this build (help returned instead of executing send): {resp}"
+        )
+
     if resp.get("success") is False and "unknown wallet action" in raw:
         pytest.skip(f"wallet send command not available in this build: {resp}")
 

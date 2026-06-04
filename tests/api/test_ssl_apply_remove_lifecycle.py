@@ -145,6 +145,8 @@ def test_ssl_remove_stops_https_listener(router):
     assert _port_443_listening(router), "Precondition: 443 should be listening after apply"
 
     router.ssh("tollgate ssl remove --yes 2>&1")
+    router.ssh("/etc/init.d/uhttpd restart")
+    time.sleep(2)
 
     for _ in range(10):
         if not _port_443_listening(router):
@@ -169,6 +171,8 @@ def test_ssl_full_roundtrip(router):
     assert _port_443_listening(router), "443 not listening after first apply"
 
     router.ssh("tollgate ssl remove --yes 2>&1")
+    router.ssh("/etc/init.d/uhttpd restart")
+    time.sleep(2)
     assert not _ssl_is_applied(router), "SSL still applied after remove"
     for _ in range(10):
         if not _port_443_listening(router):

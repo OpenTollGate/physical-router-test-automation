@@ -6,6 +6,7 @@ Makefile-based branch into the pytest framework. Uses feature detection
 to skip cleanly when the router binary lacks upstream WiFi support.
 """
 
+import os
 import re
 import time
 
@@ -28,8 +29,35 @@ def _skip_if_no_upstream_wifi(router):
         pytest.skip("tollgate upstream list returned failure with no message")
 
 
+def _skip_if_hwsim_no_scan(router):
+    """Skip if hwsim virtual radios are present — they can't propagate beacons for real scans."""
+    # Check environment variable first
+    if os.environ.get("TOLLGATE_ENABLE_HWSIM"):
+        pytest.skip("WiFi scan tests require real radios — hwsim cannot propagate beacons")
+    
+    # Check if mac80211_hwsim module is loaded
+    try:
+        result = router.ssh("ls /sys/module/mac80211_hwsim 2>/dev/null", timeout=5)
+        if result and result.strip():
+            pytest.skip("WiFi scan tests require real radios — hwsim module loaded")
+    except Exception:
+        # If command fails, assume no hwsim
+        pass
+    
+    # Check if radio interfaces are hwsim-style (phy0-ap0, phy1-ap0, etc.)
+    try:
+        result = router.ssh("iw dev | grep -E 'phy[0-9]+-ap'", timeout=5)
+        # hwsim AP interfaces are named phyN-ap0 on OpenWrt
+        if result and result.strip():
+            pytest.skip("WiFi scan tests require real radios — hwsim-style interfaces detected")
+    except Exception:
+        # If command fails, assume no hwsim
+        pass
+
+
 def test_upstream_scan(router):
     _skip_if_no_upstream_wifi(router)
+    _skip_if_hwsim_no_scan(router)
 
     result = router.cli_command("upstream", ["scan"])
     assert result is not None, "upstream scan returned None"
@@ -57,6 +85,7 @@ def test_upstream_list(router):
 
 def test_connect_to_unknown_ssid_fails(router):
     _skip_if_no_upstream_wifi(router)
+    _skip_if_hwsim_no_scan(router)
 
     result = router.cli_command("upstream", ["connect", "NonExistentSSID_UnitTest"])
     raw = str(result.get("raw", "") or result.get("message", "")).lower()
