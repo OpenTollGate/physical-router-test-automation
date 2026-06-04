@@ -16,6 +16,8 @@ import re
 
 import pytest
 
+from lib.helpers import ssl_is_applied
+
 log = logging.getLogger("tollgate.ssl_backup_restore")
 
 pytestmark = [pytest.mark.api, pytest.mark.extended]
@@ -29,9 +31,7 @@ def _skip_if_no_ssl_cli(router):
         pytest.skip("'tollgate ssl' subcommand not available")
 
 
-def _ssl_is_applied(router):
-    result = router.ssh("tollgate ssl status 2>&1")
-    return "active" in result.lower() or "applied" in result.lower() or "installed" in result.lower()
+_ssl_is_applied = ssl_is_applied
 
 
 def _backup_dir_exists(router):
@@ -88,7 +88,7 @@ def test_ssl_apply_creates_backup_directory(router):
 
     assert not _backup_dir_exists(router), "Precondition: backup dir should not exist"
 
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
 
     assert _backup_dir_exists(router), "Backup directory not created after apply"
 
@@ -97,7 +97,7 @@ def test_ssl_backup_contains_mode(router):
     """Backup must contain ssl.mode file with 'self-signed' for self-signed certs."""
     _skip_if_no_ssl_cli(router)
 
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
 
     mode = _backup_file_content(router, "ssl.mode")
     assert mode == "self-signed", f"Expected ssl.mode='self-signed', got '{mode}'"
@@ -110,7 +110,7 @@ def test_ssl_backup_contains_domain(router):
     hostname = _get_hostname(router)
     expected_domain = f"{hostname}.lan"
 
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
 
     domain = _backup_file_content(router, "ssl.domain")
     assert domain == expected_domain, f"Expected ssl.domain='{expected_domain}', got '{domain}'"
@@ -122,7 +122,7 @@ def test_ssl_backup_contains_uhttpd_values(router):
 
     original_cert = _get_uhttpd_cert(router)
 
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
 
     backed_up_cert = _backup_file_content(router, "uhttpd.cert")
     assert backed_up_cert == original_cert, \
@@ -133,7 +133,7 @@ def test_ssl_remove_deletes_backup_directory(router):
     """After removing SSL, backup directory must be cleaned up."""
     _skip_if_no_ssl_cli(router)
 
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
     assert _backup_dir_exists(router), "Precondition: backup should exist after apply"
 
     router.ssh("tollgate ssl remove --yes 2>&1")
@@ -149,7 +149,7 @@ def test_ssl_uhttpd_list_parsed_correctly(router):
     """
     _skip_if_no_ssl_cli(router)
 
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
 
     listeners = _get_uhttpd_list(router, "uhttpd.main.listen_https")
     if listeners is None:

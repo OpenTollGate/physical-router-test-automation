@@ -15,6 +15,8 @@ import re
 
 import pytest
 
+from lib.helpers import ssl_is_applied
+
 log = logging.getLogger("tollgate.ssl_real_cert")
 
 pytestmark = [pytest.mark.api, pytest.mark.extended]
@@ -26,9 +28,7 @@ def _skip_if_no_ssl_cli(router):
         pytest.skip("'tollgate ssl' subcommand not available")
 
 
-def _ssl_is_applied(router):
-    result = router.ssh("tollgate ssl status 2>&1")
-    return "active" in result.lower() or "applied" in result.lower() or "installed" in result.lower()
+_ssl_is_applied = ssl_is_applied
 
 
 def _generate_self_signed_on_router(router, domain, ip):
@@ -91,6 +91,7 @@ def test_ssl_real_cert_sets_dnsmasq_entry(router):
     'uci set dhcp.@dnsmasq[0].address=...' was called.
     """
     _skip_if_no_ssl_cli(router)
+    _skip_if_no_openssl(router)
 
     hostname = _get_hostname(router)
     domain = f"{hostname}.lan"
@@ -111,6 +112,7 @@ def test_ssl_real_cert_sets_nodogsplash_gatewaydomainname(router):
     'uci set nodogsplash.@nodogsplash[0].gatewaydomainname=...' was called.
     """
     _skip_if_no_ssl_cli(router)
+    _skip_if_no_openssl(router)
 
     hostname = _get_hostname(router)
     domain = f"{hostname}.lan"
@@ -131,6 +133,7 @@ def test_ssl_real_cert_sets_nodogsplash_gatewaydomainname(router):
 def test_ssl_real_cert_remove_restores_dnsmasq(router):
     """After removing real cert, dnsmasq domain entry must be cleaned up."""
     _skip_if_no_ssl_cli(router)
+    _skip_if_no_openssl(router)
 
     hostname = _get_hostname(router)
     domain = f"{hostname}.lan"
@@ -150,6 +153,7 @@ def test_ssl_real_cert_remove_restores_dnsmasq(router):
 def test_ssl_real_cert_remove_restores_nodogsplash(router):
     """After removing real cert, nodogsplash gatewaydomainname must be restored."""
     _skip_if_no_ssl_cli(router)
+    _skip_if_no_openssl(router)
 
     hostname = _get_hostname(router)
     domain = f"{hostname}.lan"
@@ -176,6 +180,7 @@ def test_ssl_real_cert_remove_restores_nodogsplash(router):
 def test_ssl_real_cert_separate_cert_and_key(router):
     """Test applying with separate cert and key files (not combined PEM)."""
     _skip_if_no_ssl_cli(router)
+    _skip_if_no_openssl(router)
 
     hostname = _get_hostname(router)
     domain = f"{hostname}.lan"
