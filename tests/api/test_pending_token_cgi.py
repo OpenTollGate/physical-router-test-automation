@@ -33,6 +33,6 @@ def test_pending_token_returns_and_consumes(router):
 def test_pending_token_no_cache_headers(router):
     if not _pending_token_cgi_available(router):
         pytest.skip("tollgate-pending-token CGI not available on this router")
-    resp = router.ssh(f"wget -S -o /dev/null -O /dev/null '{router.cgi_url('tollgate-pending-token')}' 2>&1")
+    resp = router.ssh(f"curl -s -D - -o /dev/null '{router.cgi_url('tollgate-pending-token')}' 2>&1")
     assert "no-cache" in resp.lower() or "no-store" in resp.lower(), \
         f"Missing no-cache/no-store headers: {resp[:200]}"

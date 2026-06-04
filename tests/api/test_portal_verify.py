@@ -17,7 +17,7 @@ PORTAL_TYPE = os.environ.get("TOLLGATE_PORTAL", "builtin").lower()
 
 def _nds_gateway_responsive(router):
     resp = router.ssh(
-        "wget -S -o /dev/null -O /dev/null 'http://127.0.0.1:2050/' 2>&1 | head -1 | grep -oE '[0-9]{3}' | head -1",
+        "curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:2050/'",
         timeout=5,
     )
     return resp.strip() in ("200", "302", "301", "307", "308")
@@ -45,10 +45,10 @@ class TestBuiltinPortal:
     def test_builtin_portal_served_via_nds(self, router):
         _skip_unless_nds_responsive(router)
         code = router.ssh(
-            "wget -S -o /dev/null -O /dev/null 'http://127.0.0.1:2050/splash.html' 2>&1 | head -1 | grep -oE '[0-9]{3}' | head -1",
+            "curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:2050/splash.html'",
             timeout=10,
         )
-        assert "200" in code, f"nodogsplash not serving splash.html (got {code})"
+        assert code.strip() == "200", f"nodogsplash not serving splash.html (got {code})"
 
     @pytest.mark.skipif(PORTAL_TYPE != "builtin", reason="only for builtin portal")
     def test_builtin_portal_has_spa_assets(self, router):
@@ -75,10 +75,10 @@ class TestNet4satsPortal:
     def test_net4sats_portal_served_via_nds(self, router):
         _skip_unless_nds_responsive(router)
         code = router.ssh(
-            "wget -S -o /dev/null -O /dev/null 'http://127.0.0.1:2050/portal.html' 2>&1 | head -1 | grep -oE '[0-9]{3}' | head -1",
+            "curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:2050/portal.html'",
             timeout=10,
         )
-        assert "200" in code, f"nodogsplash not serving portal.html (got {code})"
+        assert code.strip() == "200", f"nodogsplash not serving portal.html (got {code})"
 
     @pytest.mark.skipif(PORTAL_TYPE != "net4sats", reason="only for net4sats portal")
     def test_net4sats_portal_has_payment_elements(self, router):
@@ -106,7 +106,7 @@ class TestPortalAgnostic:
     def test_nds_gateway_responds(self, router):
         _skip_unless_nds_responsive(router)
         code = router.ssh(
-            "wget -S -o /dev/null -O /dev/null 'http://127.0.0.1:2050/' 2>&1 | head -1 | grep -oE '[0-9]{3}' | head -1",
+            "curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:2050/'",
             timeout=10,
         )
         assert code.strip() in ("200", "302", "301"), (
@@ -114,8 +114,9 @@ class TestPortalAgnostic:
         )
 
     def test_tollgate_backend_healthy(self, router):
+        port = os.environ.get('TOLLGATE_BACKEND_PORT', '2121')
         code = router.ssh(
-            f"wget -S -o /dev/null -O /dev/null 'http://[::1]:{os.environ.get('TOLLGATE_BACKEND_PORT', '2121')}/' 2>&1 | head -1 | grep -oE '[0-9]{{3}}' | head -1",
+            f"curl -s -o /dev/null -w '%{{http_code}}' 'http://[::1]:{port}/'",
             timeout=10,
         )
-        assert "200" in code, f"tollgate backend not healthy on :2121 (got {code})"
+        assert code.strip() == "200", f"tollgate backend not healthy on :{port} (got {code!r})"

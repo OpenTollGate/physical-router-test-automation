@@ -25,7 +25,7 @@ def test_captive_api_pre_auth(router):
 def test_captive_api_content_type(router):
     if not _captive_api_available(router):
         pytest.skip("captive-portal-api CGI not installed on this build")
-    resp = router.ssh(f"wget -S -o /dev/null -O /dev/null '{router.cgi_url('captive-portal-api')}' 2>&1")
+    resp = router.ssh(f"curl -s -D - -o /dev/null '{router.cgi_url('captive-portal-api')}' 2>&1")
     assert "application/captive+json" in resp, \
         f"Missing application/captive+json content type: {resp[:200]}"
 
@@ -33,6 +33,6 @@ def test_captive_api_content_type(router):
 def test_captive_api_no_cache(router):
     if not _captive_api_available(router):
         pytest.skip("captive-portal-api CGI not installed on this build")
-    resp = router.ssh(f"wget -S -o /dev/null -O /dev/null '{router.cgi_url('captive-portal-api')}' 2>&1")
+    resp = router.ssh(f"curl -s -D - -o /dev/null '{router.cgi_url('captive-portal-api')}' 2>&1")
     assert "no-store" in resp.lower(), \
         f"Missing Cache-Control: no-store header: {resp[:200]}"

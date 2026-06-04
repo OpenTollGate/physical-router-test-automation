@@ -117,18 +117,18 @@ def test_health_command_works(router):
 def test_cors_restricted_to_local(router):
     _skip_if_no_luci_app(router)
     evil_code = router.ssh(
-        "wget -S -o /dev/null -O /dev/null "
-        "--header='Origin: http://evil.com' "
-        "http://127.0.0.1:2121/ 2>&1 | head -1 | grep -oE '[0-9]{3}' | head -1"
+        "curl -s -o /dev/null -w '%{http_code}' "
+        "-H 'Origin: http://evil.com' "
+        "http://127.0.0.1:2121/"
     ).strip()
     assert evil_code in ("403", "000"), (
         f"External origin should be rejected (got {evil_code}), not allowed through CORS"
     )
 
     local_code = router.ssh(
-        f"wget -S -o /dev/null -O /dev/null "
-        f"--header='Origin: http://{router.host}' "
-        "http://127.0.0.1:2121/ 2>&1 | head -1 | grep -oE '[0-9]{3}' | head -1"
+        f"curl -s -o /dev/null -w '%{{http_code}}' "
+        f"-H 'Origin: http://{router.host}' "
+        f"http://127.0.0.1:2121/"
     ).strip()
     assert local_code == "200", (
         f"Local origin should be accepted (got {local_code})"
