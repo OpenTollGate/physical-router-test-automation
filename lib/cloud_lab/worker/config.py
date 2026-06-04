@@ -37,6 +37,7 @@ class WorkerConfig:
     hwsim_enabled: bool
     vwifi_enabled: bool
     smoke: bool
+    complete: bool
     wifi_plane: str
     runner_mode: bool = False  # True when running inside GitHub Actions self-hosted runner
 def _metadata_get(key: str) -> str:
@@ -78,12 +79,13 @@ def load_config_from_metadata() -> WorkerConfig:
         vwifi_enabled=_metadata_get_optional("tollgate-vwifi").lower() in ("true", "1", "yes"),
         quick=_metadata_get_optional("tollgate-quick").lower() in ("true", "1", "yes"),
         smoke=_metadata_get_optional("tollgate-smoke").lower() in ("true", "1", "yes"),
+        complete=_metadata_get_optional("tollgate-complete").lower() in ("true", "1", "yes"),
         wifi_plane=_metadata_get_optional("tollgate-wifi-plane", "tap"),
     )
     log.info(
-        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s portal=%s hwsim=%s vwifi=%s quick=%s smoke=%s wifi_plane=%s",
+        "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s portal=%s hwsim=%s vwifi=%s quick=%s smoke=%s complete=%s wifi_plane=%s",
         cfg.run_id, cfg.sut_branch, cfg.artifact_repo, cfg.backend,
-        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure, cfg.mint, cfg.portal, cfg.hwsim_enabled, cfg.vwifi_enabled, cfg.quick, cfg.smoke, cfg.wifi_plane,
+        cfg.sut_pr or "(none)", cfg.publish, cfg.keep_vm_on_failure, cfg.mint, cfg.portal, cfg.hwsim_enabled, cfg.vwifi_enabled, cfg.quick, cfg.smoke, cfg.complete, cfg.wifi_plane,
     )
     log.info(
         "Artifact: run_id=%s suite_ref=%s reseller=%s secondary=%s",
@@ -134,6 +136,7 @@ def load_config_from_env() -> WorkerConfig:
         hwsim_enabled=_env_bool("TOLLGATE_HWSIM"),
         vwifi_enabled=_env_bool("TOLLGATE_VWIFI"),
         smoke=_env_bool("TOLLGATE_SMOKE"),
+        complete=_env_bool("TOLLGATE_COMPLETE"),
         wifi_plane=_env("TOLLGATE_WIFI_PLANE", "tap"),
     )
     log.info(

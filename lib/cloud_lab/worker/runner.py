@@ -102,6 +102,7 @@ def build_runners(config: WorkerConfig) -> list[RunnerSpec]:
             name="api",
             paths=("tests/api/",),
             timeout=300,
+            markers="not complete" if not config.complete else None,
             ignore_paths=("tests/api/test_visual_happy_path.py",),
         ),
         RunnerSpec(name="vl-scenarios", paths=VL_SCENARIO_PATHS, timeout=600),
@@ -132,6 +133,8 @@ def runner_scope(config: WorkerConfig) -> str:
         return "quick"
     if config.smoke:
         return "smoke"
+    if config.complete:
+        return "complete"
     return "full"
 
 

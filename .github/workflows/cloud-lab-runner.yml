@@ -1,0 +1,205 @@
+# =============================================================================
+# Cloud Lab Runner — Executes on the ephemeral self-hosted GCP runner
+# =============================================================================
+# This workflow runs on the self-hosted [cloud-lab] runner inside a GCP VM
+# created by .github/workflows/cloud-lab.yml. It is NOT triggered manually
+# — it is dispatched by the cloud-lab.yml workflow after spawning the VM.
+#
+# The GCP VM is created from a baked snapshot that includes:
+#   - /opt/tollgate-venv  (Python venv with pytest, playwright, etc.)
+#   - /opt/cashu-venv     (cashu CLI for testnet token minting)
+#   - /opt/cdk-mintd      (CDK mintd binary for local V2 mint)
+#   - /home/runner/actions-runner (GitHub Actions runner agent)
+#   - Pre-provisioned OpenWrt + Debian QEMU base images
+#   - WiFi packages (kmod-mac80211-hwsim, wpad-basic, iw-full, iwinfo)
+#   - vwifi binaries (/opt/vwifi/bin/)
+#
+# Runner lifecycle:
+#   1. VM boots from snapshot
+#   2. Startup script reads JIT config from GCP metadata
+#   3. Runner agent registers with GitHub Actions
+#   4. This workflow executes on the runner
+#   5. After the job completes, the VM self-deletes (or shuts down if keep_vm=true)
+# =============================================================================
+
+name: Cloud Lab Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run ID from dispatcher (e.g. 20260519T120000Z-abc1234)"
+        required: true
+      backend:
+        description: "Backend to test"
+        type: choice
+        options: [go, rust]
+        default: go
+      artifact_repo:
+        description: "Repo to download .ipk from"
+        default: "OpenTollGate/tollgate-module-basic-go"
+      artifact_run_id:
+        description: "CI run ID with the x86_64 artifact"
+        required: true
+      artifact_branch:
+        description: "Branch the artifact was built from"
+        required: true
+      artifact_commit:
+        description: "Commit the artifact was built from"
+        default: ""
+      pr_number:
+        description: "PR number (for report metadata and PR comments)"
+        default: ""
+      pr_repo:
+        description: "Repo where the PR lives (for cross-repo comments)"
+        default: ""
+      publish:
+        type: boolean
+        default: true
+        description: "Publish report to tests.tollgate.me (gh-pages)"
+      smoke:
+        type: boolean
+        default: false
+        description: "Smoke mode: visual + smoke API only (~8min)"
+      quick:
+        type: boolean
+        default: false
+        description: "Quick mode: visual happy path only (~5min)"
+      hwsim:
+        type: boolean
+        default: false
+        description: "Enable mac80211_hwsim virtual WiFi"
+      vwifi:
+        type: boolean
+        default: false
+        description: "Enable vwifi cross-VM WiFi relay"
+      two-router:
+        type: boolean
+        default: false
+        description: "Boot second OpenWrt VM for two-router tests"
+      reseller-scenarios:
+        type: boolean
+        default: false
+        description: "Run virtualizable reseller-mode scenario tests"
+
+permissions:
+  contents: write   # gh-pages push
+  actions: read     # artifact download
+
+jobs:
+  test:
+    name: "Run cloud lab tests"
+    runs-on: [self-hosted, cloud-lab]
+    timeout-minutes: 90
+    env:
+      TOLLGATE_VIRTUAL_LAB: "1"
+      TOLLGATE_LAB_TYPE: "gcloud"
+      TOLLGATE_BACKEND: ${{ inputs.backend }}
+      TOLLGATE_SSH_HOST: "10.99.99.1"
+      TOLLGATE_CONTAINER_HOST: "10.99.99.100"
+      TOLLGATE_CLIENT_TYPE: "container"
+      TOLLGATE_CASHU_VENV: "/opt/cashu-venv"
+      TOLLGATE_PUBLISH: ${{ inputs.publish }}
+      TOLLGATE_PR: ${{ inputs.pr_number }}
+      TOLLGATE_BRANCH: ${{ inputs.artifact_branch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Download the TollGate .ipk from the upstream CI artifact.
+      # Uses CROSS_REPO_TOKEN because GITHUB_TOKEN is repo-scoped
+      # and cannot download artifacts from other repositories.
+      - name: Download TollGate .ipk artifact
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        run: |
+          python3 -c "
+          import os
+          from lib.cloud_lab.artifact import ensure_target_artifact
+          from lib.cloud_lab.resolve import RunTarget
+
+          target = RunTarget(
+              repo='${{ inputs.artifact_repo }}',
+              branch='${{ inputs.artifact_branch }}',
+              sut_commit='${{ inputs.artifact_commit }}' or '',
+              pr='${{ inputs.pr_number }}' or None,
+              backend='${{ inputs.backend }}',
+              pr_repo='${{ inputs.pr_repo }}' or '${{ inputs.artifact_repo }}',
+          )
+          run_id = ensure_target_artifact(target, timeout_s=120)
+          print(f'Artifact confirmed from CI run: {run_id}')
+          "
+
+      - name: Set up environment
+        run: |
+          source /opt/tollgate-venv/bin/activate || true
+          mkdir -p "/tmp/tollgate-results/${{ inputs.run_id }}/raw"
+          echo "Environment configured for run ${{ inputs.run_id }}"
+
+      - name: Run test pipeline
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          TOLLGATE_RUN_ID: ${{ inputs.run_id }}
+          TOLLGATE_SUT_BRANCH: ${{ inputs.artifact_branch }}
+          TOLLGATE_SUT_COMMIT: ${{ inputs.artifact_commit }}
+          TOLLGATE_SUT_PR: ${{ inputs.pr_number }}
+          TOLLGATE_ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
+          TOLLGATE_ARTIFACT_REPO: ${{ inputs.artifact_repo }}
+          TOLLGATE_PR_REPO: ${{ inputs.pr_repo }}
+          TOLLGATE_BACKEND: ${{ inputs.backend }}
+          TOLLGATE_PUBLISH: ${{ inputs.publish }}
+          TOLLGATE_TWO_ROUTER: ${{ inputs.two-router }}
+          TOLLGATE_RESELLER_SCENARIOS: ${{ inputs.reseller-scenarios }}
+          TOLLGATE_QUICK: ${{ inputs.quick }}
+          TOLLGATE_SMOKE: ${{ inputs.smoke }}
+          TOLLGATE_HWSIM: ${{ inputs.hwsim }}
+          TOLLGATE_VWIFI: ${{ inputs.vwifi }}
+        run: |
+          source /opt/tollgate-venv/bin/activate
+          echo "Starting cloud lab worker pipeline..."
+          python3 -m lib.cloud_lab.worker --from-env
+
+      - name: Publish results
+        if: inputs.publish == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source /opt/tollgate-venv/bin/activate
+          RESULTS_DIR="/tmp/tollgate-results/${{ inputs.run_id }}"
+          if [ ! -f "$RESULTS_DIR/report/index.html" ]; then
+            echo "No report to publish (worker may have already published)"
+            exit 0
+          fi
+          TOLLGATE_GH_PAGES_CNAME=tests.tollgate.me ./scripts/publish-report.sh "$RESULTS_DIR"
+
+      # Post PR comment on success/failure.
+      # Uses github.token for same-repo PRs; for cross-repo PRs the
+      # dispatcher workflow handles the comment.
+      - name: Post PR comment
+        if: always() && inputs.pr_number != '' && inputs.pr_repo == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID="${{ inputs.run_id }}"
+          COMMIT_SHORT="${{ inputs.artifact_commit }}"
+          [ -n "$COMMIT_SHORT" ] && COMMIT_SHORT="${COMMIT_SHORT:0:7}" || COMMIT_SHORT="unknown"
+          REPORT_URL="https://tests.tollgate.me/reports/${COMMIT_SHORT}/${RUN_ID}/report/index.html"
+
+          cat <<EOF | gh pr comment "${{ inputs.pr_number }}" --body-file -
+          ## Cloud Lab Run: \`${RUN_ID}\`
+
+          **Status**: ${{ job.status }}
+          **Backend**: ${{ inputs.backend }}
+          **Report**: [${REPORT_URL}](${REPORT_URL})
+          **Dashboard**: [tests.tollgate.me](https://tests.tollgate.me/)
+
+          Ran on ephemeral GCP self-hosted runner.
+          EOF
+
+      - name: Collect artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud-lab-results-${{ inputs.run_id }}
+          path: /tmp/tollgate-results/${{ inputs.run_id }}/
+          retention-days: 30
+          if-no-files-found: warn

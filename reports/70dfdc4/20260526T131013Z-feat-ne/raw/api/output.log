@@ -1,0 +1,181 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-9.0.3, pluggy-1.6.0 -- /opt/tollgate-venv/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-1058-gcp-x86_64-with-glibc2.35', 'Packages': {'pytest': '9.0.3', 'pluggy': '1.6.0'}, 'Plugins': {'timeout': '2.4.0', 'metadata': '3.1.1', 'rerunfailures': '16.2', 'html': '4.2.0'}}
+rootdir: /opt/tollgate-test
+configfile: pytest.ini
+plugins: timeout-2.4.0, metadata-3.1.1, rerunfailures-16.2, html-4.2.0
+timeout: 300.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 242 items
+
+tests/api/test_captive_api.py::test_captive_api_pre_auth SKIPPED         [  0%]
+tests/api/test_captive_api.py::test_captive_api_content_type SKIPPED     [  0%]
+tests/api/test_captive_api.py::test_captive_api_no_cache SKIPPED         [  1%]
+tests/api/test_cli_degraded_operations.py::test_cli_balance_degraded SKIPPED [  1%]
+tests/api/test_cli_degraded_operations.py::test_cli_info_degraded SKIPPED [  2%]
+tests/api/test_cli_degraded_operations.py::test_cli_drain_degraded SKIPPED [  2%]
+tests/api/test_cli_degraded_operations.py::test_cli_fund_degraded SKIPPED [  2%]
+tests/api/test_cli_json_config.py::test_cli_json_config_schema SKIPPEDwn
+command "schema" for "tollgate"
+Run 'tollgate --help' for usage.
+Error:
+unknown command "schema" for "tollgate")                                 [  3%]
+tests/api/test_cli_json_config.py::test_cli_json_config_get SKIPPEDwn
+command "get" for "tollgate"
+Run 'tollgate --help' for usage.
+Error:
+unknown command "get" for "tollgate")                                    [  3%]
+tests/api/test_cli_json_config.py::test_cli_json_health SKIPPEDwn flag:
+--json
+Usage:
+  tollgate [command]
+
+Available Commands:
+  completion
+Generate the autocompletion script for the specified shell
+  help
+Help about any command
+  logs)                                                                  [  4%]
+tests/api/test_cli_json_config.py::test_cli_json_config_set_roundtrip SKIPPEDknown command "get" for "tollgate"
+Run 'tollgate --help' for
+usage.
+Error: unknown command "get" for "tollgate")                             [  4%]
+tests/api/test_cli_version.py::test_version_succeeds PASSED              [  4%]
+tests/api/test_cli_version.py::test_version_has_message PASSED           [  5%]
+tests/api/test_cli_version.py::test_version_message_has_fields PASSED    [  5%]
+tests/api/test_cli_version.py::test_version_message_has_openwrt PASSED   [  6%]
+tests/api/test_cli_version.py::test_version_commit_is_hex PASSED         [  6%]
+tests/api/test_cli_wallet.py::test_wallet_info_succeeds PASSED           [  7%]
+tests/api/test_cli_wallet.py::test_wallet_info_has_mint_fields PASSED    [  7%]
+tests/api/test_cli_wallet.py::test_wallet_info_has_balance_fields PASSED [  7%]
+tests/api/test_cli_wallet.py::test_wallet_balance_succeeds PASSED        [  8%]
+tests/api/test_cli_wallet.py::test_wallet_balance_is_numeric PASSED      [  8%]
+tests/api/test_concurrent_payments.py::test_concurrent_payments_single_token PASSED [  9%]
+tests/api/test_concurrent_payments.py::test_concurrent_payments_different_tokens XFAILct tokens can fail with 'outputs have already been signed
+before'.)                                                                [  9%]
+tests/api/test_crypto_rand_password.py::test_current_password_generation_available SKIPPEDrmware. Response: {'success': False, 'error':
+'Private network command requires an action (status, enable, disable,
+rename, password)', 'timestamp': '2026-05-26T13:21:35.908575256Z'})      [  9%]
+tests/api/test_crypto_rand_password.py::test_password_generation_creates_valid_wpa2_password SKIPPEDrmware. Response: {'success': False,
+'error': 'Private network command requires an action (status, enable,
+disable, rename, password)', 'timestamp':
+'2026-05-26T13:21:38.687315425Z'})                                       [ 10%]
+tests/api/test_crypto_rand_password.py::test_password_format_is_word_word_word_digits SKIPPEDrmware. Response: {'success': False, 'error':
+'Private network command requires an action (status, enable, disable,
+rename, password)', 'timestamp': '2026-05-26T13:21:41.40120946Z'})       [ 10%]
+tests/api/test_degraded_mode.py::test_service_health_while_mints_reachable PASSED [ 11%]
+tests/api/test_degraded_mode.py::test_cli_health_shows_mint_status SKIPPED [ 11%]
+tests/api/test_degraded_mode.py::test_block_all_mints_service_stays_up SKIPPED [ 11%]
+tests/api/test_degraded_mode.py::test_degraded_mode_returns_retry_notice SKIPPED [ 12%]
+tests/api/test_degraded_mode.py::test_mint_recovery_after_unblock SKIPPED [ 12%]
+tests/api/test_degraded_mode.py::test_block_one_mint_others_still_work SKIPPED [ 13%]
+tests/api/test_degraded_mode.py::test_degraded_mode_notice_event_content SKIPPED [ 13%]
+tests/api/test_degraded_mode.py::test_service_survives_restart_in_degraded SKIPPED [ 14%]
+tests/api/test_degraded_mode.py::test_dynamic_downgrade_without_restart SKIPPED [ 14%]
+tests/api/test_degraded_mode.py::test_dynamic_reupgrade_full_lifecycle SKIPPED [ 14%]
+tests/api/test_degraded_mode.py::test_boltdb_lock_release_on_swap SKIPPED [ 15%]
+tests/api/test_discovery_mints.py::test_discovery_price_per_step_has_mint_urls PASSED [ 15%]
+tests/api/test_discovery_mints.py::test_configured_mints_subset_in_discovery PASSED [ 16%]
+tests/api/test_discovery_mints.py::test_unreachable_mint_not_in_discovery SKIPPED [ 16%]
+tests/api/test_discovery_mints.py::test_discovery_mint_count_reasonable PASSED [ 16%]
+tests/api/test_discovery_mints.py::test_bad_mint_handled_gracefully SKIPPED [ 17%]
+tests/api/test_dual_mint.py::test_both_configured_mints_in_discovery SKIPPED [ 17%]
+tests/api/test_dual_mint.py::test_v1_mint_payment_accepted PASSED        [ 18%]
+tests/api/test_dual_mint.py::test_v2_mint_payment_accepted SKIPPED
+'a56aee9a0d056148a8d4c3611ef40d6d28d6db231cba7589987f2ef9e1a9ffbe',
+'pubkey':
+'e0fc6c2469b2beaa53ff4c56a2c2731ec3b5fe3a79145e5129680b1f82d7f885',
+'created_at': 1779801766, 'tags')                                        [ 18%]
+tests/api/test_dual_mint.py::test_discovery_has_distinct_price_per_mint SKIPPED [ 19%]
+tests/api/test_dual_mint.py::test_keyset_id_format_in_discovery SKIPPED  [ 19%]
+tests/api/test_e2e_payment_auth_delay.py::test_payment_auth_delay_with_redirect SKIPPED [ 19%]
+tests/api/test_e2e_payment_auth_delay.py::test_payment_without_redirect_no_auth_delay SKIPPED [ 20%]
+tests/api/test_e2e_portal_payment.py::test_e2e_portal_payment +++++++++++++++++++++++++++++++++++ Timeout ++++++++++++++++++++++++++++++++++++
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Captured stderr ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+13:25:51 [tollgate.container_client] portal recording result: RECORD_ERROR: timeout waiting for token or payment signal
+~~~~~~~~~~~~~~~~~~~~ Stack of MainThread (127799262966208) ~~~~~~~~~~~~~~~~~~~~~
+  File "/usr/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pytest/__main__.py", line 9, in <module>
+    raise SystemExit(pytest.console_main())
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 223, in console_main
+    code = main()
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/_pytest/config/__init__.py", line 199, in main
+    ret: ExitCode | int = config.hook.pytest_cmdline_main(config=config)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/_pytest/main.py", line 365, in pytest_cmdline_main
+    return wrap_session(config, _main)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/_pytest/main.py", line 318, in wrap_session
+    session.exitstatus = doit(config, session) or 0
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/_pytest/main.py", line 372, in _main
+    config.hook.pytest_runtestloop(session=session)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/_pytest/main.py", line 396, in pytest_runtestloop
+    item.config.hook.pytest_runtest_protocol(item=item, nextitem=nextitem)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/_pytest/runner.py", line 118, in pytest_runtest_protocol
+    runtestprotocol(item, nextitem=nextitem)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/_pytest/runner.py", line 137, in runtestprotocol
+    reports.append(call_and_report(item, "call", log))
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/_pytest/runner.py", line 244, in call_and_report
+    call = CallInfo.from_call(
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/_pytest/runner.py", line 353, in from_call
+    result: TResult | None = func()
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/_pytest/runner.py", line 245, in <lambda>
+    lambda: runtest_hook(item=item, **kwds),
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/_pytest/runner.py", line 179, in pytest_runtest_call
+    item.runtest()
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/_pytest/python.py", line 1720, in runtest
+    self.ihook.pytest_pyfunc_call(pyfuncitem=self)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/opt/tollgate-venv/lib/python3.10/site-packages/_pytest/python.py", line 166, in pytest_pyfunc_call
+    result = testfunction(**testargs)
+  File "/opt/tollgate-test/tests/api/test_e2e_portal_payment.py", line 71, in test_e2e_portal_payment
+    token = cashu.mint(TOKEN_DEFAULT)
+  File "/opt/tollgate-test/lib/cashu.py", line 157, in mint
+    return self._mint_inner(amount, legacy)
+  File "/opt/tollgate-test/lib/cashu.py", line 175, in _mint_inner
+    self._ensure_balance(amount)
+  File "/opt/tollgate-test/lib/cashu.py", line 142, in _ensure_balance
+    if not self._wait_and_claim(quote_id, amount):
+  File "/opt/tollgate-test/lib/cashu.py", line 93, in _wait_and_claim
+    r = subprocess.run(
+  File "/usr/lib/python3.10/subprocess.py", line 505, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+  File "/usr/lib/python3.10/subprocess.py", line 1154, in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+  File "/usr/lib/python3.10/subprocess.py", line 2021, in _communicate
+    ready = selector.select(timeout)
+  File "/usr/lib/python3.10/selectors.py", line 416, in select
+    fd_event_list = self._selector.poll(timeout)
++++++++++++++++++++++++++++++++++++ Timeout ++++++++++++++++++++++++++++++++++++

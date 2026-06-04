@@ -1,0 +1,19 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-9.0.3, pluggy-1.6.0 -- /opt/tollgate-venv/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-1058-gcp-x86_64-with-glibc2.35', 'Packages': {'pytest': '9.0.3', 'pluggy': '1.6.0'}, 'Plugins': {'timeout': '2.4.0', 'metadata': '3.1.1', 'rerunfailures': '16.2', 'html': '4.2.0'}}
+rootdir: /opt/tollgate-test
+configfile: pytest.ini
+plugins: timeout-2.4.0, metadata-3.1.1, rerunfailures-16.2, html-4.2.0
+timeout: 300.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 3 items
+
+tests/api/test_visual_happy_path.py::test_visual_happy_path SKIPPED      [ 33%]
+tests/api/test_visual_happy_path.py::test_visual_time_metering_expiry PASSED [ 66%]
+tests/api/test_visual_happy_path.py::test_visual_data_metering_cutoff SKIPPED)) [100%]
+
+- generated xml file: /tmp/tollgate-results/20260526T131013Z-feat-ne/raw/visual/junit.xml -
+- Generated html report: file:///tmp/tollgate-results/20260526T131013Z-feat-ne/raw/visual/report.html -
+=================== 1 passed, 2 skipped in 150.22s (0:02:30) ===================

@@ -1,0 +1,1325 @@
+{
+  "run_id": "20260526T131013Z-feat-ne",
+  "status": "passed",
+  "counts": {
+    "total": 74,
+    "passed": 21,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 53,
+    "flaky": 0
+  },
+  "runners": [
+    {
+      "name": "visual",
+      "status": "passed",
+      "counts": {
+        "total": 3,
+        "passed": 1,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 2,
+        "flaky": 0
+      }
+    },
+    {
+      "name": "api",
+      "status": "passed",
+      "counts": {
+        "total": 41,
+        "passed": 16,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 25,
+        "flaky": 0
+      }
+    },
+    {
+      "name": "vl-scenarios",
+      "status": "passed",
+      "counts": {
+        "total": 30,
+        "passed": 4,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 26,
+        "flaky": 0
+      }
+    }
+  ],
+  "tests": [
+    {
+      "runner": "visual",
+      "framework": "pytest",
+      "name": "test_visual_happy_path",
+      "file": "tests/api/test_visual_happy_path",
+      "outcome": "skipped",
+      "duration_ms": 67956,
+      "failure_message": "cashu mint unavailable: mint() timed out after 60s",
+      "markers": []
+    },
+    {
+      "runner": "visual",
+      "framework": "pytest",
+      "name": "test_visual_time_metering_expiry",
+      "file": "tests/api/test_visual_happy_path",
+      "outcome": "passed",
+      "duration_ms": 59734,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "visual",
+      "framework": "pytest",
+      "name": "test_visual_data_metering_cutoff",
+      "file": "tests/api/test_visual_happy_path",
+      "outcome": "skipped",
+      "duration_ms": 1744,
+      "failure_message": "data metering cutoff requires physical network (nftables byte counting)",
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_captive_api_pre_auth",
+      "file": "tests/api/test_captive_api.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_captive_api_content_type",
+      "file": "tests/api/test_captive_api.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_captive_api_no_cache",
+      "file": "tests/api/test_captive_api.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_cli_balance_degraded",
+      "file": "tests/api/test_cli_degraded_operations.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_cli_info_degraded",
+      "file": "tests/api/test_cli_degraded_operations.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_cli_drain_degraded",
+      "file": "tests/api/test_cli_degraded_operations.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_cli_fund_degraded",
+      "file": "tests/api/test_cli_degraded_operations.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_version_succeeds",
+      "file": "tests/api/test_cli_version.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_version_has_message",
+      "file": "tests/api/test_cli_version.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_version_message_has_fields",
+      "file": "tests/api/test_cli_version.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_version_message_has_openwrt",
+      "file": "tests/api/test_cli_version.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_version_commit_is_hex",
+      "file": "tests/api/test_cli_version.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_wallet_info_succeeds",
+      "file": "tests/api/test_cli_wallet.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_wallet_info_has_mint_fields",
+      "file": "tests/api/test_cli_wallet.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_wallet_info_has_balance_fields",
+      "file": "tests/api/test_cli_wallet.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_wallet_balance_succeeds",
+      "file": "tests/api/test_cli_wallet.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_wallet_balance_is_numeric",
+      "file": "tests/api/test_cli_wallet.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_concurrent_payments_single_token",
+      "file": "tests/api/test_concurrent_payments.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_service_health_while_mints_reachable",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_cli_health_shows_mint_status",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_block_all_mints_service_stays_up",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_degraded_mode_returns_retry_notice",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_mint_recovery_after_unblock",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_block_one_mint_others_still_work",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_degraded_mode_notice_event_content",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_service_survives_restart_in_degraded",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_dynamic_downgrade_without_restart",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_dynamic_reupgrade_full_lifecycle",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_boltdb_lock_release_on_swap",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_discovery_price_per_step_has_mint_urls",
+      "file": "tests/api/test_discovery_mints.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_configured_mints_subset_in_discovery",
+      "file": "tests/api/test_discovery_mints.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_unreachable_mint_not_in_discovery",
+      "file": "tests/api/test_discovery_mints.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_discovery_mint_count_reasonable",
+      "file": "tests/api/test_discovery_mints.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_bad_mint_handled_gracefully",
+      "file": "tests/api/test_discovery_mints.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_both_configured_mints_in_discovery",
+      "file": "tests/api/test_dual_mint.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_v1_mint_payment_accepted",
+      "file": "tests/api/test_dual_mint.py",
+      "outcome": "passed",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_v2_mint_payment_accepted",
+      "file": "tests/api/test_dual_mint.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_discovery_has_distinct_price_per_mint",
+      "file": "tests/api/test_dual_mint.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_keyset_id_format_in_discovery",
+      "file": "tests/api/test_dual_mint.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_payment_auth_delay_with_redirect",
+      "file": "tests/api/test_e2e_payment_auth_delay.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_payment_without_redirect_no_auth_delay",
+      "file": "tests/api/test_e2e_payment_auth_delay.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_portal_no_bare_zero_literals",
+      "file": "tests/scenarios/test_captive_portal_browser",
+      "outcome": "skipped",
+      "duration_ms": 1750,
+      "failure_message": "Portal at http://localhost:80/splash.html returned empty HTML \u2014 nodogsplash may not serve splash.html without a preauthenticated client",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_api_returns_valid_advertisement",
+      "file": "tests/scenarios/test_captive_portal_browser",
+      "outcome": "passed",
+      "duration_ms": 229,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_degraded_mode_shows_error",
+      "file": "tests/scenarios/test_captive_portal_browser",
+      "outcome": "skipped",
+      "duration_ms": 231,
+      "failure_message": "Backend is not in degraded mode \u2014 cannot test degraded portal rendering",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_degraded_mode_hides_payment",
+      "file": "tests/scenarios/test_captive_portal_browser",
+      "outcome": "skipped",
+      "duration_ms": 247,
+      "failure_message": "Backend is not in degraded mode \u2014 cannot test payment hiding",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_portal_has_cashu_input",
+      "file": "tests/scenarios/test_captive_portal_browser",
+      "outcome": "skipped",
+      "duration_ms": 245,
+      "failure_message": "Portal at http://localhost:80/splash.html returned empty HTML \u2014 nodogsplash may not serve splash.html without a preauthenticated client",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_portal_has_lightning_input",
+      "file": "tests/scenarios/test_captive_portal_browser",
+      "outcome": "skipped",
+      "duration_ms": 254,
+      "failure_message": "Portal at http://localhost:80/splash.html returned empty HTML \u2014 nodogsplash may not serve splash.html without a preauthenticated client",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_portal_has_mint_options",
+      "file": "tests/scenarios/test_captive_portal_browser",
+      "outcome": "skipped",
+      "duration_ms": 250,
+      "failure_message": "Portal at http://localhost:80/splash.html returned empty HTML \u2014 nodogsplash may not serve splash.html without a preauthenticated client",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_block_mint_via_hosts",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 245,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_restart_into_degraded_mode",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 244,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_offline_wallet_operations",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 247,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_unblock_mint",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 242,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_recovery_to_full_merchant",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 246,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_full_degraded_lifecycle",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 255,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_first_boot_offline",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 246,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_default_mints_configured",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "passed",
+      "duration_ms": 237,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_no_configured_mints",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 240,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_startup_hygiene_auto_switch",
+      "file": "tests/scenarios/test_boot_hygiene",
+      "outcome": "skipped",
+      "duration_ms": 244,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_startup_hygiene_dead_only",
+      "file": "tests/scenarios/test_boot_hygiene",
+      "outcome": "skipped",
+      "duration_ms": 234,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_degraded_recovery_no_restart",
+      "file": "tests/scenarios/test_boot_hygiene",
+      "outcome": "skipped",
+      "duration_ms": 274,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_dynamic_merchant_rebuild",
+      "file": "tests/scenarios/test_boot_hygiene",
+      "outcome": "skipped",
+      "duration_ms": 249,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_wallet_preserved_through_degraded_cycle",
+      "file": "tests/scenarios/test_boot_hygiene",
+      "outcome": "skipped",
+      "duration_ms": 237,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_upstream_scan",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "skipped",
+      "duration_ms": 236,
+      "failure_message": "tollgate upstream list returned failure with no message",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_upstream_list",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "skipped",
+      "duration_ms": 231,
+      "failure_message": "tollgate upstream list returned failure with no message",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_connect_to_unknown_ssid_fails",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "skipped",
+      "duration_ms": 238,
+      "failure_message": "tollgate upstream list returned failure with no message",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_remove_unknown_ssid_fails",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "skipped",
+      "duration_ms": 234,
+      "failure_message": "tollgate upstream list returned failure with no message",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_existing_cli_commands_work",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "passed",
+      "duration_ms": 266,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_upstream_status_check",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "passed",
+      "duration_ms": 243,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_reseller_mode_guard",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "skipped",
+      "duration_ms": 242,
+      "failure_message": "tollgate upstream list returned failure with no message",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_no_dual_wwan",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "skipped",
+      "duration_ms": 241,
+      "failure_message": "tollgate upstream list returned failure with no message",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_sta_health",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "skipped",
+      "duration_ms": 262,
+      "failure_message": "tollgate upstream list returned failure with no message",
+      "markers": []
+    }
+  ],
+  "failed_tests": [],
+  "skipped_tests": [
+    {
+      "runner": "visual",
+      "framework": "pytest",
+      "name": "test_visual_happy_path",
+      "file": "tests/api/test_visual_happy_path",
+      "outcome": "skipped",
+      "duration_ms": 67956,
+      "failure_message": "cashu mint unavailable: mint() timed out after 60s",
+      "markers": []
+    },
+    {
+      "runner": "visual",
+      "framework": "pytest",
+      "name": "test_visual_data_metering_cutoff",
+      "file": "tests/api/test_visual_happy_path",
+      "outcome": "skipped",
+      "duration_ms": 1744,
+      "failure_message": "data metering cutoff requires physical network (nftables byte counting)",
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_captive_api_pre_auth",
+      "file": "tests/api/test_captive_api.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_captive_api_content_type",
+      "file": "tests/api/test_captive_api.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_captive_api_no_cache",
+      "file": "tests/api/test_captive_api.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_cli_balance_degraded",
+      "file": "tests/api/test_cli_degraded_operations.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_cli_info_degraded",
+      "file": "tests/api/test_cli_degraded_operations.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_cli_drain_degraded",
+      "file": "tests/api/test_cli_degraded_operations.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_cli_fund_degraded",
+      "file": "tests/api/test_cli_degraded_operations.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_cli_health_shows_mint_status",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_block_all_mints_service_stays_up",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_degraded_mode_returns_retry_notice",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_mint_recovery_after_unblock",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_block_one_mint_others_still_work",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_degraded_mode_notice_event_content",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_service_survives_restart_in_degraded",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_dynamic_downgrade_without_restart",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_dynamic_reupgrade_full_lifecycle",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_boltdb_lock_release_on_swap",
+      "file": "tests/api/test_degraded_mode.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_unreachable_mint_not_in_discovery",
+      "file": "tests/api/test_discovery_mints.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_bad_mint_handled_gracefully",
+      "file": "tests/api/test_discovery_mints.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_both_configured_mints_in_discovery",
+      "file": "tests/api/test_dual_mint.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_v2_mint_payment_accepted",
+      "file": "tests/api/test_dual_mint.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_discovery_has_distinct_price_per_mint",
+      "file": "tests/api/test_dual_mint.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_keyset_id_format_in_discovery",
+      "file": "tests/api/test_dual_mint.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_payment_auth_delay_with_redirect",
+      "file": "tests/api/test_e2e_payment_auth_delay.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "api",
+      "framework": "pytest",
+      "name": "test_payment_without_redirect_no_auth_delay",
+      "file": "tests/api/test_e2e_payment_auth_delay.py",
+      "outcome": "skipped",
+      "duration_ms": 0,
+      "failure_message": null,
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_portal_no_bare_zero_literals",
+      "file": "tests/scenarios/test_captive_portal_browser",
+      "outcome": "skipped",
+      "duration_ms": 1750,
+      "failure_message": "Portal at http://localhost:80/splash.html returned empty HTML \u2014 nodogsplash may not serve splash.html without a preauthenticated client",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_degraded_mode_shows_error",
+      "file": "tests/scenarios/test_captive_portal_browser",
+      "outcome": "skipped",
+      "duration_ms": 231,
+      "failure_message": "Backend is not in degraded mode \u2014 cannot test degraded portal rendering",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_degraded_mode_hides_payment",
+      "file": "tests/scenarios/test_captive_portal_browser",
+      "outcome": "skipped",
+      "duration_ms": 247,
+      "failure_message": "Backend is not in degraded mode \u2014 cannot test payment hiding",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_portal_has_cashu_input",
+      "file": "tests/scenarios/test_captive_portal_browser",
+      "outcome": "skipped",
+      "duration_ms": 245,
+      "failure_message": "Portal at http://localhost:80/splash.html returned empty HTML \u2014 nodogsplash may not serve splash.html without a preauthenticated client",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_portal_has_lightning_input",
+      "file": "tests/scenarios/test_captive_portal_browser",
+      "outcome": "skipped",
+      "duration_ms": 254,
+      "failure_message": "Portal at http://localhost:80/splash.html returned empty HTML \u2014 nodogsplash may not serve splash.html without a preauthenticated client",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_portal_has_mint_options",
+      "file": "tests/scenarios/test_captive_portal_browser",
+      "outcome": "skipped",
+      "duration_ms": 250,
+      "failure_message": "Portal at http://localhost:80/splash.html returned empty HTML \u2014 nodogsplash may not serve splash.html without a preauthenticated client",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_block_mint_via_hosts",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 245,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_restart_into_degraded_mode",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 244,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_offline_wallet_operations",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 247,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_unblock_mint",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 242,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_recovery_to_full_merchant",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 246,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_full_degraded_lifecycle",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 255,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_first_boot_offline",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 246,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_no_configured_mints",
+      "file": "tests/scenarios/test_mint_health",
+      "outcome": "skipped",
+      "duration_ms": 240,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_startup_hygiene_auto_switch",
+      "file": "tests/scenarios/test_boot_hygiene",
+      "outcome": "skipped",
+      "duration_ms": 244,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_startup_hygiene_dead_only",
+      "file": "tests/scenarios/test_boot_hygiene",
+      "outcome": "skipped",
+      "duration_ms": 234,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_degraded_recovery_no_restart",
+      "file": "tests/scenarios/test_boot_hygiene",
+      "outcome": "skipped",
+      "duration_ms": 274,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_dynamic_merchant_rebuild",
+      "file": "tests/scenarios/test_boot_hygiene",
+      "outcome": "skipped",
+      "duration_ms": 249,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_wallet_preserved_through_degraded_cycle",
+      "file": "tests/scenarios/test_boot_hygiene",
+      "outcome": "skipped",
+      "duration_ms": 237,
+      "failure_message": "no degraded mode support detected",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_upstream_scan",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "skipped",
+      "duration_ms": 236,
+      "failure_message": "tollgate upstream list returned failure with no message",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_upstream_list",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "skipped",
+      "duration_ms": 231,
+      "failure_message": "tollgate upstream list returned failure with no message",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_connect_to_unknown_ssid_fails",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "skipped",
+      "duration_ms": 238,
+      "failure_message": "tollgate upstream list returned failure with no message",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_remove_unknown_ssid_fails",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "skipped",
+      "duration_ms": 234,
+      "failure_message": "tollgate upstream list returned failure with no message",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_reseller_mode_guard",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "skipped",
+      "duration_ms": 242,
+      "failure_message": "tollgate upstream list returned failure with no message",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_no_dual_wwan",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "skipped",
+      "duration_ms": 241,
+      "failure_message": "tollgate upstream list returned failure with no message",
+      "markers": []
+    },
+    {
+      "runner": "vl-scenarios",
+      "framework": "pytest",
+      "name": "test_sta_health",
+      "file": "tests/scenarios/test_upstream_wifi",
+      "outcome": "skipped",
+      "duration_ms": 262,
+      "failure_message": "tollgate upstream list returned failure with no message",
+      "markers": []
+    }
+  ]
+}

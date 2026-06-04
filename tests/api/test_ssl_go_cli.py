@@ -22,6 +22,7 @@ pytestmark = [
     pytest.mark.go_only,
     pytest.mark.config,
     pytest.mark.destructive,
+    pytest.mark.complete,
 ]
 
 SSL_DIR = "/etc/tollgate/ssl"

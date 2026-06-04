@@ -30,7 +30,7 @@ from lib.helpers import parse_json_or_fail
 
 log = logging.getLogger("tollgate.degraded_mode")
 
-pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.timeout(300)]
+pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.timeout(300), pytest.mark.complete]
 
 SERVICE_RESTART_WAIT = 10
 HEALTH_POLL_INTERVAL = 5

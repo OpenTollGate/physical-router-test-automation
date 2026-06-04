@@ -166,6 +166,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         portal=cast(str, args.portal),
         quick=cast(bool, args.quick),
         smoke=cast(bool, getattr(args, "smoke", False)),
+        complete=cast(bool, getattr(args, "complete", False)),
         hwsim=cast(bool, getattr(args, "hwsim", False)),
         vwifi=cast(bool, getattr(args, "vwifi", False)),
         wifi_plane=cast(str, getattr(args, "wifi_plane", "tap")),
@@ -175,13 +176,14 @@ def cmd_submit(args: argparse.Namespace) -> int:
     portal_line = f"  Portal:       {cast(str, args.portal)}\n" if cast(str, args.portal) != "builtin" else ""
     quick_line = "  Mode:         QUICK (visual happy path only)\n" if cast(bool, args.quick) else ""
     smoke_line = "  Mode:         SMOKE (visual + smoke API + hwsim)\n" if cast(bool, getattr(args, "smoke", False)) and not cast(bool, args.quick) else ""
+    complete_line = "  Mode:         COMPLETE (includes slow/exhaustive tests)\n" if cast(bool, getattr(args, "complete", False)) and not cast(bool, args.quick) and not cast(bool, getattr(args, "smoke", False)) else ""
     hwsim_line = "  hwsim:        enabled\n" if cast(bool, getattr(args, "hwsim", False)) else ""
     vwifi_line = "  vwifi:        enabled (cross-VM WiFi relay)\n" if cast(bool, getattr(args, "vwifi", False)) else ""
     wifi_plane_line = f"  WiFi plane:   {cast(str, getattr(args, 'wifi_plane', 'tap'))}\n" if cast(str, getattr(args, "wifi_plane", "tap")) != "tap" else ""
     print(f"""
 Submitted run {info['run_id']}
 {pr_line}  SUT commit:   {target.sut_commit or '(branch head)'}
-{quick_line}{smoke_line}{mint_line}{portal_line}{hwsim_line}{vwifi_line}{wifi_plane_line}  VM:           {info['vm_name']} ({info['zone']})
+{quick_line}{smoke_line}{complete_line}{mint_line}{portal_line}{hwsim_line}{vwifi_line}{wifi_plane_line}  VM:           {info['vm_name']} ({info['zone']})
   Artifact run: {info['artifact_run_id']}
   Suite ref:    {info['suite_ref']} (must exist on github.com/{SUITE_REPO})
   Logs:         {info['log_hint']}
@@ -351,6 +353,8 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--smoke", action="store_true",
         help="Smoke mode: visual happy path + smoke API tests + hwsim (if --hwsim) (~8min)")
     submit.add_argument("--quick", action="store_true", help="Quick mode: only run visual happy path (~5min total)")
+    submit.add_argument("--complete", action="store_true",
+        help="Complete mode: include slow/exhaustive tests excluded from default runs (~45min)")
     submit.add_argument("--hwsim", action="store_true",
         help="Enable mac80211_hwsim virtual WiFi on the OpenWrt VM (experimental)")
     submit.add_argument("--vwifi", action="store_true",

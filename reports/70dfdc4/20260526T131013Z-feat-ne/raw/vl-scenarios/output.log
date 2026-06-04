@@ -1,0 +1,53 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-9.0.3, pluggy-1.6.0 -- /opt/tollgate-venv/bin/python3
+cachedir: .pytest_cache
+metadata: {'Python': '3.10.12', 'Platform': 'Linux-6.8.0-1058-gcp-x86_64-with-glibc2.35', 'Packages': {'pytest': '9.0.3', 'pluggy': '1.6.0'}, 'Plugins': {'timeout': '2.4.0', 'metadata': '3.1.1', 'rerunfailures': '16.2', 'html': '4.2.0'}}
+rootdir: /opt/tollgate-test
+configfile: pytest.ini
+plugins: timeout-2.4.0, metadata-3.1.1, rerunfailures-16.2, html-4.2.0
+timeout: 600.0s
+timeout method: thread
+timeout func_only: False
+collecting ... collected 30 items
+
+tests/scenarios/test_captive_portal_browser.py::test_portal_no_bare_zero_literals SKIPPEDplash may not serve splash.html without a
+preauthenticated client)                                                 [  3%]
+tests/scenarios/test_captive_portal_browser.py::test_api_returns_valid_advertisement PASSED [  6%]
+tests/scenarios/test_captive_portal_browser.py::test_degraded_mode_shows_error SKIPPEDg) [ 10%]
+tests/scenarios/test_captive_portal_browser.py::test_degraded_mode_hides_payment SKIPPED [ 13%]
+tests/scenarios/test_captive_portal_browser.py::test_portal_has_cashu_input SKIPPEDplash may not serve splash.html without a preauthenticated
+client)                                                                  [ 16%]
+tests/scenarios/test_captive_portal_browser.py::test_portal_has_lightning_input SKIPPEDplash may not serve splash.html without a
+preauthenticated client)                                                 [ 20%]
+tests/scenarios/test_captive_portal_browser.py::test_portal_has_mint_options SKIPPEDplash may not serve splash.html without a preauthenticated
+client)                                                                  [ 23%]
+tests/scenarios/test_mint_health.py::test_block_mint_via_hosts SKIPPED   [ 26%]
+tests/scenarios/test_mint_health.py::test_restart_into_degraded_mode SKIPPED [ 30%]
+tests/scenarios/test_mint_health.py::test_offline_wallet_operations SKIPPED [ 33%]
+tests/scenarios/test_mint_health.py::test_unblock_mint SKIPPED (no
+degraded mode support detected)                                          [ 36%]
+tests/scenarios/test_mint_health.py::test_recovery_to_full_merchant SKIPPED [ 40%]
+tests/scenarios/test_mint_health.py::test_full_degraded_lifecycle SKIPPED [ 43%]
+tests/scenarios/test_mint_health.py::test_first_boot_offline SKIPPED (no
+degraded mode support detected)                                          [ 46%]
+tests/scenarios/test_mint_health.py::test_default_mints_configured PASSED [ 50%]
+tests/scenarios/test_mint_health.py::test_no_configured_mints SKIPPED    [ 53%]
+tests/scenarios/test_boot_hygiene.py::test_startup_hygiene_auto_switch SKIPPED [ 56%]
+tests/scenarios/test_boot_hygiene.py::test_startup_hygiene_dead_only SKIPPED [ 60%]
+tests/scenarios/test_boot_hygiene.py::test_degraded_recovery_no_restart SKIPPED [ 63%]
+tests/scenarios/test_boot_hygiene.py::test_dynamic_merchant_rebuild SKIPPED [ 66%]
+tests/scenarios/test_boot_hygiene.py::test_wallet_preserved_through_degraded_cycle SKIPPED [ 70%]
+tests/scenarios/test_upstream_wifi.py::test_upstream_scan SKIPPED        [ 73%]
+tests/scenarios/test_upstream_wifi.py::test_upstream_list SKIPPED        [ 76%]
+tests/scenarios/test_upstream_wifi.py::test_connect_to_unknown_ssid_fails SKIPPED [ 80%]
+tests/scenarios/test_upstream_wifi.py::test_remove_unknown_ssid_fails SKIPPED [ 83%]
+tests/scenarios/test_upstream_wifi.py::test_existing_cli_commands_work PASSED [ 86%]
+tests/scenarios/test_upstream_wifi.py::test_upstream_status_check PASSED [ 90%]
+tests/scenarios/test_upstream_wifi.py::test_reseller_mode_guard SKIPPED  [ 93%]
+tests/scenarios/test_upstream_wifi.py::test_no_dual_wwan SKIPPED         [ 96%]
+tests/scenarios/test_upstream_wifi.py::test_sta_health SKIPPED (tollgate
+upstream list returned failure with no message)                          [100%]
+
+- generated xml file: /tmp/tollgate-results/20260526T131013Z-feat-ne/raw/vl-scenarios/junit.xml -
+- Generated html report: file:///tmp/tollgate-results/20260526T131013Z-feat-ne/raw/vl-scenarios/report.html -
+================== 4 passed, 26 skipped in 104.26s (0:01:44) ===================

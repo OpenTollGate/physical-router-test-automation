@@ -33,7 +33,7 @@ from lib.helpers import (
 
 log = logging.getLogger("tollgate.merchant_provider")
 
-pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.timeout(300), pytest.mark.go_only]
+pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.timeout(300), pytest.mark.go_only, pytest.mark.complete]
 
 HEALTH_POLL_INTERVAL = 5
 HEALTH_POLL_TIMEOUT = 180

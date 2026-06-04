@@ -21,6 +21,7 @@ pytestmark = [
     pytest.mark.config,
     pytest.mark.destructive,
     pytest.mark.timeout(1800),
+    pytest.mark.complete,
 ]
 
 SSL_CERT = "/etc/tollgate/ssl/server.crt"

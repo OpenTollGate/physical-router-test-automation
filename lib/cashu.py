@@ -127,12 +127,12 @@ class CashuMint:
             [self._cashu, "-h", self.mint_url, "-t", "-y", "invoice", str(amount)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self._env(),
         )
-        time.sleep(5)
+        time.sleep(3)
         proc.kill()
         proc.communicate()
 
         created = False
-        for _ in range(5):
+        for attempt in range(10):
             after = self._count_invoices()
             if after > before:
                 created = True
@@ -141,7 +141,7 @@ class CashuMint:
 
         if not created:
             raise RuntimeError(
-                f"Invoice not created after 15s (before={before}, after={after}, mint={self.mint_url})"
+                f"Invoice not created after 25s (before={before}, after={after}, mint={self.mint_url})"
             )
 
         quote_id = self._find_latest_quote_id()
