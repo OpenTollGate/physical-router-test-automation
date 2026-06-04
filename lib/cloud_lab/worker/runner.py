@@ -152,7 +152,7 @@ def _build_pytest_cmd(config: WorkerConfig, spec: RunnerSpec, results_dir: str) 
     raw = spec.raw_dir(results_dir)
     expected_pr = _expected_pr_arg(config)
     target = spec.pytest_node or " ".join(spec.paths)
-    marker = f"-m {spec.markers} " if spec.markers else ""
+    marker = f"-m '{spec.markers}' " if spec.markers else ""
     ignore = " ".join(f"--ignore={p}" for p in spec.ignore_paths)
     ignore_sp = f"{ignore} " if ignore else ""
     pytest_cmd = (
