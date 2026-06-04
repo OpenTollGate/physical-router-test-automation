@@ -314,7 +314,7 @@ class Router:
         url = self.backend_url(path)
         if self.jump_host:
             try:
-                out = self.ssh(f"wget -S -o /dev/null -O /dev/null '{url}' 2>&1 | head -1 | grep -oE '[0-9]{{3}}' | head -1", timeout=15)
+                out = self.ssh(f"curl -s -o /dev/null -w '%{{http_code}}' '{url}'", timeout=15)
                 return int(out.strip()) if out.strip().isdigit() else 0
             except Exception:
                 return 0
