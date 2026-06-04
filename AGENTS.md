@@ -1148,3 +1148,53 @@ Tests are ordered by dependency and run sequentially. The full suite validates W
    ```
    See: https://github.com/OpenTollGate/tollgate-knowledgebase/tree/main/incidents/YYYY-MM-DD_slug.md
    ```
+
+## Cashu Token Version Compatibility
+
+The Go backend (gonuts) only supports V1 and V3 Cashu tokens. V4 tokens are rejected with `"Invalid cashu token: invalid token: invalid V3 token"`.
+
+| Token Version | Prefix | Encoding | Go Backend | Notes |
+|---------------|--------|----------|------------|-------|
+| V1 | `cashuA` | Base64 JSON | **Accepted** | Legacy format |
+| V3 | `cashuAeyJ` | Base64 JSON | **Accepted** | Current standard, tested with 378-char testnut tokens |
+| V4 | `cashuB` | Binary CBOR | **Rejected** | Go returns `kind:21023` error |
+
+Users with modern Cashu wallets (eNuts, cashu.me with latest CDK) may produce V4 tokens that the Go backend cannot process. This is a backend limitation, not a mint-specific issue.
+
+Full findings and test matrix: `docs/portal-test-findings.md`.
+
+### Keyset ID compatibility (separate from token version)
+
+| Keyset Version | Prefix | Go Backend | Notes |
+|---------------|--------|------------|-------|
+| V1 | `00` (16 hex chars) | **Required** | gonuts only supports V1 keysets |
+| V2 | `01` (66 hex chars) | **Fatal crash** | Backend refuses to start |
+
+Only `testnut.cashu.exchange` returns V1 keysets. CDK mints return V2 keysets and will crash the Go backend on startup.
+
+## Captive Portal Flow (Physical Router)
+
+### Framework approach (recommended)
+
+The framework does NOT rely on Android's native "Sign in to network" popup. It bypasses it:
+
+1. `reset_state()` — deauth client, restart NDS + backend
+2. `wifi._connect_to_wifi()` — disconnect WiFi, reconnect to TollGate SSID
+3. `_open_portal_on_phone()` — **manually opens portal URL in browser** via `am start -a android.intent.action.VIEW`
+
+This is deterministic and works across Android versions/OEMs. The native popup is unreliable — Android caches network validation results and may not re-check for minutes after deauthentication.
+
+### ADB token typing
+
+- `adb shell input text` silently truncates at ~200 chars. Must use 80-char chunks with 0.3s delay for tokens ≥200 chars.
+- The portal UI only shows ~30 chars of the token in the input field, but the full token IS present.
+- The keyboard must be dismissed (tap outside input field) before the Purchase button is visible.
+- The portal Paste button (CB002) is broken on Android 14 Firefox.
+
+### firewall-tollgate masquerade bug
+
+The TollGate `.ipk` creates `/etc/config/firewall-tollgate` as a UCI-format fw4 include. fw4 silently rejects it because the syntax is invalid for an include file. The masquerade/NAT rule never loads. Authenticated clients can reach the router but not the internet.
+
+**Fix**: Rename the file to `.disabled`, remove the UCI include reference, restart fw4.
+
+**Impact**: `pay_direct()` tests don't catch this because they SSH to the router and hit the backend directly. Only phone tests that verify actual internet access would detect the missing masquerade.

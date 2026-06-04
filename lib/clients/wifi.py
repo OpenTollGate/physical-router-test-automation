@@ -261,40 +261,125 @@ class WiFi:
         log.info(f"Detected router LAN IP: {ip}")
         return ip
 
-    def _open_portal_on_phone(self, state_pattern: str, timeout: int = 30) -> bool:
-        if self.router.get_nds_gateway_domain():
-            self.router.ensure_nds_gateway_domain_supported()
-        portal_host = self._get_portal_host()
-        portal_url = f"http://{portal_host}/"
-        log.info(f"Opening portal at {portal_url}")
+    def _open_portal_via_native_captive(self, state_pattern: str, timeout: int = 30) -> bool:
+        log.info("Attempting native captive portal popup...")
 
-        # Clear any previous browser state
-        if hasattr(self.adb, 'force_stop_browser'):
-            self.adb.force_stop_browser()
-        else:
-            # Fallback: manually force stop common browsers
-            self.adb.shell("am force-stop com.android.chrome")
-            self.adb.shell("am force-stop com.sec.android.app.sbrowser")
+        self.adb.shell("am force-stop com.android.captiveportallogin 2>/dev/null")
+        time.sleep(1)
 
-        # Open portal URL in phone's browser
-        self.adb.start_activity(action="android.intent.action.VIEW", data_uri=portal_url)
+        self.adb.shell("am start -a android.settings.WIFI_SETTINGS")
         time.sleep(3)
 
-        log.info("Waiting for portal to render...")
+        xml = self.adb.ui_xml()
+        ssid_escaped = re.escape(self.ssid)
+
+        # Match TollGate SSID title followed by "Sign in" in the same UI row
+        entry_match = re.search(
+            rf'<node[^>]*text="{ssid_escaped}"[^>]*resource-id="[^"]*title"[^>]*/>'
+            rf'.*?text="[^"]*[Ss]ign in[^"]*"',
+            xml, re.DOTALL,
+        )
+
+        if not entry_match:
+            entry_match = re.search(
+                rf'<node[^>]*clickable="true"[^>]*bounds="\[([^]]*)\]\[([^]]*)\]"[^>]*>.*?'
+                rf'text="{ssid_escaped}"',
+                xml, re.DOTALL,
+            )
+
+        if not entry_match:
+            log.warning("Could not find TollGate entry in WiFi settings for native portal")
+            return False
+
+        # Re-search to capture clickable container bounds for the tap
+        container_match = re.search(
+            rf'<node[^>]*clickable="true"[^>]*bounds="\[([^]]*)\]\[([^]]*)\]"[^>]*>.*?'
+            rf'text="{ssid_escaped}"',
+            xml, re.DOTALL,
+        )
+        if container_match:
+            bounds_str = f"[{container_match.group(1)}][{container_match.group(2)}]"
+            self.adb.tap_bounds(bounds_str)
+            log.info(f"Tapped TollGate WiFi entry at {bounds_str}")
+        else:
+            # Tap the first entry under "Current network"
+            connected_match = re.search(
+                r'text="Current network".*?'
+                r'<node[^>]*clickable="true"[^>]*bounds="\[([^]]*)\]\[([^]]*)\]"',
+                xml, re.DOTALL,
+            )
+            if connected_match:
+                bounds_str = f"[{connected_match.group(1)}][{connected_match.group(2)}]"
+                self.adb.tap_bounds(bounds_str)
+                log.info(f"Tapped current network entry at {bounds_str}")
+            else:
+                log.warning("Could not find clickable TollGate entry to tap")
+                return False
+
+        time.sleep(5)
+
+        xml = self.adb.ui_xml()
+        if "captiveportallogin" in xml.lower() or "Tollgate Captive Portal" in xml:
+            log.info("Native captive portal opened successfully")
+
         start = time.time()
         while time.time() - start < timeout:
             xml = self.adb.ui_xml()
             if re.search(state_pattern, xml):
                 sm = re.search(r'data-sm="([^"]*)"', xml)
                 if sm:
-                    log.info(f"Portal reached state '{sm.group(1)}' after {int(time.time()-start)}s")
+                    log.info(f"Native portal reached state '{sm.group(1)}' after {int(time.time()-start)}s")
                 else:
-                    log.info(f"Portal page loaded after {int(time.time()-start)}s")
+                    log.info(f"Native portal page loaded after {int(time.time()-start)}s")
                 return True
             time.sleep(3)
 
-        log.warning(f"Portal did not reach expected state within {timeout}s")
+        log.warning(f"Native captive portal did not render within {timeout}s")
         return False
+
+    def _open_portal_via_browser(self, portal_url: str, state_pattern: str, timeout: int = 30) -> bool:
+        log.info(f"Falling back to browser: opening portal at {portal_url}")
+
+        if hasattr(self.adb, 'force_stop_browser'):
+            self.adb.force_stop_browser()
+        else:
+            self.adb.shell("am force-stop com.android.chrome")
+            self.adb.shell("am force-stop com.sec.android.app.sbrowser")
+
+        self.adb.start_activity(action="android.intent.action.VIEW", data_uri=portal_url)
+        time.sleep(3)
+
+        log.info("Waiting for portal to render in browser...")
+        start = time.time()
+        while time.time() - start < timeout:
+            xml = self.adb.ui_xml()
+            if re.search(state_pattern, xml):
+                sm = re.search(r'data-sm="([^"]*)"', xml)
+                if sm:
+                    log.info(f"Browser portal reached state '{sm.group(1)}' after {int(time.time()-start)}s")
+                else:
+                    log.info(f"Browser portal page loaded after {int(time.time()-start)}s")
+                return True
+            time.sleep(3)
+
+        log.warning(f"Browser portal did not reach expected state within {timeout}s")
+        return False
+
+    def _open_portal_on_phone(self, state_pattern: str, timeout: int = 30) -> bool:
+        if self.router.get_nds_gateway_domain():
+            self.router.ensure_nds_gateway_domain_supported()
+        portal_host = self._get_portal_host()
+        portal_url = f"http://{portal_host}/"
+
+        if not _is_desktop_client(self.adb):
+            try:
+                if self._open_portal_via_native_captive(state_pattern, timeout=timeout):
+                    return True
+                log.info("Native captive portal failed, falling back to browser")
+            except Exception as e:
+                log.warning(f"Native captive portal error: {e}, falling back to browser")
+
+        return self._open_portal_via_browser(portal_url, state_pattern, timeout=timeout)
 
     def _type_token_in_portal(self, token: str, timeout: int = 60) -> bool:
         """Type a cashu token into the portal's input field and submit."""
