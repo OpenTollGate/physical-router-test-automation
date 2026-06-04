@@ -16,7 +16,7 @@ import re
 
 import pytest
 
-from lib.helpers import ssl_is_applied
+from lib.helpers import skip_if_no_ssl_cli, ssl_is_applied
 
 log = logging.getLogger("tollgate.ssl_backup_restore")
 
@@ -25,12 +25,7 @@ pytestmark = [pytest.mark.api, pytest.mark.extended]
 BACKUP_DIR = "/etc/tollgate/ssl/backup"
 
 
-def _skip_if_no_ssl_cli(router):
-    result = router.ssh("tollgate ssl status 2>&1 || true")
-    if "unknown command" in result.lower() or "not found" in result.lower():
-        pytest.skip("'tollgate ssl' subcommand not available")
-
-
+_skip_if_no_ssl_cli = skip_if_no_ssl_cli
 _ssl_is_applied = ssl_is_applied
 
 
