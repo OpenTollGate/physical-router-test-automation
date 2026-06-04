@@ -66,6 +66,6 @@ def test_cdk_v2_mint_info():
 
 def test_local_mints_reachable_from_openwrt(router):
     _skip_if_no_local_mints()
-    cdk_url = os.environ.get("TOLLGATE_CDK_MINT_URL", "http://10.99.99.2:8383")
-    result = router.ssh(f"wget -qO- {cdk_url}/v1/keys 2>/dev/null | head -c 100")
-    assert "keysets" in result, f"OpenWrt should reach CDK mint, got: {result}"
+    v1_url = os.environ.get("TOLLGATE_NUTSHELL_V1_MINT_URL", "http://10.99.99.2:8385")
+    result = router.ssh(f"wget -qO- {v1_url}/v1/keys 2>/dev/null | head -c 100")
+    assert "keysets" in result, f"OpenWrt should reach local mint at {v1_url}, got: {result}"

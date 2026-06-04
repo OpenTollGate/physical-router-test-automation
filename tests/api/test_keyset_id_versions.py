@@ -232,6 +232,9 @@ def test_minted_token_keyset_id_matches_mint(router, cashu, mint_keyset_ids):
     decoded = _decode_cashuA_token(token)
 
     proofs = decoded.get("proofs", [])
+    if not proofs and "token" in decoded:
+        for entry in decoded["token"]:
+            proofs.extend(entry.get("proofs", []))
     assert proofs, f"No proofs in decoded token: {decoded}"
 
     for proof in proofs:
@@ -376,6 +379,9 @@ def test_payment_proof_keyset_id_accepted(router, cashu):
     token = cashu.mint(amount=4)
     decoded = _decode_cashuA_token(token)
     proofs = decoded.get("proofs", [])
+    if not proofs and "token" in decoded:
+        for entry in decoded["token"]:
+            proofs.extend(entry.get("proofs", []))
 
     if not proofs:
         pytest.skip("No proofs in minted token — cannot determine keyset version")

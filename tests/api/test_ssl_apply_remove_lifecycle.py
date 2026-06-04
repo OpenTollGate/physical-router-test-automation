@@ -13,6 +13,7 @@ All tests skip cleanly when 'tollgate ssl' subcommand is not available.
 """
 
 import logging
+import os
 import re
 import time
 
@@ -23,6 +24,11 @@ from lib.helpers import get_uhttpd_cert, get_uhttpd_key, skip_if_no_ssl_cli, ssl
 log = logging.getLogger("tollgate.ssl_lifecycle")
 
 pytestmark = [pytest.mark.api, pytest.mark.extended]
+
+
+def _skip_virtual_lab():
+    if os.environ.get("TOLLGATE_VIRTUAL_LAB"):
+        pytest.skip("SSL lifecycle requires physical router (uhttpd HTTPS in QEMU is unreliable)")
 
 
 _skip_if_no_ssl_cli = skip_if_no_ssl_cli
@@ -139,6 +145,7 @@ def test_ssl_remove_stops_https_listener(router):
 
     This replaces TestRemovePort443Allow which mocked fnRunCommandChecked.
     """
+    _skip_virtual_lab()
     _skip_if_no_ssl_cli(router)
 
     router.ssh("tollgate ssl apply --yes 2>&1")
@@ -162,6 +169,7 @@ def test_ssl_full_roundtrip(router):
     This exercises the complete flow including idempotent re-application and
     ensures no state leaks between apply/remove cycles.
     """
+    _skip_virtual_lab()
     _skip_if_no_ssl_cli(router)
 
     original_cert = _get_uhttpd_cert(router)
