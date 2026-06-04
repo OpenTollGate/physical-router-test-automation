@@ -15,7 +15,7 @@ import re
 
 import pytest
 
-from lib.helpers import skip_if_no_ssl_cli, ssl_is_applied
+from lib.helpers import skip_if_no_ssl_cli, skip_if_no_openssl, ssl_is_applied
 
 log = logging.getLogger("tollgate.ssl_real_cert")
 
@@ -23,6 +23,7 @@ pytestmark = [pytest.mark.api, pytest.mark.extended]
 
 
 _skip_if_no_ssl_cli = skip_if_no_ssl_cli
+_skip_if_no_openssl = skip_if_no_openssl
 _ssl_is_applied = ssl_is_applied
 
 

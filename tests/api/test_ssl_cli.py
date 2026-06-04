@@ -16,7 +16,7 @@ import re
 
 import pytest
 
-from lib.helpers import skip_if_no_ssl_cli, ssl_is_applied
+from lib.helpers import skip_if_no_ssl_cli, skip_if_no_openssl, ssl_is_applied
 
 log = logging.getLogger("tollgate.ssl_cli")
 
@@ -24,6 +24,7 @@ pytestmark = [pytest.mark.api, pytest.mark.extended]
 
 
 _skip_if_no_ssl_cli = skip_if_no_ssl_cli
+_skip_if_no_openssl = skip_if_no_openssl
 _ssl_is_applied = ssl_is_applied
 
 
@@ -83,8 +84,7 @@ def test_ssl_idempotent_apply(router):
 
 def test_ssl_cert_has_valid_san(router):
     _skip_if_no_ssl_cli(router)
-    if not router.ssh_bool("which openssl 2>/dev/null"):
-        pytest.skip("openssl not available on router")
+    _skip_if_no_openssl(router)
     router.ssh("tollgate ssl apply --yes 2>&1")
     cert_check = router.ssh(
         "openssl x509 -in /etc/tollgate/ssl/server.crt -noout -text 2>/dev/null | grep -A5 'Subject Alternative'"

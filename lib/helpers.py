@@ -328,6 +328,11 @@ def ssl_is_applied(router):
     return any(kw in result.lower() for kw in ("active", "applied", "installed", "configured")) and "not configured" not in result.lower()
 
 
+def skip_if_no_openssl(router):
+    if not router.ssh_bool("which openssl 2>/dev/null"):
+        pytest.skip("openssl not available on router")
+
+
 def skip_if_no_degraded_support(router):
     resp = router.get_tollgate_status()
     if resp.get("success") is not True:
