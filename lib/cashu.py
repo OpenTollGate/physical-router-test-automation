@@ -148,7 +148,7 @@ class CashuMint:
         if not quote_id:
             raise RuntimeError("No quote found after invoice creation")
 
-        if not self._wait_and_claim(quote_id, amount):
+        if not self._wait_and_claim(quote_id, amount, timeout=60):
             raise RuntimeError(f"Mint claim failed for quote {quote_id}")
 
     def _timeout_handler(self, signum, frame):
