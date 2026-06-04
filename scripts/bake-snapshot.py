@@ -114,7 +114,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
     disk_size_gb = cast(int, args.disk_size)
     project = get_project()
 
-    total_steps = 10
+    total_steps = 11
     vm_name = f"tollgate-bake-{int(time.time())}"
 
     print(f"Bake configuration:")
@@ -464,8 +464,35 @@ def cmd_bake(args: argparse.Namespace) -> int:
             print(f"  WARNING: vwifi build failed (non-fatal): {(r.stdout or '')[:200]}", file=sys.stderr)
             print(f"  stderr: {(r.stderr or '')[:300]}", file=sys.stderr)
 
-        # Step 9: Stop QEMU and copy overlay as new base
-        _step(9, total_steps, "Stopping QEMU and replacing base image with provisioned overlay")
+        # Step 9: Install GitHub Actions runner binary
+        _step(9, total_steps, "Installing GitHub Actions runner binary")
+        t0_runner = time.monotonic()
+        runner_version = "2.324.0"
+        runner_install_cmd = (
+            "id runner >/dev/null 2>&1 || useradd -m -s /bin/bash runner && "
+            f"RUNNER_VERSION={runner_version} && "
+            'RUNNER_DIR=/home/runner/actions-runner && '
+            f'[ -f "$RUNNER_DIR/run.sh" ] && echo "Runner already present" && echo RUNNER_INSTALL_OK && exit 0; '
+            'rm -rf "$RUNNER_DIR" && mkdir -p "$RUNNER_DIR" && '
+            'cd "$RUNNER_DIR" && '
+            "curl -fL -o actions-runner-linux-x64.tar.gz "
+            '"https://github.com/actions/runner/releases/download/v$RUNNER_VERSION/actions-runner-linux-x64-$RUNNER_VERSION.tar.gz" && '
+            "tar xzf actions-runner-linux-x64.tar.gz && "
+            "rm -f actions-runner-linux-x64.tar.gz && "
+            "chown -R runner:runner /home/runner/actions-runner && "
+            'ls "$RUNNER_DIR/run.sh" && '
+            "echo RUNNER_INSTALL_OK"
+        )
+        r = _gcloud_ssh(vm_name, runner_install_cmd, zone, project, timeout=300)
+        if "RUNNER_INSTALL_OK" in (r.stdout or ""):
+            print(f"  GitHub Actions runner v{runner_version} installed to /home/runner/actions-runner/")
+            print("  Done in {:.1f}s".format(time.monotonic() - t0_runner))
+        else:
+            print(f"  WARNING: Runner install failed (non-fatal): {(r.stdout or '')[:200]}", file=sys.stderr)
+            print(f"  stderr: {(r.stderr or '')[:300]}", file=sys.stderr)
+
+        # Step 10: Stop QEMU and copy overlay as new base
+        _step(10, total_steps, "Stopping QEMU and replacing base image with provisioned overlay")
         t0 = time.monotonic()
         replace_cmd = (
             "killall -TERM qemu-system-x86_64 2>/dev/null || true; sleep 5; "
@@ -486,8 +513,8 @@ def cmd_bake(args: argparse.Namespace) -> int:
             return 1
         print(f"  Base image replaced in {time.monotonic() - t0:.1f}s")
 
-        # Step 10: Stop VM and create snapshot
-        _step(10, total_steps, "Stopping VM and creating snapshot")
+        # Step 11: Stop VM and create snapshot
+        _step(11, total_steps, "Stopping VM and creating snapshot")
         t0 = time.monotonic()
         r = _run_gcloud([
             "compute", "instances", "stop", vm_name,

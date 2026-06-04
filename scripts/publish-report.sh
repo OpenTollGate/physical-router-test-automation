@@ -139,8 +139,11 @@ scrub_token() {
 }
 
 # ── Configure git auth ───────────────────────────────────────────────
-# Use GH_TOKEN (or GITHUB_TOKEN) for git push if available.
-if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
+# Runner mode: gh CLI is pre-authenticated by the GitHub Actions agent.
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+  gh auth setup-git 2>/dev/null || true
+  REMOTE_URL="$(git -C "$(cd "$(dirname "$0")/.." && pwd)" remote get-url origin)"
+elif [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
   _token="${GH_TOKEN:-$GITHUB_TOKEN}"
   # Rewrite SSH remotes to HTTPS so the token works
   REPO_DIR_CANDIDATE="$(cd "$(dirname "$0")/.." && pwd)"

@@ -126,21 +126,28 @@ def run_worker(config: WorkerConfig) -> int:
         try:
             log.info("=== Pipeline start ===")
 
-            os.environ["GH_TOKEN"] = config.gh_token
-            _step_start("suite-checkout")
-            log.info("[1/10] Suite checkout (ref=%s)", config.suite_ref[:7])
-            ensure_suite_checkout(config)
-            _step_end("suite-checkout")
+            # In runner mode, GH_TOKEN is set by the workflow (cross_repo_token
+            # for artifact download). Don't overwrite it — publish-report.sh
+            # detects GITHUB_ACTIONS=true and uses gh auth setup-git instead.
+            if not config.runner_mode:
+                os.environ["GH_TOKEN"] = config.gh_token
 
-            _step_start("outer-deps")
-            log.info("[2/10] Outer deps (venv + cashu)")
-            ensure_outer_deps()
-            _step_end("outer-deps")
+                _step_start("suite-checkout")
+                log.info("[1/10] Suite checkout (ref=%s)", config.suite_ref[:7])
+                ensure_suite_checkout(config)
+                _step_end("suite-checkout")
 
-            _step_start("gh-cli-auth")
-            log.info("[3/10] GitHub CLI auth (token=***%s)", config.gh_token[-4:] if len(config.gh_token) > 8 else "***")
-            ensure_github_cli(config.gh_token)
-            _step_end("gh-cli-auth")
+                _step_start("outer-deps")
+                log.info("[2/10] Outer deps (venv + cashu)")
+                ensure_outer_deps()
+                _step_end("outer-deps")
+
+                _step_start("gh-cli-auth")
+                log.info("[3/10] GitHub CLI auth (token=***%s)", config.gh_token[-4:] if len(config.gh_token) > 8 else "***")
+                ensure_github_cli(config.gh_token)
+                _step_end("gh-cli-auth")
+            else:
+                log.info("[runner mode] Skipping steps 1-3 (GitHub Actions provides checkout/deps/auth)")
 
             if config.vwifi_enabled:
                 _step_start("vwifi-host")

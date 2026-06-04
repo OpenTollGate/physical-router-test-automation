@@ -376,6 +376,50 @@ def _build_startup_script(suite_overlay_b64: str = "") -> str:
     """)
 
 
+def _build_runner_startup_script() -> str:
+    return textwrap.dedent("""\
+        #!/bin/bash
+        set -euo pipefail
+        exec >> /var/log/runner-startup.log 2>&1
+        echo "=== GitHub Actions runner started $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+
+        KILL_SWITCH_PROJECT=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/project/project-id || true)
+        KILL_SWITCH_ZONE=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/zone || true)
+        KILL_SWITCH_ZONE_BASE=$(basename "$KILL_SWITCH_ZONE" 2>/dev/null || echo "")
+        KILL_SWITCH_NAME=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/name || true)
+        setsid bash -c 'sleep 7200 && echo "2h kill switch triggered — self-deleting VM" >> /var/log/runner-startup.log && gcloud compute instances delete "$0" --project="$1" --zone="$2" --delete-disks=all --quiet >> /var/log/runner-startup.log 2>&1 || shutdown -h now "TollGate self-delete failed, forcing shutdown"' "$KILL_SWITCH_NAME" "$KILL_SWITCH_PROJECT" "$KILL_SWITCH_ZONE_BASE" </dev/null >/dev/null 2>&1 &
+        KILL_SWITCH_PID=$!
+        echo "Kill switch armed: PID=$KILL_SWITCH_PID (self-delete in 7200s)"
+
+        export RUNNER_ALLOW_RUNASROOT=1
+        JIT_CONFIG=$(curl -sf -H "Metadata-Flavor: Google" \\
+            http://metadata.google.internal/computeMetadata/v1/instance/attributes/jit-config)
+
+        cd /home/runner/actions-runner
+        echo "Starting ephemeral runner agent..."
+        ./run.sh --jitconfig "$JIT_CONFIG"
+        RUNNER_EXIT=$?
+        echo "Runner exited with code $RUNNER_EXIT"
+
+        ZONE=$(curl -sf -H "Metadata-Flavor: Google" \\
+            http://metadata.google.internal/computeMetadata/v1/instance/attributes/tollgate-zone)
+        PROJECT=$(curl -sf -H "Metadata-Flavor: Google" \\
+            http://metadata.google.internal/computeMetadata/v1/instance/attributes/tollgate-project)
+        NAME=$(curl -sf -H "Metadata-Flavor: Google" \\
+            http://metadata.google.internal/computeMetadata/v1/instance/name)
+        KEEP=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/attributes/tollgate-keep-vm-on-failure || true)
+
+        if [ "$KEEP" = "true" ]; then
+            echo "Keeping VM for inspection (tollgate-keep-vm-on-failure=true)"
+            shutdown -h now "Runner finished, VM retained"
+        else
+            echo "Self-deleting VM..."
+            gcloud compute instances delete "$NAME" --project="$PROJECT" --zone="$ZONE" \\
+                --delete-disks=all --quiet || shutdown -h now "Self-delete failed"
+        fi
+    """)
+
+
 def submit_run(
     target: RunTarget,
     *,
@@ -485,6 +529,76 @@ def submit_run(
         "suite_ref": suite_ref,
         "log_hint": log_hint,
     }
+    return info
+
+
+def submit_runner(
+    encoded_jit_config: str,
+    *,
+    run_id: str,
+    zone: str = DEFAULT_ZONE,
+    machine_type: str = DEFAULT_MACHINE_TYPE,
+    disk_size_gb: int = DEFAULT_DISK_SIZE_GB,
+    keep_vm_on_failure: bool = False,
+) -> dict[str, str]:
+    cleanup_stale(max_age_hours=2)
+    project = get_project()
+    _validate_machine_type(machine_type)
+
+    vm_name = _sanitize_vm_name(run_id)
+
+    startup_script = _build_runner_startup_script()
+    script_path = Path(f"/tmp/tollgate-runner-startup-{vm_name}.sh")
+    script_path.write_text(startup_script)
+
+    jit_config_path = Path(f"/tmp/tollgate-jit-config-{vm_name}.txt")
+    jit_config_path.write_text(encoded_jit_config)
+
+    metadata = {
+        "tollgate-run-id": run_id,
+        "tollgate-project": project,
+        "tollgate-zone": zone,
+        "tollgate-vm-name": vm_name,
+        "tollgate-keep-vm-on-failure": "true" if keep_vm_on_failure else "false",
+    }
+    metadata_payload = ",".join(f"{k}={v}" for k, v in metadata.items())
+
+    ensure_firewall_rules(project)
+    print(f"Creating runner VM {vm_name} from snapshot {SNAPSHOT_NAME}...")
+    r = _run_gcloud([
+        "compute", "instances", "create", vm_name,
+        f"--project={project}",
+        f"--zone={zone}",
+        f"--machine-type={machine_type}",
+        f"--source-snapshot={SNAPSHOT_NAME}",
+        f"--boot-disk-size={disk_size_gb}GB",
+        "--enable-nested-virtualization",
+        "--min-cpu-platform=Intel Cascade Lake",
+        "--tags=tollgate-runner,tollgate-run",
+        "--labels=tollgate_run=true",
+        "--scopes=compute-rw,storage-rw",
+        f"--metadata={metadata_payload}",
+        f"--metadata-from-file=startup-script={script_path},jit-config={jit_config_path}",
+    ], timeout=300)
+    script_path.unlink(missing_ok=True)
+    jit_config_path.unlink(missing_ok=True)
+
+    if r.returncode != 0:
+        raise RuntimeError(f"Failed to create runner VM: {r.stderr.strip() or r.stdout.strip()}")
+
+    log_hint = (
+        f"gcloud compute ssh {vm_name} --project={project} --zone={zone} "
+        f"--command='tail -f /var/log/runner-startup.log'"
+    )
+    info = {
+        "run_id": run_id,
+        "vm_name": vm_name,
+        "project": project,
+        "zone": zone,
+        "log_hint": log_hint,
+    }
+    print(f"Runner VM created: {vm_name}")
+    print(f"Logs: {log_hint}")
     return info
 
 
