@@ -61,11 +61,10 @@ CDK_MINT_URL = f"http://{LOCAL_MINT_HOST}:{CDK_MINT_PORT}"
 NUTSHELL_V2_MINT_URL = f"http://{LOCAL_MINT_HOST}:{NUTSHELL_V2_MINT_PORT}"
 NUTSHELL_V1_MINT_URL = f"http://{LOCAL_MINT_HOST}:{NUTSHELL_V1_MINT_PORT}"
 
-# Canonical LAN DNS names — used after /etc/hosts is set up
-# Naming scheme: $version.testnut.$implementation.lan
-V1_TESTNUT_NUTSHELL_LAN = "http://v1.testnut.nutshell.lan:8385"
-V2_TESTNUT_CDK_LAN = "http://v2.testnut.cdk.lan:8383"
-V2_TESTNUT_NUTSHELL_LAN = "http://v2.testnut.nutshell.lan:8384"
+# LAN mint URLs — IP-based (OpenWrt dnsmasq does not resolve /etc/hosts entries)
+V1_TESTNUT_NUTSHELL_LAN = f"http://{LOCAL_MINT_HOST}:{NUTSHELL_V1_MINT_PORT}"
+V2_TESTNUT_CDK_LAN = f"http://{LOCAL_MINT_HOST}:{CDK_MINT_PORT}"
+V2_TESTNUT_NUTSHELL_LAN = f"http://{LOCAL_MINT_HOST}:{NUTSHELL_V2_MINT_PORT}"
 
 # Beta isolated LAN bridge — separate from tg-poc-br so Beta has its own subnet
 BETA_BRIDGE = "tg-beta-br"
