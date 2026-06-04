@@ -522,8 +522,8 @@ def test_default_mints_configured(router):
     config = json.loads(raw)
     mints = config.get("accepted_mints", [])
     assert len(mints) >= 1, f"Expected at least 1 mint, got {len(mints)}"
-    urls = json.dumps(mints)
-    assert "testnut" in urls, f"Expected a testnut mint in config, got: {urls}"
+    urls = [m.get("url", "") for m in mints]
+    assert all(urls), f"Expected non-empty mint URLs in config, got: {urls}"
 
 
 @pytest.mark.destructive

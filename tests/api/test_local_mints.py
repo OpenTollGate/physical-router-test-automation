@@ -27,7 +27,7 @@ def _mint_available(url: str, timeout: int = 5) -> bool:
 
 def test_cdk_v2_mint_healthy():
     _skip_if_no_local_mints()
-    url = os.environ.get("TOLLGATE_CDK_MINT_URL", "http://v2.testnut.cdk.lan:8383")
+    url = os.environ.get("TOLLGATE_CDK_MINT_URL", "http://10.99.99.2:8383")
     resp = request.urlopen(f"{url}/v1/keys", timeout=10)
     assert resp.status == 200
     data = json.loads(resp.read())
@@ -39,7 +39,7 @@ def test_cdk_v2_mint_healthy():
 
 def test_nutshell_v2_mint_healthy():
     _skip_if_no_local_mints()
-    url = os.environ.get("TOLLGATE_NUTSHELL_V2_MINT_URL", "http://v2.testnut.nutshell.lan:8384")
+    url = os.environ.get("TOLLGATE_NUTSHELL_V2_MINT_URL", "http://10.99.99.2:8384")
     if not _mint_available(url):
         pytest.skip("Nutshell V2 mint not available")
     resp = request.urlopen(f"{url}/v1/keys", timeout=10)
@@ -48,7 +48,7 @@ def test_nutshell_v2_mint_healthy():
 
 def test_nutshell_v1_mint_healthy():
     _skip_if_no_local_mints()
-    url = os.environ.get("TOLLGATE_NUTSHELL_V1_MINT_URL", "http://v1.testnut.nutshell.lan:8385")
+    url = os.environ.get("TOLLGATE_NUTSHELL_V1_MINT_URL", "http://10.99.99.2:8385")
     if not _mint_available(url):
         pytest.skip("Nutshell V1 mint not available")
     resp = request.urlopen(f"{url}/v1/keys", timeout=10)
@@ -57,7 +57,7 @@ def test_nutshell_v1_mint_healthy():
 
 def test_cdk_v2_mint_info():
     _skip_if_no_local_mints()
-    url = os.environ.get("TOLLGATE_CDK_MINT_URL", "http://v2.testnut.cdk.lan:8383")
+    url = os.environ.get("TOLLGATE_CDK_MINT_URL", "http://10.99.99.2:8383")
     resp = request.urlopen(f"{url}/v1/info", timeout=10)
     assert resp.status == 200
     data = json.loads(resp.read())
@@ -66,5 +66,6 @@ def test_cdk_v2_mint_info():
 
 def test_local_mints_reachable_from_openwrt(router):
     _skip_if_no_local_mints()
-    result = router.ssh("wget -qO- http://v2.testnut.cdk.lan:8383/v1/keys 2>/dev/null | head -c 100")
+    cdk_url = os.environ.get("TOLLGATE_CDK_MINT_URL", "http://10.99.99.2:8383")
+    result = router.ssh(f"wget -qO- {cdk_url}/v1/keys 2>/dev/null | head -c 100")
     assert "keysets" in result, f"OpenWrt should reach CDK mint, got: {result}"
