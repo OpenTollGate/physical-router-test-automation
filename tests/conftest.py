@@ -772,7 +772,7 @@ def _debug_summary(adb, router) -> str:
             pass
     if adb and hasattr(adb, "ui_xml"):
         try:
-            xml = adb.ui_xml()
+            xml = adb.ui_xml(timeout=5)
             texts = re.findall(r'text="([^"]{3,})"', xml)
             if texts:
                 lines.append(f"phone UI text: {texts[:15]}")

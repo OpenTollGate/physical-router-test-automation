@@ -265,7 +265,7 @@ class ContainerClient:
         log.debug("playwright screenshot result: %s", result[:200])
         return "SCREENSHOT_OK" in result
 
-    def ui_xml(self) -> str:
+    def ui_xml(self, timeout: int = 30) -> str:
         try:
             portal_url = f"http://{POC_GATEWAY}:{NDS_PORTAL_PORT}/"
             script = (
@@ -279,7 +279,7 @@ class ContainerClient:
                 "    browser.close()\n"
             )
             self._exec(f"cat > /tmp/tg-ui.py << 'PYEOF'\n{script}\nPYEOF")
-            return self._exec("python3 /tmp/tg-ui.py", timeout=30)
+            return self._exec("python3 /tmp/tg-ui.py", timeout=timeout)
         except Exception:
             return ""
 
