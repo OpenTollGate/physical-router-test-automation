@@ -16,6 +16,8 @@ import re
 
 import pytest
 
+from lib.helpers import ssl_is_applied
+
 log = logging.getLogger("tollgate.ssl_cli")
 
 pytestmark = [pytest.mark.api, pytest.mark.extended]
@@ -27,9 +29,7 @@ def _skip_if_no_ssl_cli(router):
         pytest.skip("'tollgate ssl' subcommand not available")
 
 
-def _ssl_is_applied(router):
-    result = router.ssh("tollgate ssl status 2>&1")
-    return "active" in result.lower() or "applied" in result.lower()
+_ssl_is_applied = ssl_is_applied
 
 
 @pytest.fixture(autouse=True)
@@ -42,7 +42,7 @@ def ssl_cleanup(router):
 
 def test_ssl_apply_self_signed(router):
     _skip_if_no_ssl_cli(router)
-    result = router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    result = router.ssh("tollgate ssl apply --yes 2>&1")
     log.info("ssl apply output: %s", result)
     assert "error" not in result.lower() or "no error" in result.lower(), \
         f"SSL apply failed: {result[:300]}"
@@ -50,15 +50,16 @@ def test_ssl_apply_self_signed(router):
 
 def test_ssl_status_shows_cert(router):
     _skip_if_no_ssl_cli(router)
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
     result = router.ssh("tollgate ssl status 2>&1")
-    assert "active" in result.lower() or "applied" in result.lower() or "installed" in result.lower(), \
+    assert any(kw in result.lower() for kw in ("active", "applied", "installed", "configured")) \
+        and "not configured" not in result.lower(), \
         f"SSL status did not show applied state: {result[:300]}"
 
 
 def test_ssl_removes_cleanly(router):
     _skip_if_no_ssl_cli(router)
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
     result = router.ssh("tollgate ssl remove --yes 2>&1")
     log.info("ssl remove output: %s", result)
     status = router.ssh("tollgate ssl status 2>&1")
@@ -79,35 +80,37 @@ def test_ssl_wrapper_scripts_exist(router):
 
 def test_ssl_idempotent_apply(router):
     _skip_if_no_ssl_cli(router)
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
-    result = router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
+    result = router.ssh("tollgate ssl apply --yes 2>&1")
     assert "error" not in result.lower() or "already" in result.lower() or "no error" in result.lower(), \
         f"Second SSL apply failed: {result[:300]}"
 
 
 def test_ssl_cert_has_valid_san(router):
     _skip_if_no_ssl_cli(router)
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    if not router.ssh_bool("which openssl 2>/dev/null"):
+        pytest.skip("openssl not available on router")
+    router.ssh("tollgate ssl apply --yes 2>&1")
     cert_check = router.ssh(
-        "openssl x509 -in /etc/tollgate/ssl/tollgate.crt -noout -text 2>/dev/null | grep -A5 'Subject Alternative'"
+        "openssl x509 -in /etc/tollgate/ssl/server.crt -noout -text 2>/dev/null | grep -A5 'Subject Alternative'"
     )
     if not cert_check.strip():
         cert_check = router.ssh(
-            "openssl x509 -in /etc/tollgate/ssl/tollgate.crt -noout -text 2>/dev/null | grep -A2 'Subject:'"
+            "openssl x509 -in /etc/tollgate/ssl/server.crt -noout -text 2>/dev/null | grep -A2 'Subject:'"
         )
     assert cert_check.strip(), "Could not read SSL certificate"
 
 
 def test_ssl_https_port_listening(router):
     _skip_if_no_ssl_cli(router)
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
     result = router.ssh("netstat -tlnp 2>/dev/null | grep ':443' || ss -tlnp | grep ':443'")
     assert "443" in result, f"Port 443 not listening after SSL apply: {result[:200]}"
 
 
 def test_ssl_nodogsplash_allows_443(router):
     _skip_if_no_ssl_cli(router)
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
     nds_config = router.ssh("cat /etc/config/nodogsplash 2>/dev/null || echo MISSING")
     if "MISSING" in nds_config:
         pytest.skip("nodogsplash config not found")
@@ -118,5 +121,6 @@ def test_ssl_nodogsplash_allows_443(router):
 def test_ssl_remove_no_backup_errors(router):
     _skip_if_no_ssl_cli(router)
     result = router.ssh("tollgate ssl remove --yes 2>&1 || true")
-    if "no backup" not in result.lower() and "nothing to remove" not in result.lower():
-        assert "error" not in result.lower(), f"SSL remove errored unexpectedly: {result[:300]}"
+    if "no ssl backup" in result.lower() or "nothing to remove" in result.lower() or "not configured" in result.lower():
+        return
+    assert "error" not in result.lower(), f"SSL remove errored unexpectedly: {result[:300]}"

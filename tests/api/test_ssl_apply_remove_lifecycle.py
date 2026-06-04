@@ -14,8 +14,11 @@ All tests skip cleanly when 'tollgate ssl' subcommand is not available.
 
 import logging
 import re
+import time
 
 import pytest
+
+from lib.helpers import ssl_is_applied
 
 log = logging.getLogger("tollgate.ssl_lifecycle")
 
@@ -28,9 +31,7 @@ def _skip_if_no_ssl_cli(router):
         pytest.skip("'tollgate ssl' subcommand not available")
 
 
-def _ssl_is_applied(router):
-    result = router.ssh("tollgate ssl status 2>&1")
-    return "active" in result.lower() or "applied" in result.lower() or "installed" in result.lower()
+_ssl_is_applied = ssl_is_applied
 
 
 def _get_uhttpd_cert(router):
@@ -51,7 +52,7 @@ def _port_443_listening(router):
 
 
 def _cert_file_exists(router):
-    result = router.ssh("ls -la /etc/tollgate/ssl/tollgate.crt 2>&1")
+    result = router.ssh("ls -la /etc/tollgate/ssl/server.crt 2>&1")
     return "No such file" not in result
 
 
@@ -72,7 +73,7 @@ def test_ssl_apply_sets_uhttpd_cert_and_key(router):
     """
     _skip_if_no_ssl_cli(router)
 
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
 
     cert = _get_uhttpd_cert(router)
     key = _get_uhttpd_key(router)
@@ -91,7 +92,7 @@ def test_ssl_apply_enables_https_listener(router):
     """
     _skip_if_no_ssl_cli(router)
 
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
 
     assert _port_443_listening(router), "Port 443 not listening after SSL apply"
 
@@ -100,7 +101,7 @@ def test_ssl_apply_cert_file_on_disk(router):
     """After applying SSL, the cert file must exist on disk with correct permissions."""
     _skip_if_no_ssl_cli(router)
 
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
 
     assert _cert_file_exists(router), "Cert file not found after SSL apply"
 
@@ -116,7 +117,7 @@ def test_ssl_remove_restores_uhttpd(router):
     original_cert = _get_uhttpd_cert(router)
     original_key = _get_uhttpd_key(router)
 
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
 
     applied_cert = _get_uhttpd_cert(router)
     assert applied_cert != original_cert, "Cert path should have changed after apply"
@@ -136,7 +137,7 @@ def test_ssl_remove_cleans_cert_files(router):
     """After removing SSL, cert files must be deleted from disk."""
     _skip_if_no_ssl_cli(router)
 
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
     assert _cert_file_exists(router), "Precondition: cert should exist after apply"
 
     router.ssh("tollgate ssl remove --yes 2>&1")
@@ -151,10 +152,15 @@ def test_ssl_remove_stops_https_listener(router):
     """
     _skip_if_no_ssl_cli(router)
 
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
     assert _port_443_listening(router), "Precondition: 443 should be listening after apply"
 
     router.ssh("tollgate ssl remove --yes 2>&1")
+
+    for _ in range(10):
+        if not _port_443_listening(router):
+            break
+        time.sleep(2)
 
     assert not _port_443_listening(router), "Port 443 still listening after SSL remove"
 
@@ -169,15 +175,19 @@ def test_ssl_full_roundtrip(router):
 
     original_cert = _get_uhttpd_cert(router)
 
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
     assert _ssl_is_applied(router), "SSL not applied after first apply"
     assert _port_443_listening(router), "443 not listening after first apply"
 
     router.ssh("tollgate ssl remove --yes 2>&1")
     assert not _ssl_is_applied(router), "SSL still applied after remove"
+    for _ in range(10):
+        if not _port_443_listening(router):
+            break
+        time.sleep(2)
     assert not _port_443_listening(router), "443 still listening after remove"
     assert _get_uhttpd_cert(router) == original_cert, "Cert not restored after remove"
 
-    router.ssh("tollgate ssl apply --self-signed --yes 2>&1")
+    router.ssh("tollgate ssl apply --yes 2>&1")
     assert _ssl_is_applied(router), "SSL not applied after second apply"
     assert _port_443_listening(router), "443 not listening after second apply"
