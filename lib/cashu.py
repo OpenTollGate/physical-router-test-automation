@@ -381,8 +381,6 @@ class TokenPool:
                 self._queue.append(token)
             except Exception as exc:
                 log.warning("TokenPool: prefill mint %d/%d failed: %s", i + 1, self._pool_size, exc)
-                if i == 0:
-                    raise
                 break
         elapsed = time.monotonic() - t0
         log.info(

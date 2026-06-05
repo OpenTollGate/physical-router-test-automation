@@ -15,7 +15,7 @@ BUILD_DIR = Path("/tmp/tollgate-build")
 
 # Packages required by the test framework on the router.
 # Factory reset wipes all opkg packages; these must be reinstalled.
-TEST_DEPS = ["curl", "nodogsplash", "jq", "luci", "px5g-mbedtls"]
+TEST_DEPS = ["curl", "socat", "nodogsplash", "jq", "luci", "px5g-mbedtls"]
 
 
 def detect_arch(router) -> str:

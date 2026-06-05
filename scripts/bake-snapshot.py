@@ -410,7 +410,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
 
         # Step 8b: Install WiFi packages for hwsim-based virtual WiFi testing
         _step(8, total_steps, "Installing WiFi packages for hwsim testing")
-        wifi_pkgs = "kmod-mac80211-hwsim wpad-basic iw-full iwinfo"
+        wifi_pkgs = "kmod-mac80211-hwsim wpad-basic iw-full iwinfo socat"
         wifi_install_cmd = (
             f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
             "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "

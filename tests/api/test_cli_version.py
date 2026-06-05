@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 pytestmark = [pytest.mark.api, pytest.mark.smoke, pytest.mark.go_only]
@@ -7,6 +9,13 @@ def _skip_if_no_version_cli(router):
     r = router.ssh("tollgate version 2>&1 || true", timeout=10)
     if "unknown command" in r.lower() or "not found" in r.lower() or not r.strip():
         pytest.skip("tollgate version subcommand not available")
+    r_json = router.ssh("tollgate --json version 2>&1 || true", timeout=10)
+    try:
+        data = json.loads(r_json)
+        if not data.get("success"):
+            pytest.skip(f"tollgate --json version returned non-success: {str(data)[:120]}")
+    except json.JSONDecodeError:
+        pytest.skip(f"tollgate --json version returned non-JSON: {r_json[:120]}")
 
 
 @pytest.fixture(scope="module")

@@ -90,16 +90,95 @@ def vm_external_ip(project: str, zone: str, vm_name: str) -> str | None:
 # See: https://cloud.google.com/compute/docs/instances/nested-virtualization/overview
 _NO_NESTED_VIRT_PREFIXES = ("e2-", "n2d-", "t2a-", "a2-")
 
+# Zones to try when the requested zone is exhausted (ZONE_RESOURCE_POOL_EXHAUSTED).
+# Ordered by price (cheapest first). All support Intel CPUs + nested virt.
+# Tier 1 ($0.0971/hr): us-central1, us-east1, us-east5, us-west1
+# Tier 2 ($0.1068-$0.1069/hr): northamerica-northeast1/2, europe-west1, europe-west4
+# See: https://gcloud-compute.com/n2-standard-2.html
+_ZONE_FALLBACKS = [
+    # Tier 1 — $0.0971/hr (cheapest)
+    "us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f",
+    "us-east1-b", "us-east1-c", "us-east1-d",
+    "us-east5-a", "us-east5-b", "us-east5-c",
+    "us-west1-a", "us-west1-b", "us-west1-c",
+    # Tier 2 — $0.1068-$0.1069/hr (~10% more, still cheap)
+    "northamerica-northeast1-a", "northamerica-northeast1-b", "northamerica-northeast1-c",
+    "northamerica-northeast2-a", "northamerica-northeast2-b", "northamerica-northeast2-c",
+    "europe-west1-b", "europe-west1-c", "europe-west1-d",
+    "europe-west4-a", "europe-west4-b", "europe-west4-c",
+]
+
+# Machine types to try in order when the requested type is unavailable.
+# All support nested virtualization and have >= 2 vCPU (Debian QEMU needs 2).
+# Ordered by price: n2 ($0.0971/hr) → n1 ($0.0950/hr, older Intel).
+_MACHINE_TYPE_FALLBACKS = ["n2-standard-2", "n1-standard-2"]
+
+# Minimum CPU platform per machine family. N2 has Cascade Lake/Ice Lake;
+# N1 maxes out at Skylake. Both support VMX (nested virt).
+_MIN_CPU_PLATFORM = {
+    "n2": "Intel Cascade Lake",
+    "n1": "Intel Skylake",
+}
+
 
 def _validate_machine_type(machine_type: str) -> None:
     """Reject machine types that cannot run nested KVM."""
     if any(machine_type.startswith(p) for p in _NO_NESTED_VIRT_PREFIXES):
         raise ValueError(
             f"Machine type '{machine_type}' does not support nested virtualization. "
-            f"Use an Intel-based type (n2-standard-*, n1-standard-*, c2-*). "
+            f"Use an Intel-based type (n1-standard-*, n2-standard-*). "
             f"Nested virt requires Intel Haswell or later. "
             f"See: https://cloud.google.com/compute/docs/instances/nested-virtualization/overview"
         )
+
+
+def _create_vm_with_fallback(
+    vm_name: str,
+    project: str,
+    zone: str,
+    machine_type: str,
+    disk_size_gb: int,
+    extra_args: list[str],
+    timeout: int = 300,
+) -> tuple[subprocess.CompletedProcess[str], str, str]:
+    """Try creating a VM, falling back through zones and machine types on RESOURCE_POOL_EXHAUSTED."""
+    zones_to_try = [zone] + [z for z in _ZONE_FALLBACKS if z != zone]
+    types_to_try = [machine_type] + [t for t in _MACHINE_TYPE_FALLBACKS if t != machine_type]
+
+    last_err = ""
+    for mt in types_to_try:
+        _validate_machine_type(mt)
+        for z in zones_to_try:
+            cpu_platform = _MIN_CPU_PLATFORM.get(mt.split("-")[0], "Intel Skylake")
+            r = _run_gcloud([
+                "compute", "instances", "create", vm_name,
+                f"--project={project}",
+                f"--zone={z}",
+                f"--machine-type={mt}",
+                f"--source-snapshot={SNAPSHOT_NAME}",
+                f"--boot-disk-size={disk_size_gb}GB",
+                "--enable-nested-virtualization",
+                f"--min-cpu-platform={cpu_platform}",
+                *extra_args,
+            ], timeout=timeout)
+            if r.returncode == 0:
+                if z != zone or mt != machine_type:
+                    print(f"  → succeeded on {mt} in {z} (requested: {machine_type} in {zone})")
+                return r, z, mt
+            stderr = r.stderr + r.stdout
+            if "ZONE_RESOURCE_POOL_EXHAUSTED" in stderr or "does not have enough resources" in stderr:
+                print(f"  → {mt} in {z}: zone exhausted, trying next...")
+                last_err = stderr.strip()
+                continue
+            if "not compatible with CPU platform" in stderr:
+                print(f"  → {mt} in {z}: CPU platform incompatibility, trying next type...")
+                last_err = stderr.strip()
+                break
+            raise RuntimeError(f"Failed to create VM: {stderr.strip()}")
+
+    raise RuntimeError(
+        f"Failed to create VM in any zone/type combination. Last error:\n{last_err}"
+    )
 
 
 def vm_up(vm_name: str, zone: str = DEFAULT_ZONE, machine_type: str = DEFAULT_MACHINE_TYPE,
@@ -118,6 +197,7 @@ def vm_up(vm_name: str, zone: str = DEFAULT_ZONE, machine_type: str = DEFAULT_MA
         r = _run_gcloud(["compute", "instances", "start", vm_name, f"--project={project}", f"--zone={zone}"], timeout=120)
         return 0 if r.returncode == 0 else 1
     print(f"Creating VM from snapshot {SNAPSHOT_NAME}...")
+    cpu_platform = _MIN_CPU_PLATFORM.get(machine_type.split("-")[0], "Intel Skylake")
     r = _run_gcloud([
         "compute", "instances", "create", vm_name,
         f"--project={project}", f"--zone={zone}",
@@ -125,7 +205,7 @@ def vm_up(vm_name: str, zone: str = DEFAULT_ZONE, machine_type: str = DEFAULT_MA
         f"--source-snapshot={SNAPSHOT_NAME}",
         f"--boot-disk-size={disk_size_gb}GB",
         "--enable-nested-virtualization",
-        "--min-cpu-platform=Intel Cascade Lake",
+        f"--min-cpu-platform={cpu_platform}",
         "--tags=tollgate-runner",
     ], timeout=300)
     if r.returncode != 0 and vm_status(project, zone, vm_name) != "RUNNING":
@@ -498,35 +578,36 @@ def submit_run(
     _validate_machine_type(machine_type)
     ensure_firewall_rules(project)
     print(f"Creating VM {vm_name} from snapshot {SNAPSHOT_NAME}...")
-    r = _run_gcloud([
-        "compute", "instances", "create", vm_name,
-        f"--project={project}",
-        f"--zone={zone}",
-        f"--machine-type={machine_type}",
-        f"--source-snapshot={SNAPSHOT_NAME}",
-        f"--boot-disk-size={disk_size_gb}GB",
-        "--enable-nested-virtualization",
-        "--min-cpu-platform=Intel Cascade Lake",
+    extra_args = [
         "--tags=tollgate-runner,tollgate-run",
         "--labels=tollgate_run=true",
         "--scopes=compute-rw,storage-rw",
         f"--metadata={metadata_payload}",
         f"--metadata-from-file=startup-script={script_path}",
-    ], timeout=300)
+    ]
+    r, actual_zone, actual_type = _create_vm_with_fallback(
+        vm_name, project, zone, machine_type, disk_size_gb, extra_args, timeout=300,
+    )
     script_path.unlink(missing_ok=True)
 
-    if r.returncode != 0:
-        raise RuntimeError(f"Failed to create VM: {r.stderr.strip() or r.stdout.strip()}")
+    if actual_zone != zone:
+        _run_gcloud([
+            "compute", "instances", "add-metadata", vm_name,
+            f"--project={project}",
+            f"--zone={actual_zone}",
+            f"--metadata=tollgate-zone={actual_zone}",
+        ], timeout=30)
 
     log_hint = (
-        f"gcloud compute ssh {vm_name} --project={project} --zone={zone} "
+        f"gcloud compute ssh {vm_name} --project={project} --zone={actual_zone} "
         f"--command='tail -f /var/log/tollgate-run.log'"
     )
     info = {
         "run_id": run_id,
         "vm_name": vm_name,
         "project": project,
-        "zone": zone,
+        "zone": actual_zone,
+        "machine_type": actual_type,
         "artifact_run_id": artifact_run_id,
         "suite_ref": suite_ref,
         "log_hint": log_hint,
@@ -567,36 +648,37 @@ def submit_runner(
 
     ensure_firewall_rules(project)
     print(f"Creating runner VM {vm_name} from snapshot {SNAPSHOT_NAME}...")
-    r = _run_gcloud([
-        "compute", "instances", "create", vm_name,
-        f"--project={project}",
-        f"--zone={zone}",
-        f"--machine-type={machine_type}",
-        f"--source-snapshot={SNAPSHOT_NAME}",
-        f"--boot-disk-size={disk_size_gb}GB",
-        "--enable-nested-virtualization",
-        "--min-cpu-platform=Intel Cascade Lake",
+    extra_args = [
         "--tags=tollgate-runner,tollgate-run",
         "--labels=tollgate_run=true",
         "--scopes=compute-rw,storage-rw",
         f"--metadata={metadata_payload}",
         f"--metadata-from-file=startup-script={script_path},jit-config={jit_config_path}",
-    ], timeout=300)
+    ]
+    r, actual_zone, actual_type = _create_vm_with_fallback(
+        vm_name, project, zone, machine_type, disk_size_gb, extra_args, timeout=300,
+    )
     script_path.unlink(missing_ok=True)
     jit_config_path.unlink(missing_ok=True)
 
-    if r.returncode != 0:
-        raise RuntimeError(f"Failed to create runner VM: {r.stderr.strip() or r.stdout.strip()}")
+    if actual_zone != zone:
+        _run_gcloud([
+            "compute", "instances", "add-metadata", vm_name,
+            f"--project={project}",
+            f"--zone={actual_zone}",
+            f"--metadata=tollgate-zone={actual_zone}",
+        ], timeout=30)
 
     log_hint = (
-        f"gcloud compute ssh {vm_name} --project={project} --zone={zone} "
+        f"gcloud compute ssh {vm_name} --project={project} --zone={actual_zone} "
         f"--command='tail -f /var/log/runner-startup.log'"
     )
     info = {
         "run_id": run_id,
         "vm_name": vm_name,
         "project": project,
-        "zone": zone,
+        "zone": actual_zone,
+        "machine_type": actual_type,
         "log_hint": log_hint,
     }
     print(f"Runner VM created: {vm_name}")

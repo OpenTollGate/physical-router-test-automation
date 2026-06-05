@@ -657,12 +657,32 @@ After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check tha
 
 ## GCP cloud lab (fire-and-forget)
 
-`scripts/cloud-lab.py submit` runs TollGate tests in nested KVM on a GCP VM (`n2-standard-2` + the `SNAPSHOT_NAME` configured in `lib/cloud_lab/constants.py`). The current snapshot is `tollgate-runner-baked-v9`; newer baked snapshots must be verified before becoming the default.
+### Cost Policy
+
+**Always use the cheapest machine types and regions.** Our workload is light (~2.5GB RAM total for QEMU VMs). Do not use expensive machine types (c2, custom, anything >2 vCPU) without explicit user approval.
+
+| Machine Type | $/hr | RAM | CPU Platform | Notes |
+|---|---|---|---|---|
+| `n1-standard-2` | $0.0950 | 7.5 GB | Intel Skylake | **Default. Cheapest.** |
+| `n2-standard-2` | $0.0971 | 8 GB | Intel Cascade Lake | Fallback. 2% more. |
+
+**Forbidden without user approval:** `c2-standard-4` ($0.1942/hr, 2x price), `n2-standard-4` ($0.1942/hr), any E2/N2D/T2A (no nested virt).
+
+**Region priority (cheapest first):**
+
+| Tier | Regions | $/hr (N1) | Use When |
+|---|---|---|---|
+| Tier 1 (cheapest) | `us-central1`, `us-east1`, `us-east5`, `us-west1` | $0.0950 | Default |
+| Tier 2 (+10%) | `northamerica-northeast1/2`, `europe-west1`, `europe-west4` | $0.1045 | Tier 1 exhausted |
+
+The fallback logic in `_create_vm_with_fallback()` tries all Tier 1 zones, then Tier 2, then alternates machine type (N1 → N2). **Never fall back to regions >20% more expensive** without asking the user first.
+
+`scripts/cloud-lab.py submit` runs TollGate tests in nested KVM on a GCP VM (`n1-standard-2` + the `SNAPSHOT_NAME` configured in `lib/cloud_lab/constants.py`). The current snapshot is `tollgate-runner-baked-v10`; newer baked snapshots must be verified before becoming the default.
 
 ### Architecture
 
 ```
-┌─ GCP Host VM (n2-standard-2, nested KVM) ──────────────────────┐
+┌─ GCP Host VM (n1-standard-2, nested KVM) ──────────────────────┐
 │                                                                  │
 │  tg-poc-br (10.99.99.0/24) — test LAN                           │
 │    ├── host: 10.99.99.2 (mints, NAT, orchestration)            │
