@@ -7,6 +7,7 @@ import logging
 import os
 import shlex
 import subprocess
+import textwrap
 import time
 import urllib.request
 from pathlib import Path
@@ -234,20 +235,26 @@ def stop_local_mints(mints: dict[str, subprocess.Popen[str]]) -> None:
                 pass
         log.info("Stopped local mint: %s", name)
 def _configure_mint(mint_url: str) -> None:
-    """Configure the backend to use a specific mint URL and wait for health."""
-    _run(
+    configure_script = textwrap.dedent(f"""\
+        import os, sys
+        from lib.router import Router
+        from lib.backend import BackendConfig
+        r = Router(host=os.environ['TOLLGATE_SSH_HOST'], phone_ip='', phone_mac='', domain='',
+                   backend=BackendConfig(os.environ.get('TOLLGATE_BACKEND', 'go')))
+        r.ssh('cp /tmp/config.json.bak /etc/tollgate/config.json 2>/dev/null || true')
+        r.replace_mints(['{mint_url}'])
+    """)
+    script_path = "/tmp/configure-mint.py"
+    Path(script_path).write_text(configure_script)
+
+    r = _run(
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
-        f"python3 -c \""
-        f"from lib.router import Router; "
-        f"from lib.backend import BackendConfig; "
-        f"import os; "
-        f"r = Router(host=os.environ['TOLLGATE_SSH_HOST'], phone_ip='', phone_mac='', domain='', backend=BackendConfig(os.environ.get('TOLLGATE_BACKEND','go'))); "
-        f"r.ssh('cp /tmp/config.json.bak /etc/tollgate/config.json 2>/dev/null || true'); "
-        f"r.replace_mints(['{mint_url}']); "
-        f"\" 2>&1",
+        f"python3 {script_path} 2>&1",
         timeout=120,
         check=False,
     )
+    if r.returncode != 0:
+        log.warning("Mint configure script failed (rc=%d): %s", r.returncode, (r.stdout or "").strip()[-500:])
     wait_for_backend()
 def select_test_mint(forced_mint: str = "auto") -> str:
     """Probe the backend with CDK V2 keysets. Return the mint URL to use.
@@ -281,31 +288,46 @@ def select_test_mint(forced_mint: str = "auto") -> str:
     PUBLIC_TESTNUTS = "https://testnut.cashu.exchange"
     cdk_ok = False
     try:
+        # Write probe script to temp file — avoids shell quoting nightmares
+        # with nested f-strings, braces, and quotes in python3 -c "...".
+        probe_script = textwrap.dedent(f"""\
+            import os, json, time, sys
+            from lib.router import Router
+            from lib.backend import BackendConfig
+            r = Router(host=os.environ['TOLLGATE_SSH_HOST'], phone_ip='', phone_mac='', domain='',
+                       backend=BackendConfig(os.environ.get('TOLLGATE_BACKEND', 'go')))
+            r.ssh('cat /etc/tollgate/config.json > /tmp/config.json.bak 2>/dev/null || true')
+            r.replace_mints(['{CDK_MINT_URL}'])
+            time.sleep(8)
+            code = r.api_status('/')
+            body = r.api_body('/') or ''
+            try:
+                data = json.loads(body)
+            except Exception:
+                data = {{}}
+            has_pps = any(isinstance(t, list) and len(t) > 0 and t[0] == 'price_per_step'
+                          for t in data.get('tags', []))
+            print(f'v2_probe={{code}} full_merchant={{has_pps}}')
+        """)
+        probe_path = "/tmp/v2-probe.py"
+        Path(probe_path).write_text(probe_script)
+
         r = _run(
             f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
-            f"python3 -c \""
-            f"from lib.router import Router; "
-            f"from lib.backend import BackendConfig; "
-            f"import os, json, time; "
-            f"r = Router(host=os.environ['TOLLGATE_SSH_HOST'], phone_ip='', phone_mac='', domain='', backend=BackendConfig(os.environ.get('TOLLGATE_BACKEND','go'))); "
-            f"r.ssh('cat /etc/tollgate/config.json > /tmp/config.json.bak 2>/dev/null || true'); "
-            f"r.replace_mints(['{CDK_MINT_URL}']); "
-            f"time.sleep(8); "
-            f"code = r.api_status('/'); "
-            f"body = r.api_body('/') or ''; "
-            f"try: data = json.loads(body); "
-            f"except: data = {{}}; "
-            f"has_pps = any(isinstance(t, list) and len(t) > 0 and t[0] == 'price_per_step' for t in data.get('tags', [])); "
-            f"print(f'v2_probe={{code}} full_merchant={{has_pps}}'); "
-            f"\" 2>&1",
+            f"python3 {probe_path} 2>&1",
             timeout=120,
             check=False,
         )
-        if "v2_probe=200" in r.stdout and "full_merchant=True" in r.stdout:
+        stdout = (r.stdout or "").strip()
+        if r.returncode != 0:
+            log.warning("V2 probe script failed (rc=%d): %s", r.returncode, stdout[-500:])
+        elif "v2_probe=200" in stdout and "full_merchant=True" in stdout:
             cdk_ok = True
             log.info("Backend supports V2 keysets — using CDK mint (full merchant confirmed)")
-        elif "v2_probe=200" in r.stdout:
+        elif "v2_probe=200" in stdout:
             log.info("Backend returned 200 with CDK V2 but not full merchant — V2 likely unsupported")
+        else:
+            log.warning("V2 probe: unexpected output (rc=%d): %s", r.returncode, stdout[-300:])
     except Exception as exc:
         log.warning("V2 probe failed: %s", exc)
 
@@ -314,7 +336,7 @@ def select_test_mint(forced_mint: str = "auto") -> str:
         return V2_TESTNUT_CDK_LAN
 
     nutshell_v1_ok = False
-    for _attempt in range(10):
+    for attempt in range(10):
         try:
             req = urllib.request.Request(f"{NUTSHELL_V1_MINT_URL}/v1/keys")
             with urllib.request.urlopen(req, timeout=5) as resp:
@@ -325,12 +347,14 @@ def select_test_mint(forced_mint: str = "auto") -> str:
                         kid = keysets[0].get("id", "")
                         if kid.startswith("00") and len(kid) == 16:
                             nutshell_v1_ok = True
-                            log.info("Nutshell V1 mint has V1 keysets (kid=%s)", kid)
+                            log.info("Nutshell V1 mint has V1 keysets (kid=%s, attempt=%d)", kid, attempt + 1)
                             break
                         log.info("Nutshell V1 mint has V2 keysets (kid=%s), unusable for Go backend", kid[:16])
                         break
         except Exception:
             pass
+        if attempt % 3 == 2:
+            log.info("Nutshell V1 mint not ready yet (attempt %d/10)", attempt + 1)
         time.sleep(3)
 
     fallback_url = NUTSHELL_V1_MINT_LAN if nutshell_v1_ok else PUBLIC_TESTNUTS
