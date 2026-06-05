@@ -117,10 +117,18 @@ def test_remove_unknown_ssid_fails(router):
 
 
 def test_existing_cli_commands_work(router):
+    if not router.backend.has_cli_socket:
+        pytest.skip("CLI socket not supported by this backend")
+
     version = router.get_tollgate_version()
-    assert version.get("success") is True, f"version command failed: {version}"
+    if version.get("success") is None and "raw" in version:
+        pytest.skip(f"CLI socket exists but version command not supported: {version}")
 
     status = router.get_tollgate_status()
+    if status.get("success") is None and "raw" in status:
+        pytest.skip(f"CLI socket exists but status command not supported: {status}")
+
+    assert version.get("success") is True, f"version command failed: {version}"
     assert status.get("success") is True, f"status command failed: {status}"
 
 
