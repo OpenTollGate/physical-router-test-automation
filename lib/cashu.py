@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 import signal
 import subprocess
@@ -7,6 +8,8 @@ import os
 import base64
 import time
 import re
+import threading
+from collections import deque
 from urllib import error, request
 
 from lib.constants import TEST_MINT_URL
@@ -354,3 +357,71 @@ def create_minter(
         return cdk
 
     return CashuMint(venv_path=venv_path, mint_url=mint_url)
+
+
+log = logging.getLogger("tollgate.token_pool")
+
+
+class TokenPool:
+    _POOL_AMOUNT = 4
+
+    def __init__(self, minter: CashuMint | CdkCliWallet, pool_size: int = 10):
+        self._minter = minter
+        self._pool_size = pool_size
+        self._queue: deque[str] = deque()
+        self._lock = threading.Lock()
+        self._minter_url = getattr(minter, "mint_url", "<unknown>")
+        self._prefill()
+
+    def _prefill(self):
+        t0 = time.monotonic()
+        for i in range(self._pool_size):
+            try:
+                token = self._minter.mint(self._POOL_AMOUNT)
+                self._queue.append(token)
+            except Exception as exc:
+                log.warning("TokenPool: prefill mint %d/%d failed: %s", i + 1, self._pool_size, exc)
+                if i == 0:
+                    raise
+                break
+        elapsed = time.monotonic() - t0
+        log.info(
+            "TokenPool: prefilled %d/%d tokens (%.1fs, mint=%s)",
+            len(self._queue), self._pool_size, elapsed, self._minter_url,
+        )
+
+    def _replenish(self):
+        try:
+            token = self._minter.mint(self._POOL_AMOUNT)
+            with self._lock:
+                self._queue.append(token)
+        except Exception as exc:
+            log.warning("TokenPool: replenish failed: %s", exc)
+
+    # -- public API (same interface as CashuMint / CdkCliWallet) --
+
+    def mint(self, amount: int = 4, legacy: bool = True, timeout: int = 120, retries: int = 2) -> str:
+        if amount == self._POOL_AMOUNT:
+            with self._lock:
+                if self._queue:
+                    token = self._queue.popleft()
+                    if len(self._queue) < 3:
+                        threading.Thread(target=self._replenish, daemon=True).start()
+                    return token
+        return self._minter.mint(amount, legacy=legacy, timeout=timeout, retries=retries)
+
+    def ensure_mint_available(self, timeout: int = 15):
+        return self._minter.ensure_mint_available(timeout=timeout)
+
+    def warmup(self, timeout: int = 60):
+        return self._minter.warmup(timeout=timeout)
+
+    def is_available(self) -> bool:
+        return self._minter.is_available()
+
+    def mint_from_wrong_mint(self, amount: int = 4, timeout: int = 90) -> str:
+        return self._minter.mint_from_wrong_mint(amount=amount, timeout=timeout)
+
+    @staticmethod
+    def synthetic_wrong_mint_token() -> str:
+        return CashuMint.synthetic_wrong_mint_token()

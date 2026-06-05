@@ -17,7 +17,7 @@ except ImportError:
 
 from lib.router import Router
 from lib.router_lock import RouterLock
-from lib.cashu import CashuMint, MintUnavailableError, create_minter
+from lib.cashu import CashuMint, MintUnavailableError, TokenPool, create_minter
 from lib.clients.adb import ADBDevice
 from lib.clients.wifi import WiFi
 from lib.clients.desktop import MacWiFiClient, MacAdapter, LinuxWiFiClient, LinuxAdapter
@@ -492,6 +492,9 @@ def cashu():
         try:
             minter.ensure_mint_available(timeout=10)
             minter.warmup(timeout=30)
+            pool_size = int(os.environ.get("TOLLGATE_TOKEN_POOL_SIZE", "10"))
+            if pool_size > 0:
+                return TokenPool(minter, pool_size=pool_size)
             return minter
         except MintUnavailableError as exc:
             if attempt < 4:
