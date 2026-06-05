@@ -1,6 +1,8 @@
 import json
+import shutil
 import signal
 import subprocess
+import tempfile
 import os
 import base64
 import time
@@ -265,35 +267,43 @@ class CdkCliWallet:
             raise MintUnavailableError(f"cashu mint unexpected error: {exc}") from exc
 
     def _mint_token(self, amount: int, timeout: int) -> str:
-        mint_r = subprocess.run(
-            [self._cli, "mint", self.mint_url, str(amount)],
-            capture_output=True, text=True, timeout=timeout,
-        )
-        if mint_r.returncode != 0:
-            raise RuntimeError(
-                f"cdk-cli mint failed (exit {mint_r.returncode}): "
-                f"{mint_r.stderr[-300:]}"
+        # Use a fresh temp work directory for each mint+send pair.
+        # Without this, cdk-cli reuses ~/.cdk-cli/ and stale wallet state
+        # (pending quotes, spent proofs) causes subsequent mint calls to
+        # hang until timeout.
+        work_dir = tempfile.mkdtemp(prefix="cdk-cli-wallet-")
+        try:
+            mint_r = subprocess.run(
+                [self._cli, "-w", work_dir, "mint", self.mint_url, str(amount)],
+                capture_output=True, text=True, timeout=timeout,
             )
+            if mint_r.returncode != 0:
+                raise RuntimeError(
+                    f"cdk-cli mint failed (exit {mint_r.returncode}): "
+                    f"{mint_r.stderr[-300:]}"
+                )
 
-        send_r = subprocess.run(
-            [self._cli, "send", "--mint-url", self.mint_url, "--v3"],
-            input=f"{amount}\n",
-            capture_output=True, text=True, timeout=timeout,
-        )
-        if send_r.returncode != 0:
-            raise RuntimeError(
-                f"cdk-cli send failed (exit {send_r.returncode}): "
-                f"stdout={send_r.stdout[-200:]} stderr={send_r.stderr[-200:]}"
+            send_r = subprocess.run(
+                [self._cli, "-w", work_dir, "send", "--mint-url", self.mint_url, "--v3"],
+                input=f"{amount}\n",
+                capture_output=True, text=True, timeout=timeout,
             )
+            if send_r.returncode != 0:
+                raise RuntimeError(
+                    f"cdk-cli send failed (exit {send_r.returncode}): "
+                    f"stdout={send_r.stdout[-200:]} stderr={send_r.stderr[-200:]}"
+                )
 
-        for line in send_r.stdout.strip().splitlines():
-            line = line.strip()
-            if line.startswith(("cashuA", "cashuB")):
-                return line
+            for line in send_r.stdout.strip().splitlines():
+                line = line.strip()
+                if line.startswith(("cashuA", "cashuB")):
+                    return line
 
-        raise RuntimeError(
-            f"cdk-cli send produced no token: {send_r.stdout[-300:]}"
-        )
+            raise RuntimeError(
+                f"cdk-cli send produced no token: {send_r.stdout[-300:]}"
+            )
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
 
     def warmup(self, timeout: int = 60) -> None:
         """Pre-initialize the CDK CLI by running a lightweight command."""
