@@ -464,6 +464,92 @@ def cmd_bake(args: argparse.Namespace) -> int:
             print(f"  WARNING: vwifi build failed (non-fatal): {(r.stdout or '')[:200]}", file=sys.stderr)
             print(f"  stderr: {(r.stderr or '')[:300]}", file=sys.stderr)
 
+        # Step 8d: Pre-bake Playwright into Debian QEMU overlay
+        _step(8, total_steps, "Pre-baking Playwright + Chromium into Debian overlay")
+        t0_deb = time.monotonic()
+        debian_pw_cmd = (
+            f"cd {workdir} && "
+            "DEB_BASE=images/debian-12-nocloud-amd64.qcow2; "
+            "[ -f \"$DEB_BASE\" ] || DEB_BASE=../images/debian-12-nocloud-amd64.qcow2; "
+            "DEB_BASE=$(readlink -f \"$DEB_BASE\"); "
+            "rm -f overlays/debian-client.qcow2 && "
+            "qemu-img create -f qcow2 -F qcow2 -b \"$DEB_BASE\" overlays/debian-client.qcow2 >/dev/null && "
+            "qemu-img resize --shrink overlays/debian-client.qcow2 10G >/dev/null 2>&1 || true && "
+            "ip tuntap add dev tg-poc-tap2 mode tap user root 2>/dev/null || true && "
+            "ip link set tg-poc-tap2 master tg-poc-br 2>/dev/null || true && "
+            "ip link set tg-poc-tap2 up 2>/dev/null || true && "
+            "ip link add name mgmt-br type bridge 2>/dev/null || true; "
+            "ip addr add 10.99.97.2/24 dev mgmt-br 2>/dev/null || true; "
+            "ip link set mgmt-br up 2>/dev/null || true; "
+            "ip tuntap add dev mgmt-tap2 mode tap user root 2>/dev/null || true; "
+            "ip link set mgmt-tap2 master mgmt-br 2>/dev/null || true; "
+            "ip link set mgmt-tap2 up 2>/dev/null || true; "
+            "nohup qemu-system-x86_64 "
+            "-enable-kvm -m 1536 -smp 2 -display none "
+            f"-drive file=overlays/debian-client.qcow2,format=qcow2,if=virtio "
+            "-netdev tap,id=net0,ifname=tg-poc-tap2,script=no,downscript=no "
+            f"-device virtio-net-pci,netdev=net0,mac=de:54:4e:91:49:da "
+            "-netdev tap,id=mgmt0,ifname=mgmt-tap2,script=no,downscript=no "
+            f"-device virtio-net-pci,netdev=mgmt0,mac=52:54:00:c0:02:64 "
+            ">/tmp/debian-qemu.log 2>&1 &"
+        )
+        r = _gcloud_ssh(vm_name, debian_pw_cmd, zone, project, timeout=60)
+
+        print("  Waiting for Debian VM SSH...")
+        deb_ssh_wait = (
+            f"for i in $(seq 1 30); do "
+            f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
+            "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+            f"-o ConnectTimeout=3 root@10.99.99.100 'echo DEB_SSH_OK' 2>/dev/null && break; "
+            "sleep 2; done"
+        )
+        r = _gcloud_ssh(vm_name, deb_ssh_wait, zone, project, timeout=120)
+
+        if "DEB_SSH_OK" in (r.stdout or ""):
+            print("  Debian VM SSH ready, installing Playwright...")
+            pw_install = (
+                f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
+                "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+                "root@10.99.99.100 "
+                "'apt-get -o Acquire::ForceIPv4=true update -qq && "
+                "DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true install -y -qq --no-install-recommends "
+                "python3-pip libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libdbus-1-3 "
+                "libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 "
+                "libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 xvfb fonts-liberation fonts-freefont-ttf >/dev/null && "
+                "python3 -m pip install -q --break-system-packages playwright && "
+                "python3 -m playwright install chromium >/dev/null && "
+                "python3 -c \"import playwright; print('PLAYWRIGHT_OK')\"' 2>&1"
+            )
+            r = _gcloud_ssh(vm_name, pw_install, zone, project, timeout=600)
+            if "PLAYWRIGHT_OK" in (r.stdout or ""):
+                print("  Playwright + Chromium installed in Debian overlay")
+            else:
+                print(f"  WARNING: Playwright install may have failed: {(r.stdout or '')[:300]}", file=sys.stderr)
+
+            print("  Shutting down Debian VM...")
+            deb_shutdown = (
+                f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
+                "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+                "root@10.99.99.100 'sync; poweroff' 2>/dev/null || true; "
+                "sleep 5; killall -9 qemu-system-x86_64 2>/dev/null; sleep 2; "
+                f"cd {workdir} && "
+                "DEB_BASE=images/debian-12-nocloud-amd64.qcow2; "
+                "[ -f \"$DEB_BASE\" ] || DEB_BASE=../images/debian-12-nocloud-amd64.qcow2; "
+                "DEB_BASE=$(readlink -f \"$DEB_BASE\"); "
+                "echo \"Flattening Debian overlay onto base at $DEB_BASE\"; "
+                "qemu-img convert -f qcow2 -O qcow2 overlays/debian-client.qcow2 /tmp/debian-base-flat.qcow2 && "
+                "mv /tmp/debian-base-flat.qcow2 \"$DEB_BASE\" && "
+                "rm -f overlays/debian-client.qcow2 && "
+                "echo DEBIAN_FLATTEN_OK"
+            )
+            r = _gcloud_ssh(vm_name, deb_shutdown, zone, project, timeout=120)
+            if "DEBIAN_FLATTEN_OK" in (r.stdout or ""):
+                print(f"  Debian base image updated with Playwright ({time.monotonic() - t0_deb:.1f}s)")
+            else:
+                print(f"  WARNING: Debian flatten may have failed: {(r.stdout or '')[:300]}", file=sys.stderr)
+        else:
+            print(f"  WARNING: Debian VM SSH not ready, skipping Playwright pre-bake ({time.monotonic() - t0_deb:.1f}s)", file=sys.stderr)
+
         # Step 9: Install GitHub Actions runner binary
         _step(9, total_steps, "Installing GitHub Actions runner binary")
         t0_runner = time.monotonic()
