@@ -237,6 +237,7 @@ def stop_local_mints(mints: dict[str, subprocess.Popen[str]]) -> None:
 def _configure_mint(mint_url: str) -> None:
     configure_script = textwrap.dedent(f"""\
         import os, sys
+        sys.path.insert(0, '{TEST_DIR}')
         from lib.router import Router
         from lib.backend import BackendConfig
         r = Router(host=os.environ['TOLLGATE_SSH_HOST'], phone_ip='', phone_mac='', domain='',
@@ -292,6 +293,7 @@ def select_test_mint(forced_mint: str = "auto") -> str:
         # with nested f-strings, braces, and quotes in python3 -c "...".
         probe_script = textwrap.dedent(f"""\
             import os, json, time, sys
+            sys.path.insert(0, '{TEST_DIR}')
             from lib.router import Router
             from lib.backend import BackendConfig
             r = Router(host=os.environ['TOLLGATE_SSH_HOST'], phone_ip='', phone_mac='', domain='',
