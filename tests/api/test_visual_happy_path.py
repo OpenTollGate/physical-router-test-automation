@@ -9,7 +9,7 @@ import pytest
 from lib.constants import NDS_PORTAL_PORT, TOKEN_DEFAULT
 from lib.helpers import assert_deauthenticated, metering_test_setup, wait_expiry_and_verify_cutoff
 
-pytestmark = [pytest.mark.api, pytest.mark.virtual_lab, pytest.mark.publish_screenshot]
+pytestmark = [pytest.mark.api, pytest.mark.complete, pytest.mark.virtual_lab, pytest.mark.publish_screenshot]
 
 DATA_DOWNLOAD_URL = os.environ.get(
     "TOLLGATE_VISUAL_DATA_TEST_URL",

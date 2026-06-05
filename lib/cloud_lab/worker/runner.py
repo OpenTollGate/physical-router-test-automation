@@ -97,7 +97,12 @@ def build_runners(config: WorkerConfig) -> list[RunnerSpec]:
         return [r for r in runners if r.enabled(config)]
 
     runners = [
-        RunnerSpec(name="visual", paths=("tests/api/test_visual_happy_path.py",), timeout=300),
+        RunnerSpec(
+            name="visual",
+            paths=("tests/api/test_visual_happy_path.py",),
+            timeout=300,
+            markers="not complete" if not config.complete else None,
+        ),
         RunnerSpec(
             name="api",
             paths=("tests/api/",),

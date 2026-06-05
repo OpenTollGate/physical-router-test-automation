@@ -9,7 +9,7 @@ import pytest
 from lib.constants import TOKEN_DEFAULT
 from lib.helpers import is_degraded
 
-pytestmark = [pytest.mark.api, pytest.mark.smoke, pytest.mark.virtual_lab, pytest.mark.timeout(180)]
+pytestmark = [pytest.mark.api, pytest.mark.complete, pytest.mark.virtual_lab, pytest.mark.timeout(180)]
 
 try:
     from pytest_html import extras as html_extras

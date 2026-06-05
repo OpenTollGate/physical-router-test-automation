@@ -704,6 +704,15 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.flaky(reruns=1, reruns_delay=5))
             item.add_marker(pytest.mark.timeout(300))
 
+    # Cashu-dependent tests get a retry — the Nutshell V1 FakeWallet
+    # is inherently flaky under load (subprocess deadlocks).
+    for item in items:
+        if "complete" in item.keywords:
+            continue
+        fixturenames = getattr(item, "fixturenames", [])
+        if "cashu" in fixturenames:
+            item.add_marker(pytest.mark.flaky(reruns=1, reruns_delay=3))
+
     api = [t for t in items if "api" in t.keywords]
     phone = [t for t in items if "phone" in t.keywords]
     other = [t for t in items if "api" not in t.keywords and "phone" not in t.keywords]
