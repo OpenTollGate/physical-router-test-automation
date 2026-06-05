@@ -339,26 +339,8 @@ def create_minter(
     mint_url: str = TEST_MINT_URL,
     venv_path: str | None = None,
 ) -> CashuMint | CdkCliWallet:
-    def _probe_keyset_version(url: str) -> str | None:
-        keys_url = f"{url.rstrip('/')}/v1/keys"
-        req = request.Request(keys_url, headers={"User-Agent": "tollgate-test/1.0"})
-        try:
-            with request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read())
-        except Exception:
-            return None
-        for keyset in data.get("keysets", []):
-            kid = keyset.get("id", "")
-            if kid.startswith("01"):
-                return "v2"
-            if kid.startswith("00"):
-                return "v1"
-        return None
-
-    version = _probe_keyset_version(mint_url)
     cdk = CdkCliWallet(mint_url)
-
-    if version == "v2" and cdk.is_available():
+    if cdk.is_available():
         return cdk
 
     return CashuMint(venv_path=venv_path, mint_url=mint_url)
