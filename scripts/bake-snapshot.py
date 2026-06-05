@@ -469,12 +469,17 @@ def cmd_bake(args: argparse.Namespace) -> int:
         t0_deb = time.monotonic()
         debian_pw_cmd = (
             f"cd {workdir} && "
+            # Reuse existing Debian overlay from base snapshot (already has SSH + password configured)
+            # Only create fresh overlay if the cached one doesn't exist
+            "if [ -f overlays/debian-client.qcow2 ]; then "
+            "echo 'Reusing cached Debian overlay'; "
+            "else "
             "DEB_BASE=images/debian-12-nocloud-amd64.qcow2; "
             "[ -f \"$DEB_BASE\" ] || DEB_BASE=../images/debian-12-nocloud-amd64.qcow2; "
             "DEB_BASE=$(readlink -f \"$DEB_BASE\"); "
-            "rm -f overlays/debian-client.qcow2 && "
             "qemu-img create -f qcow2 -F qcow2 -b \"$DEB_BASE\" overlays/debian-client.qcow2 >/dev/null && "
-            "qemu-img resize --shrink overlays/debian-client.qcow2 10G >/dev/null 2>&1 || true && "
+            "qemu-img resize --shrink overlays/debian-client.qcow2 10G >/dev/null 2>&1 || true; "
+            "fi && "
             "ip tuntap add dev tg-poc-tap2 mode tap user root 2>/dev/null || true && "
             "ip link set tg-poc-tap2 master tg-poc-br 2>/dev/null || true && "
             "ip link set tg-poc-tap2 up 2>/dev/null || true && "
@@ -533,10 +538,10 @@ def cmd_bake(args: argparse.Namespace) -> int:
                 "root@10.99.99.100 'sync; poweroff' 2>/dev/null || true; "
                 "sleep 5; killall -9 qemu-system-x86_64 2>/dev/null; sleep 2; "
                 f"cd {workdir} && "
+                "echo 'Flattening Debian overlay onto base...'; "
                 "DEB_BASE=images/debian-12-nocloud-amd64.qcow2; "
                 "[ -f \"$DEB_BASE\" ] || DEB_BASE=../images/debian-12-nocloud-amd64.qcow2; "
                 "DEB_BASE=$(readlink -f \"$DEB_BASE\"); "
-                "echo \"Flattening Debian overlay onto base at $DEB_BASE\"; "
                 "qemu-img convert -f qcow2 -O qcow2 overlays/debian-client.qcow2 /tmp/debian-base-flat.qcow2 && "
                 "mv /tmp/debian-base-flat.qcow2 \"$DEB_BASE\" && "
                 "rm -f overlays/debian-client.qcow2 && "
