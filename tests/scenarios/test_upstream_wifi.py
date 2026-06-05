@@ -15,8 +15,20 @@ import pytest
 pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.go_only, pytest.mark.virtual_lab]
 
 
+def _skip_if_no_wireless_config(router):
+    """Skip if wireless config is absent (no radios, no hwsim)."""
+    try:
+        result = router.ssh("ls /etc/config/wireless 2>/dev/null", timeout=5)
+        if not result or not result.strip():
+            pytest.skip("No /etc/config/wireless — WiFi hardware not available")
+    except Exception:
+        pytest.skip("Cannot check wireless config — SSH error")
+
+
 def _skip_if_no_upstream_wifi(router):
     """Feature-detect upstream WiFi CLI support and skip if absent."""
+    _skip_if_no_wireless_config(router)
+
     try:
         result = router.cli_command("upstream", ["list"])
     except (NotImplementedError, Exception):

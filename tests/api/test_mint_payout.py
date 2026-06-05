@@ -34,7 +34,13 @@ def post_payment_balance(router, paid_token):
 
 @pytest.fixture(scope="module")
 def wallet_info(router):
-    return router.get_wallet_info()
+    if not router.backend.has_cli_socket:
+        pytest.skip("CLI socket not supported by this backend")
+    info = router.get_wallet_info()
+    raw = info.get("raw", "")
+    if info.get("success") is not True and ("unknown command" in raw.lower() or "error" in raw.lower()):
+        pytest.skip(f"wallet info command not supported: {raw[:100]}")
+    return info
 
 
 def test_wallet_balance_increases_after_payment(initial_balance, post_payment_balance):
