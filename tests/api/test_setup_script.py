@@ -49,7 +49,7 @@ def test_setup_nodogsplash_gatewayport(router):
     ).strip()
     if not port:
         pytest.skip("gatewayport not set (pre-PR I firmware)")
-    assert port == "80", f"Expected gatewayport 80, got '{port}'"
+    assert port == "2050", f"Expected gatewayport 2050, got '{port}'"
 
 
 def test_setup_nodogsplash_idempotent(router):
