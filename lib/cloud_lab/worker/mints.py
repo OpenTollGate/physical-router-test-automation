@@ -257,18 +257,48 @@ def _configure_mint(mint_url: str) -> None:
     if r.returncode != 0:
         log.warning("Mint configure script failed (rc=%d): %s", r.returncode, (r.stdout or "").strip()[-500:])
     wait_for_backend()
+def _quick_mint_cycle_check(mint_url: str, timeout: int = 60) -> bool:
+    """Try a quick mint cycle (warmup + mint 4 sats). Returns True if successful."""
+    check_script = textwrap.dedent(f"""\
+        import os, sys
+        sys.path.insert(0, '{TEST_DIR}')
+        from lib.cashu import create_minter
+        try:
+            m = create_minter(mint_url='{mint_url}', venv_path='/opt/cashu-venv')
+            m.ensure_mint_available()
+            m.warmup(timeout=20)
+            token = m.mint(4, timeout={timeout})
+            assert token.startswith(('cashuA', 'cashuB')), f'bad token: {{token[:20]}}'
+            print('MINT_CYCLE_OK')
+        except Exception as e:
+            print(f'MINT_CYCLE_FAIL: {{e}}')
+    """)
+    script_path = "/tmp/mint-cycle-check.py"
+    Path(script_path).write_text(check_script)
+
+    r = _run(
+        f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && "
+        f"set -a && source .env && set +a && "
+        f"python3 {script_path} 2>&1",
+        timeout=timeout + 30,
+        check=False,
+    )
+    ok = "MINT_CYCLE_OK" in (r.stdout or "")
+    if not ok:
+        log.warning("Mint cycle check FAILED for %s: %s", mint_url, (r.stdout or "").strip()[-300:])
+    return ok
+
+
 def select_test_mint(forced_mint: str = "auto") -> str:
-    """Probe the backend with CDK V2 keysets. Return the mint URL to use.
+    """Probe the backend and select the best mint with failover.
 
-    If forced_mint is not 'auto', skip probing and use the specified mint:
-      - 'cdk-v2'       → CDK V2 mint (01-prefix keysets)
-      - 'nutshell-v2'  → Nutshell V2 mint (01-prefix keysets)
-      - 'nutshell-v1'  → Nutshell V1 mint (00-prefix keysets, for Go/gonuts)
+    Strategy:
+    1. If forced, use that mint directly (no failover).
+    2. Try CDK V2 (if backend supports V2 keysets) with mint_cycle validation.
+    3. Try Nutshell V1 (V1 keysets for Go/gonuts) with mint_cycle validation.
+    4. Fall back to public testnut.cashu.exchange.
 
-    Strategy: start with CDK (V2). If the backend starts as a full merchant
-    (kind 10021 with price_per_step tags) after being configured with CDK V2,
-    V2 is supported. If not (crash or degraded mode), fall back to Nutshell V1
-    (V1 keysets). If Nutshell V1 isn't running either, fall back to public testnuts.
+    At each step, if the mint_cycle fails, we move to the next option.
     """
     MINT_ALIASES = {
         "cdk-v2": (CDK_MINT_URL, V2_TESTNUT_CDK_LAN),
@@ -287,10 +317,9 @@ def select_test_mint(forced_mint: str = "auto") -> str:
         return lan_url
 
     PUBLIC_TESTNUTS = "https://testnut.cashu.exchange"
+
     cdk_ok = False
     try:
-        # Write probe script to temp file — avoids shell quoting nightmares
-        # with nested f-strings, braces, and quotes in python3 -c "...".
         probe_script = textwrap.dedent(f"""\
             import os, json, time, sys
             sys.path.insert(0, '{TEST_DIR}')
@@ -325,7 +354,7 @@ def select_test_mint(forced_mint: str = "auto") -> str:
             log.warning("V2 probe script failed (rc=%d): %s", r.returncode, stdout[-500:])
         elif "v2_probe=200" in stdout and "full_merchant=True" in stdout:
             cdk_ok = True
-            log.info("Backend supports V2 keysets — using CDK mint (full merchant confirmed)")
+            log.info("Backend supports V2 keysets — CDK V2 candidate")
         elif "v2_probe=200" in stdout:
             log.info("Backend returned 200 with CDK V2 but not full merchant — V2 likely unsupported")
         else:
@@ -334,8 +363,12 @@ def select_test_mint(forced_mint: str = "auto") -> str:
         log.warning("V2 probe failed: %s", exc)
 
     if cdk_ok:
-        _verify_router_mint_reachability(V2_TESTNUT_CDK_LAN)
-        return V2_TESTNUT_CDK_LAN
+        log.info("Validating CDK V2 mint with mint cycle...")
+        if _quick_mint_cycle_check(V2_TESTNUT_CDK_LAN):
+            _verify_router_mint_reachability(V2_TESTNUT_CDK_LAN)
+            log.info("Selected CDK V2 mint (validated)")
+            return V2_TESTNUT_CDK_LAN
+        log.warning("CDK V2 mint probe passed but mint cycle FAILED — trying next mint")
 
     nutshell_v1_ok = False
     for attempt in range(10):
@@ -359,12 +392,19 @@ def select_test_mint(forced_mint: str = "auto") -> str:
             log.info("Nutshell V1 mint not ready yet (attempt %d/10)", attempt + 1)
         time.sleep(3)
 
-    fallback_url = NUTSHELL_V1_MINT_LAN if nutshell_v1_ok else PUBLIC_TESTNUTS
-    log.info("Backend does not support V2 keysets — falling back to %s", fallback_url)
+    if nutshell_v1_ok:
+        log.info("Configuring Nutshell V1 and validating with mint cycle...")
+        _configure_mint(V1_TESTNUT_NUTSHELL_LAN)
+        if _quick_mint_cycle_check(V1_TESTNUT_NUTSHELL_LAN):
+            _verify_router_mint_reachability(V1_TESTNUT_NUTSHELL_LAN)
+            log.info("Selected Nutshell V1 mint (validated)")
+            return V1_TESTNUT_NUTSHELL_LAN
+        log.warning("Nutshell V1 mint cycle FAILED — trying next mint")
 
-    _configure_mint(fallback_url)
-    _verify_router_mint_reachability(fallback_url)
-    return fallback_url
+    log.warning("All local mints failed — falling back to public testnut.cashu.exchange")
+    _configure_mint(PUBLIC_TESTNUTS)
+    _verify_router_mint_reachability(PUBLIC_TESTNUTS)
+    return PUBLIC_TESTNUTS
 
 
 def _verify_router_mint_reachability(mint_url: str) -> None:
