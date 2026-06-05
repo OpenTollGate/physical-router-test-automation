@@ -145,30 +145,28 @@ def wait_for_dpkg_lock(timeout: int = 300) -> None:
 def ensure_github_cli(token: str) -> None:
     os.environ["GH_TOKEN"] = token
     _run("git config --global --add safe.directory '*'", timeout=10, check=False)
-    r = _run("command -v gh >/dev/null && gh auth status >/dev/null 2>&1 && echo GH_OK", timeout=15, check=False)
-    if "GH_OK" in r.stdout:
-        _run("gh auth setup-git", timeout=15)
-        _run("git config --global user.email 'test@localhost'", timeout=10, check=False)
-        _run("git config --global user.name 'CI'", timeout=10, check=False)
-        return
-    wait_for_dpkg_lock()
-    log.info("Installing GitHub CLI...")
-    _run(
-        "if ! command -v gh >/dev/null; then "
-        "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wget >/dev/null && "
-        "mkdir -p -m 755 /etc/apt/keyrings && "
-        "wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg > /etc/apt/keyrings/githubcli-archive-keyring.gpg && "
-        "chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && "
-        'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] '
-        'https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list && '
-        "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gh >/dev/null; fi",
-        timeout=180,
-    )
+
+    r = _run("command -v gh >/dev/null 2>&1 && echo GH_BIN_OK", timeout=10, check=False)
+    if "GH_BIN_OK" not in r.stdout:
+        wait_for_dpkg_lock()
+        log.info("Installing GitHub CLI...")
+        _run(
+            "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wget >/dev/null && "
+            "mkdir -p -m 755 /etc/apt/keyrings && "
+            "wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg > /etc/apt/keyrings/githubcli-archive-keyring.gpg && "
+            "chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && "
+            'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] '
+            'https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list && '
+            "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gh >/dev/null",
+            timeout=180,
+        )
+
+    _run("gh auth setup-git", timeout=15, check=False)
+    _run("git config --global user.email 'test@localhost'", timeout=10, check=False)
+    _run("git config --global user.name 'CI'", timeout=10, check=False)
+
     r = _run("GH_TOKEN=$GH_TOKEN gh auth status >/dev/null 2>&1 && echo GH_OK", timeout=15, check=False)
     if "GH_OK" in r.stdout:
-        _run("gh auth setup-git", timeout=15)
-        _run("git config --global user.email 'test@localhost'", timeout=10, check=False)
-        _run("git config --global user.name 'CI'", timeout=10, check=False)
         return
     last_err = ""
     for attempt in range(1, 4):
@@ -185,12 +183,6 @@ def ensure_github_cli(token: str) -> None:
             time.sleep(5 * attempt)
     else:
         raise RuntimeError(f"gh auth failed after 3 attempts: {last_err}")
-    r = _run("gh auth status 2>&1 && echo GH_OK", timeout=15, check=False)
-    if "GH_OK" not in r.stdout:
-        raise RuntimeError("gh auth status check failed on worker VM")
-    _run("gh auth setup-git", timeout=15)
-    _run("git config --global user.email 'test@localhost'", timeout=10, check=False)
-    _run("git config --global user.name 'CI'", timeout=10, check=False)
 def ensure_debian_client_deps() -> bool:
     r = inner_ssh(DEBIAN_IP, 'python3 -c "import playwright; print(\\"PLAYWRIGHT_OK\\")" 2>/dev/null')
     if "PLAYWRIGHT_OK" in r.stdout:
