@@ -292,10 +292,13 @@ def _quick_mint_cycle_check(mint_url: str, timeout: int = 60) -> bool:
 def select_test_mint(forced_mint: str = "auto") -> str:
     """Probe the backend and select the best mint with failover.
 
-    Strategy:
+    Strategy (backend-aware):
     1. If forced, use that mint directly (no failover).
-    2. Try CDK V2 (if backend supports V2 keysets) with mint_cycle validation.
-    3. Try Nutshell V1 (V1 keysets for Go/gonuts) with mint_cycle validation.
+    2. If Rust backend: try CDK V2 with mint_cycle validation.
+       If Go backend: skip CDK V2 — gonuts v0.7.1 loads V2 keysets but
+       serializes them wrong in /swap requests (NUT-02 ID length mismatch).
+    3. Try Nutshell V1 (V1 keysets, works with all backends) with mint_cycle
+       validation.
     4. Fall back to public testnut.cashu.exchange.
 
     At each step, if the mint_cycle fails, we move to the next option.
@@ -305,6 +308,8 @@ def select_test_mint(forced_mint: str = "auto") -> str:
         "nutshell-v2": (NUTSHELL_V2_MINT_URL, V2_TESTNUT_NUTSHELL_LAN),
         "nutshell-v1": (NUTSHELL_V1_MINT_URL, V1_TESTNUT_NUTSHELL_LAN),
     }
+
+    backend_type = os.environ.get("TOLLGATE_BACKEND", "go")
 
     if forced_mint != "auto":
         urls = MINT_ALIASES.get(forced_mint)
@@ -318,49 +323,56 @@ def select_test_mint(forced_mint: str = "auto") -> str:
 
     PUBLIC_TESTNUTS = "https://testnut.cashu.exchange"
 
+    # --- CDK V2 probe (Rust backend only) ---
+    # Go/gonuts v0.7.1 loads V2 keysets at startup but serializes them wrong
+    # in /swap requests: CDK rejects with "NUT02: ID length invalid, expected
+    # 8 bytes (short/v1) or 33 bytes (v2)".  Skip CDK V2 for Go entirely.
     cdk_ok = False
-    try:
-        probe_script = textwrap.dedent(f"""\
-            import os, json, time, sys
-            sys.path.insert(0, '{TEST_DIR}')
-            from lib.router import Router
-            from lib.backend import BackendConfig
-            r = Router(host=os.environ['TOLLGATE_SSH_HOST'], phone_ip='', phone_mac='', domain='',
-                       backend=BackendConfig(os.environ.get('TOLLGATE_BACKEND', 'go')))
-            r.ssh('cat /etc/tollgate/config.json > /tmp/config.json.bak 2>/dev/null || true')
-            r.replace_mints(['{CDK_MINT_URL}'])
-            time.sleep(8)
-            code = r.api_status('/')
-            body = r.api_body('/') or ''
-            try:
-                data = json.loads(body)
-            except Exception:
-                data = {{}}
-            has_pps = any(isinstance(t, list) and len(t) > 0 and t[0] == 'price_per_step'
-                          for t in data.get('tags', []))
-            print(f'v2_probe={{code}} full_merchant={{has_pps}}')
-        """)
-        probe_path = "/tmp/v2-probe.py"
-        Path(probe_path).write_text(probe_script)
+    if backend_type == "rust":
+        try:
+            probe_script = textwrap.dedent(f"""\
+                import os, json, time, sys
+                sys.path.insert(0, '{TEST_DIR}')
+                from lib.router import Router
+                from lib.backend import BackendConfig
+                r = Router(host=os.environ['TOLLGATE_SSH_HOST'], phone_ip='', phone_mac='', domain='',
+                           backend=BackendConfig(os.environ.get('TOLLGATE_BACKEND', 'go')))
+                r.ssh('cat /etc/tollgate/config.json > /tmp/config.json.bak 2>/dev/null || true')
+                r.replace_mints(['{CDK_MINT_URL}'])
+                time.sleep(8)
+                code = r.api_status('/')
+                body = r.api_body('/') or ''
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    data = {{{{}}}}
+                has_pps = any(isinstance(t, list) and len(t) > 0 and t[0] == 'price_per_step'
+                              for t in data.get('tags', []))
+                print(f'v2_probe={{{{code}}}} full_merchant={{{{has_pps}}}}')
+            """)
+            probe_path = "/tmp/v2-probe.py"
+            Path(probe_path).write_text(probe_script)
 
-        r = _run(
-            f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
-            f"python3 {probe_path} 2>&1",
-            timeout=120,
-            check=False,
-        )
-        stdout = (r.stdout or "").strip()
-        if r.returncode != 0:
-            log.warning("V2 probe script failed (rc=%d): %s", r.returncode, stdout[-500:])
-        elif "v2_probe=200" in stdout and "full_merchant=True" in stdout:
-            cdk_ok = True
-            log.info("Backend supports V2 keysets — CDK V2 candidate")
-        elif "v2_probe=200" in stdout:
-            log.info("Backend returned 200 with CDK V2 but not full merchant — V2 likely unsupported")
-        else:
-            log.warning("V2 probe: unexpected output (rc=%d): %s", r.returncode, stdout[-300:])
-    except Exception as exc:
-        log.warning("V2 probe failed: %s", exc)
+            r = _run(
+                f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
+                f"python3 {probe_path} 2>&1",
+                timeout=120,
+                check=False,
+            )
+            stdout = (r.stdout or "").strip()
+            if r.returncode != 0:
+                log.warning("V2 probe script failed (rc=%d): %s", r.returncode, stdout[-500:])
+            elif "v2_probe=200" in stdout and "full_merchant=True" in stdout:
+                cdk_ok = True
+                log.info("Rust backend supports V2 keysets — CDK V2 candidate")
+            elif "v2_probe=200" in stdout:
+                log.info("Rust backend returned 200 with CDK V2 but not full merchant — V2 likely unsupported")
+            else:
+                log.warning("V2 probe: unexpected output (rc=%d): %s", r.returncode, stdout[-300:])
+        except Exception as exc:
+            log.warning("V2 probe failed: %s", exc)
+    else:
+        log.info("Go backend — skipping CDK V2 (gonuts /swap serializes V2 keyset IDs wrong)")
 
     if cdk_ok:
         log.info("Validating CDK V2 mint with mint cycle...")
@@ -370,6 +382,7 @@ def select_test_mint(forced_mint: str = "auto") -> str:
             return V2_TESTNUT_CDK_LAN
         log.warning("CDK V2 mint probe passed but mint cycle FAILED — trying next mint")
 
+    # --- Nutshell V1 (works with all backends) ---
     nutshell_v1_ok = False
     for attempt in range(10):
         try:
