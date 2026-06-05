@@ -24,10 +24,6 @@ echo "==> Cloning tollgate-module-basic-go at ${GIT_HASH}..."
 git clone --depth 1 --branch "$GIT_HASH" "$REPO" "$TMPDIR/repo" 2>/dev/null || \
   git clone "$REPO" "$TMPDIR/repo" && git -C "$TMPDIR/repo" checkout "$GIT_HASH"
 
-# Temporary: patch gonuts to bolt11-tolerant version (see #156)
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-"$SCRIPT_DIR/patch-gonuts-version.sh" "$TMPDIR/repo"
-
 cd "$TMPDIR/repo"
 mkdir -p bin
 
