@@ -64,7 +64,7 @@ def write_env_file(config: WorkerConfig) -> None:
         f"TOLLGATE_VIRTUAL_LAB=1\n"
         f"TOLLGATE_LAB_TYPE=gcloud\n"
         f"TOLLGATE_VIRTUAL_GATEWAY={OPENWRT_IP}\n"
-        f"TOLLGATE_NDS_PORTAL_PORT=80\n"
+        f"TOLLGATE_NDS_PORTAL_PORT=2050\n"
         f"TOLLGATE_TEST_MINT_URL={CDK_MINT_URL}\n"
         f"TOLLGATE_CDK_MINT_URL={CDK_MINT_URL}\n"
         f"TOLLGATE_NUTSHELL_V2_MINT_URL={NUTSHELL_V2_MINT_URL}\n"

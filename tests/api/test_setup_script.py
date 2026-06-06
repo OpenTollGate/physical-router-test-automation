@@ -7,6 +7,8 @@ Verifies that the uci-defaults setup script (99-tollgate-setup):
 - Sets gatewaydomainname and gatewayport correctly
 """
 
+import os
+
 import pytest
 
 pytestmark = [pytest.mark.api, pytest.mark.extended]
@@ -49,8 +51,8 @@ def test_setup_nodogsplash_gatewayport(router):
     ).strip()
     if not port:
         pytest.skip("gatewayport not set (pre-PR I firmware)")
-    if port != "2050":
-        pytest.skip(f"gatewayport is {port}, not 2050 (cloud lab uses different port)")
+    expected = os.environ.get("TOLLGATE_NDS_PORTAL_PORT", "2050")
+    assert port == expected, f"Expected gatewayport {expected}, got {port}"
 
 
 def test_setup_nodogsplash_idempotent(router):

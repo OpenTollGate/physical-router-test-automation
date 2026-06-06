@@ -107,6 +107,23 @@ def _finish_pending_step() -> None:
         if "duration_ms" not in entry and "_start" in entry:
             entry["duration_ms"] = round((now - entry["_start"]) * 1000)
             entry.pop("_start", None)
+
+NDS_EXPECTED_GATEWAYPORT = 2050
+NDS_EXPECTED_GATEWAYDOMAINNAME = "TollGate.lan"
+
+
+def _fix_nodogsplash_gatewayport() -> None:
+    _run(
+        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o ControlPersist=60 -o ControlMaster=auto -o ControlPath=/tmp/ssh-nds-%r@%h:%p "
+        f"root@{OPENWRT_IP} "
+        f'"uci set nodogsplash.@nodogsplash[0].gatewayport={NDS_EXPECTED_GATEWAYPORT} && '
+        f'uci set nodogsplash.@nodogsplash[0].gatewaydomainname={NDS_EXPECTED_GATEWAYDOMAINNAME} && '
+        f'uci commit nodogsplash"',
+        timeout=30, check=False,
+    )
+
+
 def run_worker(config: WorkerConfig) -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -220,6 +237,10 @@ def run_worker(config: WorkerConfig) -> int:
             log.info("[8/10] Wait for backend health")
             wait_for_backend()
             _step_end("backend-health")
+
+            _step_start("fix-nodogsplash-port")
+            _fix_nodogsplash_gatewayport()
+            _step_end("fix-nodogsplash-port")
 
             if config.portal != "builtin":
                 _step_start("portal-overlay")
