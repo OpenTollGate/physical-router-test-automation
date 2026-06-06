@@ -408,6 +408,10 @@ class TokenPool:
                     return token
         return self._minter.mint(amount, legacy=legacy, timeout=timeout, retries=retries)
 
+    @property
+    def mint_url(self) -> str:
+        return self._minter_url
+
     def ensure_mint_available(self, timeout: int = 15):
         return self._minter.ensure_mint_available(timeout=timeout)
 
