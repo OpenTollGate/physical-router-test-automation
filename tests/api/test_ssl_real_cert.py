@@ -152,6 +152,7 @@ def _apply_real_cert(router, real_cert_paths: tuple[Path, Path], domain: str) ->
     assert domain in dhcp, dhcp
 
 
+@pytest.mark.extended
 def test_ssl_real_cert_apply_via_acme(router, real_cert_paths):
     _skip_without_cloudflare()
     domain = _domain()
@@ -177,6 +178,7 @@ def test_ssl_real_cert_apply_via_acme(router, real_cert_paths):
     assert domain in subject or domain in san, f"subject={subject}\nsan={san}"
 
 
+@pytest.mark.extended
 def test_ssl_real_cert_remove_cleans_state(router, real_cert_paths):
     _skip_without_cloudflare()
     domain = _domain()

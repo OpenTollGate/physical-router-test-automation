@@ -21,6 +21,7 @@ pytestmark = [pytest.mark.api, pytest.mark.extended, pytest.mark.go_only]
 from lib.helpers import skip_if_no_cli_socket
 
 
+@pytest.mark.extended
 def test_cli_json_config_schema(router):
     """Test if tollgate --json config schema returns valid JSON schema.
 
@@ -73,6 +74,7 @@ def test_cli_json_config_schema(router):
     log.info(f"Config schema is valid JSON with {len(schema)} field definitions")
 
 
+@pytest.mark.extended
 def test_cli_json_config_get(router):
     """Test if tollgate --json config get returns valid config JSON.
 
@@ -109,6 +111,7 @@ def test_cli_json_config_get(router):
     log.info(f"Config output is valid JSON with keys: {list(config.keys())}")
 
 
+@pytest.mark.extended
 def test_cli_json_health(router):
     """Test if tollgate --json health returns valid health JSON.
 
@@ -145,6 +148,7 @@ def test_cli_json_health(router):
     log.info(f"Health output is valid JSON with keys: {list(health.keys())}")
 
 
+@pytest.mark.extended
 def test_cli_json_config_set_roundtrip(router):
     """Test if config set via --json works and persists.
 

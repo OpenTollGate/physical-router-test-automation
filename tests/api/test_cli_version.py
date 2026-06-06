@@ -30,27 +30,32 @@ def version(router):
     return router.get_tollgate_version()
 
 
+@pytest.mark.smoke
 def test_version_succeeds(version):
     assert version.get("success") is True, f"version command failed: {version}"
 
 
+@pytest.mark.smoke
 def test_version_has_message(version):
     msg = version.get("message", "")
     assert msg, f"Missing 'message' in version response: {version}"
 
 
+@pytest.mark.smoke
 def test_version_message_has_fields(version):
     msg = version.get("message", "")
     for field in ("version:", "commit:", "build_time:", "go_version:"):
         assert field in msg, f"Missing '{field}' in version message: {msg}"
 
 
+@pytest.mark.smoke
 def test_version_message_has_openwrt(version):
     msg = version.get("message", "")
     assert "openwrt" in msg.lower() or "OpenWrt" in msg, \
         f"Missing OpenWrt version in message: {msg}"
 
 
+@pytest.mark.smoke
 def test_version_commit_is_hex(version):
     msg = version.get("message", "")
     for line in msg.split("\n"):

@@ -44,10 +44,12 @@ def _skip_if_no_welcome_page(router):
 # --- Welcome page checks ---
 
 
+@pytest.mark.extended
 def test_welcome_html_exists(router):
     _skip_if_no_welcome_page(router)
 
 
+@pytest.mark.extended
 def test_welcome_html_contains_target_url(router):
     _skip_if_no_welcome_page(router)
     content = router.ssh(f"cat {CAPTIVE_PORTAL_DIR}/welcome.html 2>/dev/null")
@@ -55,6 +57,7 @@ def test_welcome_html_contains_target_url(router):
         f"welcome.html should contain target URL '{DEFAULT_REDIRECT_URL}'"
 
 
+@pytest.mark.extended
 def test_welcome_html_has_auto_redirect(router):
     _skip_if_no_welcome_page(router)
     content = router.ssh(f"cat {CAPTIVE_PORTAL_DIR}/welcome.html 2>/dev/null")
@@ -64,6 +67,7 @@ def test_welcome_html_has_auto_redirect(router):
         "welcome.html should have a countdown for auto-redirect"
 
 
+@pytest.mark.extended
 def test_welcome_html_has_intent_url(router):
     _skip_if_no_welcome_page(router)
     content = router.ssh(f"cat {CAPTIVE_PORTAL_DIR}/welcome.html 2>/dev/null")
@@ -71,6 +75,7 @@ def test_welcome_html_has_intent_url(router):
         "welcome.html should have intent URL for Android Chrome escape"
 
 
+@pytest.mark.extended
 def test_welcome_html_has_clickable_link(router):
     _skip_if_no_welcome_page(router)
     content = router.ssh(f"cat {CAPTIVE_PORTAL_DIR}/welcome.html 2>/dev/null")
@@ -78,6 +83,7 @@ def test_welcome_html_has_clickable_link(router):
         "welcome.html should have clickable link to target URL"
 
 
+@pytest.mark.extended
 def test_welcome_html_has_pwa_section(router):
     _skip_if_no_welcome_page(router)
     content = router.ssh(f"cat {CAPTIVE_PORTAL_DIR}/welcome.html 2>/dev/null")
@@ -88,6 +94,7 @@ def test_welcome_html_has_pwa_section(router):
 # --- Balance page redirect ---
 
 
+@pytest.mark.extended
 def test_balance_html_redirects_to_welcome(router):
     _skip_if_no_welcome_page(router)
     content = router.ssh(f"cat {CAPTIVE_PORTAL_DIR}/balance.html 2>/dev/null")
@@ -98,6 +105,7 @@ def test_balance_html_redirects_to_welcome(router):
 # --- Setup script should NOT have redirecturl ---
 
 
+@pytest.mark.extended
 def test_setup_script_no_redirecturl(router):
     setup = router.ssh(
         "cat /etc/uci-defaults/99-tollgate-setup 2>/dev/null || echo MISSING"
@@ -111,6 +119,7 @@ def test_setup_script_no_redirecturl(router):
 # --- NDS webroot symlink ---
 
 
+@pytest.mark.extended
 def test_nds_webroot_links_to_captive_portal(router):
     target = router.ssh("readlink /etc/nodogsplash/htdocs 2>/dev/null").strip()
     assert "tollgate-captive-portal-site" in target, \
@@ -151,6 +160,7 @@ def _client_exec(*args, timeout=10):
     )
 
 
+@pytest.mark.extended
 def test_welcome_html_served_by_nds(router):
     _skip_if_no_welcome_page(router)
     gateway = router.ssh("uci -q get nodogsplash.@nodogsplash[0].gatewayaddress 2>/dev/null || echo 10.99.99.1").strip()

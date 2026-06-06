@@ -5,6 +5,7 @@ import pytest
 pytestmark = [pytest.mark.api, pytest.mark.critical]
 
 
+@pytest.mark.critical
 def test_wrong_mint_rejected(router, cashu):
     wrong_token = cashu.synthetic_wrong_mint_token()
 
@@ -12,6 +13,7 @@ def test_wrong_mint_rejected(router, cashu):
     assert '"success":true' not in resp, "Wrong mint token was ACCEPTED (expected rejection)"
 
 
+@pytest.mark.critical
 def test_wrong_mint_no_auth(router):
     state = router.get_nds_state()
     if not state:

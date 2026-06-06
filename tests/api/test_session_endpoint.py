@@ -11,6 +11,7 @@ def _skip_if_degraded(router):
         pytest.skip("Backend not responding (likely degraded mode)")
 
 
+@pytest.mark.extended
 def test_session_response_structure(router):
     _skip_if_degraded(router)
     resp = router.api_body("/balance")
@@ -18,6 +19,7 @@ def test_session_response_structure(router):
     assert isinstance(data, dict), f"Balance response is not a dict: {type(data)}"
 
 
+@pytest.mark.extended
 def test_session_has_remaining_or_error(router):
     if router.backend.is_rust:
         pytest.skip("Rust v1 session API format differs from Go (Amperstrand/tollgate-rs#42)")
@@ -28,6 +30,7 @@ def test_session_has_remaining_or_error(router):
         f"Balance response missing expected fields: {resp[:200]}"
 
 
+@pytest.mark.extended
 def test_session_with_client_ip(router):
     _skip_if_degraded(router)
     if not router.phone_ip:

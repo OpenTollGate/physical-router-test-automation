@@ -45,6 +45,7 @@ def wallet_info(router):
     return info
 
 
+@pytest.mark.extended
 def test_wallet_balance_increases_after_payment(initial_balance, post_payment_balance):
     assert post_payment_balance.get("success") is True, \
         f"Post-payment balance check failed: {post_payment_balance}"
@@ -53,6 +54,7 @@ def test_wallet_balance_increases_after_payment(initial_balance, post_payment_ba
         f"Balance did not increase after payment: before={initial_balance}, after={new_balance}"
 
 
+@pytest.mark.extended
 def test_wallet_payout_succeeds(router, paid_token):
     resp = router.cli_command("wallet", args=["payout"])
     if resp.get("success") is True:
@@ -64,6 +66,7 @@ def test_wallet_payout_succeeds(router, paid_token):
         f"Payout command not recognized: {resp}"
 
 
+@pytest.mark.extended
 def test_wallet_send_exercises_keyset_derivation(router, paid_token):
     post_payment_balance = router.get_wallet_balance()
     balance = post_payment_balance.get("data", {}).get("balance_sats", 0)
@@ -101,6 +104,7 @@ def test_wallet_send_exercises_keyset_derivation(router, paid_token):
             f"Send response token is not a string: {data}"
 
 
+@pytest.mark.extended
 def test_wallet_info_shows_mint_urls(wallet_info):
     assert wallet_info.get("success") is True, \
         f"Wallet info failed: {wallet_info}"

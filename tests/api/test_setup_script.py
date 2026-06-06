@@ -20,6 +20,7 @@ def _skip_if_no_setup_script(router):
         pytest.skip("uci-defaults script already consumed or not present")
 
 
+@pytest.mark.extended
 def test_setup_uhttpd_conditional_https(router):
     _skip_if_no_setup_script(router)
     setup = router.ssh("cat /etc/uci-defaults/99-tollgate-setup 2>/dev/null")
@@ -27,6 +28,7 @@ def test_setup_uhttpd_conditional_https(router):
         "setup_uhttpd should configure HTTPS listener"
 
 
+@pytest.mark.extended
 def test_setup_hostname_applied_to_kernel(router):
     hostname_uci = router.ssh("uci -q get system.@system[0].hostname 2>/dev/null").strip()
     hostname_kernel = router.ssh("cat /proc/sys/kernel/hostname").strip()
@@ -34,6 +36,7 @@ def test_setup_hostname_applied_to_kernel(router):
         f"UCI hostname '{hostname_uci}' != kernel hostname '{hostname_kernel}'"
 
 
+@pytest.mark.extended
 def test_setup_nodogsplash_gatewaydomainname(router):
     _skip_if_no_setup_script(router)
     domain = router.ssh(
@@ -44,6 +47,7 @@ def test_setup_nodogsplash_gatewaydomainname(router):
     assert domain == "TollGate.lan", f"Expected TollGate.lan, got '{domain}'"
 
 
+@pytest.mark.extended
 def test_setup_nodogsplash_gatewayport(router):
     _skip_if_no_setup_script(router)
     port = router.ssh(
@@ -55,6 +59,7 @@ def test_setup_nodogsplash_gatewayport(router):
     assert port == expected, f"Expected gatewayport {expected}, got {port}"
 
 
+@pytest.mark.extended
 def test_setup_nodogsplash_idempotent(router):
     _skip_if_no_setup_script(router)
     users_before = router.ssh(

@@ -5,6 +5,7 @@ from lib.helpers import parse_json_or_fail, post_payment_event
 pytestmark = [pytest.mark.api, pytest.mark.critical]
 
 
+@pytest.mark.critical
 def test_notice_event_on_invalid_token(router):
     resp_text = post_payment_event(router, "cashuAinvalid")
     data = parse_json_or_fail(resp_text, "error response", skip=True)
@@ -16,6 +17,7 @@ def test_notice_event_on_invalid_token(router):
         assert resp_text, "Empty response for invalid payment"
 
 
+@pytest.mark.critical
 def test_notice_event_on_wrong_mint(router, cashu):
     wrong_token = cashu.synthetic_wrong_mint_token()
 
@@ -31,6 +33,7 @@ def test_notice_event_on_wrong_mint(router, cashu):
             assert code_tags[0][1], "Notice event has empty code tag"
 
 
+@pytest.mark.critical
 def test_notice_event_has_required_tags(router, cashu):
     wrong_token = cashu.synthetic_wrong_mint_token()
     resp = post_payment_event(router, wrong_token)

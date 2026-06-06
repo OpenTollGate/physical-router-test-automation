@@ -134,6 +134,7 @@ def _restart_and_wait(router, timeout=15):
 # ── test 1: auth delay with welcome.html ────────────────────────────────
 
 
+@pytest.mark.extended
 def test_payment_auth_delay_with_redirect(router, cashu):
     """Payment with welcome.html configured: auth should be delayed.
 
@@ -214,6 +215,7 @@ def test_payment_auth_delay_with_redirect(router, cashu):
 # ── test 2: no auth delay without redirect ───────────────────────────────
 
 
+@pytest.mark.extended
 def test_payment_without_redirect_no_auth_delay(router, cashu):
     """When redirect_url is NOT set, payment authenticates immediately.
 

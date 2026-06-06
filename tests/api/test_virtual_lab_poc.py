@@ -36,6 +36,7 @@ def _netns_exec(*args, timeout=10):
     )
 
 
+@pytest.mark.smoke
 def test_container_reaches_openwrt_gateway(adb, request):
     _skip_unless_virtual_lab()
 

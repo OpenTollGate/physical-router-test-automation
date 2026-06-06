@@ -23,6 +23,7 @@ def backend_logs(router):
     return router.get_tollgate_logs(lines=500)
 
 
+@pytest.mark.extended
 def test_mint_api_responds_within_timeout(router):
     """Mint API calls must complete in <5s. Before the TLS 1.2 fix,
     Go's TLS 1.3 ClientHello would hang indefinitely on the router's
@@ -34,6 +35,7 @@ def test_mint_api_responds_within_timeout(router):
     assert elapsed < 5.0, f"API call took {elapsed:.1f}s — possible TLS hang"
 
 
+@pytest.mark.extended
 def test_no_tls_timeout_in_logs(backend_logs):
     """Backend logs should not contain TLS handshake timeout errors."""
     tls_errors = re.findall(
@@ -44,6 +46,7 @@ def test_no_tls_timeout_in_logs(backend_logs):
         pytest.fail(f"TLS errors found in logs: {tls_errors[:5]}")
 
 
+@pytest.mark.extended
 def test_mint_info_endpoint_reachable(router):
     """The test mint's /v1/info must be reachable from the router."""
     result = router.ssh(

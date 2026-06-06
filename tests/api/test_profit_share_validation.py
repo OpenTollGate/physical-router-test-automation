@@ -86,6 +86,7 @@ def profit_share_config_guard(router):
 
 # ── read-only tests ─────────────────────────────────────────────────
 
+@pytest.mark.extended
 def test_profit_share_config_has_valid_structure(router):
     """Config must have profit_share as a list of objects with 'factor' keys."""
     cfg = _read_config(router)
@@ -99,6 +100,7 @@ def test_profit_share_config_has_valid_structure(router):
         assert "factor" in entry, f"profit_share[{i}] missing 'factor' key: {list(entry.keys())}"
 
 
+@pytest.mark.extended
 def test_profit_share_factors_sum_to_one(router):
     """All factor values in profit_share must sum to 1.0 ± 1e-6."""
     cfg = _read_config(router)
@@ -110,6 +112,7 @@ def test_profit_share_factors_sum_to_one(router):
     )
 
 
+@pytest.mark.extended
 def test_profit_share_no_negative_factors(router):
     """No factor in profit_share may be negative."""
     cfg = _read_config(router)
@@ -120,6 +123,7 @@ def test_profit_share_no_negative_factors(router):
 
 # ── mutating tests (config backup/restore via fixture) ──────────────
 
+@pytest.mark.extended
 def test_profit_share_boot_with_invalid_config(router, profit_share_config_guard):
     """Service must boot when profit_share factors sum to 0.5 (invalid).
 
@@ -155,6 +159,7 @@ def test_profit_share_boot_with_invalid_config(router, profit_share_config_guard
     )
 
 
+@pytest.mark.extended
 def test_profit_share_boot_with_empty_list(router, profit_share_config_guard):
     """Service must boot when profit_share is an empty list.
 
@@ -170,6 +175,7 @@ def test_profit_share_boot_with_empty_list(router, profit_share_config_guard):
     assert "tollgate-wrt" in ps_out, "Backend process not running after boot with empty profit_share"
 
 
+@pytest.mark.extended
 def test_profit_share_boot_with_negative_factor(router, profit_share_config_guard):
     """Service must boot when profit_share contains a negative factor.
 
@@ -188,6 +194,7 @@ def test_profit_share_boot_with_negative_factor(router, profit_share_config_guar
     assert "tollgate-wrt" in ps_out, "Backend process not running after boot with negative factor"
 
 
+@pytest.mark.extended
 def test_profit_share_multiple_shares_sum_correctly(router, profit_share_config_guard):
     """Write 3 shares (0.5, 0.3, 0.2), restart, verify they survived or were reset."""
     cfg = _read_config(router)

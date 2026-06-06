@@ -58,6 +58,7 @@ def _decode_token(token: str) -> list:
 # a) Default mint — baseline
 # ---------------------------------------------------------------------------
 
+@pytest.mark.extended
 def test_default_mint_token_accepted(router, cashu):
     """Baseline: whatever mint the cashu fixture is configured with works.
 
@@ -84,6 +85,7 @@ def test_default_mint_token_accepted(router, cashu):
 # b) Nutshell wallet + V1 mint
 # ---------------------------------------------------------------------------
 
+@pytest.mark.extended
 def test_nutshell_wallet_v1_mint_token(router):
     """CashuMint (Python cashu CLI) against V1 keyset mint.
 
@@ -110,6 +112,7 @@ def test_nutshell_wallet_v1_mint_token(router):
 # c) CDK wallet + V2 mint
 # ---------------------------------------------------------------------------
 
+@pytest.mark.extended
 def test_cdk_wallet_v2_mint_token(router):
     """CdkCliWallet (Rust cdk-cli) against V2 keyset mint.
 
@@ -145,6 +148,7 @@ def test_cdk_wallet_v2_mint_token(router):
 # d) create_minter factory
 # ---------------------------------------------------------------------------
 
+@pytest.mark.extended
 def test_create_minter_factory_produces_working_wallet(router, cashu):
     """create_minter() factory returns a wallet that can mint accepted tokens.
 
@@ -174,6 +178,7 @@ def test_create_minter_factory_produces_working_wallet(router, cashu):
 # e) CDK wallet + V1 mint (cross-compat)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.extended
 def test_cdk_wallet_v1_mint_compat(router):
     """CdkCliWallet against V1 mint — cross-compatibility test.
 
@@ -203,6 +208,7 @@ def test_cdk_wallet_v1_mint_compat(router):
 # f) Nutshell wallet + V2 mint
 # ---------------------------------------------------------------------------
 
+@pytest.mark.extended
 def test_nutshell_wallet_v2_mint_token(router):
     """CashuMint (Python cashu CLI) against V2 keyset mint.
 
@@ -242,6 +248,7 @@ def test_nutshell_wallet_v2_mint_token(router):
 # g) Token format consistency
 # ---------------------------------------------------------------------------
 
+@pytest.mark.extended
 def test_minted_token_format_consistency(router, cashu):
     """All available wallets produce cashuA tokens with valid proof structure.
 
@@ -342,6 +349,7 @@ def _assert_token_format(token: str, label: str):
 # h) Multi-mint cross-acceptance rejection
 # ---------------------------------------------------------------------------
 
+@pytest.mark.extended
 def test_multi_mint_payment_not_cross_accepted(router, cashu):
     """Tokens from a wrong/unconfigured mint are rejected by TollGate.
 

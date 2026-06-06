@@ -9,6 +9,7 @@ def _skip_if_no_tollgate_portal(router):
         pytest.skip("tollgate package not installed")
 
 
+@pytest.mark.extended
 def test_ipk_install_deploys_files(router):
     _skip_if_no_tollgate_portal(router)
 
@@ -28,6 +29,7 @@ def test_ipk_install_deploys_files(router):
                 "No admin SPA found at /www/tollgate/ or /www/net4sats/"
 
 
+@pytest.mark.extended
 def test_ipk_install_rpcd_responds(router):
     plugin = router.ssh("test -x /usr/libexec/rpcd/tollgate && echo YES || echo NO")
     if "YES" not in plugin:
@@ -41,6 +43,7 @@ def test_ipk_install_rpcd_responds(router):
         f"ubus config_schema failed: {schema[:200]}"
 
 
+@pytest.mark.extended
 def test_ipk_uninstall_removes_files(router):
     installed = router.ssh("opkg list-installed 2>/dev/null | grep tollgate-captive-portal && echo YES || echo NO")
     if "YES" not in installed:

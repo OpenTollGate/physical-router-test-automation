@@ -27,11 +27,13 @@ def wgm_logs(router):
     return router.get_tollgate_logs(lines=500)
 
 
+@pytest.mark.smoke
 def test_wgm_startup_check_executes(wgm_logs):
     """WGM startup connectivity check runs during daemon startup."""
     _skip_if_no_startup_check(wgm_logs)
 
 
+@pytest.mark.smoke
 def test_wgm_startup_completes_cleanly(wgm_logs):
     """Startup check reaches a terminal state (no STA, or STA verified)."""
     _skip_if_no_startup_check(wgm_logs)
@@ -46,6 +48,7 @@ def test_wgm_startup_completes_cleanly(wgm_logs):
         "WGM startup check did not reach a terminal state"
 
 
+@pytest.mark.smoke
 def test_wgm_no_panics_after_startup(wgm_logs):
     """WGM startup produces no panics or fatal errors in backend logs."""
     _skip_if_no_startup_check(wgm_logs)
@@ -54,6 +57,7 @@ def test_wgm_no_panics_after_startup(wgm_logs):
     assert not panics, f"Panics detected in backend logs: {panics}"
 
 
+@pytest.mark.smoke
 def test_wgm_grace_period_activates(wgm_logs):
     """WGM main loop starts with grace period after startup check."""
     _skip_if_no_startup_check(wgm_logs)
@@ -62,6 +66,7 @@ def test_wgm_grace_period_activates(wgm_logs):
         "WGM startup grace period not logged"
 
 
+@pytest.mark.smoke
 def test_wgm_backend_responsive(router, wgm_logs):
     """Backend API remains healthy after WGM startup sequence."""
     _skip_if_no_startup_check(wgm_logs)

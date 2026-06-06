@@ -10,6 +10,7 @@ def _skip_if_no_portal(router):
         pytest.skip("Captive portal files not deployed")
 
 
+@pytest.mark.extended
 def test_portal_fetches_real_pricing_from_backend(router):
     _skip_if_no_portal(router)
 

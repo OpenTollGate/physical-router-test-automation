@@ -86,6 +86,7 @@ def degraded_from_full(router, mint_ip_map):
     log.info("Cleaned up iptables rules")
 
 
+@pytest.mark.extended
 def test_cli_balance_after_recovery(router, mint_ip_map):
     """After degraded->full recovery, CLI wallet balance should return
     the real balance from the new merchant, not 0 or an error."""
@@ -121,6 +122,7 @@ def test_cli_balance_after_recovery(router, mint_ip_map):
         unblock_mints(router, rules)
 
 
+@pytest.mark.extended
 def test_cli_wallet_info_after_recovery(router, mint_ip_map):
     """After recovery, wallet info should show real mint data, not empty."""
     skip_if_no_degraded_support(router)
@@ -157,6 +159,7 @@ def test_cli_wallet_info_after_recovery(router, mint_ip_map):
         unblock_mints(router, rules)
 
 
+@pytest.mark.extended
 def test_http_endpoints_degraded_responses(router, mint_ip_map):
     """In degraded mode, every HTTP endpoint should return a structured
     response (not 500 or panic)."""
@@ -189,6 +192,7 @@ def test_http_endpoints_degraded_responses(router, mint_ip_map):
         unblock_mints(router, rules)
 
 
+@pytest.mark.extended
 def test_http_endpoints_work_after_recovery(router, mint_ip_map):
     """After recovery, all endpoints return normal responses."""
     skip_if_no_degraded_support(router)
@@ -220,6 +224,7 @@ def test_http_endpoints_work_after_recovery(router, mint_ip_map):
         unblock_mints(router, rules)
 
 
+@pytest.mark.extended
 def test_concurrent_requests_during_swap(router, mint_ip_map):
     """Send concurrent GET / requests during degraded->full recovery.
     No request should get a 500 or connection error."""
@@ -265,6 +270,7 @@ def test_concurrent_requests_during_swap(router, mint_ip_map):
         unblock_mints(router, rules)
 
 
+@pytest.mark.extended
 def test_cli_status_reflects_provider_state(router, mint_ip_map):
     """tollgate status should show wallet_ok=true when full, false when
     degraded, and transition correctly after recovery."""

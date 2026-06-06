@@ -114,6 +114,7 @@ def v2_keysets(mint_keysets):
 # Tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.extended
 def test_mint_keysets_endpoint_returns_valid_structure(mint_keysets):
     """GET /v1/keys returns a list of keysets with id, unit, keys fields.
 
@@ -132,6 +133,7 @@ def test_mint_keysets_endpoint_returns_valid_structure(mint_keysets):
         )
 
 
+@pytest.mark.extended
 def test_keyset_id_format_classification(mint_keysets):
     """Classify each keyset ID as V1, V2, or unknown.
 
@@ -158,6 +160,7 @@ def test_keyset_id_format_classification(mint_keysets):
         "No V1 or V2 keysets found — all keyset IDs are unrecognised"
 
 
+@pytest.mark.extended
 def test_v1_keyset_id_length(v1_keysets):
     """V1 keyset IDs are exactly 16 hex characters (8 bytes).
 
@@ -176,6 +179,7 @@ def test_v1_keyset_id_length(v1_keysets):
         log.info("V1 keyset ID verified: %s", kid)
 
 
+@pytest.mark.extended
 def test_v2_keyset_id_length(v2_keysets):
     """V2 keyset IDs are exactly 66 hex characters (33 bytes).
 
@@ -194,6 +198,7 @@ def test_v2_keyset_id_length(v2_keysets):
         log.info("V2 keyset ID verified: %s", kid)
 
 
+@pytest.mark.extended
 def test_keyset_has_amount_keys(mint_keysets):
     """Each keyset's ``keys`` dict contains standard power-of-2 amounts.
 
@@ -222,6 +227,7 @@ def test_keyset_has_amount_keys(mint_keysets):
              f"({sorted(overlap)}), expected at least 4")
 
 
+@pytest.mark.extended
 def test_minted_token_keyset_id_matches_mint(router, cashu, mint_keyset_ids):
     """A minted token's proof keyset ID must exist in the mint's /v1/keys.
 
@@ -246,6 +252,7 @@ def test_minted_token_keyset_id_matches_mint(router, cashu, mint_keyset_ids):
         log.info("Token proof keyset ID %s validated against mint", proof_id)
 
 
+@pytest.mark.extended
 def test_v1_keyset_id_derivation_format(v1_keysets):
     """V1 keyset ID derivation: ``00`` + first 14 hex of SHA256(raw pubkeys).
 
@@ -293,6 +300,7 @@ def test_v1_keyset_id_derivation_format(v1_keysets):
                 )
 
 
+@pytest.mark.extended
 def test_v2_keyset_id_derivation_format(v2_keysets):
     """V2 keyset ID derivation: ``01`` + SHA256(amount:pubkey pairs).
 
@@ -332,6 +340,7 @@ def test_v2_keyset_id_derivation_format(v2_keysets):
             )
 
 
+@pytest.mark.extended
 def test_discovery_includes_active_keyset_ids(router, mint_keyset_ids):
     """Backend discovery event may contain keyset IDs matching mint's /v1/keys.
 
@@ -368,6 +377,7 @@ def test_discovery_includes_active_keyset_ids(router, mint_keyset_ids):
              len(found_keyset_ids), sorted(found_keyset_ids))
 
 
+@pytest.mark.extended
 def test_payment_proof_keyset_id_accepted(router, cashu):
     """Backend accepts payment tokens regardless of keyset ID version.
 

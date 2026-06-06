@@ -28,6 +28,7 @@ def _discovery_price_tags(discovery):
     return [t for t in tags if isinstance(t, list) and t[0] == "price_per_step"]
 
 
+@pytest.mark.extended
 def test_both_configured_mints_in_discovery(discovery, config, router):
     config_urls = {m.get("url") for m in config.get("accepted_mints", [])}
     if len(config_urls) < 2:
@@ -60,6 +61,7 @@ def test_both_configured_mints_in_discovery(discovery, config, router):
         )
 
 
+@pytest.mark.extended
 def test_v1_mint_payment_accepted(router, cashu):
     require_client_identity(router)
     token = cashu.mint(amount=4, legacy=True)
@@ -70,6 +72,7 @@ def test_v1_mint_payment_accepted(router, cashu):
         f"V1 mint payment rejected: {str(resp)[:300]}"
 
 
+@pytest.mark.extended
 def test_v2_mint_payment_accepted(router):
     require_client_identity(router)
     v2_url = os.environ.get("TOLLGATE_V2_MINT_URL", V2_MINT_URL)
@@ -99,6 +102,7 @@ def test_v2_mint_payment_accepted(router):
         f"V2 mint payment rejected: {str(resp)[:300]}"
 
 
+@pytest.mark.extended
 def test_discovery_has_distinct_price_per_mint(discovery, config):
     price_tags = _discovery_price_tags(discovery)
     if len(price_tags) < 2:
@@ -117,6 +121,7 @@ def test_discovery_has_distinct_price_per_mint(discovery, config):
         assert tag[4].startswith("http"), f"Expected URL at index 4: {tag}"
 
 
+@pytest.mark.extended
 def test_keyset_id_format_in_discovery(discovery):
     v1_pattern = re.compile(r"^00[0-9a-fA-F]{14}$")
     v2_pattern = re.compile(r"^01[0-9a-fA-F]{64}$")

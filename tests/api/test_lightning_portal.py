@@ -73,6 +73,7 @@ def _poll_until_settled(router, quote, timeout_s=45):
     pytest.fail(f"Lightning invoice did not settle within {timeout_s}s (last: {last_status})")
 
 
+@pytest.mark.critical
 def test_ln_invoice_create_and_settle(router):
     """POST /ln-invoice creates a quote, FakeWallet auto-settles, GET confirms settled."""
     _skip_if_no_ln_invoice(router)
@@ -87,6 +88,7 @@ def test_ln_invoice_create_and_settle(router):
     _poll_until_settled(router, quote)
 
 
+@pytest.mark.critical
 def test_ln_invoice_grants_session(router):
     """After Lightning invoice settles, client should have an active session."""
     _skip_if_no_ln_invoice(router)
@@ -116,6 +118,7 @@ def test_ln_invoice_grants_session(router):
     assert has_session, f"No active session found after Lightning payment: {session_resp[:300]}"
 
 
+@pytest.mark.critical
 def test_cashu_and_lightning_both_accepted(router, cashu):
     """Both Cashu tokens and Lightning invoices are valid payment methods.
 

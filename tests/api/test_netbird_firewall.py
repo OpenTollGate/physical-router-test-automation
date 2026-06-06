@@ -26,6 +26,7 @@ def _get_netbird_zone_config(router):
     return out.strip()
 
 
+@pytest.mark.extended
 def test_netbird_zone_exists_in_firewall(router):
     """Verify the netbird zone exists with device wt0."""
     _skip_if_no_netbird_zone(router)
@@ -36,6 +37,7 @@ def test_netbird_zone_exists_in_firewall(router):
         f"Netbird zone does not reference device 'wt0': {out}"
 
 
+@pytest.mark.extended
 def test_netbird_zone_input_policy(router):
     """Verify netbird zone has input='ACCEPT'."""
     _skip_if_no_netbird_zone(router)
@@ -44,6 +46,7 @@ def test_netbird_zone_input_policy(router):
         f"Netbird zone input policy is not ACCEPT: {out}"
 
 
+@pytest.mark.extended
 def test_netbird_zone_forward_policy(router):
     """Verify netbird zone has forward='REJECT'."""
     _skip_if_no_netbird_zone(router)
@@ -52,6 +55,7 @@ def test_netbird_zone_forward_policy(router):
         f"Netbird zone forward policy is not REJECT: {out}"
 
 
+@pytest.mark.extended
 def test_netbird_zone_output_policy(router):
     """Verify netbird zone has output='ACCEPT'."""
     _skip_if_no_netbird_zone(router)
@@ -60,6 +64,7 @@ def test_netbird_zone_output_policy(router):
         f"Netbird zone output policy is not ACCEPT: {out}"
 
 
+@pytest.mark.extended
 def test_netbird_zone_has_lan_forwarding(router):
     """Verify forwarding from netbird to lan exists."""
     _skip_if_no_netbird_zone(router)
@@ -68,6 +73,7 @@ def test_netbird_zone_has_lan_forwarding(router):
         f"No forwarding from netbird to lan found: {out}"
 
 
+@pytest.mark.extended
 def test_netbird_zone_no_wan_forwarding(router):
     """Verify NO forwarding from netbird to wan (security: no internet routing).
 
@@ -80,6 +86,7 @@ def test_netbird_zone_no_wan_forwarding(router):
         f"SECURITY: Found forwarding from netbird to wan: {out}"
 
 
+@pytest.mark.extended
 def test_netbird_zone_has_private_forwarding(router):
     """Verify forwarding from netbird to private zone exists."""
     _skip_if_no_netbird_zone(router)
@@ -88,6 +95,7 @@ def test_netbird_zone_has_private_forwarding(router):
         f"No forwarding from netbird to private zone found: {out}"
 
 
+@pytest.mark.extended
 def test_fw4_include_is_not_broken(router):
     """Verify firewall.tollgate_rules include is not broken.
 
@@ -113,6 +121,7 @@ def test_fw4_include_is_not_broken(router):
         f"fw4 include path {include_path} does not appear to be a shell script: {file_type}"
 
 
+@pytest.mark.extended
 def test_setup_netbird_zone_in_defaults(router):
     """Verify 99-tollgate-setup contains setup_netbird_zone function and it's called."""
     _skip_if_no_netbird_zone(router)
@@ -153,6 +162,7 @@ def test_setup_netbird_zone_in_defaults(router):
         "setup_netbird_zone function exists but is never called in 99-tollgate-setup"
 
 
+@pytest.mark.extended
 def test_netbird_zone_enabled_marker_exists(router):
     """Check if /etc/tollgate/netbird-zone-enabled sentinel file exists."""
     _skip_if_no_netbird_zone(router)

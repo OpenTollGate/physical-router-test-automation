@@ -8,6 +8,7 @@ from lib.helpers import is_session_event, is_mac_lookup_failure, require_client_
 pytestmark = [pytest.mark.api, pytest.mark.extended]
 
 
+@pytest.mark.extended
 def test_concurrent_payments_single_token(router, cashu):
     require_client_identity(router)
     token = cashu.mint(3)
@@ -38,6 +39,7 @@ def test_concurrent_payments_single_token(router, cashu):
     assert successes + errors == 2, f"Unexpected results: {results}"
 
 
+@pytest.mark.extended
 def test_concurrent_payments_different_tokens(router, cashu):
     pytest.xfail(
         "Go backend wallet.Receive is not concurrency-safe yet: parallel distinct "

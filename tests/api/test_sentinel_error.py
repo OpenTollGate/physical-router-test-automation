@@ -19,6 +19,7 @@ log = logging.getLogger("tollgate.sentinel_error")
 pytestmark = [pytest.mark.api, pytest.mark.extended]
 
 
+@pytest.mark.extended
 def test_duplicate_token_returns_error_not_crash(router, cashu):
     """Submit the same valid token twice. The second attempt must return
     an error response (not 500 crash) with a recognizable error indicator."""

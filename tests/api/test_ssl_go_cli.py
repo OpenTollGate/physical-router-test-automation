@@ -64,6 +64,7 @@ def ssl_clean_state(router):
     _remove_ssl_force(router)
 
 
+@pytest.mark.extended
 def test_ssl_go_cli_initial_clean_state(router):
     assert not router.ssh_bool(f"test -f {SSL_CERT}"), "TollGate SSL cert should not exist initially"
     assert not router.ssh_bool(f"test -d {SSL_BACKUP}"), "SSL backup should not exist initially"
@@ -73,6 +74,7 @@ def test_ssl_go_cli_initial_clean_state(router):
     assert "allow tcp port 443" not in nds, f"NDS should not allow 443 initially: {nds}"
 
 
+@pytest.mark.extended
 def test_ssl_go_cli_status_reports_unconfigured(router):
     status = router.ssh("tollgate ssl status 2>&1")
     assert "SSL" in status
@@ -80,6 +82,7 @@ def test_ssl_go_cli_status_reports_unconfigured(router):
     assert "tollgate ssl apply" in status, status
 
 
+@pytest.mark.extended
 def test_ssl_go_cli_apply_self_signed_configures_uhttpd(router):
     _apply_self_signed(router)
     assert router.uci_get("uhttpd.main.cert") == SSL_CERT
@@ -90,6 +93,7 @@ def test_ssl_go_cli_apply_self_signed_configures_uhttpd(router):
         "uhttpd should listen on 443"
 
 
+@pytest.mark.extended
 def test_ssl_go_cli_apply_self_signed_interactive_prompt_accepts_yes(router):
     out = router.ssh("printf 'y\\n' | tollgate ssl apply 2>&1", timeout=90)
     assert "Apply all?" in out, out
@@ -98,6 +102,7 @@ def test_ssl_go_cli_apply_self_signed_interactive_prompt_accepts_yes(router):
     assert router.uci_get("uhttpd.main.cert") == SSL_CERT
 
 
+@pytest.mark.extended
 def test_ssl_go_cli_apply_self_signed_creates_backup_and_mode(router):
     _apply_self_signed(router)
     assert router.ssh_bool(f"test -d {SSL_BACKUP}"), "SSL backup directory missing"
@@ -105,6 +110,7 @@ def test_ssl_go_cli_apply_self_signed_creates_backup_and_mode(router):
     assert mode == "self-signed", f"Expected self-signed mode backup, got: {mode}"
 
 
+@pytest.mark.extended
 def test_ssl_go_cli_generated_cert_has_expected_cn_san_and_key_permissions(router):
     _apply_self_signed(router)
     hostname = router.uci_get("system.@system[0].hostname")
@@ -139,6 +145,7 @@ def test_ssl_go_cli_generated_cert_has_expected_cn_san_and_key_permissions(route
     assert key_mode == "-rw-------", f"Expected SSL key mode 600, got {key_mode}"
 
 
+@pytest.mark.extended
 def test_ssl_go_cli_allows_https_through_nodogsplash_without_self_signed_dns(router):
     _apply_self_signed(router)
     nds = router.uci_get("nodogsplash.@nodogsplash[0].users_to_router")
@@ -148,6 +155,7 @@ def test_ssl_go_cli_allows_https_through_nodogsplash_without_self_signed_dns(rou
     assert f"{hostname}.lan" not in domains, domains
 
 
+@pytest.mark.extended
 def test_ssl_go_cli_status_reports_self_signed_after_apply(router):
     _apply_self_signed(router)
     status = router.ssh("tollgate ssl status 2>&1")
@@ -155,6 +163,7 @@ def test_ssl_go_cli_status_reports_self_signed_after_apply(router):
     assert "self-signed" in status.lower(), status
 
 
+@pytest.mark.extended
 def test_ssl_go_cli_reapply_keeps_valid_state(router):
     _apply_self_signed(router)
     out = router.ssh("tollgate ssl apply --yes 2>&1", timeout=90)
@@ -166,6 +175,7 @@ def test_ssl_go_cli_reapply_keeps_valid_state(router):
         "uhttpd should still listen on 443"
 
 
+@pytest.mark.extended
 def test_ssl_go_cli_remove_reverts_self_signed_state(router):
     _apply_self_signed(router)
     out = router.ssh("tollgate ssl remove --yes 2>&1", timeout=90)
@@ -176,6 +186,7 @@ def test_ssl_go_cli_remove_reverts_self_signed_state(router):
     assert cert_uci != SSL_CERT, f"uhttpd still points to TollGate cert: {cert_uci}"
 
 
+@pytest.mark.extended
 def test_ssl_go_cli_remove_without_backup_fails_cleanly(router):
     _remove_ssl_force(router)
     out = router.ssh("tollgate ssl remove 2>&1; echo RC=$?", timeout=60)
@@ -185,6 +196,7 @@ def test_ssl_go_cli_remove_without_backup_fails_cleanly(router):
     assert "backup" in out.lower(), out
 
 
+@pytest.mark.extended
 def test_ssl_go_cli_apply_real_certificate_configures_domain_mode(router):
     domain = os.environ.get("TOLLGATE_SSL_TEST_DOMAIN", "tollgate-python-test.example.com")
     key_path = "/tmp/tollgate-test-key.pem"
@@ -209,6 +221,7 @@ def test_ssl_go_cli_apply_real_certificate_configures_domain_mode(router):
     assert domain in dhcp_domains, dhcp_domains
 
 
+@pytest.mark.extended
 def test_ssl_go_cli_remove_reverts_real_certificate_domain_state(router):
     domain = os.environ.get("TOLLGATE_SSL_TEST_DOMAIN", "tollgate-python-test.example.com")
     key_path = "/tmp/tollgate-test-key.pem"

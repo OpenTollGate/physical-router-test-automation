@@ -5,6 +5,7 @@ from lib.helpers import is_session_event, is_mac_lookup_failure, require_client_
 pytestmark = [pytest.mark.api, pytest.mark.critical]
 
 
+@pytest.mark.critical
 def test_pay_rejects_empty_body(router):
     url = router.backend_url("/").replace("[::1]", "127.0.0.1")
     resp_text = router.ssh(
@@ -18,6 +19,7 @@ def test_pay_rejects_empty_body(router):
         pass
 
 
+@pytest.mark.critical
 def test_pay_rejects_invalid_json(router):
     resp_text = router.ssh(
         f"wget -O- --post-data='not-json' "
@@ -27,6 +29,7 @@ def test_pay_rejects_invalid_json(router):
         f"Expected error response for invalid JSON, got: {resp_text[:200]}"
 
 
+@pytest.mark.critical
 def test_pay_rejects_fake_token(router):
     resp_text = router.ssh(
         f"wget -qO- --post-data='cashuBfake_token_not_real' "
@@ -36,6 +39,7 @@ def test_pay_rejects_fake_token(router):
         f"Fake token was accepted: {resp_text[:200]}"
 
 
+@pytest.mark.critical
 def test_pay_success_returns_session(router, cashu):
     require_client_identity(router)
     token = cashu.mint(3)

@@ -250,6 +250,7 @@ def restart_clean(router):
     _restart_and_wait(router)
 
 
+@pytest.mark.extended
 def test_service_health_while_mints_reachable(router, discovery):
     """Verify GET / returns 200 when mints are reachable (baseline).
 
@@ -265,6 +266,7 @@ def test_service_health_while_mints_reachable(router, discovery):
         f"Expected kind 10021 in discovery, got {discovery.get('kind')}"
 
 
+@pytest.mark.extended
 def test_cli_health_shows_mint_status(router):
     """Verify `tollgate status` reports mint health information.
 
@@ -289,6 +291,7 @@ def test_cli_health_shows_mint_status(router):
         )
 
 
+@pytest.mark.extended
 def test_block_all_mints_service_stays_up(router, block_all_mints):
     """Block all mints via iptables and verify service stays up.
 
@@ -329,6 +332,7 @@ def test_block_all_mints_service_stays_up(router, block_all_mints):
         )
 
 
+@pytest.mark.extended
 def test_degraded_mode_returns_retry_notice(router, block_all_mints, cashu):
     """In degraded mode, payment attempts should return a retry notice.
 
@@ -388,6 +392,7 @@ def test_degraded_mode_returns_retry_notice(router, block_all_mints, cashu):
             f"Response missing 'kind' field: {str(resp)[:200]}"
 
 
+@pytest.mark.extended
 def test_mint_recovery_after_unblock(router, block_all_mints, cashu):
     _skip_if_no_degraded_support(router)
 
@@ -447,6 +452,7 @@ def test_mint_recovery_after_unblock(router, block_all_mints, cashu):
             pytest.skip("Cashu mint or payment verification failed")
 
 
+@pytest.mark.extended
 def test_block_one_mint_others_still_work(router, block_one_mint, mint_urls,
                                           cashu, discovery):
     _skip_if_no_degraded_support(router)
@@ -488,6 +494,7 @@ def test_block_one_mint_others_still_work(router, block_one_mint, mint_urls,
             pytest.skip("Cashu mint or payment verification failed")
 
 
+@pytest.mark.extended
 def test_degraded_mode_notice_event_content(router):
     """Verify the degraded mode notice event has correct structure.
 
@@ -523,6 +530,7 @@ def test_degraded_mode_notice_event_content(router):
         f"Content should mention recovery/mints: {content[:200]}"
 
 
+@pytest.mark.extended
 def test_service_survives_restart_in_degraded(router):
     """Verify service can restart successfully while mints are unreachable.
 
@@ -594,6 +602,7 @@ def _is_degraded_api(router):
         return False
 
 
+@pytest.mark.extended
 def test_dynamic_downgrade_without_restart(router, mint_ip_map, cashu):
     """Verify that blocking all mints while running as a full merchant causes
     an active downgrade WITHOUT a service restart.
@@ -653,6 +662,7 @@ def test_dynamic_downgrade_without_restart(router, mint_ip_map, cashu):
         log.info("Unblocked mints after dynamic downgrade test")
 
 
+@pytest.mark.extended
 def test_dynamic_reupgrade_full_lifecycle(router, mint_ip_map, cashu):
     """Full downgrade → upgrade lifecycle in one continuous sequence.
 
@@ -723,6 +733,7 @@ def test_dynamic_reupgrade_full_lifecycle(router, mint_ip_map, cashu):
         raise
 
 
+@pytest.mark.extended
 def test_boltdb_lock_release_on_swap(router, mint_ip_map, cashu):
     """Verify wallet shutdown and BoltDB lock release during merchant swap.
 

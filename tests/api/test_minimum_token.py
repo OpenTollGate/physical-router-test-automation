@@ -7,6 +7,7 @@ from lib.helpers import require_client_identity
 pytestmark = [pytest.mark.api, pytest.mark.critical]
 
 
+@pytest.mark.critical
 def test_minimum_token(router, cashu):
     require_client_identity(router)
     token = cashu.mint(1)

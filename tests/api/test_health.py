@@ -5,6 +5,7 @@ import pytest
 pytestmark = [pytest.mark.api, pytest.mark.smoke]
 
 
+@pytest.mark.smoke
 def test_root_endpoint(router):
     code = router.api_status("/")
     assert code == 200, f"Expected 200, got {code}"
@@ -14,6 +15,7 @@ def test_root_endpoint(router):
     assert '"kind":10021' in body, f"Response missing kind:10021: {body[:200]}"
 
 
+@pytest.mark.smoke
 def test_pay_endpoint(router):
     code = router.api_status("/pay")
     body = router.api_body("/pay")
@@ -25,6 +27,7 @@ def test_pay_endpoint(router):
         assert '"kind"' in body, f"200 but missing kind field: {body[:200]}"
 
 
+@pytest.mark.smoke
 def test_whoami_endpoint(router):
     code = router.api_status("/whoami")
     body = router.api_body("/whoami")
@@ -44,6 +47,7 @@ def test_whoami_endpoint(router):
             f"500 without error message: {body[:200]}"
 
 
+@pytest.mark.smoke
 def test_balance_endpoint(router):
     """Hit /balance and verify it responds.
 

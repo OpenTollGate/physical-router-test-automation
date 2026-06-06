@@ -71,6 +71,7 @@ def _skip_if_no_password_command(router):
     )
 
 
+@pytest.mark.extended
 def test_current_password_generation_available(router):
     """Check if the network private command exists via socket.
 
@@ -82,6 +83,7 @@ def test_current_password_generation_available(router):
     log.info("network password command is available")
 
 
+@pytest.mark.extended
 def test_password_generation_creates_valid_wpa2_password(router):
     """Generate a password via the network command and verify the format.
 
@@ -111,6 +113,7 @@ def test_password_generation_creates_valid_wpa2_password(router):
     log.info("Generated password matches WPA2 pattern: %s", password[:6] + "...")
 
 
+@pytest.mark.extended
 def test_password_format_is_word_word_word_digits(router):
     """Verify the password matches the strict Word-Word-Word-DD pattern.
 

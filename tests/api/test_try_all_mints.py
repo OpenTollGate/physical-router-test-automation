@@ -69,6 +69,7 @@ def _set_mints(router, mint_urls):
     time.sleep(15)
 
 
+@pytest.mark.extended
 def test_first_mint_unreachable_second_works(router, config_guard):
     """Configure [unreachable, working] mints. Service should start as
     full merchant using the second mint, NOT degraded."""
@@ -96,6 +97,7 @@ def test_first_mint_unreachable_second_works(router, config_guard):
     assert price_tags, "Full merchant should have price_per_step tags"
 
 
+@pytest.mark.extended
 def test_wallet_logs_show_mint_fallback(router, config_guard):
     """After try-all-mints fallback, logs should show:
     - "Trying to load wallet with mint" for the unreachable mint
@@ -130,6 +132,7 @@ def test_wallet_logs_show_mint_fallback(router, config_guard):
     )
 
 
+@pytest.mark.extended
 def test_all_mints_unreachable_falls_to_degraded(router, config_guard):
     """Configure [unreachable, unreachable] mints. Service should
     start in degraded mode."""

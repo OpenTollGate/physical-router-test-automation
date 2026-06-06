@@ -30,11 +30,13 @@ def wallet_balance(router):
     return router.get_wallet_balance()
 
 
+@pytest.mark.smoke
 def test_wallet_info_succeeds(wallet_info):
     assert wallet_info.get("success") is True, \
         f"wallet info command failed: {wallet_info}"
 
 
+@pytest.mark.smoke
 def test_wallet_info_has_mint_fields(wallet_info):
     data = wallet_info.get("data", {})
     assert "mint_count" in data, \
@@ -42,6 +44,7 @@ def test_wallet_info_has_mint_fields(wallet_info):
     assert isinstance(data["mint_count"], int)
 
 
+@pytest.mark.smoke
 def test_wallet_info_has_balance_fields(wallet_info):
     data = wallet_info.get("data", {})
     for field in ("total_balance", "mint_balances"):
@@ -49,11 +52,13 @@ def test_wallet_info_has_balance_fields(wallet_info):
             f"Missing '{field}' in wallet info data: {wallet_info}"
 
 
+@pytest.mark.smoke
 def test_wallet_balance_succeeds(wallet_balance):
     assert wallet_balance.get("success") is True, \
         f"wallet balance command failed: {wallet_balance}"
 
 
+@pytest.mark.smoke
 def test_wallet_balance_is_numeric(wallet_balance):
     data = wallet_balance.get("data", {})
     balance = data.get("balance_sats")

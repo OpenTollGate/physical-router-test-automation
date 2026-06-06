@@ -88,6 +88,7 @@ def configure_fake_mint(router, fake_mint_502):
     time.sleep(5)
 
 
+@pytest.mark.extended
 def test_fake_mint_returns_502(fake_mint_502):
     try:
         urllib.request.urlopen(f"{fake_mint_502.url}/v1/keysets", timeout=5)
@@ -96,6 +97,7 @@ def test_fake_mint_returns_502(fake_mint_502):
         assert e.code == 502, f"Expected 502, got {e.code}"
 
 
+@pytest.mark.extended
 def test_service_handles_502_mint(router):
     code = router.api_status("/")
     if code == 0:
@@ -103,6 +105,7 @@ def test_service_handles_502_mint(router):
     assert code in (200, 502, 503), f"Service not responding: HTTP {code}"
 
 
+@pytest.mark.extended
 def test_no_crash_loop_with_502(router):
     pid_before = router.ssh("pidof tollgate-wrt").strip()
     if not pid_before:
@@ -115,6 +118,7 @@ def test_no_crash_loop_with_502(router):
         f"PID changed: {pid_before} -> {pid_after} (restart detected)"
 
 
+@pytest.mark.extended
 def test_degraded_mode_or_graceful(router):
     body = router.api_body("/")
     if not body:

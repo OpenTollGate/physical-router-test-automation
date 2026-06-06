@@ -10,6 +10,7 @@ def _beacon_cgi_available(router):
     return code not in ("000", "404", "500", "503", "")
 
 
+@pytest.mark.extended
 def test_log_beacon_accepts_post(router):
     router.clear_portal_log()
     if not _beacon_cgi_available(router):
@@ -18,6 +19,7 @@ def test_log_beacon_accepts_post(router):
     assert code == 200, f"Log beacon CGI returned {code}"
 
 
+@pytest.mark.extended
 def test_log_beacon_appends_data(router):
     if not _beacon_cgi_available(router):
         pytest.skip("tollgate-log CGI not installed on this build")
@@ -28,6 +30,7 @@ def test_log_beacon_appends_data(router):
     assert marker in log, f"Beacon data not found in log file: {log[:200]}"
 
 
+@pytest.mark.extended
 def test_log_beacon_truncates_at_limit(router):
     if not _beacon_cgi_available(router):
         pytest.skip("tollgate-log CGI not installed on this build")

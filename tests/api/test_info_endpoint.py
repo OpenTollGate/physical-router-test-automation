@@ -14,11 +14,13 @@ def discovery(router):
     return event
 
 
+@pytest.mark.smoke
 def test_info_returns_discovery_event(discovery):
     assert discovery.get("kind") == 10021, \
         f"Expected kind=10021, got kind={discovery.get('kind')}"
 
 
+@pytest.mark.smoke
 def test_info_has_metric_tag(discovery):
     tags = discovery.get("tags", [])
     metric_tags = [t for t in tags if isinstance(t, list) and len(t) >= 2 and t[0] == "metric"]
@@ -27,6 +29,7 @@ def test_info_has_metric_tag(discovery):
         f"Invalid metric value: {metric_tags[0][1]}"
 
 
+@pytest.mark.smoke
 def test_info_has_step_size_tag(discovery):
     tags = discovery.get("tags", [])
     step_tags = [t for t in tags if isinstance(t, list) and len(t) >= 2 and t[0] == "step_size"]
@@ -34,6 +37,7 @@ def test_info_has_step_size_tag(discovery):
     assert step_tags[0][1].isdigit(), f"step_size is not a number: {step_tags[0][1]}"
 
 
+@pytest.mark.smoke
 def test_info_has_price_per_step(discovery):
     tags = discovery.get("tags", [])
     price_tags = [t for t in tags if isinstance(t, list) and len(t) >= 2 and t[0] == "price_per_step"]
@@ -46,6 +50,7 @@ def test_info_has_price_per_step(discovery):
     assert price[1] == "cashu", f"Expected bearer_asset_type='cashu', got: {price[1]}"
 
 
+@pytest.mark.smoke
 def test_info_has_tips_tag(discovery, router):
     if router.backend.is_rust:
         pytest.skip("Rust v1 discovery event missing 'tips' tag (Amperstrand/tollgate-rs#43)")

@@ -6,6 +6,7 @@ from lib.helpers import parse_json_or_fail
 pytestmark = [pytest.mark.rust_only, pytest.mark.api, pytest.mark.smoke]
 
 
+@pytest.mark.smoke
 def test_rust_advertisement(router):
     if router.backend.is_rust:
         pytest.skip("Rust v1 advertisement format differs from test expectations (Amperstrand/tollgate-rs#42)")
@@ -19,12 +20,14 @@ def test_rust_advertisement(router):
     assert "step" in tags, f"Missing step tag: {body[:200]}"
 
 
+@pytest.mark.smoke
 def test_rust_pay_token(router, cashu):
     token = cashu.mint(1)
     resp = router.pay_direct(token)
     assert resp.get("kind") == 1022, f"Expected kind:1022 session event, got: {str(resp)[:200]}"
 
 
+@pytest.mark.smoke
 def test_rust_usage(router, cashu):
     if router.backend.is_rust:
         pytest.skip("Rust v1 usage API format differs from Go (Amperstrand/tollgate-rs#42)")
@@ -36,6 +39,7 @@ def test_rust_usage(router, cashu):
     assert "allotment" in resp.lower() or "usage" in resp.lower(), f"Unexpected usage response: {resp[:200]}"
 
 
+@pytest.mark.smoke
 def test_rust_balance(router, cashu):
     if router.backend.is_rust:
         pytest.skip("Rust v1 balance API format differs from Go (Amperstrand/tollgate-rs#42)")
@@ -47,6 +51,7 @@ def test_rust_balance(router, cashu):
     assert "remaining" in data or "allotment" in data, f"Unexpected balance response: {resp[:200]}"
 
 
+@pytest.mark.smoke
 def test_rust_whoami(router):
     resp = router.ssh(
         f"wget -qO- --header='X-Forwarded-For: {router.phone_ip or '127.0.0.1'}' "
@@ -56,6 +61,7 @@ def test_rust_whoami(router):
     assert ":" in resp and len(resp.split(":")) >= 6, f"Expected MAC address, got: {resp[:100]}"
 
 
+@pytest.mark.smoke
 def test_rust_ln_invoice_create(router):
     resp = router.ssh(
         f"wget -qO- --post-data='{{\"amount\": 10, \"unit\": \"sat\"}}' "
@@ -66,6 +72,7 @@ def test_rust_ln_invoice_create(router):
         f"Unexpected ln-invoice response: {str(data)[:200]}"
 
 
+@pytest.mark.smoke
 def test_rust_ln_invoice_status(router):
     resp = router.ssh(
         f"wget -qO- '{router.backend_url('/ln-invoice')}?quote=nonexistent-test-quote'"
@@ -73,6 +80,7 @@ def test_rust_ln_invoice_status(router):
     assert resp, "Empty ln-invoice status response"
 
 
+@pytest.mark.smoke
 def test_rust_full_payment_cycle(router, cashu):
     """End-to-end: mint token → pay → verify session → check balance → verify whoami."""
     if not cashu.is_available():

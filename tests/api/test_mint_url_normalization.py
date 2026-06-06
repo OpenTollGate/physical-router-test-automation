@@ -26,6 +26,7 @@ def _get_config_mint_urls(router):
     return [m["url"] for m in cfg.get("accepted_mints", []) if "url" in m]
 
 
+@pytest.mark.extended
 def test_config_mint_urls_use_https(router):
     _skip_if_local_mint()
     urls = _get_config_mint_urls(router)
@@ -35,6 +36,7 @@ def test_config_mint_urls_use_https(router):
             f"Mint URL does not use HTTPS: {url}"
 
 
+@pytest.mark.extended
 def test_config_mint_urls_no_trailing_slash(router):
     urls = _get_config_mint_urls(router)
     for url in urls:
@@ -43,6 +45,7 @@ def test_config_mint_urls_no_trailing_slash(router):
             f"Mint URL has trailing slash: {url}"
 
 
+@pytest.mark.extended
 def test_config_mint_urls_valid_format(router):
     _skip_if_local_mint()
     urls = _get_config_mint_urls(router)
@@ -54,6 +57,7 @@ def test_config_mint_urls_valid_format(router):
         assert "." in parsed.hostname, f"Invalid hostname: {parsed.hostname}"
 
 
+@pytest.mark.extended
 def test_discovery_mint_urls_match_config(router):
     urls = _get_config_mint_urls(router)
     body = router.api_body("/")

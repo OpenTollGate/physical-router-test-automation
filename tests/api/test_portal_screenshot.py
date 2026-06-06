@@ -13,6 +13,7 @@ def _skip_unless_virtual_lab():
         pytest.skip("set TOLLGATE_VIRTUAL_LAB=1 and run scripts/virtual-lab.py start-poc")
 
 
+@pytest.mark.smoke
 def test_portal_screenshot(screenshot_portal, adb, request):
     _skip_unless_virtual_lab()
 

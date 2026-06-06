@@ -56,6 +56,7 @@ def degraded_mode(router, mint_ip_map):
     wait_for_full_merchant(router, timeout=120, interval=5)
 
 
+@pytest.mark.extended
 def test_cli_balance_degraded(router, degraded_mode):
     """tollgate wallet balance in degraded mode should return balance_sats: 0
     (not panic or crash)."""
@@ -71,6 +72,7 @@ def test_cli_balance_degraded(router, degraded_mode):
     )
 
 
+@pytest.mark.extended
 def test_cli_info_degraded(router, degraded_mode):
     """tollgate wallet info in degraded mode should return valid info
     with mint_count=0 (no active mint connections)."""
@@ -82,6 +84,7 @@ def test_cli_info_degraded(router, degraded_mode):
     assert "mint_count" in data, f"Missing mint_count in wallet info: {resp}"
 
 
+@pytest.mark.extended
 def test_cli_drain_degraded(router, degraded_mode):
     """tollgate wallet drain in degraded mode should return an error
     (not panic or crash)."""
@@ -97,6 +100,7 @@ def test_cli_drain_degraded(router, degraded_mode):
     )
 
 
+@pytest.mark.extended
 def test_cli_fund_degraded(router, degraded_mode):
     """tollgate wallet fund in degraded mode should return an error
     (not panic or crash)."""

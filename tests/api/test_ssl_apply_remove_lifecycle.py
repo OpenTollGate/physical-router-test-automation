@@ -59,6 +59,7 @@ def ssl_cleanup(router):
         router.ssh("tollgate ssl remove --yes 2>/dev/null || true")
 
 
+@pytest.mark.extended
 def test_ssl_apply_sets_uhttpd_cert_and_key(router):
     """After applying self-signed SSL, uhttpd must point to the new cert/key files.
 
@@ -79,6 +80,7 @@ def test_ssl_apply_sets_uhttpd_cert_and_key(router):
     assert "tollgate" in key.lower() or ".key" in key, f"unexpected key path: {key}"
 
 
+@pytest.mark.extended
 def test_ssl_apply_enables_https_listener(router):
     """After applying SSL, uhttpd must listen on port 443.
 
@@ -92,6 +94,7 @@ def test_ssl_apply_enables_https_listener(router):
     assert _port_443_listening(router), "Port 443 not listening after SSL apply"
 
 
+@pytest.mark.extended
 def test_ssl_apply_cert_file_on_disk(router):
     """After applying SSL, the cert file must exist on disk with correct permissions."""
     _skip_if_no_ssl_cli(router)
@@ -101,6 +104,7 @@ def test_ssl_apply_cert_file_on_disk(router):
     assert _cert_file_exists(router), "Cert file not found after SSL apply"
 
 
+@pytest.mark.extended
 def test_ssl_remove_restores_uhttpd(router):
     """After removing SSL, uhttpd cert/key must be restored to defaults.
 
@@ -128,6 +132,7 @@ def test_ssl_remove_restores_uhttpd(router):
         f"Key not restored: before={original_key}, after={restored_key}"
 
 
+@pytest.mark.extended
 def test_ssl_remove_cleans_cert_files(router):
     """After removing SSL, cert files must be deleted from disk."""
     _skip_if_no_ssl_cli(router)
@@ -140,6 +145,7 @@ def test_ssl_remove_cleans_cert_files(router):
     assert not _cert_file_exists(router), "Cert file still exists after SSL remove"
 
 
+@pytest.mark.extended
 def test_ssl_remove_stops_https_listener(router):
     """After removing SSL, port 443 must no longer be listening.
 
@@ -163,6 +169,7 @@ def test_ssl_remove_stops_https_listener(router):
     assert not _port_443_listening(router), "Port 443 still listening after SSL remove"
 
 
+@pytest.mark.extended
 def test_ssl_full_roundtrip(router):
     """Full lifecycle: apply → verify → remove → verify → re-apply → verify.
 

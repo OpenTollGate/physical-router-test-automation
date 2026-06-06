@@ -11,6 +11,7 @@ def _captive_api_available(router):
     return code not in ("000", "404", "500", "503", "")
 
 
+@pytest.mark.smoke
 def test_captive_api_pre_auth(router):
     if not _captive_api_available(router):
         pytest.skip("captive-portal-api CGI not installed on this build")
@@ -22,6 +23,7 @@ def test_captive_api_pre_auth(router):
     assert data["captive"] is True, f"Expected captive=true, got: {data}"
 
 
+@pytest.mark.smoke
 def test_captive_api_content_type(router):
     if not _captive_api_available(router):
         pytest.skip("captive-portal-api CGI not installed on this build")
@@ -30,6 +32,7 @@ def test_captive_api_content_type(router):
         f"Missing application/captive+json content type: {resp[:200]}"
 
 
+@pytest.mark.smoke
 def test_captive_api_no_cache(router):
     if not _captive_api_available(router):
         pytest.skip("captive-portal-api CGI not installed on this build")

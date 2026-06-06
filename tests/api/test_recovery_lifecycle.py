@@ -56,6 +56,7 @@ def cleanup_iptables(router):
             wait_for_full_merchant(router, timeout=120, interval=5)
 
 
+@pytest.mark.extended
 def test_multiple_recovery_cycles(router, mint_ip_map):
     """Full merchant -> block -> degraded -> unblock -> recover ->
     block again -> degraded -> unblock -> recover.
@@ -95,6 +96,7 @@ def test_multiple_recovery_cycles(router, mint_ip_map):
     log.info("Both recovery cycles completed successfully")
 
 
+@pytest.mark.extended
 def test_health_tracker_alive_after_recovery(router, mint_ip_map):
     """After recovery from degraded, the health tracker should still be
     running and detect a second degradation.
@@ -144,6 +146,7 @@ def test_health_tracker_alive_after_recovery(router, mint_ip_map):
     wait_for_full_merchant(router, timeout=HEALTH_POLL_TIMEOUT)
 
 
+@pytest.mark.extended
 def test_flapping_mint_hysteresis(router, mint_ip_map):
     """Simulate a flapping mint by rapidly blocking and unblocking.
     Hysteresis (3 consecutive successes required) should prevent the

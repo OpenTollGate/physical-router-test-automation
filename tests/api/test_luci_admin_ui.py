@@ -15,6 +15,7 @@ def _skip_if_no_luci_app(router):
         pytest.skip("PR #114 not installed (LuCI app files not found)")
 
 
+@pytest.mark.extended
 def test_luci_menu_registration_exists(router):
     _skip_if_no_luci_app(router)
     out = router.ssh(
@@ -26,6 +27,7 @@ def test_luci_menu_registration_exists(router):
     )
 
 
+@pytest.mark.extended
 def test_luci_rpcd_acl_exists(router):
     _skip_if_no_luci_app(router)
     out = router.ssh(
@@ -51,6 +53,7 @@ def test_luci_rpcd_acl_exists(router):
     assert has_permissions, f"ACL contains no permissions: {json.dumps(acl)[:300]}"
 
 
+@pytest.mark.extended
 def test_luci_css_assets_exist(router):
     _skip_if_no_luci_app(router)
     out = router.ssh(
@@ -60,6 +63,7 @@ def test_luci_css_assets_exist(router):
     assert "EXISTS" in out, f"LuCI CSS asset missing: {out}"
 
 
+@pytest.mark.extended
 def test_luci_js_assets_exist(router):
     _skip_if_no_luci_app(router)
     out = router.ssh(
@@ -69,6 +73,7 @@ def test_luci_js_assets_exist(router):
     assert "EXISTS" in out, f"LuCI JS asset missing: {out}"
 
 
+@pytest.mark.extended
 def test_config_schema_command_works(router):
     _skip_if_no_luci_app(router)
     result = router.cli_command("config", args=["schema", "--json"])
@@ -83,6 +88,7 @@ def test_config_schema_command_works(router):
     )
 
 
+@pytest.mark.extended
 def test_config_schema_has_expected_fields(router):
     _skip_if_no_luci_app(router)
     result = router.cli_command("config", args=["schema", "--json"])
@@ -98,6 +104,7 @@ def test_config_schema_has_expected_fields(router):
     )
 
 
+@pytest.mark.extended
 def test_config_get_command_works(router):
     _skip_if_no_luci_app(router)
     result = router.cli_command("config", args=["get"])
@@ -107,6 +114,7 @@ def test_config_get_command_works(router):
     assert len(data) > 0, f"config get returned empty data: {result}"
 
 
+@pytest.mark.extended
 def test_health_command_works(router):
     _skip_if_no_luci_app(router)
     result = router.cli_command("health")
@@ -114,6 +122,7 @@ def test_health_command_works(router):
     assert result.get("success") is True, f"health command failed: {result}"
 
 
+@pytest.mark.extended
 def test_cors_restricted_to_local(router):
     _skip_if_no_luci_app(router)
     evil_code = router.ssh(
@@ -135,6 +144,7 @@ def test_cors_restricted_to_local(router):
     )
 
 
+@pytest.mark.extended
 def test_luci_page_loads(router):
     _skip_if_no_luci_app(router)
     r = subprocess.run(

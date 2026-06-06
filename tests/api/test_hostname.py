@@ -20,12 +20,14 @@ def _skip_if_no_hostname_setup(router):
         pytest.skip("Hostname setup not present (hostname is not 'TollGate')")
 
 
+@pytest.mark.extended
 def test_hostname_set_to_tollgate(router):
     _skip_if_no_hostname_setup(router)
     hostname = router.ssh("uci get system.@system[0].hostname 2>/dev/null").strip()
     assert hostname == "TollGate", f"Expected hostname 'TollGate', got '{hostname}'"
 
 
+@pytest.mark.extended
 def test_hostname_persists_after_restart(router):
     _skip_if_no_hostname_setup(router)
     hostname_uci = router.ssh("uci get system.@system[0].hostname 2>/dev/null").strip()

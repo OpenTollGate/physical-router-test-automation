@@ -10,6 +10,7 @@ def _skip_if_no_admin_spa(router):
         pytest.skip("Admin SPA not deployed")
 
 
+@pytest.mark.extended
 def test_admin_spa_serves_on_port_80(router):
     _skip_if_no_admin_spa(router)
 
@@ -23,6 +24,7 @@ def test_admin_spa_serves_on_port_80(router):
         f"Admin SPA on port 80 returned {code} (expected 200/302/307)"
 
 
+@pytest.mark.extended
 def test_luci_serves_on_port_8080(router):
     r = subprocess.run(
         ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",

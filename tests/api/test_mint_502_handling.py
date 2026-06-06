@@ -76,6 +76,7 @@ def local_502_config(router):
     _restart_and_wait(router)
 
 
+@pytest.mark.extended
 def test_local_502_mint_returns_502(router):
     output = router.ssh(
         f"wget --spider --timeout=10 '{LOCAL_502_MINT_URL}/v1/keysets' 2>&1"
@@ -91,6 +92,7 @@ def test_local_502_mint_returns_502(router):
     assert code == "502", f"Expected 502 from local 502 mint, got '{code}' (output: {output[:200]})"
 
 
+@pytest.mark.extended
 def test_service_stays_up_with_502_mint(router):
     if _backend_exits_on_502_startup(router):
         pytest.skip("Backend exits on local 502 mint startup in this build")
@@ -98,6 +100,7 @@ def test_service_stays_up_with_502_mint(router):
     assert code in (200, 503), f"Service not responding: HTTP {code}"
 
 
+@pytest.mark.extended
 def test_discovery_indicates_degraded_mode(router):
     if _backend_exits_on_502_startup(router):
         pytest.skip("Backend exits on local 502 mint startup in this build")
@@ -115,6 +118,7 @@ def test_discovery_indicates_degraded_mode(router):
         )
 
 
+@pytest.mark.extended
 def test_degraded_event_has_no_reachable_mints_code(router):
     if _backend_exits_on_502_startup(router):
         pytest.skip("Backend exits on local 502 mint startup in this build")
@@ -131,6 +135,7 @@ def test_degraded_event_has_no_reachable_mints_code(router):
         f"Expected code 'no-reachable-mints', got: {code_tags[0][1]}"
 
 
+@pytest.mark.extended
 def test_service_no_crash_loop(router):
     pid_before = router.ssh("pidof tollgate-wrt").strip()
     if not pid_before:
@@ -143,6 +148,7 @@ def test_service_no_crash_loop(router):
         f"PID changed: {pid_before} -> {pid_after} (restart detected)"
 
 
+@pytest.mark.extended
 def test_cli_status_works_in_degraded(router):
     status = router.get_tollgate_status()
     if status.get("success") is not True:

@@ -25,6 +25,7 @@ def _mint_available(url: str, timeout: int = 5) -> bool:
         return False
 
 
+@pytest.mark.extended
 def test_cdk_v2_mint_healthy():
     _skip_if_no_local_mints()
     url = os.environ.get("TOLLGATE_CDK_MINT_URL", "http://10.99.99.2:8383")
@@ -37,6 +38,7 @@ def test_cdk_v2_mint_healthy():
     assert any(k.startswith("01") for k in keyset_ids), f"CDK should have V2 keyset, got: {keyset_ids}"
 
 
+@pytest.mark.extended
 def test_nutshell_v2_mint_healthy():
     _skip_if_no_local_mints()
     url = os.environ.get("TOLLGATE_NUTSHELL_V2_MINT_URL", "http://10.99.99.2:8384")
@@ -46,6 +48,7 @@ def test_nutshell_v2_mint_healthy():
     assert resp.status == 200
 
 
+@pytest.mark.extended
 def test_nutshell_v1_mint_healthy():
     _skip_if_no_local_mints()
     url = os.environ.get("TOLLGATE_NUTSHELL_V1_MINT_URL", "http://10.99.99.2:8385")
@@ -55,6 +58,7 @@ def test_nutshell_v1_mint_healthy():
     assert resp.status == 200
 
 
+@pytest.mark.extended
 def test_cdk_v2_mint_info():
     _skip_if_no_local_mints()
     url = os.environ.get("TOLLGATE_CDK_MINT_URL", "http://10.99.99.2:8383")
@@ -64,6 +68,7 @@ def test_cdk_v2_mint_info():
     assert isinstance(data, dict) and len(data) > 0
 
 
+@pytest.mark.extended
 def test_local_mints_reachable_from_openwrt(router):
     _skip_if_no_local_mints()
     v1_url = os.environ.get("TOLLGATE_NUTSHELL_V1_MINT_URL", "http://10.99.99.2:8385")

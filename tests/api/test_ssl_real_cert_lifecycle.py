@@ -80,6 +80,7 @@ def ssl_cleanup(router):
     router.ssh("rm -rf /tmp/tollgate-test-cert 2>/dev/null || true")
 
 
+@pytest.mark.extended
 def test_ssl_real_cert_sets_dnsmasq_entry(router):
     """After applying real cert, dnsmasq must have a DNS entry for the domain.
 
@@ -101,6 +102,7 @@ def test_ssl_real_cert_sets_dnsmasq_entry(router):
         f"dnsmasq does not have domain entry for {domain}"
 
 
+@pytest.mark.extended
 def test_ssl_real_cert_sets_nodogsplash_gatewaydomainname(router):
     """After applying real cert, nodogsplash gatewaydomainname must be set.
 
@@ -126,6 +128,7 @@ def test_ssl_real_cert_sets_nodogsplash_gatewaydomainname(router):
         f"nodogsplash gatewaydomainname: expected {domain}, got {nds_domain}"
 
 
+@pytest.mark.extended
 def test_ssl_real_cert_remove_restores_dnsmasq(router):
     """After removing real cert, dnsmasq domain entry must be cleaned up."""
     _skip_if_no_ssl_cli(router)
@@ -146,6 +149,7 @@ def test_ssl_real_cert_remove_restores_dnsmasq(router):
         f"dnsmasq still has entry for {domain} after remove"
 
 
+@pytest.mark.extended
 def test_ssl_real_cert_remove_restores_nodogsplash(router):
     """After removing real cert, nodogsplash gatewaydomainname must be restored."""
     _skip_if_no_ssl_cli(router)
@@ -173,6 +177,7 @@ def test_ssl_real_cert_remove_restores_nodogsplash(router):
         f"nodogsplash port not restored: before={original_port}, after={restored_port}"
 
 
+@pytest.mark.extended
 def test_ssl_real_cert_separate_cert_and_key(router):
     """Test applying with separate cert and key files (not combined PEM)."""
     _skip_if_no_ssl_cli(router)

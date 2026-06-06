@@ -70,6 +70,7 @@ def ssl_cleanup(router):
         router.ssh("tollgate ssl remove --yes 2>/dev/null || true")
 
 
+@pytest.mark.extended
 def test_ssl_apply_creates_backup_directory(router):
     """After applying SSL, backup directory must exist with expected files.
 
@@ -85,6 +86,7 @@ def test_ssl_apply_creates_backup_directory(router):
     assert _backup_dir_exists(router), "Backup directory not created after apply"
 
 
+@pytest.mark.extended
 def test_ssl_backup_contains_mode(router):
     """Backup must contain ssl.mode file with 'self-signed' for self-signed certs."""
     _skip_if_no_ssl_cli(router)
@@ -95,6 +97,7 @@ def test_ssl_backup_contains_mode(router):
     assert mode == "self-signed", f"Expected ssl.mode='self-signed', got '{mode}'"
 
 
+@pytest.mark.extended
 def test_ssl_backup_contains_domain(router):
     """Backup must contain ssl.domain with the router's domain."""
     _skip_if_no_ssl_cli(router)
@@ -108,6 +111,7 @@ def test_ssl_backup_contains_domain(router):
     assert domain == expected_domain, f"Expected ssl.domain='{expected_domain}', got '{domain}'"
 
 
+@pytest.mark.extended
 def test_ssl_backup_contains_uhttpd_values(router):
     """Backup must contain the original uhttpd cert and key values."""
     _skip_if_no_ssl_cli(router)
@@ -121,6 +125,7 @@ def test_ssl_backup_contains_uhttpd_values(router):
         f"Backup cert mismatch: backed_up={backed_up_cert}, original={original_cert}"
 
 
+@pytest.mark.extended
 def test_ssl_remove_deletes_backup_directory(router):
     """After removing SSL, backup directory must be cleaned up."""
     _skip_if_no_ssl_cli(router)
@@ -133,6 +138,7 @@ def test_ssl_remove_deletes_backup_directory(router):
     assert not _backup_dir_exists(router), "Backup directory still exists after remove"
 
 
+@pytest.mark.extended
 def test_ssl_uhttpd_list_parsed_correctly(router):
     """Verify uhttpd listen_https list contains port 443 entries after apply.
 
@@ -151,6 +157,7 @@ def test_ssl_uhttpd_list_parsed_correctly(router):
     assert has_443, f"Expected 443 in listen_https, got: {listeners}"
 
 
+@pytest.mark.extended
 def test_ssl_uhttpd_list_before_apply(router):
     """Verify uhttpd listen_https before SSL apply (may or may not have 443).
 

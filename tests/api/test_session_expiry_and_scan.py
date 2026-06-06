@@ -34,6 +34,7 @@ pytestmark = [pytest.mark.api, pytest.mark.extended]
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.extended
 def test_expired_session_returns_no_remaining(router, cashu, test_pricing):
     """Create a short session, wait for expiry, verify remaining=0.
 
@@ -90,6 +91,7 @@ def test_expired_session_returns_no_remaining(router, cashu, test_pricing):
         )
 
 
+@pytest.mark.extended
 def test_session_expiry_while_querying(router, cashu, test_pricing):
     """Query balance repeatedly during session, verify clean expiry transition.
 
@@ -163,6 +165,7 @@ def test_session_expiry_while_querying(router, cashu, test_pricing):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.extended
 def test_backend_starts_scan_loop(router):
     """Check that the upstream scan loop starts on backend startup.
 
@@ -227,6 +230,7 @@ def _try_config_command(router, args):
         return False, str(exc)
 
 
+@pytest.mark.extended
 def test_mint_config_get_set_via_socket(router):
     """Test if config get/set commands work via the Unix socket.
 
@@ -258,6 +262,7 @@ def test_mint_config_get_set_via_socket(router):
         )
 
 
+@pytest.mark.extended
 def test_dot_path_config_access(router):
     """Test if dot-path config access is available (e.g. accepted_mints.0.url).
 

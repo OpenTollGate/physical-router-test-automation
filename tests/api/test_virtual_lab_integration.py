@@ -55,6 +55,7 @@ def _skip_if_no_virtual_lab():
         pytest.skip("Virtual lab not running (tg-poc-client namespace not found)")
 
 
+@pytest.mark.extended
 def test_container_reaches_gateway():
     """Container can ping the OpenWrt VM gateway at 10.99.99.1."""
     _skip_if_no_virtual_lab()
@@ -66,6 +67,7 @@ def test_container_reaches_gateway():
     )
 
 
+@pytest.mark.extended
 def test_container_curl_luci():
     """Container can reach the LuCI admin interface on the OpenWrt VM."""
     _skip_if_no_virtual_lab()
@@ -85,6 +87,7 @@ def test_container_curl_luci():
     )
 
 
+@pytest.mark.extended
 def test_container_dns_resolution():
     """DNS resolution works through the OpenWrt VM (dnsmasq forwarding)."""
     _skip_if_no_virtual_lab()
@@ -104,6 +107,7 @@ def test_container_dns_resolution():
     )
 
 
+@pytest.mark.extended
 def test_captive_portal_detection():
     """Captive portal detection returns nodogsplash splash page or redirect."""
     _skip_if_no_virtual_lab()
@@ -143,6 +147,7 @@ def test_captive_portal_detection():
     )
 
 
+@pytest.mark.extended
 def test_container_network_config():
     """Container has an IP in 10.99.99.0/24 and default route via the gateway."""
     _skip_if_no_virtual_lab()
@@ -168,6 +173,7 @@ def test_container_network_config():
     )
 
 
+@pytest.mark.extended
 def test_container_curl_tollgate_api():
     """Container can reach TollGate API endpoints (conditional on TollGate being installed)."""
     _skip_if_no_virtual_lab()

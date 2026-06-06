@@ -10,6 +10,7 @@ def _skip_if_no_json_cli(router):
         pytest.skip("tollgate --json config get not available (PR #124 not deployed)")
 
 
+@pytest.mark.extended
 def test_config_save_identities_round_trip(router):
     _skip_if_no_json_cli(router)
 
@@ -37,6 +38,7 @@ def test_config_save_identities_round_trip(router):
             "merchant identity name changed after save-identities"
 
 
+@pytest.mark.extended
 def test_config_save_identities_rejects_invalid(router):
     _skip_if_no_json_cli(router)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -204,15 +205,39 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
     exit_codes: dict[str, int] = {}
     total_timeout = 600 if config.quick else (1200 if config.smoke else 3000)
 
-    for spec in runners:
+    # Run "visual" gate first (sequential) — fast sanity check before parallel work
+    visual_runners = [r for r in runners if r.name == "visual"]
+    parallel_runners = [r for r in runners if r.name != "visual"]
+
+    for spec in visual_runners:
         cmd = _build_pytest_cmd(config, spec, results_dir)
-        log.info("Runner [%s] starting (timeout=%ds)", spec.name, spec.timeout)
+        log.info("Runner [%s] starting (sequential gate, timeout=%ds)", spec.name, spec.timeout)
         r = _run(cmd, timeout=total_timeout, check=False)
         exit_codes[spec.name] = r.returncode
         if r.returncode != 0:
-            log.warning("Runner [%s] exit=%d", spec.name, r.returncode)
+            log.warning("Runner [%s] exit=%d (gate failed, continuing parallel runners)", spec.name, r.returncode)
         else:
-            log.info("Runner [%s] passed", spec.name)
+            log.info("Runner [%s] passed (gate)", spec.name)
+
+    # Run remaining runners in parallel — each is an independent pytest subprocess
+    if parallel_runners:
+        log.info("Starting %d parallel runner(s): %s", len(parallel_runners), ", ".join(r.name for r in parallel_runners))
+
+        def _execute_runner(spec: RunnerSpec) -> tuple[str, int]:
+            cmd = _build_pytest_cmd(config, spec, results_dir)
+            log.info("Runner [%s] starting (parallel, timeout=%ds)", spec.name, spec.timeout)
+            r = _run(cmd, timeout=total_timeout, check=False)
+            return spec.name, r.returncode
+
+        with ThreadPoolExecutor(max_workers=len(parallel_runners)) as pool:
+            futures = {pool.submit(_execute_runner, spec): spec.name for spec in parallel_runners}
+            for future in as_completed(futures):
+                name, code = future.result()
+                exit_codes[name] = code
+                if code != 0:
+                    log.warning("Runner [%s] exit=%d", name, code)
+                else:
+                    log.info("Runner [%s] passed", name)
 
     worst = _aggregate_exit(exit_codes)
     log.info(

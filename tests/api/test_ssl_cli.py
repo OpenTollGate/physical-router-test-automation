@@ -36,6 +36,7 @@ def ssl_cleanup(router):
         router.ssh("tollgate ssl remove --yes 2>/dev/null || true")
 
 
+@pytest.mark.extended
 def test_ssl_apply_self_signed(router):
     _skip_if_no_ssl_cli(router)
     result = router.ssh("tollgate ssl apply --yes 2>&1")
@@ -44,6 +45,7 @@ def test_ssl_apply_self_signed(router):
         f"SSL apply failed: {result[:300]}"
 
 
+@pytest.mark.extended
 def test_ssl_status_shows_cert(router):
     _skip_if_no_ssl_cli(router)
     router.ssh("tollgate ssl apply --yes 2>&1")
@@ -53,6 +55,7 @@ def test_ssl_status_shows_cert(router):
         f"SSL status did not show applied state: {result[:300]}"
 
 
+@pytest.mark.extended
 def test_ssl_removes_cleanly(router):
     _skip_if_no_ssl_cli(router)
     router.ssh("tollgate ssl apply --yes 2>&1")
@@ -63,6 +66,7 @@ def test_ssl_removes_cleanly(router):
         f"SSL still shows as applied after remove: {status[:300]}"
 
 
+@pytest.mark.extended
 def test_ssl_wrapper_scripts_exist(router):
     tollgate_apply = router.ssh("which tollgate-apply-ssl 2>/dev/null || echo MISSING")
     tollgate_remove = router.ssh("which tollgate-remove-ssl 2>/dev/null || echo MISSING")
@@ -74,6 +78,7 @@ def test_ssl_wrapper_scripts_exist(router):
         assert tollgate_remove.strip().endswith("tollgate-remove-ssl")
 
 
+@pytest.mark.extended
 def test_ssl_idempotent_apply(router):
     _skip_if_no_ssl_cli(router)
     router.ssh("tollgate ssl apply --yes 2>&1")
@@ -82,6 +87,7 @@ def test_ssl_idempotent_apply(router):
         f"Second SSL apply failed: {result[:300]}"
 
 
+@pytest.mark.extended
 def test_ssl_cert_has_valid_san(router):
     _skip_if_no_ssl_cli(router)
     _skip_if_no_openssl(router)
@@ -96,6 +102,7 @@ def test_ssl_cert_has_valid_san(router):
     assert cert_check.strip(), "Could not read SSL certificate"
 
 
+@pytest.mark.extended
 def test_ssl_https_port_listening(router):
     _skip_if_no_ssl_cli(router)
     router.ssh("tollgate ssl apply --yes 2>&1")
@@ -103,6 +110,7 @@ def test_ssl_https_port_listening(router):
     assert "443" in result, f"Port 443 not listening after SSL apply: {result[:200]}"
 
 
+@pytest.mark.extended
 def test_ssl_nodogsplash_allows_443(router):
     _skip_if_no_ssl_cli(router)
     router.ssh("tollgate ssl apply --yes 2>&1")
@@ -113,6 +121,7 @@ def test_ssl_nodogsplash_allows_443(router):
         "nodogsplash config may not allow port 443"
 
 
+@pytest.mark.extended
 def test_ssl_remove_no_backup_errors(router):
     _skip_if_no_ssl_cli(router)
     result = router.ssh("tollgate ssl remove --yes 2>&1 || true")

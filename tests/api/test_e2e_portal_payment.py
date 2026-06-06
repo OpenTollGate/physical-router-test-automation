@@ -33,6 +33,7 @@ def _wait_for_auth_state(router, timeout: int = 45) -> bool:
     return router.get_nds_state() == "Authenticated"
 
 
+@pytest.mark.extended
 def test_e2e_portal_payment(adb, cashu, router, results_dir, request):
     """Full e2e with video: portal loads → payment → session active → internet.
 

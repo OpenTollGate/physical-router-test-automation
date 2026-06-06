@@ -17,6 +17,7 @@ def discovery(router):
     return parse_json_or_fail(router.api_body("/"), "discovery response")
 
 
+@pytest.mark.extended
 def test_logs_show_mint_health_tracking(backend_logs):
     health_signals = re.findall(
         r"(health|reachable|unreachable|mint.*check)",
@@ -27,6 +28,7 @@ def test_logs_show_mint_health_tracking(backend_logs):
     assert len(health_signals) > 0
 
 
+@pytest.mark.extended
 def test_logs_show_dynamic_rebuild(backend_logs):
     rebuild_signals = re.findall(
         r"(rebuilding merchant|reachable mint set changed|merchant rebuilt)",
@@ -37,6 +39,7 @@ def test_logs_show_dynamic_rebuild(backend_logs):
     assert len(rebuild_signals) > 0
 
 
+@pytest.mark.extended
 def test_discovery_excludes_unhealthy_mints(backend_logs, discovery):
     unreachable = set(re.findall(
         r"mint (\S+) .*(?:unreachable|failed)",
@@ -54,6 +57,7 @@ def test_discovery_excludes_unhealthy_mints(backend_logs, discovery):
         f"Unreachable mints still in discovery ad: {stale}"
 
 
+@pytest.mark.extended
 def test_wallet_info_shows_mint_count(router):
     if not router.backend.has_cli_socket:
         pytest.skip("CLI socket not supported by this backend")
@@ -66,6 +70,7 @@ def test_wallet_info_shows_mint_count(router):
     assert mint_count >= 0
 
 
+@pytest.mark.extended
 def test_status_command_works(router):
     """Test that the CLI status command returns valid data.
 
@@ -88,6 +93,7 @@ def test_status_command_works(router):
     assert status.get("success") is True, f"Status command failed: {status}"
 
 
+@pytest.mark.extended
 def test_version_matches_installed(router):
     if not router.backend.has_cli_socket:
         pytest.skip("CLI socket not supported by this backend")

@@ -36,11 +36,13 @@ def _skip_unless_nds_responsive(router):
 class TestBuiltinPortal:
     """Checks that run when the builtin portal is expected."""
 
+    @pytest.mark.smoke
     @pytest.mark.skipif(PORTAL_TYPE != "builtin", reason="only for builtin portal")
     def test_builtin_portal_html_exists(self, router):
         html = router.ssh("cat /etc/nodogsplash/htdocs/splash.html 2>/dev/null | head -5")
         assert html.strip(), "builtin portal splash.html missing from htdocs"
 
+    @pytest.mark.smoke
     @pytest.mark.skipif(PORTAL_TYPE != "builtin", reason="only for builtin portal")
     def test_builtin_portal_served_via_nds(self, router):
         _skip_unless_nds_responsive(router)
@@ -50,6 +52,7 @@ class TestBuiltinPortal:
         )
         assert code.strip() == "200", f"nodogsplash not serving splash.html (got {code})"
 
+    @pytest.mark.smoke
     @pytest.mark.skipif(PORTAL_TYPE != "builtin", reason="only for builtin portal")
     def test_builtin_portal_has_spa_assets(self, router):
         ls = router.ssh("ls /etc/nodogsplash/htdocs/assets/*.js 2>/dev/null")
@@ -59,6 +62,7 @@ class TestBuiltinPortal:
 class TestNet4satsPortal:
     """Checks that run when the net4sats/configurationwizzard portal is expected."""
 
+    @pytest.mark.smoke
     @pytest.mark.skipif(PORTAL_TYPE != "net4sats", reason="only for net4sats portal")
     def test_net4sats_package_installed(self, router):
         pkgs = router.ssh("opkg list-installed | grep configurationwizzard", timeout=10)
@@ -66,11 +70,13 @@ class TestNet4satsPortal:
             f"configurationwizzard not in opkg list-installed. Got: {pkgs!r}"
         )
 
+    @pytest.mark.smoke
     @pytest.mark.skipif(PORTAL_TYPE != "net4sats", reason="only for net4sats portal")
     def test_net4sats_portal_html_exists(self, router):
         html = router.ssh("ls /etc/nodogsplash/htdocs/portal.html 2>/dev/null")
         assert "portal.html" in html, "net4sats portal.html missing from htdocs"
 
+    @pytest.mark.smoke
     @pytest.mark.skipif(PORTAL_TYPE != "net4sats", reason="only for net4sats portal")
     def test_net4sats_portal_served_via_nds(self, router):
         _skip_unless_nds_responsive(router)
@@ -80,6 +86,7 @@ class TestNet4satsPortal:
         )
         assert code.strip() == "200", f"nodogsplash not serving portal.html (got {code})"
 
+    @pytest.mark.smoke
     @pytest.mark.skipif(PORTAL_TYPE != "net4sats", reason="only for net4sats portal")
     def test_net4sats_portal_has_payment_elements(self, router):
         html = router.ssh("cat /etc/nodogsplash/htdocs/portal.html 2>/dev/null")
@@ -90,6 +97,7 @@ class TestNet4satsPortal:
             f"net4sats portal missing payment elements (cashu={has_cashu}, ln={has_ln})"
         )
 
+    @pytest.mark.smoke
     @pytest.mark.skipif(PORTAL_TYPE != "net4sats", reason="only for net4sats portal")
     def test_net4sats_manifest_exists(self, router):
         manifest = router.ssh("cat /etc/nodogsplash/htdocs/manifest.json 2>/dev/null")
@@ -99,10 +107,12 @@ class TestNet4satsPortal:
 class TestPortalAgnostic:
     """Checks that should pass regardless of which portal is installed."""
 
+    @pytest.mark.smoke
     def test_nds_htdocs_directory_exists(self, router):
         ls = router.ssh("ls /etc/nodogsplash/htdocs/ 2>/dev/null")
         assert ls.strip(), "/etc/nodogsplash/htdocs/ is empty or missing"
 
+    @pytest.mark.smoke
     def test_nds_gateway_responds(self, router):
         _skip_unless_nds_responsive(router)
         code = router.ssh(
@@ -113,6 +123,7 @@ class TestPortalAgnostic:
             f"nodogsplash gateway not responding on :2050 (got {code})"
         )
 
+    @pytest.mark.smoke
     def test_tollgate_backend_healthy(self, router):
         port = os.environ.get('TOLLGATE_BACKEND_PORT', '2121')
         code = router.ssh(

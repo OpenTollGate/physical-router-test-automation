@@ -14,6 +14,7 @@ def _nut24_enabled():
     return os.environ.get("ENABLE_NUT24", "0") == "1"
 
 
+@pytest.mark.critical
 def test_nut24_header(router, cashu):
     if not _nut24_enabled():
         pytest.skip("Set ENABLE_NUT24=1 in .env when backend supports NUT-24")
@@ -22,6 +23,7 @@ def test_nut24_header(router, cashu):
     assert '"kind":1022' in resp, f"Unexpected response: {resp[:200]}"
 
 
+@pytest.mark.critical
 def test_nut24_post_json(router, cashu):
     if not _nut24_enabled():
         pytest.skip("Set ENABLE_NUT24=1 in .env when backend supports NUT-24")

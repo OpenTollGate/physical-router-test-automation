@@ -6,6 +6,7 @@ from lib.helpers import is_session_event, require_client_identity, is_degraded
 pytestmark = [pytest.mark.api, pytest.mark.extended]
 
 
+@pytest.mark.extended
 def test_empty_token_rejected(router, cashu):
     empty_token = ""
     resp = router.pay_via_header(empty_token)
@@ -15,6 +16,7 @@ def test_empty_token_rejected(router, cashu):
         f"Empty token was accepted (unexpected success)"
 
 
+@pytest.mark.extended
 def test_garbage_token_rejected(router, cashu):
     garbage_token = "not-a-token"
     resp = router.pay_via_header(garbage_token)
@@ -24,6 +26,7 @@ def test_garbage_token_rejected(router, cashu):
         f"Garbage token was ACCEPTED (expected rejection)"
 
 
+@pytest.mark.extended
 def test_malformed_cashu_prefix(router, cashu):
     malformed_token = "cashuA" + "!" * 10  # Not valid base64
     resp = router.pay_via_header(malformed_token)
@@ -33,6 +36,7 @@ def test_malformed_cashu_prefix(router, cashu):
         f"Malformed token was ACCEPTED (expected rejection)"
 
 
+@pytest.mark.extended
 def test_duplicate_token_immediate_reuse(router, cashu):
     require_client_identity(router)
 

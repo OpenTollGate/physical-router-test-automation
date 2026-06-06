@@ -20,6 +20,7 @@ def _skip_if_no_portal(router):
         pytest.skip("Captive portal splash.html not found")
 
 
+@pytest.mark.extended
 def test_portal_locale_keys_exist(router):
     _skip_if_no_portal(router)
     locales_raw = router.ssh(
@@ -43,6 +44,7 @@ def test_portal_locale_keys_exist(router):
         pytest.skip(f"Portal does not have degraded-mode locale keys yet (missing: {missing})")
 
 
+@pytest.mark.extended
 def test_portal_splash_has_degraded_elements(router):
     _skip_if_no_portal(router)
     splash = router.ssh(
@@ -60,6 +62,7 @@ def test_portal_splash_has_degraded_elements(router):
         pytest.skip("splash.html missing degraded-mode UI elements (pre-PR F firmware)")
 
 
+@pytest.mark.extended
 def test_portal_has_apple_touch_icon(router):
     _skip_if_no_portal(router)
     splash = router.ssh(

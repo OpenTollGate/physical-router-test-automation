@@ -49,6 +49,7 @@ def _get_proofs(decoded: dict | list) -> list[dict]:
     return proofs
 
 
+@pytest.mark.extended
 def test_minted_token_is_cashuA_format(cashu):
     """Verify the mint produces cashuA (V3 JSON) tokens, not cashuB (V4 CBOR).
 
@@ -64,6 +65,7 @@ def test_minted_token_is_cashuA_format(cashu):
         "Minter produced cashuB (V4 CBOR) token — TollGate only accepts cashuA"
 
 
+@pytest.mark.extended
 def test_decode_cashuA_token_structure(cashu):
     """Decode a minted token and verify the top-level JSON structure.
 
@@ -105,6 +107,7 @@ def test_decode_cashuA_token_structure(cashu):
                 f"'proofs' is not a list: {type(entry['proofs'])}"
 
 
+@pytest.mark.extended
 def test_cashuA_token_has_valid_proof_fields(cashu):
     """Check each proof in a decoded token has the required fields.
 
@@ -150,6 +153,7 @@ def test_cashuA_token_has_valid_proof_fields(cashu):
         assert len(proof["C"]) > 0, f"Proof {i} has empty 'C'"
 
 
+@pytest.mark.extended
 def test_cashuA_base64_padding_handled():
     """Verify base64url decoding handles both padded and unpadded tokens.
 
@@ -183,6 +187,7 @@ def test_cashuA_base64_padding_handled():
     assert proofs[0]["amount"] == 2
 
 
+@pytest.mark.extended
 def test_cashuB_token_rejected_by_backend(router):
     """Verify TollGate rejects cashuB (V4 CBOR) tokens.
 
@@ -207,6 +212,7 @@ def test_cashuB_token_rejected_by_backend(router):
         f"cashuB token resulted in success — unexpected: {resp}"
 
 
+@pytest.mark.extended
 def test_synthetic_wrong_mint_token_format(cashu):
     """Verify synthetic_wrong_mint_token() produces valid cashuA structure.
 
@@ -238,6 +244,7 @@ def test_synthetic_wrong_mint_token_format(cashu):
         f"Expected wrong-mint URL in synthetic token, got: {mint_urls}"
 
 
+@pytest.mark.extended
 def test_token_proof_amount_matches_request(cashu):
     """Verify the sum of proof amounts equals the requested mint amount.
 
@@ -256,6 +263,7 @@ def test_token_proof_amount_matches_request(cashu):
         f"Individual amounts: {[p['amount'] for p in proofs]}"
 
 
+@pytest.mark.extended
 def test_multi_proof_token_structure(cashu):
     """Verify tokens with multiple proofs have valid structure in each proof.
 

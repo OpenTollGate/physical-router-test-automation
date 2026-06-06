@@ -10,6 +10,7 @@ def _skip_if_no_rpcd_plugin(router):
         pytest.skip("rpcd tollgate plugin not installed")
 
 
+@pytest.mark.extended
 def test_rpcd_shell_injection_blocked(router):
     _skip_if_no_rpcd_plugin(router)
 
@@ -29,6 +30,7 @@ def test_rpcd_shell_injection_blocked(router):
         f"Command substitution injection may have succeeded: {result2[:300]}"
 
 
+@pytest.mark.extended
 def test_rpcd_acl_unauthenticated_write_blocked(router):
     _skip_if_no_rpcd_plugin(router)
 
