@@ -355,7 +355,7 @@ def run_worker(config: WorkerConfig) -> int:
         elapsed = time.monotonic() - wall_t0
         force_delete = elapsed >= MAX_WALL_SECONDS
         if force_delete:
-            log.warning("2h max lifetime reached (%.1fs) — forcing VM deletion regardless of self_delete setting", elapsed)
+            log.warning("2h max lifetime reached (%.1fs) — forcing VM deletion regardless of lease setting", elapsed)
         if syslog_proc and syslog_proc.poll() is None:
             syslog_proc.kill()
         stop_local_mints(local_mints)
@@ -365,7 +365,7 @@ def run_worker(config: WorkerConfig) -> int:
             delete_self(config)
         elif config.keep_vm_on_failure:
             log.warning("Keeping VM + inner VMs alive for log inspection (keep_vm_on_failure=true). "
-                        "Kill switch will shut it down at 2h if still running.")
+                        "Lease kill switch will delete at tollgate-delete-at timestamp (3h hard backstop).")
         else:
             stop_inner_vms()
             log.info("Self-deleting VM %s", config.vm_name)

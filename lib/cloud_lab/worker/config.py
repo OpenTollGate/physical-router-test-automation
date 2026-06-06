@@ -39,6 +39,7 @@ class WorkerConfig:
     smoke: bool
     complete: bool
     wifi_plane: str
+    lease_minutes: int = 60
     runner_mode: bool = False  # True when running inside GitHub Actions self-hosted runner
 def _metadata_get(key: str) -> str:
     req = urllib.request.Request(
@@ -81,6 +82,7 @@ def load_config_from_metadata() -> WorkerConfig:
         smoke=_metadata_get_optional("tollgate-smoke").lower() in ("true", "1", "yes"),
         complete=_metadata_get_optional("tollgate-complete").lower() in ("true", "1", "yes"),
         wifi_plane=_metadata_get_optional("tollgate-wifi-plane", "tap"),
+        lease_minutes=int(_metadata_get_optional("tollgate-lease-minutes", "60")),
     )
     log.info(
         "Config: run=%s branch=%s repo=%s backend=%s pr=%s publish=%s keep_on_fail=%s mint=%s portal=%s hwsim=%s vwifi=%s quick=%s smoke=%s complete=%s wifi_plane=%s",
@@ -138,6 +140,7 @@ def load_config_from_env() -> WorkerConfig:
         smoke=_env_bool("TOLLGATE_SMOKE"),
         complete=_env_bool("TOLLGATE_COMPLETE"),
         wifi_plane=_env("TOLLGATE_WIFI_PLANE", "tap"),
+        lease_minutes=int(_env("TOLLGATE_LEASE_MINUTES", "60")),
     )
     log.info(
         "Config (runner mode): run=%s branch=%s repo=%s backend=%s pr=%s publish=%s mint=%s hwsim=%s vwifi=%s",

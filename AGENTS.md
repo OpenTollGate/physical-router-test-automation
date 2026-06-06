@@ -384,6 +384,14 @@ Nodogsplash's `ndsRTR` iptables chain drops ALL unauthenticated packets (mark 0x
 
 Nodogsplash only manages IPv4 iptables. If IPv6 Router Advertisements are active on LAN, WiFi clients get global IPv6 addresses and Android validates connectivity over IPv6, completely bypassing the captive portal. `Router.disable_ipv6_on_lan()` disables RA, DHCPv6, and removes the LAN IPv6 prefix.
 
+### Gatewayport 80 vs 2050 conflict
+
+Nodogsplash's default `gatewayport` is `2050` (hardcoded in `src/conf.h`). The TollGate `.ipk` includes `/etc/uci-defaults/99-tollgate-setup` which overrides it to `80`. The cloud lab pipeline (`pipeline.py:_fix_nodogsplash_gatewayport()`) force-corrects it back to `2050` after every deploy via `uci set nodogsplash.@nodogsplash[0].gatewayport=2050`.
+
+**Why this matters**: The captive portal CGI scripts in `/usr/lib/nodogsplash/` are configured to listen on port 2050. If the port is 80, NDS's own HTTP server clashes with uhttpd/LuCI and the portal breaks silently — clients get LuCI HTML instead of the captive portal page.
+
+**Current state**: The pipeline fix is a band-aid. The real fix requires changing `99-tollgate-setup` in the backend package to use port 2050 instead of 80. Tracked as issue #32.
+
 ### Offline router deployment (no internet, no opkg update)
 
 When a router has no internet (e.g., downstream/reseller behind a jump host), `opkg update` and `opkg install` will fail. You must manually SCP all packages and their dependencies.
@@ -825,15 +833,42 @@ The worker (`lib/cloud_lab/worker.py`) detects pre-provisioned OpenWrt bases aut
 | **Total (single-router)** | **~30min** | |
 | **Total (two-router)** | **~50min** | Extra Beta VM + serial provisioning + deploy |
 
-### VM lifecycle and kill switch
+### VM lifecycle and lease-based kill switch
 
-Cloud lab VMs use a two-layer safety mechanism:
+Cloud lab VMs use a three-layer safety mechanism:
 
 1. **Worker `MAX_WALL_SECONDS`** (7200s / 2h): The Python worker force-deletes the VM if the pipeline runs longer than 2 hours. This handles hung test suites, stuck SSH sessions, or runaway processes.
 
-2. **Startup script kill switch** (7200s / 2h): A background `sleep 7200 && gcloud compute instances delete` process runs independently of the worker. This is the last line of defense — it kills the VM even if the Python worker crashes or hangs.
+2. **Lease-based kill switch**: A background process inside the VM polls `tollgate-delete-at` metadata every 60s. When the epoch timestamp is reached, the VM self-deletes via `gcloud compute instances delete`. The host can extend the lease or trigger immediate deletion:
+   ```bash
+   # Extend lease by 60 minutes from now
+   ./scripts/cloud-lab.py extend --run-id <id> --minutes 60
+   
+   # Delete immediately
+   ./scripts/cloud-lab.py delete --run-id <id>
+   ```
 
-**VM retention policy**: By default, VMs stay alive after the pipeline finishes (successful or failed). The `keep_vm_on_failure` metadata flag defaults to `True`. Only when explicitly set to `"false"` or `"0"` does the worker self-delete immediately. The 2h kill switch ensures no VM runs longer than 2 hours regardless.
+3. **3h hard backstop**: The kill switch also enforces a 3h (10800s) absolute maximum from boot time. No amount of lease extensions can exceed this limit.
+
+**Lease configuration**: The default lease is 60 minutes, set at VM creation via `--lease` flag:
+```bash
+# 30-minute lease (aggressive cost savings)
+./scripts/cloud-lab.py submit --pr 42 --lease 30 --publish
+
+# 120-minute lease (deep debugging session)
+./scripts/cloud-lab.py submit --pr 42 --lease 120 --publish
+```
+
+**VM retention policy**: By default, VMs stay alive after the pipeline finishes with a 60-minute lease for log inspection. Use `delete` to clean up immediately when done, or `extend` if you need more time.
+
+**Cost comparison**:
+
+| Scenario | Cost |
+|----------|------|
+| Default 60min lease, inspect 5min then delete | ~$0.03 |
+| Default 60min lease, let expire naturally | ~$0.10 |
+| Extended to 120min, full inspection | ~$0.20 |
+| Hard backstop (3h max) | ~$0.29 |
 
 **Operational rule**: Do not kill VMs until you have either:
 - Verified the publish step completed (check `tests.tollgate.me` or gh-pages branch)

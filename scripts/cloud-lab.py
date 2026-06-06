@@ -26,6 +26,8 @@ from lib.cloud_lab.constants import (
 from lib.cloud_lab.gcp import (
     cleanup_all,
     cleanup_stale,
+    delete_by_run_id,
+    extend_lease,
     get_project,
     status_run,
     submit_run,
@@ -170,6 +172,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         hwsim=cast(bool, getattr(args, "hwsim", False)),
         vwifi=cast(bool, getattr(args, "vwifi", False)),
         wifi_plane=cast(str, getattr(args, "wifi_plane", "tap")),
+        lease_minutes=cast(int, getattr(args, "lease", 60)),
     )
     pr_line = f"  PR:           {target.pr} ({target.repo}@{target.branch})\n" if target.pr else f"  Branch:       {target.repo}@{target.branch}\n"
     mint_line = f"  Mint:         {cast(str, args.mint)}\n" if cast(str, args.mint) != "auto" else ""
@@ -180,10 +183,11 @@ def cmd_submit(args: argparse.Namespace) -> int:
     hwsim_line = "  hwsim:        enabled\n" if cast(bool, getattr(args, "hwsim", False)) else ""
     vwifi_line = "  vwifi:        enabled (cross-VM WiFi relay)\n" if cast(bool, getattr(args, "vwifi", False)) else ""
     wifi_plane_line = f"  WiFi plane:   {cast(str, getattr(args, 'wifi_plane', 'tap'))}\n" if cast(str, getattr(args, "wifi_plane", "tap")) != "tap" else ""
+    lease_line = f"  Lease:        {cast(int, getattr(args, 'lease', 60))} min\n" if cast(int, getattr(args, 'lease', 60)) != 60 else ""
     print(f"""
 Submitted run {info['run_id']}
 {pr_line}  SUT commit:   {target.sut_commit or '(branch head)'}
-{quick_line}{smoke_line}{complete_line}{mint_line}{portal_line}{hwsim_line}{vwifi_line}{wifi_plane_line}  VM:           {info['vm_name']} ({info['zone']})
+{quick_line}{smoke_line}{complete_line}{mint_line}{portal_line}{hwsim_line}{vwifi_line}{wifi_plane_line}{lease_line}  VM:           {info['vm_name']} ({info['zone']})
   Artifact run: {info['artifact_run_id']}
   Suite ref:    {info['suite_ref']} (must exist on github.com/{SUITE_REPO})
   Logs:         {info['log_hint']}
@@ -269,6 +273,14 @@ def cmd_cleanup_stale(args: argparse.Namespace) -> int:
 
 def cmd_cleanup_all(args: argparse.Namespace) -> int:
     return cleanup_all(zone=cast(str, args.zone))
+
+
+def cmd_delete(args: argparse.Namespace) -> int:
+    return delete_by_run_id(cast(str, args.run_id), zone=cast(str, args.zone))
+
+
+def cmd_extend(args: argparse.Namespace) -> int:
+    return extend_lease(cast(str, args.run_id), minutes=cast(int, args.minutes), zone=cast(str, args.zone))
 
 
 def cmd_install_reaper(args: argparse.Namespace) -> int:
@@ -368,6 +380,7 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--secondary-router-host", default="", help="Seller/secondary router IP or host for reseller scenarios")
     submit.add_argument("--secondary-router-port", default="", help="Optional SSH port for the seller/secondary router")
     submit.add_argument("--self-delete", action="store_true", help="Self-delete VM after tests complete (default: keep alive for debugging, 1h kill switch)")
+    submit.add_argument("--lease", type=int, default=60, help="Minutes before idle VM auto-deletes after pipeline completes (default: 60)")
     submit.add_argument("--artifact-timeout", type=int, default=1800, help="Seconds to wait for CI artifact")
     submit.add_argument("--mint", default="auto", choices=["auto", "cdk-v2", "nutshell-v2", "nutshell-v1"],
         help="Force a specific mint type instead of auto-detection. Use 'submit-all-mints' for parallel runs.")
@@ -400,6 +413,17 @@ def build_parser() -> argparse.ArgumentParser:
     sr.add_argument("--run-id", required=True)
     sr.add_argument("--zone", default=DEFAULT_ZONE)
     sr.set_defaults(func=cmd_status_run)
+
+    delete = sub.add_parser("delete", help="Delete a running VM by run-id")
+    delete.add_argument("--run-id", required=True)
+    delete.add_argument("--zone", default=DEFAULT_ZONE)
+    delete.set_defaults(func=cmd_delete)
+
+    extend = sub.add_parser("extend", help="Extend the lease on a running VM")
+    extend.add_argument("--run-id", required=True)
+    extend.add_argument("--minutes", type=int, default=60, help="Minutes to extend from now (default: 60)")
+    extend.add_argument("--zone", default=DEFAULT_ZONE)
+    extend.set_defaults(func=cmd_extend)
 
     clean = sub.add_parser("cleanup-stale", help="Delete tollgate run VMs older than max age")
     clean.add_argument("--zone", default=DEFAULT_ZONE)

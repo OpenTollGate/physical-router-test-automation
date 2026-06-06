@@ -82,6 +82,12 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     if client != "container":
         pytest.skip("visual test requires --client=container")
 
+    # IPv6 on br-lan bypasses Nodogsplash's IPv4-only captive portal.
+    # Without this, the container reaches the internet via IPv6 and the
+    # Playwright recording never sees auth markers (ok=False).
+    # See: https://github.com/OpenTollGate/physical-router-test-automation/issues/30
+    router.disable_ipv6_on_lan()
+
     gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "10.99.99.1")
     client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
     output_dir = os.path.join(results_dir, "raw", "visual")

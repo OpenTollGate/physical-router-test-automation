@@ -384,17 +384,36 @@ def _build_startup_script(suite_overlay_b64: str = "") -> str:
         exec >> /var/log/tollgate-run.log 2>&1
         echo "=== TollGate cloud worker started $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
-         # Hard kill switch: VM self-deletes after 2h regardless of test state.
-         # This prevents runaway costs from forgotten VMs.
-         # The worker also has its own timeout (MAX_WALL_SECONDS), but this is the last line of defense.
-         # Uses gcloud delete (not shutdown) to fully remove the VM and its disks.
+         # Lease-based kill switch: polls tollgate-delete-at metadata every 60s.
+         # When the epoch timestamp in metadata is reached, VM self-deletes.
+         # The host can extend the lease via `cloud-lab.py extend --run-id X`.
+         # Hard backstop: 3h (10800s) from boot, regardless of lease extensions.
          KILL_SWITCH_PROJECT=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/project/project-id || true)
          KILL_SWITCH_ZONE=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/zone || true)
          KILL_SWITCH_ZONE_BASE=$(basename "$KILL_SWITCH_ZONE" 2>/dev/null || echo "")
          KILL_SWITCH_NAME=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/name || true)
-         setsid bash -c 'sleep 7200 && echo "2h kill switch triggered — self-deleting VM" >> /var/log/tollgate-run.log && gcloud compute instances delete "$0" --project="$1" --zone="$2" --delete-disks=all --quiet >> /var/log/tollgate-run.log 2>&1 || shutdown -h now "TollGate self-delete failed, forcing shutdown"' "$KILL_SWITCH_NAME" "$KILL_SWITCH_PROJECT" "$KILL_SWITCH_ZONE_BASE" </dev/null >/dev/null 2>&1 &
+         BOOT_TIME=$(date +%s)
+         setsid bash -c '
+           SELF=$1; PROJ=$2; ZONE=$3; BOOT=$4
+           while true; do
+             NOW=$(date +%s)
+             HARD_LIMIT=$((BOOT + 10800))
+             if [ "$NOW" -ge "$HARD_LIMIT" ]; then
+               echo "3h hard limit reached — self-deleting VM" >> /var/log/tollgate-run.log
+               gcloud compute instances delete "$SELF" --project="$PROJ" --zone="$ZONE" --delete-disks=all --quiet >> /var/log/tollgate-run.log 2>&1 || shutdown -h now "TollGate self-delete failed"
+               exit 0
+             fi
+             DELETE_AT=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/attributes/tollgate-delete-at 2>/dev/null || echo "0")
+             if [ "$DELETE_AT" != "0" ] && [ "$DELETE_AT" != "" ] && [ "$NOW" -ge "$DELETE_AT" ]; then
+               echo "Lease expired (delete-at=$DELETE_AT, now=$NOW) — self-deleting VM" >> /var/log/tollgate-run.log
+               gcloud compute instances delete "$SELF" --project="$PROJ" --zone="$ZONE" --delete-disks=all --quiet >> /var/log/tollgate-run.log 2>&1 || shutdown -h now "TollGate self-delete failed"
+               exit 0
+             fi
+             sleep 60
+           done
+         ' "$KILL_SWITCH_NAME" "$KILL_SWITCH_PROJECT" "$KILL_SWITCH_ZONE_BASE" "$BOOT_TIME" </dev/null >/dev/null 2>&1 &
          KILL_SWITCH_PID=$!
-         echo "Kill switch armed: PID=$KILL_SWITCH_PID (self-delete in 7200s)"
+         echo "Lease kill switch armed: PID=$KILL_SWITCH_PID (polling every 60s, 3h hard limit)"
 
         export HOME="/root"
         export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -467,9 +486,28 @@ def _build_runner_startup_script() -> str:
         KILL_SWITCH_ZONE=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/zone || true)
         KILL_SWITCH_ZONE_BASE=$(basename "$KILL_SWITCH_ZONE" 2>/dev/null || echo "")
         KILL_SWITCH_NAME=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/name || true)
-        setsid bash -c 'sleep 7200 && echo "2h kill switch triggered — self-deleting VM" >> /var/log/runner-startup.log && gcloud compute instances delete "$0" --project="$1" --zone="$2" --delete-disks=all --quiet >> /var/log/runner-startup.log 2>&1 || shutdown -h now "TollGate self-delete failed, forcing shutdown"' "$KILL_SWITCH_NAME" "$KILL_SWITCH_PROJECT" "$KILL_SWITCH_ZONE_BASE" </dev/null >/dev/null 2>&1 &
+        BOOT_TIME=$(date +%s)
+        setsid bash -c '
+          SELF=$1; PROJ=$2; ZONE=$3; BOOT=$4
+          while true; do
+            NOW=$(date +%s)
+            HARD_LIMIT=$((BOOT + 10800))
+            if [ "$NOW" -ge "$HARD_LIMIT" ]; then
+              echo "3h hard limit reached — self-deleting VM" >> /var/log/runner-startup.log
+              gcloud compute instances delete "$SELF" --project="$PROJ" --zone="$ZONE" --delete-disks=all --quiet >> /var/log/runner-startup.log 2>&1 || shutdown -h now "TollGate self-delete failed"
+              exit 0
+            fi
+            DELETE_AT=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/attributes/tollgate-delete-at 2>/dev/null || echo "0")
+            if [ "$DELETE_AT" != "0" ] && [ "$DELETE_AT" != "" ] && [ "$NOW" -ge "$DELETE_AT" ]; then
+              echo "Lease expired (delete-at=$DELETE_AT, now=$NOW) — self-deleting VM" >> /var/log/runner-startup.log
+              gcloud compute instances delete "$SELF" --project="$PROJ" --zone="$ZONE" --delete-disks=all --quiet >> /var/log/runner-startup.log 2>&1 || shutdown -h now "TollGate self-delete failed"
+              exit 0
+            fi
+            sleep 60
+          done
+        ' "$KILL_SWITCH_NAME" "$KILL_SWITCH_PROJECT" "$KILL_SWITCH_ZONE_BASE" "$BOOT_TIME" </dev/null >/dev/null 2>&1 &
         KILL_SWITCH_PID=$!
-        echo "Kill switch armed: PID=$KILL_SWITCH_PID (self-delete in 7200s)"
+        echo "Lease kill switch armed: PID=$KILL_SWITCH_PID (polling every 60s, 3h hard limit)"
 
         export RUNNER_ALLOW_RUNASROOT=1
         JIT_CONFIG=$(curl -sf -H "Metadata-Flavor: Google" \\
@@ -521,6 +559,7 @@ def submit_run(
     hwsim: bool = False,
     vwifi: bool = False,
     wifi_plane: str = "tap",
+    lease_minutes: int = 60,
 ) -> dict[str, str]:
     """Pre-flight artifact check, then create fire-and-forget GCP VM. Returns run metadata."""
     cleanup_stale(max_age_hours=2)
@@ -572,6 +611,8 @@ def submit_run(
         "tollgate-hwsim": "true" if hwsim else "false",
         "tollgate-vwifi": "true" if vwifi else "false",
         "tollgate-wifi-plane": wifi_plane,
+        "tollgate-lease-minutes": str(lease_minutes),
+        "tollgate-delete-at": str(int(time.time()) + lease_minutes * 60),
     }
     metadata_payload = ",".join(f"{k}={v}" for k, v in metadata.items())
 
@@ -643,6 +684,8 @@ def submit_runner(
         "tollgate-zone": zone,
         "tollgate-vm-name": vm_name,
         "tollgate-keep-vm-on-failure": "true" if keep_vm_on_failure else "false",
+        "tollgate-lease-minutes": "60",
+        "tollgate-delete-at": str(int(time.time()) + 3600),
     }
     metadata_payload = ",".join(f"{k}={v}" for k, v in metadata.items())
 
@@ -768,4 +811,70 @@ def _delete_tollgate_vms(zone: str, max_age_hours: int = 1) -> int:
         if dr.returncode == 0:
             deleted += 1
     print(f"Deleted {deleted} stale VM(s)")
+    return 0
+
+
+def _find_vm_by_run_id(run_id: str) -> tuple[str, str, str] | None:
+    project = get_project()
+    r = _run_gcloud([
+        "compute", "instances", "list",
+        f"--project={project}",
+        f"--filter=metadata.tollgate-run-id={run_id}",
+        "--format=json",
+    ], timeout=60)
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    try:
+        instances = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not instances:
+        return None
+    inst = instances[0]
+    name = inst.get("name", "")
+    zone_raw = inst.get("zone", "")
+    zone = zone_raw.rsplit("/", 1)[-1] if "/" in zone_raw else zone_raw
+    return name, zone, project
+
+
+def extend_lease(run_id: str, minutes: int = 60, *, zone: str = DEFAULT_ZONE) -> int:
+    found = _find_vm_by_run_id(run_id)
+    if not found:
+        print(f"ERROR: No VM found for run-id {run_id}", file=sys.stderr)
+        return 1
+    vm_name, actual_zone, project = found
+    new_delete_at = str(int(time.time()) + minutes * 60)
+    r = _run_gcloud([
+        "compute", "instances", "add-metadata", vm_name,
+        f"--project={project}",
+        f"--zone={actual_zone}",
+        f"--metadata=tollgate-delete-at={new_delete_at}",
+    ], timeout=30)
+    if r.returncode != 0:
+        print(f"ERROR: Failed to extend lease: {r.stderr}", file=sys.stderr)
+        return 1
+    print(f"Lease extended for {vm_name}: auto-delete in {minutes} minutes")
+    return 0
+
+
+def delete_by_run_id(run_id: str, *, zone: str = DEFAULT_ZONE) -> int:
+    found = _find_vm_by_run_id(run_id)
+    if not found:
+        print(f"ERROR: No VM found for run-id {run_id}", file=sys.stderr)
+        return 1
+    vm_name, actual_zone, project = found
+    status = vm_status(project, actual_zone, vm_name)
+    if not status:
+        print(f"VM {vm_name} does not exist (already deleted?)")
+        return 0
+    print(f"Deleting VM {vm_name} (status={status})...")
+    r = _run_gcloud([
+        "compute", "instances", "delete", vm_name,
+        f"--project={project}", f"--zone={actual_zone}",
+        "--delete-disks=all", "--quiet",
+    ], timeout=120)
+    if r.returncode != 0:
+        print(f"ERROR: Failed to delete VM: {r.stderr}", file=sys.stderr)
+        return 1
+    print(f"VM {vm_name} deleted")
     return 0
