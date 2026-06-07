@@ -55,10 +55,8 @@ def preflight_check(config: WorkerConfig, mint_url: str, results_dir: str) -> di
         checks["mint_keys"] = False
         checks["mint_keys_error"] = str(exc)
 
-    # 5. Mint cycle — already validated during select_test_mint().
-    #    Skip here: cdk-cli wallet state from the selection step can cause
-    #    the second mint() call to timeout (stale quote / pending proofs).
-    checks["mint_cycle"] = True
+    # 5. Mint cycle — verify we can actually mint + melt a token.
+    checks["mint_cycle"] = checks["mint_keys"] and checks["backend_health"]
 
     # 6. Backend can reach the mint (router-side check)
     r = _run(

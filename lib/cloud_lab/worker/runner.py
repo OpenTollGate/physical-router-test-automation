@@ -197,7 +197,10 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
         f"mkdir -p {raw_dirs} {results_dir}/report"
     )
-    _run(prep, timeout=30, check=False)
+    r = _run(prep, timeout=30, check=False)
+    if r.returncode != 0:
+        log.error("Runner prep failed (rc=%d): %s", r.returncode, r.stderr[:200] if r.stderr else "")
+        return 1
 
     mode = runner_scope(config)
     log.info("%s MODE: running %d runner(s): %s", mode.upper(), len(runners), ", ".join(r.name for r in runners))
@@ -231,8 +234,17 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
 
         with ThreadPoolExecutor(max_workers=len(parallel_runners)) as pool:
             futures = {pool.submit(_execute_runner, spec): spec.name for spec in parallel_runners}
-            for future in as_completed(futures):
-                name, code = future.result()
+            for future in as_completed(futures, timeout=total_timeout):
+                try:
+                    name, code = future.result(timeout=30)
+                except TimeoutError:
+                    name = futures[future]
+                    log.error("Runner [%s] timed out waiting for result", name)
+                    code = 1
+                except Exception as exc:
+                    name = futures[future]
+                    log.error("Runner [%s] crashed: %s", name, exc)
+                    code = 1
                 exit_codes[name] = code
                 if code != 0:
                     log.warning("Runner [%s] exit=%d", name, code)

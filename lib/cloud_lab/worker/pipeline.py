@@ -113,7 +113,7 @@ NDS_EXPECTED_GATEWAYDOMAINNAME = "TollGate.lan"
 
 
 def _fix_nodogsplash_gatewayport() -> None:
-    _run(
+    r = _run(
         f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
         f"-o ControlPersist=60 -o ControlMaster=auto -o ControlPath=/tmp/ssh-nds-%r@%h:%p "
         f"root@{OPENWRT_IP} "
@@ -122,6 +122,11 @@ def _fix_nodogsplash_gatewayport() -> None:
         f'uci commit nodogsplash"',
         timeout=30, check=False,
     )
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"Failed to set nodogsplash gatewayport to {NDS_EXPECTED_GATEWAYPORT}: "
+            f"rc={r.returncode} stderr={r.stderr[:200] if r.stderr else 'none'}"
+        )
 
 
 def run_worker(config: WorkerConfig) -> int:

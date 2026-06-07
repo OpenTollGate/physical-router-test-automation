@@ -632,12 +632,14 @@ def submit_run(
     script_path.unlink(missing_ok=True)
 
     if actual_zone != zone:
-        _run_gcloud([
+        r = _run_gcloud([
             "compute", "instances", "add-metadata", vm_name,
             f"--project={project}",
             f"--zone={actual_zone}",
             f"--metadata=tollgate-zone={actual_zone}",
         ], timeout=30)
+        if r.returncode != 0:
+            print(f"WARNING: Failed to update zone metadata for {vm_name}: {r.stderr}", file=sys.stderr)
 
     log_hint = (
         f"gcloud compute ssh {vm_name} --project={project} --zone={actual_zone} "
@@ -810,8 +812,11 @@ def _delete_tollgate_vms(zone: str, max_age_hours: int = 1) -> int:
         ], timeout=120)
         if dr.returncode == 0:
             deleted += 1
-    print(f"Deleted {deleted} stale VM(s)")
-    return 0
+        else:
+            print(f"WARNING: Failed to delete VM {name}: {dr.stderr[:200]}", file=sys.stderr)
+    total = len([i for i in instances if i.get("name")])
+    print(f"Deleted {deleted}/{total} stale VM(s)")
+    return 0 if deleted == total else 1
 
 
 def _find_vm_by_run_id(run_id: str) -> tuple[str, str, str] | None:

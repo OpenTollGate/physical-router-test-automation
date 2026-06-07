@@ -25,7 +25,7 @@ def test_logs_show_mint_health_tracking(backend_logs):
     )
     if not health_signals:
         pytest.skip("No mint health tracking signals found in backend logs")
-    assert len(health_signals) > 0
+    assert len(health_signals) > 0, f"Expected at least one health signal, found {len(health_signals)}: {health_signals}"
 
 
 @pytest.mark.extended
@@ -36,7 +36,7 @@ def test_logs_show_dynamic_rebuild(backend_logs):
     )
     if not rebuild_signals:
         pytest.skip("No dynamic merchant rebuild signals in recent logs")
-    assert len(rebuild_signals) > 0
+    assert len(rebuild_signals) > 0, f"Expected at least one rebuild signal, found {len(rebuild_signals)}: {rebuild_signals}"
 
 
 @pytest.mark.extended
@@ -66,8 +66,8 @@ def test_wallet_info_shows_mint_count(router):
         pytest.skip(f"wallet info command not supported or returned no data: {str(info)[:200]}")
     data = info.get("data", {})
     mint_count = data.get("mint_count", -1)
-    assert isinstance(mint_count, int)
-    assert mint_count >= 0
+    assert isinstance(mint_count, int), f"Expected mint_count to be int, got {type(mint_count).__name__}: {mint_count}"
+    assert mint_count >= 0, f"Expected mint_count >= 0, got {mint_count}"
 
 
 @pytest.mark.extended
@@ -100,6 +100,6 @@ def test_version_matches_installed(router):
     version = router.get_tollgate_version()
     if version.get("success") is None and "raw" in version:
         pytest.skip(f"CLI socket exists but version command not supported: {version}")
-    assert version.get("success") is True
+    assert version.get("success") is True, f"Expected version.success to be True, got: {version}"
     msg = version.get("message", "")
     assert "version:" in msg, f"No version line in message: {msg}"
