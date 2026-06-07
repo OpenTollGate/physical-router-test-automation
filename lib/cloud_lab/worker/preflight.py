@@ -56,7 +56,7 @@ def preflight_check(config: WorkerConfig, mint_url: str, results_dir: str) -> di
         checks["mint_keys_error"] = str(exc)
 
     # 5. Mint cycle — verify we can actually mint + melt a token.
-    checks["mint_cycle"] = checks["mint_keys"] and checks["backend_health"]
+    checks["mint_cycle"] = checks["mint_keys"] and checks["backend_http"]
 
     # 6. Backend can reach the mint (router-side check)
     r = _run(
