@@ -6,7 +6,15 @@ import subprocess
 import time
 import logging
 
-from lib.constants import POC_GATEWAY, NDS_PORTAL_PORT
+from lib.constants import POC_GATEWAY
+
+# Container clients must access the portal via port 80 (the standard HTTP port),
+# NOT the NDS gatewayport (2050) directly. Port 80 traffic is intercepted by
+# NDS iptables rules on br-lan, which creates a proper preauthenticated client
+# record and serves the splash page correctly. Direct access to port 2050
+# bypasses iptables, leaving NDS without client context → HTTP 500.
+# See: https://github.com/openNDS/openNDS/issues/195
+_PORTAL_URL = f"http://{POC_GATEWAY}/"
 
 log = logging.getLogger("tollgate.container_client")
 
@@ -127,13 +135,12 @@ class ContainerClient:
         try:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             remote_png = "/tmp/tg-screenshot.png"
-            portal_url = f"http://{POC_GATEWAY}:{NDS_PORTAL_PORT}/"
             script = (
                 "from playwright.sync_api import sync_playwright\n"
                 "with sync_playwright() as p:\n"
                 f"    browser = p.chromium.launch(headless=True, args=['--no-sandbox'])\n"
                 "    page = browser.new_page(viewport={'width': 1280, 'height': 720})\n"
-                f"    page.goto('{portal_url}', timeout=15000)\n"
+                f"    page.goto('{_PORTAL_URL}', timeout=15000)\n"
                 "    page.wait_for_load_state('networkidle', timeout=10000)\n"
                 f"    page.screenshot(path='{remote_png}')\n"
                 "    browser.close()\n"
@@ -152,7 +159,7 @@ class ContainerClient:
             remote_png = "/tmp/tg-screenshot.png"
             remote_html = "/tmp/tg-page.html"
             ok = self._run_playwright_screenshot(
-                url=f"http://{POC_GATEWAY}:{NDS_PORTAL_PORT}/",
+                url=_PORTAL_URL,
                 png_path=remote_png,
                 html_path=remote_html,
             )
@@ -191,7 +198,6 @@ class ContainerClient:
             os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
             remote_dir = "/tmp/tg-auto-video"
             remote_video = "/tmp/tg-portal-video.webm"
-            portal_url = f"http://{POC_GATEWAY}:{NDS_PORTAL_PORT}/"
             script = (
                 "from pathlib import Path\n"
                 "from playwright.sync_api import sync_playwright\n"
@@ -209,7 +215,7 @@ class ContainerClient:
                 "        record_video_size={'width': 1280, 'height': 720},\n"
                 "    )\n"
                 "    page = ctx.new_page()\n"
-                f"    page.goto('{portal_url}', timeout=15000, wait_until='domcontentloaded')\n"
+                f"    page.goto('{_PORTAL_URL}', timeout=15000, wait_until='domcontentloaded')\n"
                 "    time.sleep(2)\n"
                 "    src = page.video.path() if page.video else None\n"
                 "    ctx.close()\n"
@@ -267,13 +273,12 @@ class ContainerClient:
 
     def ui_xml(self, timeout: int = 30) -> str:
         try:
-            portal_url = f"http://{POC_GATEWAY}:{NDS_PORTAL_PORT}/"
             script = (
                 "from playwright.sync_api import sync_playwright\n"
                 "with sync_playwright() as p:\n"
                 f"    browser = p.chromium.launch(headless=True, args=['--no-sandbox'])\n"
                 "    page = browser.new_page(viewport={'width': 1280, 'height': 720})\n"
-                f"    page.goto('{portal_url}', timeout=15000)\n"
+                f"    page.goto('{_PORTAL_URL}', timeout=15000)\n"
                 "    page.wait_for_load_state('networkidle', timeout=10000)\n"
                 "    print(page.content())\n"
                 "    browser.close()\n"
@@ -358,7 +363,6 @@ class ContainerClient:
             timeout=30,
         )
 
-        portal_url = f"http://{POC_GATEWAY}:{NDS_PORTAL_PORT}/"
         script = (
             "from playwright.sync_api import sync_playwright\n"
             "import os, re, shutil, time\n"
@@ -386,7 +390,7 @@ class ContainerClient:
             "                continue\n"
             "        return None\n"
             "    def submit_token(token):\n"
-            "        page.goto('" + portal_url + "', timeout=30000, wait_until='domcontentloaded')\n"
+            "        page.goto('" + _PORTAL_URL + "', timeout=30000, wait_until='domcontentloaded')\n"
             "        time.sleep(2)\n"
             "        try:\n"
             "            cashu_tab = page.locator('#tab-cashu, button[class*=tab-cashu]').first\n"
@@ -432,7 +436,7 @@ class ContainerClient:
             "                return\n"
             "        page.wait_for_load_state('domcontentloaded', timeout=5000)\n"
             "    try:\n"
-            f"        page.goto('{portal_url}', timeout=30000, wait_until='domcontentloaded')\n"
+            f"        page.goto('{_PORTAL_URL}', timeout=30000, wait_until='domcontentloaded')\n"
             "        time.sleep(2)\n"
             "        try:\n"
             "            cashu_tab = page.locator('#tab-cashu, button[class*=tab-cashu]').first\n"
