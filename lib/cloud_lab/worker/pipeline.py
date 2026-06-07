@@ -113,14 +113,13 @@ NDS_EXPECTED_GATEWAYDOMAINNAME = "TollGate.lan"
 
 
 def _fix_nodogsplash_gatewayport() -> None:
-    r = _run(
-        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-        f"-o ControlPersist=60 -o ControlMaster=auto -o ControlPath=/tmp/ssh-nds-%r@%h:%p "
-        f"root@{OPENWRT_IP} "
-        f'"uci set nodogsplash.@nodogsplash[0].gatewayport={NDS_EXPECTED_GATEWAYPORT} && '
-        f'uci set nodogsplash.@nodogsplash[0].gatewaydomainname={NDS_EXPECTED_GATEWAYDOMAINNAME} && '
-        f'uci commit nodogsplash"',
-        timeout=30, check=False,
+    from lib.cloud_lab.worker.inner_ssh import inner_ssh
+    r = inner_ssh(
+        OPENWRT_IP,
+        f"uci set nodogsplash.@nodogsplash[0].gatewayport={NDS_EXPECTED_GATEWAYPORT} && "
+        f"uci set nodogsplash.@nodogsplash[0].gatewaydomainname={NDS_EXPECTED_GATEWAYDOMAINNAME} && "
+        f"uci commit nodogsplash",
+        timeout=30,
     )
     if r.returncode != 0:
         log.warning(
