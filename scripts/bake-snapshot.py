@@ -587,7 +587,8 @@ def cmd_bake(args: argparse.Namespace) -> int:
             "id runner >/dev/null 2>&1 || useradd -m -s /bin/bash runner && "
             f"RUNNER_VERSION={runner_version} && "
             'RUNNER_DIR=/home/runner/actions-runner && '
-            f'[ -f "$RUNNER_DIR/run.sh" ] && echo "Runner already present" && echo RUNNER_INSTALL_OK && exit 0; '
+            f'[ -f "$RUNNER_DIR/run.sh" ] && grep -q "{runner_version}" "$RUNNER_DIR/run.sh" && echo "Runner v{runner_version} already present" && echo RUNNER_INSTALL_OK && exit 0; '
+            'echo "Removing old runner..." && rm -rf "$RUNNER_DIR" && '
             'rm -rf "$RUNNER_DIR" && mkdir -p "$RUNNER_DIR" && '
             'cd "$RUNNER_DIR" && '
             "curl -fL -o actions-runner-linux-x64.tar.gz "
