@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from lib.constants import NDS_PORTAL_PORT, TOKEN_DEFAULT
+from lib.constants import TOKEN_DEFAULT
 from lib.helpers import assert_deauthenticated, metering_test_setup, wait_expiry_and_verify_cutoff
 
 pytestmark = [pytest.mark.api, pytest.mark.complete, pytest.mark.virtual_lab, pytest.mark.publish_screenshot]
@@ -103,7 +103,7 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     except Exception as exc:
         pytest.fail(f"Cannot check Playwright in container: {exc}")
 
-    portal_url = f"http://{gateway}:{NDS_PORTAL_PORT}/"
+    portal_url = f"http://{gateway}/"
     code = ""
     for _ in range(20):
         code = adb.curl(portal_url, o="/dev/null", w="%{http_code}", s=True).strip()

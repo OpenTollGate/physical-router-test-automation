@@ -532,10 +532,15 @@ class Router:
         """
         self.ssh("service tollgate-wrt restart", timeout=15)
         if self.backend.is_rust:
+            url = self.backend_url("/")
             start = time.time()
             while time.time() - start < timeout:
                 try:
-                    if self.api_status("/") == 200:
+                    out = self.ssh(
+                        f"curl -s -o /dev/null -w '%{{http_code}}' '{url}'",
+                        timeout=10,
+                    )
+                    if out.strip() == "200":
                         return
                 except Exception:
                     pass

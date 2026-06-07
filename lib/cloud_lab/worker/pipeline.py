@@ -170,6 +170,11 @@ def run_worker(config: WorkerConfig) -> int:
             # In runner mode, GH_TOKEN is set by the workflow (cross_repo_token
             # for artifact download). Don't overwrite it — publish-report.sh
             # detects GITHUB_ACTIONS=true and uses gh auth setup-git instead.
+            # Export backend type so child code (select_test_mint, Router
+            # instances in subprocess scripts) reads the correct value from
+            # os.environ instead of falling back to "go".
+            os.environ["TOLLGATE_BACKEND"] = config.backend
+
             if not config.runner_mode:
                 os.environ["GH_TOKEN"] = config.gh_token
 

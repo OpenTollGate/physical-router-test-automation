@@ -114,7 +114,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
     disk_size_gb = cast(int, args.disk_size)
     project = get_project()
 
-    total_steps = 11
+    total_steps = 12
     vm_name = f"tollgate-bake-{int(time.time())}"
 
     print(f"Bake configuration:")
@@ -244,8 +244,32 @@ def cmd_bake(args: argparse.Namespace) -> int:
             print(f"WARNING: Cashu CLI install may have failed: {r.stderr[:300]}", file=sys.stderr)
         print(f"  Done in {time.monotonic() - t0:.1f}s")
 
+        # Step 6b: Download CDK mintd and cdk-cli binaries
+        _step(7, total_steps, "Downloading CDK mint binaries")
+        t0 = time.monotonic()
+        cdk_cmd = (
+            "mkdir -p /opt/cdk-mintd && "
+            "CDK_VER=0.16.0 && "
+            "if [ -x /opt/cdk-mintd/cdk-mintd ]; then echo 'cdk-mintd cached'; else "
+            "  wget -q -O /opt/cdk-mintd/cdk-mintd "
+            "    https://github.com/cashubtc/cdk/releases/download/v${CDK_VER}/cdk-mintd-${CDK_VER}-x86_64 && "
+            "  chmod +x /opt/cdk-mintd/cdk-mintd; fi && "
+            "if [ -x /opt/cdk-mintd/cdk-cli ]; then echo 'cdk-cli cached'; else "
+            "  wget -q -O /opt/cdk-mintd/cdk-cli "
+            "    https://github.com/cashubtc/cdk/releases/download/v${CDK_VER}/cdk-cli-${CDK_VER}-x86_64 && "
+            "  chmod +x /opt/cdk-mintd/cdk-cli && "
+            "  ln -sf /opt/cdk-mintd/cdk-cli /usr/local/bin/cdk-cli; fi && "
+            "/opt/cdk-mintd/cdk-mintd --version 2>&1 | head -1 && "
+            "/opt/cdk-mintd/cdk-cli --version 2>&1 | head -1 && "
+            "echo CDK_OK"
+        )
+        r = _gcloud_ssh(vm_name, cdk_cmd, zone, project, timeout=180)
+        if r.returncode != 0 or "CDK_OK" not in (r.stdout or ""):
+            print(f"WARNING: CDK install may have failed: {r.stderr[:300]}", file=sys.stderr)
+        print(f"  Done in {time.monotonic() - t0:.1f}s")
+
         # Step 7: Setup bridge and prepare OpenWrt overlay
-        _step(7, total_steps, "Setting up network bridge and OpenWrt overlay")
+        _step(8, total_steps, "Setting up network bridge and OpenWrt overlay")
         t0 = time.monotonic()
         workdir = VIRT_LAB_WORKDIR
         bridge_cmd = (
@@ -274,7 +298,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
         print(f"  Done in {time.monotonic() - t0:.1f}s")
 
         # Step 8: Boot QEMU with OpenWrt overlay and provision via serial
-        _step(8, total_steps, "Booting OpenWrt QEMU and provisioning via serial")
+        _step(9, total_steps, "Booting OpenWrt QEMU and provisioning via serial")
         t0 = time.monotonic()
         qemu_boot_cmd = (
             f"cd {workdir} && "
@@ -409,7 +433,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
         print(f"  Serial provisioning done in {time.monotonic() - t0:.1f}s")
 
         # Step 8b: Install WiFi packages for hwsim-based virtual WiFi testing
-        _step(8, total_steps, "Installing WiFi packages for hwsim testing")
+        _step(10, total_steps, "Installing WiFi packages for hwsim testing")
         wifi_pkgs = "kmod-mac80211-hwsim wpad-basic iw-full iwinfo socat"
         wifi_install_cmd = (
             f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
@@ -433,7 +457,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
         _gcloud_ssh(vm_name, shutdown_cmd, zone, project, timeout=30)
 
         # Step 8c: Build and install vwifi binaries for cross-VM WiFi relay
-        _step(8, total_steps, "Building vwifi binaries for cross-VM WiFi relay")
+        _step(10, total_steps, "Building vwifi binaries for cross-VM WiFi relay")
         t0_vwifi = time.monotonic()
         vwifi_build_cmd = (
             "apt-get update -qq && "
@@ -465,7 +489,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
             print(f"  stderr: {(r.stderr or '')[:300]}", file=sys.stderr)
 
         # Step 8d: Pre-bake Playwright into Debian QEMU overlay
-        _step(8, total_steps, "Pre-baking Playwright + Chromium into Debian overlay")
+        _step(10, total_steps, "Pre-baking Playwright + Chromium into Debian overlay")
         t0_deb = time.monotonic()
         debian_pw_cmd = (
             f"cd {workdir} && "
@@ -556,7 +580,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
             print(f"  WARNING: Debian VM SSH not ready, skipping Playwright pre-bake ({time.monotonic() - t0_deb:.1f}s)", file=sys.stderr)
 
         # Step 9: Install GitHub Actions runner binary
-        _step(9, total_steps, "Installing GitHub Actions runner binary")
+        _step(11, total_steps, "Installing GitHub Actions runner binary")
         t0_runner = time.monotonic()
         runner_version = "2.324.0"
         runner_install_cmd = (
@@ -583,7 +607,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
             print(f"  stderr: {(r.stderr or '')[:300]}", file=sys.stderr)
 
         # Step 10: Stop QEMU and copy overlay as new base
-        _step(10, total_steps, "Stopping QEMU and replacing base image with provisioned overlay")
+        _step(12, total_steps, "Stopping QEMU and replacing base image with provisioned overlay")
         t0 = time.monotonic()
         replace_cmd = (
             "killall -TERM qemu-system-x86_64 2>/dev/null || true; sleep 5; "
@@ -605,7 +629,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
         print(f"  Base image replaced in {time.monotonic() - t0:.1f}s")
 
         # Step 11: Stop VM and create snapshot
-        _step(11, total_steps, "Stopping VM and creating snapshot")
+        _step(12, total_steps, "Stopping VM and creating snapshot")
         t0 = time.monotonic()
         r = _run_gcloud([
             "compute", "instances", "stop", vm_name,
