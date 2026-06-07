@@ -16,24 +16,42 @@ PORTAL_TYPE = os.environ.get("TOLLGATE_PORTAL", "builtin").lower()
 
 
 def _nds_gateway_responsive(router):
-    """Check if NDS is running by querying ndsctl, not the gateway endpoint.
+    """Check if NDS is running via multiple detection methods.
 
-    Direct curl to the gatewayport (2050) bypasses iptables interception,
-    so NDS has no preauthenticated client context and returns HTTP 500.
-    Using ndsctl status is the canonical way to verify NDS is running.
+    Primary: ndsctl status (canonical NDS health check).
+    Fallback 1: pidof nodogsplash (process alive).
+    Fallback 2: netstat shows NDS listening on gatewayport.
+
+    We use multiple methods because ndsctl can fail if:
+    - The Unix socket path is wrong or not yet created
+    - ndsctl returns unexpected output format
+    - BusyBox ndsctl has different behavior than expected
     """
+    # Method 1: ndsctl status
     resp = router.ssh("ndsctl status 2>/dev/null | head -1", timeout=5)
-    return "nodogsplash" in resp.lower() or "Version" in resp
+    if resp and ("nodogsplash" in resp.lower() or "version" in resp.lower()):
+        return True
+    # Method 2: process check
+    pid = router.ssh("pidof nodogsplash 2>/dev/null", timeout=5)
+    if pid and pid.strip().isdigit():
+        return True
+    # Method 3: port listening
+    port = router.ssh(
+        "netstat -tlnp 2>/dev/null | grep nodogsplash | head -1", timeout=5
+    )
+    if port and "nodogsplash" in port:
+        return True
+    return False
 
 
 def _skip_unless_nds_responsive(router):
     """Skip test if nodogsplash is not running.
 
-    Uses ndsctl status (not HTTP curl) to detect NDS, because direct
-    curl to the gatewayport bypasses iptables and returns 500.
+    Uses multiple detection methods because ndsctl status alone is
+    unreliable across NDS versions and OpenWrt builds.
     """
     if not _nds_gateway_responsive(router):
-        pytest.skip("nodogsplash not running (ndsctl status failed)")
+        pytest.skip("nodogsplash not running (ndsctl/pidof/netstat all failed)")
 
 
 class TestBuiltinPortal:
