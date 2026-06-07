@@ -582,7 +582,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
         # Step 9: Install GitHub Actions runner binary
         _step(11, total_steps, "Installing GitHub Actions runner binary")
         t0_runner = time.monotonic()
-        runner_version = "2.324.0"
+        runner_version = "2.334.0"
         runner_install_cmd = (
             "id runner >/dev/null 2>&1 || useradd -m -s /bin/bash runner && "
             f"RUNNER_VERSION={runner_version} && "
