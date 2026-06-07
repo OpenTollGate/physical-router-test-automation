@@ -297,6 +297,11 @@ def run_worker(config: WorkerConfig) -> int:
                 configure_two_router_payment(config, chosen_mint)
                 _step_end("two-router-payment")
 
+            _step_start("post-mint-health")
+            log.info("[8.7/11] Wait for backend after mint config change")
+            wait_for_backend()
+            _step_end("post-mint-health")
+
             _step_start("preflight")
             log.info("[9/11] Pre-flight checks")
             preflight = preflight_check(config, chosen_mint, results_dir)
