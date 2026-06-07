@@ -441,21 +441,7 @@ def _build_startup_script(suite_overlay_b64: str = "") -> str:
 
         apt-get update -qq 2>/dev/null || true
         DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv git curl sshpass \\
-            qemu-utils iproute2 iptables 2>/dev/null || true
-
-        if ! command -v gh >/dev/null 2>&1; then
-            echo "Installing GitHub CLI..."
-            # Base snapshot may already have the apt source configured —
-            # just update and install. If not present, add it.
-            if ! grep -q 'cli.github.com' /etc/apt/sources.list.d/github-cli.list 2>/dev/null; then
-                apt-get install -y -qq apt-transport-https ca-certificates gnupg 2>/dev/null || true
-                curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \\
-                    | gpg --dearmor -o /etc/apt/keyrings/githubcli-archive-keyring.gpg 2>/dev/null || true
-                echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \\
-                    > /etc/apt/sources.list.d/github-cli.list 2>/dev/null || true
-            fi
-            apt-get update -qq 2>/dev/null && apt-get install -y -qq gh 2>/dev/null || true
-        fi
+            qemu-utils iproute2 iptables gh 2>/dev/null || true
 
         if ! command -v gcloud >/dev/null; then
             echo "Installing Google Cloud SDK for self-delete..."
