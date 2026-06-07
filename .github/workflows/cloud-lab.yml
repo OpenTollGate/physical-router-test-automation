@@ -225,7 +225,7 @@ jobs:
           info = submit_runner(
               encoded_jit_config='${{ steps.jit.outputs.jit_config }}',
               run_id=run_id,
-              keep_vm_on_failure=str(${{ inputs.self-delete }}).lower() == 'false',
+              keep_vm_on_failure='${{ inputs.self-delete }}' == 'false',
           )
 
           # Set GITHUB_OUTPUT
