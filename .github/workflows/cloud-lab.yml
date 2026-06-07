@@ -193,10 +193,8 @@ jobs:
           # authenticate with GitHub Actions without a persistent PAT.
           RESP=$(gh api -X POST \
             /repos/${{ github.repository }}/actions/runners/generate-jitconfig \
-            --input - <<'JSON' | jq -r '.encoded_jit_config'
-          {"name":"'"$RUNNER_NAME"'","runner_group_id":1,"labels":["cloud-lab"]}
-          JSON
-          )
+            --input "{\"name\":\"$RUNNER_NAME\",\"runner_group_id\":1,\"labels\":[\"cloud-lab\"]}" \
+            | jq -r '.encoded_jit_config')
 
           if [ -z "$RESP" ] || [ "$RESP" = "null" ]; then
             echo "ERROR: Failed to generate JIT config (empty or null)"
