@@ -179,11 +179,11 @@ jobs:
           echo "Resolved target: ${{ steps.resolve.outputs.repo }}@${{ steps.resolve.outputs.branch }}"
 
       # Step 2: Generate JIT runner config via GitHub API
-      # Uses the built-in GITHUB_TOKEN (has admin access due to permissions: contents: write)
+      # Requires a PAT with repo admin scope — GITHUB_TOKEN cannot call generate-jitconfig (HTTP 403)
       - name: Generate JIT runner config
         id: jit
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || secrets.GH_TOKEN }}
         run: |
           RUNNER_NAME="tollgate-${{ github.run_id }}"
           echo "Generating JIT config for runner: ${RUNNER_NAME}"
@@ -198,8 +198,8 @@ jobs:
           JSON
           )
 
-          if [ -z "$RESP" ]; then
-            echo "ERROR: Failed to generate JIT config"
+          if [ -z "$RESP" ] || [ "$RESP" = "null" ]; then
+            echo "ERROR: Failed to generate JIT config (empty or null)"
             exit 1
           fi
 
@@ -257,18 +257,19 @@ jobs:
       # Step 5: Create GCP VM with JIT config — runner picks up the queued job immediately
       - name: Spawn runner VM
         id: spawn
+        env:
+          JIT_CONFIG: ${{ steps.jit.outputs.jit_config }}
         run: |
           python3 -c "
-          import json
+          import json, os
           from lib.cloud_lab.gcp import submit_runner
 
           info = submit_runner(
-              encoded_jit_config='${{ steps.jit.outputs.jit_config }}',
+              encoded_jit_config=os.environ['JIT_CONFIG'],
               run_id='${{ steps.runid.outputs.run_id }}',
               keep_vm_on_failure='${{ inputs.self-delete }}' == 'false',
           )
 
-          # Set GITHUB_OUTPUT
           from pathlib import Path
           gho = Path('/tmp/gh-spawn-output')
           gho.write_text(
