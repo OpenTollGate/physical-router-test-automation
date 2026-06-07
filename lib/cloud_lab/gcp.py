@@ -394,7 +394,7 @@ def _build_startup_script(suite_overlay_b64: str = "") -> str:
          KILL_SWITCH_NAME=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/name || true)
          BOOT_TIME=$(date +%s)
          setsid bash -c '
-           SELF=$1; PROJ=$2; ZONE=$3; BOOT=$4
+           SELF=$0; PROJ=$1; ZONE=$2; BOOT=$3
            while true; do
              NOW=$(date +%s)
              HARD_LIMIT=$((BOOT + 10800))
@@ -488,7 +488,7 @@ def _build_runner_startup_script() -> str:
         KILL_SWITCH_NAME=$(curl -sf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/name || true)
         BOOT_TIME=$(date +%s)
         setsid bash -c '
-          SELF=$1; PROJ=$2; ZONE=$3; BOOT=$4
+          SELF=$0; PROJ=$1; ZONE=$2; BOOT=$3
           while true; do
             NOW=$(date +%s)
             HARD_LIMIT=$((BOOT + 10800))
