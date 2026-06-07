@@ -445,12 +445,16 @@ def _build_startup_script(suite_overlay_b64: str = "") -> str:
 
         if ! command -v gh >/dev/null 2>&1; then
             echo "Installing GitHub CLI..."
-            apt-get install -y -qq apt-transport-https ca-certificates gnupg 2>/dev/null || true
-            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \\
-                | gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null || true
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \\
-                > /etc/apt/sources.list.d/github-cli.list 2>/dev/null || true
-            apt-get update -qq && apt-get install -y -qq gh 2>/dev/null || true
+            # Base snapshot may already have the apt source configured —
+            # just update and install. If not present, add it.
+            if ! grep -q 'cli.github.com' /etc/apt/sources.list.d/github-cli.list 2>/dev/null; then
+                apt-get install -y -qq apt-transport-https ca-certificates gnupg 2>/dev/null || true
+                curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \\
+                    | gpg --dearmor -o /etc/apt/keyrings/githubcli-archive-keyring.gpg 2>/dev/null || true
+                echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \\
+                    > /etc/apt/sources.list.d/github-cli.list 2>/dev/null || true
+            fi
+            apt-get update -qq 2>/dev/null && apt-get install -y -qq gh 2>/dev/null || true
         fi
 
         if ! command -v gcloud >/dev/null; then
