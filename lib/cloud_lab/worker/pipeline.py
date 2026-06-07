@@ -120,9 +120,12 @@ def _fix_nodogsplash_gatewayport() -> None:
         f"'uci -q get nodogsplash.@nodogsplash[0].gatewayport'",
         timeout=15, check=False,
     )
-    if check.returncode != 0:
-        log.warning("nodogsplash UCI section not found — skipping gatewayport fix (rc=%d)", check.returncode)
+    if check.returncode == 255:
+        log.warning("SSH probe failed (rc=255) — retrying gatewayport fix without probe")
+    elif check.returncode != 0:
+        log.warning("nodogsplash UCI section not found (rc=%d) — skipping gatewayport fix", check.returncode)
         return
+
     r = _run(
         f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
         f"-o ControlPersist=60 -o ControlMaster=auto -o ControlPath=/tmp/ssh-nds-%r@%h:%p "
