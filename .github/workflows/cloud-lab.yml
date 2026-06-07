@@ -124,7 +124,7 @@ jobs:
       - name: Resolve target and wait for CI artifact
         id: resolve
         env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || secrets.GH_TOKEN }}
         run: |
           python3 -c "
           import json, sys
@@ -193,10 +193,10 @@ jobs:
           # authenticate with GitHub Actions without a persistent PAT.
           RESP=$(gh api -X POST \
             /repos/${{ github.repository }}/actions/runners/generate-jitconfig \
-            -f name="$RUNNER_NAME" \
-            -f runner_group_id=1 \
-            -f "labels[0]=cloud-lab" \
-            --jq '.encoded_jit_config')
+            --input - <<'JSON' | jq -r '.encoded_jit_config'
+          {"name":"'"$RUNNER_NAME"'","runner_group_id":1,"labels":["cloud-lab"]}
+          JSON
+          )
 
           if [ -z "$RESP" ]; then
             echo "ERROR: Failed to generate JIT config"
@@ -300,7 +300,7 @@ jobs:
       - name: Post PR comment with results
         if: always() && inputs.pr != ''
         env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || secrets.GH_TOKEN }}
         run: |
           RUN_ID="${{ steps.spawn.outputs.run_id || 'unknown' }}"
           BACKEND="${{ inputs.backend }}"

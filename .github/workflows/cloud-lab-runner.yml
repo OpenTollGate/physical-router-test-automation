@@ -110,7 +110,7 @@ jobs:
       # and cannot download artifacts from other repositories.
       - name: Download TollGate .ipk artifact
         env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || secrets.GH_TOKEN }}
         run: |
           python3 -c "
           import os
@@ -137,7 +137,7 @@ jobs:
 
       - name: Run test pipeline
         env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || secrets.GH_TOKEN }}
           TOLLGATE_RUN_ID: ${{ inputs.run_id }}
           TOLLGATE_SUT_BRANCH: ${{ inputs.artifact_branch }}
           TOLLGATE_SUT_COMMIT: ${{ inputs.artifact_commit }}
