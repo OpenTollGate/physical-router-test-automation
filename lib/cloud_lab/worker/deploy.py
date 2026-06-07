@@ -99,9 +99,19 @@ sys.exit(0 if result.get('success') or result.get('skipped') else 1)
     )
     log.info("Portal overlay deploy complete: %s", config.portal)
 def wait_for_backend() -> None:
+    from lib.cloud_lab.constants import VIRT_LAB_PASSWORD
+    ssh_prefix = (
+        f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} "
+        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o ControlPath=none root@{OPENWRT_IP} "
+    )
     for attempt in range(30):
-        r = _run(f"curl -s -o /dev/null -w '%{{http_code}}' http://{OPENWRT_IP}:2121/ || true", timeout=10, check=False)
-        code = r.stdout.strip()
+        r = _run(
+            f"{ssh_prefix}"
+            f"\"curl -s -o /dev/null -w '%{{http_code}}' http://127.0.0.1:2121/ 2>/dev/null || echo 000\"",
+            timeout=10, check=False,
+        )
+        code = r.stdout.strip().split("'")[-2] if "'" in r.stdout else r.stdout.strip()
         if "200" in code:
             log.info("TollGate backend healthy (attempt %d, http=%s)", attempt + 1, code)
             return
