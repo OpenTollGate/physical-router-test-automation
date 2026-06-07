@@ -191,7 +191,7 @@ jobs:
           # generate-jitconfig creates an ephemeral runner registration token
           # encoded as a single-use config string. The runner uses this to
           # authenticate with GitHub Actions without a persistent PAT.
-          RESP=$(printf '{"name":"%s","runner_group_id":1,"labels":["cloud-lab"]}' "$RUNNER_NAME" \
+          RESP=$(printf '{"name":"%s","runner_group_id":1,"labels":["self-hosted","linux","cloud-lab"]}' "$RUNNER_NAME" \
             | gh api -X POST \
               /repos/${{ github.repository }}/actions/runners/generate-jitconfig \
               --input - \
