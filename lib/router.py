@@ -311,9 +311,13 @@ class Router:
         except Exception as e:
             log.warning(f"Could not disable IPv6 on LAN: {e}")
 
+    def _use_ssh_for_api(self) -> bool:
+        """Whether API calls must go through SSH (ndsRTR blocks port 2121 on LAN)."""
+        return bool(self.jump_host) or bool(os.environ.get("TOLLGATE_VIRTUAL_LAB"))
+
     def api_status(self, path: str) -> int:
         url = self.backend_url(path)
-        if self.jump_host:
+        if self._use_ssh_for_api():
             try:
                 out = self.ssh(f"curl -s -o /dev/null -w '%{{http_code}}' '{url}'", timeout=15)
                 return int(out.strip()) if out.strip().isdigit() else 0
@@ -329,7 +333,7 @@ class Router:
 
     def api_body(self, path: str) -> str:
         url = self.backend_url(path)
-        if self.jump_host:
+        if self._use_ssh_for_api():
             try:
                 return self.ssh(f"wget -qO- '{url}'", timeout=15)
             except Exception:
