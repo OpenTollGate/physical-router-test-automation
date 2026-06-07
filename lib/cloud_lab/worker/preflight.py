@@ -42,8 +42,14 @@ def preflight_check(config: WorkerConfig, mint_url: str, results_dir: str) -> di
     )
     checks["ssh_debian"] = "DEBIAN_OK" in r.stdout
 
-    # 3. Backend responds
-    r = _run(f"curl -s -o /dev/null -w '%{{http_code}}' http://{OPENWRT_IP}:2121/", timeout=10, check=False)
+    # 3. Backend responds (via SSH to bypass Nodogsplash ndsRTR LAN restrictions)
+    r = _run(
+        f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} "
+        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o ConnectTimeout=5 root@{OPENWRT_IP} "
+        f"\"curl -s -o /dev/null -w '%{{http_code}}' http://127.0.0.1:2121/ 2>/dev/null || echo 000\"",
+        timeout=15, check=False,
+    )
     checks["backend_http"] = "200" in r.stdout
 
     # 4. Mint health (HTTP /v1/keys)
