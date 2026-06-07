@@ -247,7 +247,7 @@ jobs:
       - name: Trigger runner workflow
         id: trigger
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || secrets.GH_TOKEN }}
         run: |
           echo "Triggering cloud-lab-runner.yml on the self-hosted runner..."
           gh workflow run cloud-lab-runner.yml \
