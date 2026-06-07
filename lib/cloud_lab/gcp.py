@@ -514,10 +514,41 @@ def _build_runner_startup_script() -> str:
             http://metadata.google.internal/computeMetadata/v1/instance/attributes/jit-config)
 
         cd /home/runner/actions-runner
-        echo "Starting ephemeral runner agent..."
-        ./run.sh --jitconfig "$JIT_CONFIG"
-        RUNNER_EXIT=$?
-        echo "Runner exited with code $RUNNER_EXIT"
+
+        # JIT ephemeral runners exit with code 0 when no job is available yet.
+        # Retry up to 30 times (5 min) to handle the race between workflow
+        # dispatch and runner registration.
+        MAX_ATTEMPTS=30
+        ATTEMPT=0
+        JOB_RAN=false
+        while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Starting ephemeral runner agent (attempt $ATTEMPT/$MAX_ATTEMPTS)..."
+            ./run.sh --jitconfig "$JIT_CONFIG" 2>&1 | tee /tmp/runner-output.log
+            RUNNER_EXIT=${PIPESTATUS[0]}
+            echo "Runner exited with code $RUNNER_EXIT"
+
+            # Check if a job actually ran (runner prints "Job completed" on success)
+            if grep -q "Job completed" /tmp/runner-output.log 2>/dev/null; then
+                echo "Job executed successfully"
+                JOB_RAN=true
+                break
+            fi
+
+            # Non-zero exit = real error, don't retry
+            if [ "$RUNNER_EXIT" -ne 0 ]; then
+                echo "Runner exited with error code $RUNNER_EXIT, not retrying"
+                break
+            fi
+
+            # Exit code 0 but no job ran = idle exit, retry after delay
+            echo "Runner exited idle (no job), retrying in 10s..."
+            sleep 10
+        done
+
+        if [ "$JOB_RAN" = "false" ] && [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
+            echo "ERROR: Runner failed to pick up a job after $MAX_ATTEMPTS attempts (5 min)"
+        fi
 
         ZONE=$(curl -sf -H "Metadata-Flavor: Google" \\
             http://metadata.google.internal/computeMetadata/v1/instance/attributes/tollgate-zone)

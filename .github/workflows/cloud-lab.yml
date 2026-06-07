@@ -251,8 +251,8 @@ jobs:
             --field vwifi="${{ inputs.vwifi }}" \
             --field two-router="${{ inputs.two-router }}" \
             --field reseller-scenarios="${{ inputs.reseller-scenarios }}"
-          echo "Runner workflow triggered — waiting 5s for job to queue..."
-          sleep 5
+          echo "Runner workflow triggered — waiting 15s for job to queue..."
+          sleep 15
 
       # Step 5: Create GCP VM with JIT config — runner picks up the queued job immediately
       - name: Spawn runner VM
