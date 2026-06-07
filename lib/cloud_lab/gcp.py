@@ -443,6 +443,16 @@ def _build_startup_script(suite_overlay_b64: str = "") -> str:
         DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-venv git curl sshpass \\
             qemu-utils iproute2 iptables 2>/dev/null || true
 
+        if ! command -v gh >/dev/null 2>&1; then
+            echo "Installing GitHub CLI..."
+            apt-get install -y -qq apt-transport-https ca-certificates gnupg 2>/dev/null || true
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \\
+                | gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null || true
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \\
+                > /etc/apt/sources.list.d/github-cli.list 2>/dev/null || true
+            apt-get update -qq && apt-get install -y -qq gh 2>/dev/null || true
+        fi
+
         if ! command -v gcloud >/dev/null; then
             echo "Installing Google Cloud SDK for self-delete..."
             apt-get install -y -qq apt-transport-https ca-certificates gnupg 2>/dev/null || true
