@@ -208,7 +208,53 @@ jobs:
           echo "jit_config=${RESP}" >> "$GITHUB_OUTPUT"
           echo "JIT config generated successfully"
 
-      # Step 3: Create GCP VM with JIT config as a self-hosted runner
+      # Step 3: Generate run_id for this dispatch
+      - name: Generate run ID
+        id: runid
+        run: |
+          python3 -c "
+          from datetime import datetime, timezone
+          commit_short = '${{ steps.resolve.outputs.sut_commit }}'[:7].replace('/', '-')
+          timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+          run_id = f'{timestamp}-{commit_short}'
+          from pathlib import Path
+          Path('/tmp/gh-runid-output').write_text(f'run_id={run_id}\n')
+          "
+          while IFS='=' read -r key value; do
+            echo "${key}=${value}" >> "$GITHUB_OUTPUT"
+          done < /tmp/gh-runid-output
+          echo "Run ID: ${{ steps.runid.outputs.run_id }}"
+
+      # Step 4: Trigger runner workflow FIRST so the job is queued
+      # when the VM boots and the runner agent registers.
+      # This avoids the race where the VM boots, the JIT runner
+      # finds no job, and exits before the workflow is dispatched.
+      - name: Trigger runner workflow
+        id: trigger
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || secrets.GH_TOKEN }}
+        run: |
+          echo "Triggering cloud-lab-runner.yml (job will queue until runner registers)..."
+          gh workflow run cloud-lab-runner.yml \
+            --field run_id="${{ steps.runid.outputs.run_id }}" \
+            --field backend="${{ inputs.backend }}" \
+            --field artifact_repo="${{ steps.resolve.outputs.repo }}" \
+            --field artifact_run_id="${{ steps.resolve.outputs.artifact_run_id }}" \
+            --field artifact_branch="${{ steps.resolve.outputs.branch }}" \
+            --field artifact_commit="${{ steps.resolve.outputs.sut_commit }}" \
+            --field pr_number="${{ steps.resolve.outputs.pr }}" \
+            --field pr_repo="${{ steps.resolve.outputs.pr_repo }}" \
+            --field publish="${{ inputs.publish }}" \
+            --field smoke="${{ inputs.smoke }}" \
+            --field quick="${{ inputs.quick }}" \
+            --field hwsim="${{ inputs.hwsim }}" \
+            --field vwifi="${{ inputs.vwifi }}" \
+            --field two-router="${{ inputs.two-router }}" \
+            --field reseller-scenarios="${{ inputs.reseller-scenarios }}"
+          echo "Runner workflow triggered — waiting 5s for job to queue..."
+          sleep 5
+
+      # Step 5: Create GCP VM with JIT config — runner picks up the queued job immediately
       - name: Spawn runner VM
         id: spawn
         run: |
@@ -216,15 +262,9 @@ jobs:
           import json
           from lib.cloud_lab.gcp import submit_runner
 
-          # Generate run_id from timestamp + commit short hash
-          from datetime import datetime, timezone
-          commit_short = '${{ steps.resolve.outputs.sut_commit }}'[:7].replace('/', '-')
-          timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-          run_id = f'{timestamp}-{commit_short}'
-
           info = submit_runner(
               encoded_jit_config='${{ steps.jit.outputs.jit_config }}',
-              run_id=run_id,
+              run_id='${{ steps.runid.outputs.run_id }}',
               keep_vm_on_failure='${{ inputs.self-delete }}' == 'false',
           )
 
@@ -243,32 +283,7 @@ jobs:
           done < /tmp/gh-spawn-output
           echo "Runner VM spawned: ${{ steps.spawn.outputs.vm_name }}"
 
-      # Step 4: Trigger the runner workflow so the VM picks up the job
-      - name: Trigger runner workflow
-        id: trigger
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || secrets.GH_TOKEN }}
-        run: |
-          echo "Triggering cloud-lab-runner.yml on the self-hosted runner..."
-          gh workflow run cloud-lab-runner.yml \
-            --field run_id="${{ steps.spawn.outputs.run_id }}" \
-            --field backend="${{ inputs.backend }}" \
-            --field artifact_repo="${{ steps.resolve.outputs.repo }}" \
-            --field artifact_run_id="${{ steps.resolve.outputs.artifact_run_id }}" \
-            --field artifact_branch="${{ steps.resolve.outputs.branch }}" \
-            --field artifact_commit="${{ steps.resolve.outputs.sut_commit }}" \
-            --field pr_number="${{ steps.resolve.outputs.pr }}" \
-            --field pr_repo="${{ steps.resolve.outputs.pr_repo }}" \
-            --field publish="${{ inputs.publish }}" \
-            --field smoke="${{ inputs.smoke }}" \
-            --field quick="${{ inputs.quick }}" \
-            --field hwsim="${{ inputs.hwsim }}" \
-            --field vwifi="${{ inputs.vwifi }}" \
-            --field two-router="${{ inputs.two-router }}" \
-            --field reseller-scenarios="${{ inputs.reseller-scenarios }}"
-          echo "Runner workflow triggered"
-
-      # Step 5: Wait for the runner job to complete (optional, blocking)
+      # Step 6: Wait for the runner job to complete (optional, blocking)
       - name: Wait for runner job
         if: inputs.wait == true
         run: |
