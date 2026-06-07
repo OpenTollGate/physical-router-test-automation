@@ -127,6 +127,25 @@ def _fix_nodogsplash_gatewayport() -> None:
             r.returncode,
             r.stderr[:200] if r.stderr else "none",
         )
+    else:
+        rb = inner_ssh(
+            OPENWRT_IP,
+            "uci get nodogsplash.@nodogsplash[0].gatewayport",
+            timeout=15,
+        )
+        if rb.returncode != 0:
+            log.warning(
+                "nodogsplash gatewayport read-back failed (rc=%d)",
+                rb.returncode,
+            )
+        else:
+            actual = rb.stdout.strip() if rb.stdout else ""
+            if actual != str(NDS_EXPECTED_GATEWAYPORT):
+                log.error(
+                    "nodogsplash gatewayport mismatch: expected %d, got %r",
+                    NDS_EXPECTED_GATEWAYPORT,
+                    actual,
+                )
 
 
 def run_worker(config: WorkerConfig) -> int:

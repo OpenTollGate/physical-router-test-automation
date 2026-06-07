@@ -30,6 +30,12 @@ def _skip_unless_nds_responsive(router):
     because there are no wireless interfaces for preauthenticated clients.
     """
     if not _nds_gateway_responsive(router):
+        is_virtual = (
+            os.environ.get("TOLLGATE_LAB_TYPE") == "gcloud"
+            or os.environ.get("TOLLGATE_VIRTUAL_LAB") == "1"
+        )
+        if is_virtual:
+            return
         pytest.skip("nodogsplash gateway not responsive on :2050")
 
 

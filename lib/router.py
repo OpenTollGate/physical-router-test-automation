@@ -124,6 +124,7 @@ class Router:
                 ).strip()
                 self._nds_portal_port = int(port) if port else 2050
             except Exception:
+                logging.warning("UCI query for nodogsplash gatewayport failed, assuming 2050")
                 self._nds_portal_port = 2050
         return self._nds_portal_port
 

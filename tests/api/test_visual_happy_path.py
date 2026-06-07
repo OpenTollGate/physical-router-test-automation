@@ -99,9 +99,9 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     try:
         pw_check = adb._exec("python3 -c 'from playwright.sync_api import sync_playwright; print(\"PW_OK\")' 2>&1", timeout=15)
         if "PW_OK" not in pw_check:
-            pytest.skip(f"Playwright not functional in container: {pw_check[:200]}")
+            pytest.fail(f"Playwright not functional in container: {pw_check[:200]}")
     except Exception as exc:
-        pytest.skip(f"Cannot check Playwright in container: {exc}")
+        pytest.fail(f"Cannot check Playwright in container: {exc}")
 
     portal_url = f"http://{gateway}:{NDS_PORTAL_PORT}/"
     code = ""
