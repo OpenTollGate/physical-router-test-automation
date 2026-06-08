@@ -441,6 +441,35 @@ class Router:
             time.sleep(1)
         return self.get_nds_state(mac) == "Authenticated"
 
+    def ensure_dhcp_lease(self, ip: str | None = None, mac: str | None = None) -> None:
+        """Ensure the client IP/MAC pair exists in /tmp/dhcp.leases.
+
+        The Rust backend's DhcpLeasesResolver reads /tmp/dhcp.leases to map
+        client IPs to MAC addresses for session tracking. In the cloud lab,
+        the Debian container may use a static IP that never appears in DHCP
+        leases. This method injects a synthetic lease entry so MAC resolution
+        works.
+
+        No-op if the lease already exists.
+        """
+        ip = ip or self.phone_ip
+        mac = mac or self.phone_mac
+        if not ip or not mac:
+            return
+        try:
+            leases = self.ssh("cat /tmp/dhcp.leases 2>/dev/null || echo ''", timeout=10)
+            if ip in leases and mac in leases:
+                return
+            self.ssh(f"sed -i '/{ip}/d' /tmp/dhcp.leases 2>/dev/null || true", timeout=10)
+            timestamp = int(time.time())
+            self.ssh(
+                f"echo '{timestamp} {mac} {ip} * ' >> /tmp/dhcp.leases",
+                timeout=10,
+            )
+            log.info("Injected DHCP lease: %s -> %s", ip, mac)
+        except Exception as e:
+            log.warning("Could not inject DHCP lease for %s/%s: %s", ip, mac, e)
+
     def get_session(self, ip: str | None = None) -> dict:
         ip = ip or self.phone_ip
         resp = self.backend_curl_xff(self.backend_url("/balance"), ip)

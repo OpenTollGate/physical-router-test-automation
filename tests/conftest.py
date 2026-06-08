@@ -308,7 +308,7 @@ def router(request, backend):
 
     ssh_port = os.environ.get("TOLLGATE_SSH_PORT", "")
 
-    return Router(
+    router = Router(
         host=host,
         phone_ip=phone_ip,
         phone_mac=phone_mac,
@@ -318,6 +318,13 @@ def router(request, backend):
         port=int(ssh_port) if ssh_port else None,
         backend=backend,
     )
+
+    # Rust backend's DhcpLeasesResolver needs the client IP in /tmp/dhcp.leases.
+    # In cloud lab the container uses a static IP that never appears via DHCP.
+    if client == "container" and phone_ip and phone_mac:
+        router.ensure_dhcp_lease()
+
+    return router
 
 
 @pytest.fixture(scope="session")
