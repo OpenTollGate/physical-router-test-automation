@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Callable, cast
+
+# Ensure deploy.py log messages are visible during submit.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s", datefmt="%H:%M:%S")
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
