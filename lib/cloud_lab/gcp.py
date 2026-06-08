@@ -170,6 +170,10 @@ def _create_vm_with_fallback(
                 print(f"  → {mt} in {z}: zone exhausted, trying next...")
                 last_err = stderr.strip()
                 continue
+            if "does not exist in zone" in stderr or "does not exist" in stderr:
+                print(f"  → {mt} in {z}: machine type unavailable in this zone, trying next...")
+                last_err = stderr.strip()
+                continue
             if "not compatible with CPU platform" in stderr:
                 print(f"  → {mt} in {z}: CPU platform incompatibility, trying next type...")
                 last_err = stderr.strip()
