@@ -150,9 +150,9 @@ class TestPortalAgnostic:
 
     @pytest.mark.smoke
     def test_tollgate_backend_healthy(self, router):
-        port = os.environ.get('TOLLGATE_BACKEND_PORT', '2121')
+        url = router.backend_url("/")
         code = router.ssh(
-            f"curl -s -o /dev/null -w '%{{http_code}}' 'http://[::1]:{port}/'",
+            f"curl -s -o /dev/null -w '%{{http_code}}' '{url}'",
             timeout=10,
         )
-        assert code.strip() == "200", f"tollgate backend not healthy on :{port} (got {code!r})"
+        assert code.strip() == "200", f"tollgate backend not healthy at {url} (got {code!r})"
