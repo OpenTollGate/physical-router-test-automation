@@ -126,9 +126,10 @@ def resolve_target(
     deriving it from the backend config.  Useful for testing branches
     that only exist on a fork.
     """
-    provided = sum(1 for x in (pr, branch, commit) if x)
-    if provided != 1:
-        raise ValueError("Specify exactly one of --pr, --branch, or --commit")
+    if pr and (branch or commit):
+        raise ValueError("--pr cannot be used with --branch or --commit")
+    if not pr and not branch and not commit:
+        raise ValueError("Specify --pr, --branch, or --commit")
 
     if pr:
         target = _resolve_pr(pr, backend)
