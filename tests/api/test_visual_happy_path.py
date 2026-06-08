@@ -9,7 +9,7 @@ import pytest
 from lib.constants import TOKEN_DEFAULT
 from lib.helpers import assert_deauthenticated, metering_test_setup, wait_expiry_and_verify_cutoff
 
-pytestmark = [pytest.mark.api, pytest.mark.complete, pytest.mark.virtual_lab, pytest.mark.publish_screenshot]
+pytestmark = [pytest.mark.api, pytest.mark.virtual_lab, pytest.mark.publish_screenshot]
 
 DATA_DOWNLOAD_URL = os.environ.get(
     "TOLLGATE_VISUAL_DATA_TEST_URL",
@@ -176,6 +176,7 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     assert authenticated, "client should be authenticated after ndsctl auth"
 
 
+@pytest.mark.complete
 @pytest.mark.critical
 @pytest.mark.config
 @pytest.mark.timeout(180)
@@ -206,6 +207,7 @@ def test_visual_time_metering_expiry(adb, cashu, router, wifi, test_pricing, res
         router.reset_state(adb=adb)
 
 
+@pytest.mark.complete
 @pytest.mark.critical
 @pytest.mark.config
 @pytest.mark.timeout(180)
