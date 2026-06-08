@@ -352,6 +352,20 @@ def ensure_artifact(
             log.warning("%s", exc)
             runs = []
 
+        # gh run list --commit sometimes returns empty for older commits;
+        # fall back to branch-scoped search and filter by SHA client-side.
+        if commit and not runs and branch:
+            try:
+                runs = _list_workflow_runs(repo, workflow, branch=branch, limit=15)
+            except RuntimeError:
+                pass
+            if runs:
+                short = commit[:7] if len(commit) >= 7 else commit
+                runs = [r for r in runs if (
+                    (r.get("headSha") or "").startswith(short)
+                    or commit.startswith((r.get("headSha") or "")[:len(commit)])
+                )]
+
         if not runs:
             remaining = int(deadline - time.time())
             log.info(
