@@ -346,6 +346,29 @@ def start_inner_vms(config: WorkerConfig) -> None:
     log.info("Alpha OpenWrt VM SSH OK")
     configure_mgmt_nic(OPENWRT_IP, MGMT_ALPHA_IP, MGMT_ALPHA_MAC)
 
+    # Fix asymmetric routing in single-router mode. Without a separate WAN
+    # interface, all forwarded traffic leaves via br-lan (lan zone).  Return
+    # traffic from the host goes directly to the client on the same bridge,
+    # bypassing the OpenWrt VM.  Conntrack on the VM never sees the SYN-ACK
+    # and marks the subsequent ACK as INVALID → fw4 drops it → client gets
+    # ERR_CONNECTION_RESET.  Enabling masquerade on the lan zone makes the
+    # VM NAT forwarded traffic so the host replies to 10.99.99.1 (the VM),
+    # which then forwards back to the client — symmetric routing restored.
+    if not config.two_router:
+        log.info("Enabling masquerade on lan zone (single-router asymmetric routing fix)")
+        r = inner_ssh(
+            OPENWRT_IP,
+            "uci add_list firewall.@zone[0].masq='1' && "
+            "uci commit firewall && "
+            "fw4 restart && "
+            "echo MASQ_OK",
+            timeout=30,
+        )
+        if "MASQ_OK" in (r.stdout or ""):
+            log.info("Lan-zone masquerade enabled")
+        else:
+            log.warning("Lan-zone masquerade failed (rc=%d): %s", r.returncode, (r.stderr or "")[:200])
+
     _run(
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
         f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{OPENWRT_IP} "
