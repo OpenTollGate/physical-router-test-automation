@@ -10,6 +10,7 @@ import time
 import re
 import threading
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib import error, request
 
 from lib.constants import TEST_MINT_URL
@@ -239,6 +240,7 @@ class CdkCliWallet:
             self._cli = cdk_cli_path
         else:
             self._cli = self._find_cli()
+        self._work_dir: str | None = None
 
     def _find_cli(self) -> str:
         for path in _CDK_CLI_PATHS:
@@ -269,58 +271,67 @@ class CdkCliWallet:
         except Exception as exc:
             raise MintUnavailableError(f"cashu mint unexpected error: {exc}") from exc
 
+    def _get_work_dir(self) -> str:
+        if self._work_dir and os.path.isdir(self._work_dir):
+            return self._work_dir
+        self._work_dir = tempfile.mkdtemp(prefix="cdk-cli-session-")
+        return self._work_dir
+
     def _mint_token(self, amount: int, timeout: int) -> str:
-        # Use a fresh temp work directory for each mint+send pair.
-        # Without this, cdk-cli reuses ~/.cdk-cli/ and stale wallet state
-        # (pending quotes, spent proofs) causes subsequent mint calls to
-        # hang until timeout.
-        work_dir = tempfile.mkdtemp(prefix="cdk-cli-wallet-")
-        try:
-            mint_r = subprocess.run(
-                [self._cli, "-w", work_dir, "mint", self.mint_url, str(amount)],
-                capture_output=True, text=True, timeout=timeout,
-            )
+        work_dir = self._get_work_dir()
+        mint_r = subprocess.run(
+            [self._cli, "-w", work_dir, "mint", self.mint_url, str(amount)],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if mint_r.returncode != 0:
+            err = mint_r.stderr[-300:]
+            if "already exists" in err or "pending" in err.lower():
+                shutil.rmtree(work_dir, ignore_errors=True)
+                self._work_dir = None
+                work_dir = self._get_work_dir()
+                mint_r = subprocess.run(
+                    [self._cli, "-w", work_dir, "mint", self.mint_url, str(amount)],
+                    capture_output=True, text=True, timeout=timeout,
+                )
             if mint_r.returncode != 0:
                 raise RuntimeError(
                     f"cdk-cli mint failed (exit {mint_r.returncode}): "
                     f"{mint_r.stderr[-300:]}"
                 )
 
-            send_r = subprocess.run(
-                [self._cli, "-w", work_dir, "send", "--mint-url", self.mint_url, "--v3"],
-                input=f"{amount}\n",
-                capture_output=True, text=True, timeout=timeout,
-            )
-            if send_r.returncode != 0:
-                raise RuntimeError(
-                    f"cdk-cli send failed (exit {send_r.returncode}): "
-                    f"stdout={send_r.stdout[-200:]} stderr={send_r.stderr[-200:]}"
-                )
-
-            for line in send_r.stdout.strip().splitlines():
-                line = line.strip()
-                if line.startswith(("cashuA", "cashuB")):
-                    return line
-
+        send_r = subprocess.run(
+            [self._cli, "-w", work_dir, "send", "--mint-url", self.mint_url, "--v3"],
+            input=f"{amount}\n",
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if send_r.returncode != 0:
             raise RuntimeError(
-                f"cdk-cli send produced no token: {send_r.stdout[-300:]}"
+                f"cdk-cli send failed (exit {send_r.returncode}): "
+                f"stdout={send_r.stdout[-200:]} stderr={send_r.stderr[-200:]}"
             )
-        finally:
-            shutil.rmtree(work_dir, ignore_errors=True)
+
+        for line in send_r.stdout.strip().splitlines():
+            line = line.strip()
+            if line.startswith(("cashuA", "cashuB")):
+                return line
+
+        raise RuntimeError(
+            f"cdk-cli send produced no token: {send_r.stdout[-300:]}"
+        )
 
     def warmup(self, timeout: int = 60) -> None:
-        """Pre-initialize the CDK CLI by running a lightweight command."""
         if not self.is_available():
             return
+        work_dir = self._get_work_dir()
         try:
             subprocess.run(
-                [self._cli, "--help"],
+                [self._cli, "-w", work_dir, "balance"],
                 capture_output=True, text=True, timeout=timeout,
             )
         except (subprocess.TimeoutExpired, Exception):
             pass  # non-fatal
 
-    def mint(self, amount: int = 4, legacy: bool = False, timeout: int = 60,
+    def mint(self, amount: int = 4, legacy: bool = False, timeout: int = 90,
              retries: int = 2) -> str:
         if not self.is_available():
             raise RuntimeError(f"cdk-cli not found at {self._cli}")
@@ -375,17 +386,24 @@ class TokenPool:
 
     def _prefill(self):
         t0 = time.monotonic()
-        for i in range(self._pool_size):
-            try:
-                token = self._minter.mint(self._POOL_AMOUNT)
-                self._queue.append(token)
-            except Exception as exc:
-                log.warning("TokenPool: prefill mint %d/%d failed: %s", i + 1, self._pool_size, exc)
-                break
+        successes = 0
+        with ThreadPoolExecutor(max_workers=min(self._pool_size, 5)) as pool:
+            futures = {
+                pool.submit(self._minter.mint, self._POOL_AMOUNT): i
+                for i in range(self._pool_size)
+            }
+            for future in as_completed(futures):
+                try:
+                    token = future.result()
+                    with self._lock:
+                        self._queue.append(token)
+                    successes += 1
+                except Exception as exc:
+                    log.warning("TokenPool: prefill mint failed: %s", exc)
         elapsed = time.monotonic() - t0
         log.info(
             "TokenPool: prefilled %d/%d tokens (%.1fs, mint=%s)",
-            len(self._queue), self._pool_size, elapsed, self._minter_url,
+            successes, self._pool_size, elapsed, self._minter_url,
         )
 
     def _replenish(self):
