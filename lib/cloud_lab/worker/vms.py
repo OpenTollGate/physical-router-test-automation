@@ -359,15 +359,39 @@ def start_inner_vms(config: WorkerConfig) -> None:
         r = inner_ssh(
             OPENWRT_IP,
             "uci add_list firewall.@zone[0].masq='1' && "
-            "uci commit firewall && "
-            "fw4 restart && "
-            "echo MASQ_OK",
-            timeout=30,
+            "uci commit firewall",
+            timeout=15,
         )
-        if "MASQ_OK" in (r.stdout or ""):
-            log.info("Lan-zone masquerade enabled")
+        if r.returncode == 0:
+            log.info("Lan-zone masq committed, applying with fw4 restart...")
+            r2 = inner_ssh(
+                OPENWRT_IP,
+                "fw4 restart && echo MASQ_OK",
+                timeout=30,
+            )
+            if "MASQ_OK" in (r2.stdout or ""):
+                log.info("Lan-zone masquerade enabled")
+            else:
+                log.warning("fw4 restart may have failed (rc=%d): %s", r2.returncode, (r2.stderr or "")[:200])
         else:
-            log.warning("Lan-zone masquerade failed (rc=%d): %s", r.returncode, (r.stderr or "")[:200])
+            log.warning("Lan-zone masq commit failed (rc=%d): %s", r.returncode, (r.stderr or "")[:200])
+
+        # fw4 restart can briefly kill the SSH control master, wait for it
+        # to come back before the next SSH-dependent step (DHCP lease inject).
+        time.sleep(3)
+        for attempt in range(10):
+            check = _run(
+                f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
+                f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+                f"-o ConnectTimeout=3 root@{OPENWRT_IP} 'echo SSH_OK'",
+                timeout=10, check=False,
+            )
+            if "SSH_OK" in check.stdout:
+                log.info("SSH to OpenWrt confirmed after fw4 restart")
+                break
+            time.sleep(2)
+        else:
+            log.warning("SSH to OpenWrt not restored after fw4 restart — continuing anyway")
 
     _run(
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
