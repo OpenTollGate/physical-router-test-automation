@@ -351,47 +351,26 @@ def start_inner_vms(config: WorkerConfig) -> None:
     # traffic from the host goes directly to the client on the same bridge,
     # bypassing the OpenWrt VM.  Conntrack on the VM never sees the SYN-ACK
     # and marks the subsequent ACK as INVALID → fw4 drops it → client gets
-    # ERR_CONNECTION_RESET.  Enabling masquerade on the lan zone makes the
-    # VM NAT forwarded traffic so the host replies to 10.99.99.1 (the VM),
-    # which then forwards back to the client — symmetric routing restored.
+    # ERR_CONNECTION_RESET.  Adding a masquerade rule via nft (without fw4
+    # restart, which kills SSH) makes the VM NAT forwarded traffic so the
+    # host replies to 10.99.99.1 (the VM), which then forwards back to the
+    # client — symmetric routing restored.
     if not config.two_router:
-        log.info("Enabling masquerade on lan zone (single-router asymmetric routing fix)")
+        log.info("Applying nft masquerade for asymmetric routing fix")
         r = inner_ssh(
             OPENWRT_IP,
-            "uci add_list firewall.@zone[0].masq='1' && "
-            "uci commit firewall",
+            "nft add table ip tollgate-asym 2>/dev/null; "
+            "nft add chain ip tollgate-asym postrouting "
+            "'{ type nat hook postrouting priority srcnat + 10 ; }' 2>/dev/null; "
+            "nft add rule ip tollgate-asym postrouting "
+            "oifname br-lan ct status ! dstnat masquerade 2>/dev/null; "
+            "echo ASYM_OK",
             timeout=15,
         )
-        if r.returncode == 0:
-            log.info("Lan-zone masq committed, applying with fw4 restart...")
-            r2 = inner_ssh(
-                OPENWRT_IP,
-                "fw4 restart && echo MASQ_OK",
-                timeout=30,
-            )
-            if "MASQ_OK" in (r2.stdout or ""):
-                log.info("Lan-zone masquerade enabled")
-            else:
-                log.warning("fw4 restart may have failed (rc=%d): %s", r2.returncode, (r2.stderr or "")[:200])
+        if "ASYM_OK" in (r.stdout or ""):
+            log.info("Asymmetric routing masquerade applied via nft")
         else:
-            log.warning("Lan-zone masq commit failed (rc=%d): %s", r.returncode, (r.stderr or "")[:200])
-
-        # fw4 restart can briefly kill the SSH control master, wait for it
-        # to come back before the next SSH-dependent step (DHCP lease inject).
-        time.sleep(3)
-        for attempt in range(10):
-            check = _run(
-                f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
-                f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-                f"-o ConnectTimeout=3 root@{OPENWRT_IP} 'echo SSH_OK'",
-                timeout=10, check=False,
-            )
-            if "SSH_OK" in check.stdout:
-                log.info("SSH to OpenWrt confirmed after fw4 restart")
-                break
-            time.sleep(2)
-        else:
-            log.warning("SSH to OpenWrt not restored after fw4 restart — continuing anyway")
+            log.warning("nft masquerade failed (rc=%d): %s", r.returncode, (r.stderr or "")[:200])
 
     _run(
         f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
