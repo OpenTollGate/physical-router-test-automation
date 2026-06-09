@@ -108,10 +108,16 @@ def test_rust_ln_invoice_create(router):
 
 @pytest.mark.smoke
 def test_rust_ln_invoice_status(router):
+    # BusyBox wget suppresses body on non-2xx; use curl -s to capture
+    # the JSON error response regardless of HTTP status code.
     resp = router.ssh(
-        f"wget -qO- '{router.backend_url('/ln-invoice')}?quote=nonexistent-test-quote'"
+        f"curl -s '{router.backend_url('/ln-invoice')}?quote=nonexistent-test-quote'"
     )
     assert resp, "Empty ln-invoice status response"
+    # Should get a JSON error response (400 or 404 with error field), not empty body
+    data = parse_json_or_fail(resp, "ln-invoice status", skip=True)
+    assert data.get("error") or data.get("status") == 0, \
+        f"Expected error response for nonexistent quote, got: {str(data)[:200]}"
 
 
 @pytest.mark.smoke
