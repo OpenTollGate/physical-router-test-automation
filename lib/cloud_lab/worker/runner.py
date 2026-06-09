@@ -208,21 +208,26 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
     exit_codes: dict[str, int] = {}
     total_timeout = 600 if config.quick else (1200 if config.smoke else 3000)
 
-    # Run "visual" gate first (sequential) — fast sanity check before parallel work
-    visual_runners = [r for r in runners if r.name == "visual"]
-    parallel_runners = [r for r in runners if r.name != "visual"]
+    # vl-scenarios is destructive (blocks mints via /etc/hosts, restarts services).
+    # Must run AFTER parallel api to avoid poisoning concurrent sessions.
+    destructive_names = {"vl-scenarios"}
 
+    visual_runners = [r for r in runners if r.name == "visual"]
+    parallel_runners = [r for r in runners if r.name != "visual" and r.name not in destructive_names]
+    sequential_runners = [r for r in runners if r.name in destructive_names]
+
+    # Phase 1: visual gate
     for spec in visual_runners:
         cmd = _build_pytest_cmd(config, spec, results_dir)
         log.info("Runner [%s] starting (sequential gate, timeout=%ds)", spec.name, spec.timeout)
         r = _run(cmd, timeout=total_timeout, check=False)
         exit_codes[spec.name] = r.returncode
         if r.returncode != 0:
-            log.warning("Runner [%s] exit=%d (gate failed, continuing parallel runners)", spec.name, r.returncode)
+            log.warning("Runner [%s] exit=%d (gate failed, continuing)", spec.name, r.returncode)
         else:
             log.info("Runner [%s] passed (gate)", spec.name)
 
-    # Run remaining runners in parallel — each is an independent pytest subprocess
+    # Phase 2: parallel non-destructive runners
     if parallel_runners:
         log.info("Starting %d parallel runner(s): %s", len(parallel_runners), ", ".join(r.name for r in parallel_runners))
 
@@ -250,6 +255,19 @@ def run_tests(config: WorkerConfig, results_dir: str) -> int:
                     log.warning("Runner [%s] exit=%d", name, code)
                 else:
                     log.info("Runner [%s] passed", name)
+
+    # Phase 3: destructive runners (sequential, after parallel phase completes)
+    if sequential_runners:
+        log.info("Starting %d sequential destructive runner(s): %s", len(sequential_runners), ", ".join(r.name for r in sequential_runners))
+        for spec in sequential_runners:
+            cmd = _build_pytest_cmd(config, spec, results_dir)
+            log.info("Runner [%s] starting (sequential destructive, timeout=%ds)", spec.name, spec.timeout)
+            r = _run(cmd, timeout=total_timeout, check=False)
+            exit_codes[spec.name] = r.returncode
+            if r.returncode != 0:
+                log.warning("Runner [%s] exit=%d", spec.name, r.returncode)
+            else:
+                log.info("Runner [%s] passed", spec.name)
 
     worst = _aggregate_exit(exit_codes)
     log.info(
