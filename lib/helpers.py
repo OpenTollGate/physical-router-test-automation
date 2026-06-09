@@ -302,8 +302,10 @@ def get_mint_ip_map(router):
     """Resolve configured mint URLs to IPs via nslookup on the router.
 
     Returns dict mapping mint URL -> resolved IP address.
+    Handles bare-IP mint URLs (e.g. ``http://10.99.99.2:8385``) by
+    skipping DNS resolution — the hostname IS the IP.
     """
-    import re
+    import re as _re
     from urllib.parse import urlparse
 
     cfg_raw = router.ssh("cat /etc/tollgate/config.json")
@@ -313,8 +315,14 @@ def get_mint_ip_map(router):
     for url in urls:
         parsed = urlparse(url)
         hostname = parsed.hostname
+        if not hostname:
+            continue
+        # Bare IP — no DNS resolution needed
+        if _re.match(r"^\d+\.\d+\.\d+\.\d+$", hostname):
+            ip_map[url] = hostname
+            continue
         out = router.ssh(f"nslookup {hostname} 2>/dev/null || echo FAILED")
-        ips = re.findall(r"Address:\s*(\d+\.\d+\.\d+\.\d+)", out)
+        ips = _re.findall(r"Address:\s*(\d+\.\d+\.\d+\.\d+)", out)
         for ip in reversed(ips):
             if not ip.startswith("127."):
                 ip_map[url] = ip
@@ -371,9 +379,10 @@ def get_hostname(router):
 
 
 def skip_if_no_degraded_support(router):
-    resp = router.get_tollgate_status()
-    if resp.get("success") is not True:
-        pytest.skip("tollgate status command not available (version predates PR #118)")
-    raw = json.dumps(resp).lower()
-    if not any(kw in raw for kw in ["degraded", "reachable", "mint_health"]):
-        pytest.skip("No mint health tracking in status output (version predates PR #118)")
+    """Skip if backend lacks MintHealthTracker (degraded mode unsupported).
+
+    Delegates to :func:`skip_if_no_mint_health_tracker` which probes syslog
+    for MintHealthTracker activity.  Kept as a public alias because many test
+    files import this name directly.
+    """
+    skip_if_no_mint_health_tracker(router)
