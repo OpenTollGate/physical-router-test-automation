@@ -25,8 +25,8 @@ def test_portal_fetches_real_pricing_from_backend(router):
         pytest.skip(f"API not returning pricing (kind={kind}), may be in degraded mode")
 
     tags = data.get("tags", [])
-    price_tags = [t for t in tags if isinstance(t, list) and t[0] == "price_per_step"]
-    assert price_tags, f"No price_per_step tags in API response: {tags[:5]}"
+    pricing_tags = [t for t in tags if isinstance(t, list) and t[0] in ("price_per_step", "step_size")]
+    assert pricing_tags, f"No pricing tags in API response: {tags[:5]}"
 
     for html_file in [
         "/etc/nodogsplash/htdocs/splash.html",

@@ -93,7 +93,8 @@ _NO_NESTED_VIRT_PREFIXES = ("e2-", "n2d-", "t2a-", "a2-")
 # Zones to try when the requested zone is exhausted (ZONE_RESOURCE_POOL_EXHAUSTED).
 # Ordered by price (cheapest first). All support Intel CPUs + nested virt.
 # Tier 1 ($0.0971/hr): us-central1, us-east1, us-east5, us-west1
-# Tier 2 ($0.1068-$0.1069/hr): northamerica-northeast1/2, europe-west1, europe-west4
+# Tier 2 ($0.1068-$0.1069/hr): northamerica-northeast1/2, europe-west1/2/3/4
+# Tier 3 ($0.1170-$0.1183/hr): us-east4, us-west2/3/4, europe-west6/8
 # See: https://gcloud-compute.com/n2-standard-2.html
 _ZONE_FALLBACKS = [
     # Tier 1 — $0.0971/hr (cheapest)
@@ -105,7 +106,16 @@ _ZONE_FALLBACKS = [
     "northamerica-northeast1-a", "northamerica-northeast1-b", "northamerica-northeast1-c",
     "northamerica-northeast2-a", "northamerica-northeast2-b", "northamerica-northeast2-c",
     "europe-west1-b", "europe-west1-c", "europe-west1-d",
+    "europe-west2-a", "europe-west2-b", "europe-west2-c",
+    "europe-west3-a", "europe-west3-b", "europe-west3-c",
     "europe-west4-a", "europe-west4-b", "europe-west4-c",
+    # Tier 3 — $0.1170-$0.1183/hr (~20% more, acceptable for peak hours)
+    "us-east4-a", "us-east4-b", "us-east4-c",
+    "us-west2-a", "us-west2-b", "us-west2-c",
+    "us-west3-a", "us-west3-b", "us-west3-c",
+    "us-west4-a", "us-west4-b", "us-west4-c",
+    "europe-west6-a", "europe-west6-b", "europe-west6-c",
+    "europe-west8-a", "europe-west8-b", "europe-west8-c",
 ]
 
 # Machine types to try in order when the requested type is unavailable.
@@ -807,7 +817,12 @@ def cleanup_all(zone: str = DEFAULT_ZONE) -> int:
     return _delete_tollgate_vms(zone, max_age_hours=0)
 
 
-def _delete_tollgate_vms(zone: str, max_age_hours: int = 1) -> int:
+def _delete_tollgate_vms(zone: str = DEFAULT_ZONE, max_age_hours: int = 1) -> int:
+    """Delete tollgate VMs older than max_age_hours.
+
+    Zone-aware: extracts each VM's actual zone from its GCP metadata so
+    that fallback VMs created in alternate zones are correctly deleted.
+    """
     project = get_project()
     # Include all statuses (RUNNING, TERMINATED, STOPPING, STOPPED).
     # TERMINATED VMs still cost money for persistent disks and clutter the project.
@@ -827,6 +842,7 @@ def _delete_tollgate_vms(zone: str, max_age_hours: int = 1) -> int:
         instances = []
     cutoff = time.time() - max_age_hours * 3600
     deleted = 0
+    failed = 0
     for inst in instances:
         name = inst.get("name")
         creation = inst.get("creationTimestamp", "")
@@ -838,20 +854,43 @@ def _delete_tollgate_vms(zone: str, max_age_hours: int = 1) -> int:
             continue
         if created > cutoff:
             continue
+        vm_zone = _extract_zone_from_instance(inst, fallback_zone=zone)
         label = "stale" if max_age_hours > 0 else "tollgate"
-        print(f"Deleting {label} VM {name} (created {creation})...")
+        print(f"Deleting {label} VM {name} in {vm_zone} (created {creation})...")
         dr = _run_gcloud([
             "compute", "instances", "delete", name,
-            f"--project={project}", f"--zone={zone}",
+            f"--project={project}", f"--zone={vm_zone}",
             "--delete-disks=all", "--quiet",
         ], timeout=120)
         if dr.returncode == 0:
             deleted += 1
         else:
+            failed += 1
             print(f"WARNING: Failed to delete VM {name}: {dr.stderr[:200]}", file=sys.stderr)
     total = len([i for i in instances if i.get("name")])
-    print(f"Deleted {deleted}/{total} stale VM(s)")
+    print(f"Deleted {deleted}/{total} stale VM(s)" + (f", {failed} failed" if failed else ""))
     return 0 if deleted == total else 1
+
+
+def _extract_zone_from_instance(inst, fallback_zone=DEFAULT_ZONE):
+    """Extract the zone name from a GCP instance dict.
+
+    GCP returns zone as a full URL:
+        https://www.googleapis.com/compute/v1/projects/X/zones/us-east1-b
+    Falls back to parsing selfLink, then to fallback_zone.
+    """
+    for field in ("zone",):
+        val = inst.get(field, "")
+        if val and "/" in val:
+            return val.rsplit("/", 1)[-1]
+    self_link = inst.get("selfLink", "")
+    if "/zones/" in self_link:
+        try:
+            after_zones = self_link.split("/zones/", 1)[1]
+            return after_zones.split("/", 1)[0]
+        except (IndexError, ValueError):
+            pass
+    return fallback_zone
 
 
 def _find_vm_by_run_id(run_id: str) -> tuple[str, str, str] | None:
