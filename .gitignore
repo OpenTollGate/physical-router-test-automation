@@ -46,3 +46,9 @@ routers.lock
 *.webm
 *.mp4
 nuts/
+
+# Self-hosted GitHub Actions runner installation (local, not source)
+actions-runner/
+
+# Experimental Sovereign Hybrid Compute (SHC) client — not yet integrated
+lib/cloud_lab/shc.py

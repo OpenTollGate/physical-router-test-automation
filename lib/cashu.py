@@ -631,14 +631,22 @@ def create_minter(
         try:
             minter = HttpMinter(mint_url)
             minter.ensure_mint_available(timeout=5)
+            log.info("create_minter: selected HttpMinter (mint=%s)", mint_url)
             return minter
-        except Exception:
-            pass  # fall through to CLI-based minters
+        except Exception as exc:
+            log.warning(
+                "create_minter: HttpMinter unavailable (mint=%s, error=%s); falling back",
+                mint_url, exc,
+            )
+    else:
+        log.info("create_minter: coincurve not installed; skipping HttpMinter")
 
     cdk = CdkCliWallet(mint_url)
     if cdk.is_available():
+        log.info("create_minter: selected CdkCliWallet (mint=%s)", mint_url)
         return cdk
 
+    log.info("create_minter: selected CashuMint (mint=%s, venv=%s)", mint_url, venv_path)
     return CashuMint(venv_path=venv_path, mint_url=mint_url)
 
 

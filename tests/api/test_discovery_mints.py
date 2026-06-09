@@ -4,21 +4,11 @@ import time
 
 import pytest
 
-from lib.helpers import parse_json_or_fail
+from lib.helpers import parse_json_or_fail, skip_if_no_mint_health_tracker as _skip_if_no_degraded_support
 
 pytestmark = [pytest.mark.api, pytest.mark.extended]
 
 BAD_MINT_URL = "https://mint.example.com"
-
-
-def _skip_if_no_degraded_support(router):
-    resp = router.get_tollgate_status()
-    if resp.get("success") is not True:
-        pytest.skip("tollgate status command not available (no degraded mode support)")
-    raw = json.dumps(resp).lower()
-    has_mint_health = any(kw in raw for kw in ["degraded", "reachable", "mint_health"])
-    if not has_mint_health:
-        pytest.skip("No mint health tracking in status output (no degraded mode support)")
 
 
 def _write_config(router, config_str):

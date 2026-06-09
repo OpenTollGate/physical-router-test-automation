@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 import pytest
 
 from lib.constants import TEST_MINT_URL
+from lib.helpers import skip_if_no_mint_health_tracker as _skip_if_no_degraded_support
 
 log = logging.getLogger("tollgate.scenarios.mint_health")
 
@@ -41,16 +42,6 @@ SERVICE_SETTLE_SECONDS = 10
 def _mint_host(mint_url: str) -> str:
     """Extract hostname from a mint URL."""
     return urlparse(mint_url).hostname or mint_url
-
-
-def _skip_if_no_degraded_support(router):
-    """Skip if the deployed version does not support degraded mode."""
-    resp = router.get_tollgate_status()
-    if resp.get("success") is not True:
-        pytest.skip("tollgate status command not available")
-    raw = json.dumps(resp).lower()
-    if not any(kw in raw for kw in ["degraded", "reachable", "mint_health"]):
-        pytest.skip("no degraded mode support detected")
 
 
 def _is_full_merchant(router) -> bool:

@@ -1,3 +1,4 @@
+import re
 import time
 import json
 import logging
@@ -7,6 +8,26 @@ import pytest
 from lib.constants import PING_HOST
 
 log = logging.getLogger("tollgate.helpers")
+
+
+def skip_if_no_mint_health_tracker(router, lines: int = 2000) -> None:
+    """Skip if backend lacks MintHealthTracker (degraded mode unsupported).
+
+    MintHealthTracker (merged via PR #139/#140, present in all modern Go and Rust
+    backends) emits 'RunInitialProbe' at startup and 'runProactiveCheck' every 5min.
+    Either signal in recent syslog confirms the feature is loaded.
+
+    Replaces the pre-2026-06 status-JSON probe that checked for
+    'degraded|reachable|mint_health' keywords. Those strings were never present
+    in ServiceStatus / handleHealthCommand, so the old gate always skipped even
+    on backends that fully supported the feature.
+    """
+    try:
+        logs = router.get_tollgate_logs(lines=lines)
+    except Exception as exc:
+        pytest.skip(f"cannot read tollgate logs: {exc}")
+    if not re.search(r"RunInitialProbe|runProactiveCheck|MintHealthTracker", logs):
+        pytest.skip("backend lacks MintHealthTracker (degraded mode unsupported)")
 
 
 def is_session_event(resp: dict) -> bool:

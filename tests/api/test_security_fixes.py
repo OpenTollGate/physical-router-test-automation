@@ -1,14 +1,9 @@
 """Tests for security fixes in PR #104.
 
-PR #104 fixed three security issues:
+PR #104 (merged as 8ec5342) fixed three security issues:
 1. Mint URL case-insensitive matching
 2. Double-spent token detection (not crashing)
 3. X-Forwarded-For header trust from localhost only
-
-All three tests use xfail(strict=False): if the fix is absent, the test
-fails as XFAIL (expected — yellow in reports).  Once PR #104 lands and
-the fix is present, the test passes as XPASS (green).  No version-string
-or binary-grep probe needed — the test outcome IS the probe.
 
 See: https://github.com/OpenTollGate/tollgate-knowledgebase/tree/main/incidents/2026-01-XX_security-fixes-pr104
 """
@@ -20,10 +15,6 @@ from lib.helpers import require_client_identity
 
 @pytest.mark.api
 @pytest.mark.extended
-@pytest.mark.xfail(
-    reason="mint-url-case-sensitive not fixed — expected in PR #104",
-    strict=False,
-)
 def test_mint_url_case_insensitive(router, cashu):
     """Mint URLs with different casing should still be accepted.
 
@@ -45,10 +36,6 @@ def test_mint_url_case_insensitive(router, cashu):
 
 @pytest.mark.api
 @pytest.mark.extended
-@pytest.mark.xfail(
-    reason="spent-token-string-match not fixed — expected in PR #104",
-    strict=False,
-)
 def test_spent_token_detected(router, cashu):
     """Double-spending a token should return a proper error, not crash.
 
@@ -77,10 +64,6 @@ def test_spent_token_detected(router, cashu):
 
 @pytest.mark.api
 @pytest.mark.extended
-@pytest.mark.xfail(
-    reason="proxy-header-trust not fixed — expected in PR #104",
-    strict=False,
-)
 def test_proxy_header_only_from_localhost(router):
     """X-Forwarded-For should only be trusted from localhost.
 

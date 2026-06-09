@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 import pytest
 
-from lib.helpers import parse_json_or_fail
+from lib.helpers import parse_json_or_fail, skip_if_no_mint_health_tracker as _skip_if_no_degraded_support
 
 pytestmark = [pytest.mark.phone, pytest.mark.slow, pytest.mark.timeout(300), pytest.mark.requires_wifi]
 
@@ -65,16 +65,6 @@ def _is_degraded_mode(logs):
         logs, re.IGNORECASE,
     )
     return len(signals) > 0
-
-
-def _skip_if_no_degraded_support(router):
-    resp = router.get_tollgate_status()
-    if resp.get("success") is not True:
-        pytest.skip("tollgate status command not available (version predates PR #118)")
-    raw = json.dumps(resp).lower()
-    has_mint_health = any(kw in raw for kw in ["degraded", "reachable", "mint_health"])
-    if not has_mint_health:
-        pytest.skip("No mint health tracking in status output (version predates PR #118)")
 
 
 @pytest.fixture(autouse=True)
