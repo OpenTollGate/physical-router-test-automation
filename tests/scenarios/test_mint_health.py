@@ -88,23 +88,31 @@ def _has_no_configured_mints_logs(router) -> bool:
 def _block_mint_via_hosts(router, mint_url: str) -> None:
     """Add ``0.0.0.0 <host>`` to /etc/hosts on the router."""
     host = _mint_host(mint_url)
-    router.ssh(f"grep -q '{host}' /etc/hosts || "
+    router.ssh(f"grep -q '^0\\.0\\.0\\.0[[:space:]]\\+{host}' /etc/hosts || "
                f"echo '0.0.0.0 {host}' >> /etc/hosts")
     log.info("Blocked mint %s via /etc/hosts", host)
 
 
 def _unblock_mint_via_hosts(router, mint_url: str) -> None:
-    """Remove the mint host entry from /etc/hosts on the router."""
+    """Remove the ``0.0.0.0 <host>`` blocking entry from /etc/hosts.
+
+    Only removes the blocking line — preserves valid DNS entries that
+    happen to contain the same hostname or IP (e.g. worker-added
+    ``10.99.99.2 v1.testnut.nutshell.lan`` entries).
+    """
     host = _mint_host(mint_url)
-    router.ssh(f"sed -i '/{host}/d' /etc/hosts")
+    router.ssh(f"sed -i '/^0\\.0\\.0\\.0[[:space:]]\\+{host}/d' /etc/hosts")
     log.info("Unblocked mint %s via /etc/hosts", host)
 
 
 def _is_mint_blocked_in_hosts(router, mint_url: str) -> bool:
-    """Check if the mint host is currently blocked in /etc/hosts."""
+    """Check if the mint host is blocked with a ``0.0.0.0`` entry in /etc/hosts."""
     host = _mint_host(mint_url)
     out = router.ssh("cat /etc/hosts")
-    return host in out and "0.0.0.0" in out
+    for line in out.splitlines():
+        if line.startswith("0.0.0.0") and host in line.split():
+            return True
+    return False
 
 
 def _wait_for_recovery(router, timeout: int = RECOVERY_POLL_TIMEOUT,
