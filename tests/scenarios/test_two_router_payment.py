@@ -18,6 +18,7 @@ Requires: --two-router flag on cloud-lab.py submit (sets TOLLGATE_SECONDARY_ROUT
 import json
 import os
 import re
+import time
 
 import pytest
 
@@ -472,4 +473,94 @@ def test_both_routers_healthy_after_payment(router, backend):
         assert is_full_merchant(router_b), (
             "Beta returned kind 10021 but lacks price_per_step tags — "
             f"not a full merchant: {beta_body[:200]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# #88: router-to-router bandwidth session must CLOSE on allotment exhaustion
+# ---------------------------------------------------------------------------
+
+def _extract_remaining_bytes(raw):
+    """Best-effort: pull a remaining-byte allotment out of a /usage JSON blob."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    nested = [data] + [
+        v for v in (data.get(k) for k in ("session", "data", "usage")) if isinstance(v, dict)
+    ]
+    for c in nested:
+        for key in ("remaining", "remaining_bytes", "bytes_remaining", "allotment_remaining"):
+            v = c.get(key) if isinstance(c, dict) else None
+            if isinstance(v, (int, float)) and v > 0:
+                return int(v)
+    return None
+
+
+def _alpha_listed_on_beta(router_b, alpha_ip):
+    """True if Beta's ndsctl still lists Alpha (i.e. session not torn down)."""
+    try:
+        out = router_b.ssh("ndsctl clients 2>&1", timeout=10)
+    except Exception:
+        return True  # can't tell — don't manufacture a false pass
+    return alpha_ip in out
+
+
+@pytest.mark.timeout(180)
+def test_router_to_router_bandwidth_session_closes_on_exhaustion(router, backend):
+    """#88: a router-to-router bandwidth-metered session must CLOSE when the
+    downstream router (Alpha) exhausts its byte allotment on the upstream
+    (Beta). It must NOT stay open reporting 0 usage forever.
+
+    Regression test for the #88 root cause: a MAC paid via router-to-router
+    autopay was never registered with nodogsplash on the upstream, so usage
+    read 0 forever and the session never closed. The #104 fix makes the valve
+    always call `ndsctl auth` on gate open, so the paid MAC is tracked and the
+    allotment-exhaustion close path fires.
+
+    Skips outside the two-router virtual lab, if Alpha has no eth1 IP, or if
+    Alpha's remaining byte allotment can't be read from Beta's /usage.
+    """
+    _skip_if_not_virtual_lab()
+    router_b = _skip_if_no_secondary(_get_secondary_router(backend))
+    alpha_wan_ip = _get_alpha_wan_ip(router)
+    if not alpha_wan_ip:
+        pytest.skip("Alpha has no WAN IP on eth1")
+
+    # 1. Read Alpha's remaining byte allotment from Beta.
+    raw = router_b.ssh(
+        f"wget -qO- --timeout=10 'http://[::1]:2121/usage?ip={alpha_wan_ip}'",
+        timeout=15,
+    ).strip()
+    remaining = _extract_remaining_bytes(raw)
+    if not remaining:
+        pytest.skip(
+            "Could not determine Alpha's remaining byte allotment from Beta "
+            f"/usage (session may be time-metered or not yet established): {raw[:200]}"
+        )
+
+    # 2. Drive enough traffic from Alpha (through Beta) to exceed the allotment.
+    overage_mb = max(1, (remaining * 2) // (1024 * 1024))
+    router.ssh(
+        f"curl -s -o /dev/null --max-time 150 "
+        f"'http://cachefly.cachefly.net/{overage_mb}mb.test' || true",
+        timeout=160,
+    )
+
+    # 3. Beta must tear down Alpha's session once the allotment is exhausted.
+    deadline = time.time() + 60
+    closed = False
+    while time.time() < deadline:
+        if not _alpha_listed_on_beta(router_b, alpha_wan_ip):
+            closed = True
+            break
+        time.sleep(3)
+
+    if not closed:
+        pytest.fail(
+            f"Alpha ({alpha_wan_ip}) stayed authenticated on Beta after exhausting a "
+            f"{remaining}B allotment — router-to-router bandwidth session did not close "
+            f"(regression of #88 / the 0-usage-forever path)"
         )
