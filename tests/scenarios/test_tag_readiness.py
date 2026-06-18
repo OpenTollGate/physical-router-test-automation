@@ -104,7 +104,10 @@ class TestPreflight:
         for label, rtr in _both_routers(router, secondary_router):
             wwan = _ssh(rtr, "uci show network 2>/dev/null | grep -oE 'network\\.[a-z0-9_]+' | sort -u")
             interfaces = {line.split(".", 1)[-1] for line in wwan.splitlines() if line.strip()}
-            wwan_ifaces = {i for i in interfaces if i.startswith("wwan")}
+            # wwan6/wan6 are the IPv6 (DHCPv6) companions of wwan/wan — a standard
+            # OpenWrt pair, NOT a second WWAN. The real pitfall
+            # (docs/router-mutex.md) is a second distinct L3 interface like wwan2.
+            wwan_ifaces = {i for i in interfaces if i.startswith("wwan") and not i.endswith("6")}
             if len(wwan_ifaces) > 1:
                 bad.append(f"{label} ({rtr.host}): multiple wwan interfaces: {sorted(wwan_ifaces)}")
         assert not bad, "dual-WWAN pitfall detected (see docs/router-mutex.md):\n" + "\n".join(bad)
