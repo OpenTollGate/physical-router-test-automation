@@ -39,7 +39,7 @@
 ROUTER ?= alpha
 SSID   ?=
 PASS   ?=
-MINT   ?= https://testnut-compat.mints.orangesync.tech
+MINT   ?= https://nofee.testnut.cashu.space
 VIA    ?=
 PHASE  ?=
 
@@ -128,7 +128,7 @@ help: ## Show this help
 	@echo "  ROUTER  - router label from routers.env (default: alpha)"
 	@echo "  SSID    - upstream WiFi SSID"
 	@echo "  PASS    - upstream WiFi passphrase"
-	@echo "  MINT    - mint URL for block/unblock (default: https://testnut-compat.mints.orangesync.tech)"
+	@echo "  MINT    - mint URL for block/unblock (default: https://nofee.testnut.cashu.space)"
 	@echo "  VIA     - intermediate router for rescue"
 	@echo "  PHASE   - description for router lock"
 	@echo ""
@@ -273,6 +273,86 @@ full-all: ## Run all test suites (lint + playwright + degraded + upstream)
 	@echo "$(BOLD)=======================================$(RESET)"
 	@echo "$(GREEN)$(BOLD)  Full test suite complete [$(ROUTER)]$(RESET)"
 	@echo "$(BOLD)=======================================$(RESET)"
+
+# ===========================================================================
+#  TAG-READINESS CAMPAIGN (release gate for tollgate-module-basic-go main)
+# ===========================================================================
+#
+# Reproducible tag-readiness assessment of a pinned module commit across two
+# physical routers. Static analysis runs against a detached module worktree
+# (TOLLGATE_MAIN_SRC); the router tiers reuse the committed smoke / two-router
+# / Playwright targets plus the net-new preflight/postflight checks in
+# tests/scenarios/test_tag_readiness.py. Nothing is committed to the module
+# repo; the worktree is throwaway.
+#
+#   make tag-readiness-full ROUTER=alpha
+#
+# See docs/tag-readiness.md for the full runbook.
+
+TOLLGATE_MAIN_SRC ?= $(HOME)/tollgate-worktrees/main-readiness/src
+TAG_READINESS_COMMIT ?= 04ae54e
+
+.PHONY: tag-readiness-static tag-readiness-preflight tag-readiness-smoke \
+        tag-readiness-two-router tag-readiness-reboot tag-readiness-postflight \
+        tag-readiness-full tag-readiness-report
+
+tag-readiness-static: ## Static analysis in module worktree (go build/vet/test; no router)
+	@if [ ! -d "$(TOLLGATE_MAIN_SRC)" ]; then \
+		echo "$(RED)Module worktree src not found: $(TOLLGATE_MAIN_SRC)$(RESET)"; \
+		echo "$(YELLOW)Create it: git worktree add --detach ~/tollgate-worktrees/main-readiness $(TAG_READINESS_COMMIT)$(RESET)"; \
+		exit 1; \
+	fi
+	@echo "$(BOLD)=== tag-readiness static [$(TOLLGATE_MAIN_SRC) @ $(TAG_READINESS_COMMIT)] ===$(RESET)"
+	@cd "$(TOLLGATE_MAIN_SRC)" && echo "-- go build --" && go build ./... \
+		&& echo "-- go vet --" && go vet ./... \
+		&& echo "-- go test --" && go test ./...
+
+tag-readiness-preflight: ## Tag-readiness preflight on both routers (pytest --no-deploy)
+	$(call require_hardware_lock)
+	@python3 $(PYMAKE) tag-readiness-preflight --router $(ROUTER) -- --no-deploy
+
+tag-readiness-smoke: ## Tier 1: single-router smoke (degraded + hostname + ssl-status)
+	$(call require_hardware_lock)
+	@echo "$(BOLD)=== tag-readiness smoke [$(ROUTER)] ===$(RESET)"
+	@$(MAKE) smoke-degraded ROUTER=$(ROUTER)
+	@-$(MAKE) test-hostname ROUTER=$(ROUTER)
+	@-$(MAKE) test-ssl-status ROUTER=$(ROUTER)
+
+tag-readiness-two-router: ## Tier 2: two-router e2e (upstream renewal + pin + cashu payment)
+	$(call require_hardware_lock)
+	@echo "$(BOLD)=== tag-readiness two-router [$(ROUTER)+secondary] ===$(RESET)"
+	@$(MAKE) smoke-upstream ROUTER=$(ROUTER)
+	@-$(MAKE) smoke-pin-upstream ROUTER=$(ROUTER)
+	@-$(MAKE) test-cashu-payment ROUTER=$(ROUTER)
+
+tag-readiness-reboot: ## Tier 3: reboot-recovery (Playwright; no firmware sysupgrade)
+	$(call require_hardware_lock)
+	@if [ ! -d node_modules ]; then echo "$(YELLOW)Run npm install first$(RESET)"; exit 1; fi
+	@echo "$(BOLD)=== tag-readiness reboot-recovery ===$(RESET)"
+	@cd tests && npx playwright test destructive/reboot-recovery.spec.mjs --config=playwright.config.mjs
+
+tag-readiness-postflight: ## Tag-readiness postflight on both routers (pytest --no-deploy)
+	$(call require_hardware_lock)
+	@python3 $(PYMAKE) tag-readiness-postflight --router $(ROUTER) -- --no-deploy
+
+tag-readiness-full: ## Full tag-readiness campaign (static→preflight→smoke→two-router→reboot→postflight→report)
+	$(call require_hardware_lock)
+	@echo "$(BOLD)############ TAG-READINESS [$(TAG_READINESS_COMMIT)] ############$(RESET)"
+	@$(MAKE) tag-readiness-static
+	@$(MAKE) tag-readiness-preflight ROUTER=$(ROUTER)
+	@$(MAKE) tag-readiness-smoke ROUTER=$(ROUTER)
+	@$(MAKE) tag-readiness-two-router ROUTER=$(ROUTER)
+	@-$(MAKE) tag-readiness-reboot
+	@$(MAKE) tag-readiness-postflight ROUTER=$(ROUTER)
+	@$(MAKE) tag-readiness-report
+	@echo "$(GREEN)$(BOLD)Tag-readiness campaign complete. See docs/tag-readiness-reports/$(RESET)"
+
+tag-readiness-report: ## Collect + render report from latest results run-dir
+	@run=$$(ls -dt $(RESULTS_DIR)/*/ 2>/dev/null | head -1); \
+	if [ -z "$$run" ]; then echo "$(YELLOW)No results run-dir found; skipping render$(RESET)"; exit 0; fi; \
+	echo "$(CYAN)Collecting $$run$(RESET)"; \
+	python3 scripts/collect-results.py "$$run" || true; \
+	python3 scripts/render-report.py "$$run" || true
 
 # ===========================================================================
 #  ROUTER MANAGEMENT

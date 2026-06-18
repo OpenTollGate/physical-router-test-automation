@@ -310,3 +310,21 @@ arch-test-full:
   delegate: esp32 arch-test-full
   lock: hardware
   notes: Delegates to esp32 Makefile (Node tests)
+
+tag-readiness-preflight:
+  pytest: tests/scenarios/test_tag_readiness.py -k preflight
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  requires: secondary_router
+  timeout: 300
+  notes: Run via 'make tag-readiness-preflight' (passes --no-deploy)
+
+tag-readiness-postflight:
+  pytest: tests/scenarios/test_tag_readiness.py -k postflight
+  status: migrated
+  lock: hardware
+  router_env: mint-health
+  requires: secondary_router
+  timeout: 300
+  notes: Run via 'make tag-readiness-postflight' (passes --no-deploy)

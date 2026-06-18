@@ -79,7 +79,7 @@ r-test-startup-hygiene r-test-startup-hygiene-setup r-test-startup-hygiene-verif
 SSID    ?=
 PASS    ?=
 ROUTER  ?= alpha
-MINT    ?= https://testnut-compat.mints.orangesync.tech
+MINT    ?= https://nofee.testnut.cashu.space
 PHASE   ?= unspecified
 
 -include routers.env
@@ -149,7 +149,7 @@ help: ## Show this help
 	@echo "  SSID    - upstream WiFi SSID (required for connect/smoke/full-upstream)"
 	@echo "  PASS    - upstream WiFi passphrase (optional for open networks)"
 	@echo "  ROUTER  - router label from routers.env (default: alpha)"
-	@echo "  MINT    - mint URL to block/unblock (default: https://testnut-compat.mints.orangesync.tech)"
+	@echo "  MINT    - mint URL to block/unblock (default: https://nofee.testnut.cashu.space)"
 	@echo "  PHASE   - description for router lock (default: unspecified)"
 	@echo ""
 	@echo "Degraded mode testing:"
@@ -1230,9 +1230,9 @@ r-smoke-pin-upstream: ## [remote] Two-router: verify upstream pin prevents scan-
 #  Test mint setup & degraded mode suites
 # ---------------------------------------------------------------------------
 
-TEST_MINT_CONFIG := {"config_version":"v0.0.7","log_level":"info","accepted_mints":[{"url":"https://testnut-compat.mints.orangesync.tech","price_per_step":1,"price_unit":"sats","min_balance":0,"payout_interval_seconds":999999,"min_payout_amount":999999,"balance_tolerance_percent":0}],"profit_share":[{"factor":1.0,"identity":"owner"}],"step_size":4096,"margin":0.1,"metric":"bytes","show_setup":true,"upstream_detector":{"probe_timeout":10000000000,"probe_retry_count":3,"probe_retry_delay":2000000000,"require_valid_signature":false,"ignore_interfaces":["lo","docker0","br-lan","hostap0"],"only_interfaces":[],"discovery_timeout":300000000000},"upstream_session_manager":{"max_price_per_millisecond":0.002777777778,"max_price_per_byte":3.725782414e-05,"trust":{"default_policy":"trust_all","allowlist":[],"blocklist":[]},"sessions":{"preferred_session_increments_milliseconds":60000,"preferred_session_increments_bytes":8192,"millisecond_renewal_offset":10000,"bytes_renewal_offset":4096},"usage_tracking":{"data_monitoring_interval":500000000}}}
+TEST_MINT_CONFIG := {"config_version":"v0.0.7","log_level":"info","accepted_mints":[{"url":"https://nofee.testnut.cashu.space","price_per_step":1,"price_unit":"sats","min_balance":0,"payout_interval_seconds":999999,"min_payout_amount":999999,"balance_tolerance_percent":0}],"profit_share":[{"factor":1.0,"identity":"owner"}],"step_size":4096,"margin":0.1,"metric":"bytes","show_setup":true,"upstream_detector":{"probe_timeout":10000000000,"probe_retry_count":3,"probe_retry_delay":2000000000,"require_valid_signature":false,"ignore_interfaces":["lo","docker0","br-lan","hostap0"],"only_interfaces":[],"discovery_timeout":300000000000},"upstream_session_manager":{"max_price_per_millisecond":0.002777777778,"max_price_per_byte":3.725782414e-05,"trust":{"default_policy":"trust_all","allowlist":[],"blocklist":[]},"sessions":{"preferred_session_increments_milliseconds":60000,"preferred_session_increments_bytes":8192,"millisecond_renewal_offset":10000,"bytes_renewal_offset":4096},"usage_tracking":{"data_monitoring_interval":500000000}}}
 
-r-setup-test-mint: ## [remote] Configure router with testnut-compat.mints.orangesync.tech for testing
+r-setup-test-mint: ## [remote] Configure router with nofee.testnut.cashu.space for testing
 	@$(CHECK_LOCK)
 	@$(RESOLVE_ROUTER); \
 	echo "$(BOLD)=== Setup Test Mint [$(ROUTER)] ===$(RESET)"; \
@@ -1268,7 +1268,7 @@ r-setup-test-mint: ## [remote] Configure router with testnut-compat.mints.orange
 
 MINT_TOKEN_BIN := $(shell test -x /tmp/mint-token && echo /tmp/mint-token || echo "")
 
-r-fund-wallet: ## [remote] Fund wallet with 1013 sats from testnut-compat.mints.orangesync.tech
+r-fund-wallet: ## [remote] Fund wallet with 1013 sats from nofee.testnut.cashu.space
 	@if [ -z "$(MINT_TOKEN_BIN)" ]; then \
 		echo "$(RED)mint-token tool not found. Build it first:$(RESET)"; \
 		echo "  cd src/cmd/mint-token && export PATH=\$$PATH:/usr/local/go/bin && go build -o /tmp/mint-token ."; \
@@ -1283,7 +1283,7 @@ r-fund-wallet: ## [remote] Fund wallet with 1013 sats from testnut-compat.mints.
 		echo "$(YELLOW)This means the binary has the 000_main_test_env.go bug. Rebuild with the build tag fix.$(RESET)"; \
 		exit 1; \
 	fi; \
-	echo "Minting 1013 sats from testnut-compat.mints.orangesync.tech..."; \
+	echo "Minting 1013 sats from nofee.testnut.cashu.space..."; \
 	TOKEN=$$($(MINT_TOKEN_BIN) 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])"); \
 	if [ -z "$$TOKEN" ]; then echo "$(RED)Failed to mint token$(RESET)"; exit 1; fi; \
 	echo "Token minted (length $${#TOKEN}). Funding wallet..."; \
@@ -1373,7 +1373,7 @@ r-test-default-mints: ## [remote] Verify default mint config matches expected br
 		echo "$(RED)FAIL: Expected at least 2 mints, got $$mint_count$(RESET)"; \
 		exit 1; \
 	fi; \
-	if ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "cat /etc/tollgate/config.json" 2>/dev/null | grep -q 'testnut-compat.mints.orangesync.tech'; then \
+	if ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "cat /etc/tollgate/config.json" 2>/dev/null | grep -q 'nofee.testnut.cashu.space'; then \
 		echo "$(GREEN)OK: Test mint present in config (dev build)$(RESET)"; \
 	else \
 		echo "$(YELLOW)INFO: Test mint not in config (production build or custom config)$(RESET)"; \
@@ -2351,7 +2351,7 @@ r-fix-dns: ## [remote] Fix NetBird DNS hijack: disable NetBird DNS, restore reso
 	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "cp /tmp/resolv.conf.d/resolv.conf.auto /etc/resolv.conf 2>/dev/null && echo 'resolv.conf restored' || echo 'No auto resolv.conf, keeping current'"; \
 	echo ""; \
 	echo "$(CYAN)Step 4: Verify DNS...$(RESET)"; \
-	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "cat /etc/resolv.conf; echo '---'; nslookup testnut-compat.mints.orangesync.tech 2>&1 | head -5"; \
+	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "cat /etc/resolv.conf; echo '---'; nslookup nofee.testnut.cashu.space 2>&1 | head -5"; \
 	echo ""; \
 	echo "$(CYAN)Step 5: Restart tollgate...$(RESET)"; \
 	ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host "/etc/init.d/tollgate-wrt restart"; \
