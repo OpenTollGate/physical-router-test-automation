@@ -54,6 +54,17 @@ def _skip_unless_nds_responsive(router):
         pytest.skip("nodogsplash not running (ndsctl/pidof/netstat all failed)")
 
 
+def _nds_serves(router, path):
+    """Fetch `path` from the local NDS gateway via busybox wget; return the body.
+
+    Non-empty body means NDS answered (covers 200/302/500/511 — NDS returns a
+    body for all of these, including the pre-auth 511 page). Replaces the
+    previous curl probe (curl is absent from the minimal GL-MT3000 image, and
+    busybox wget here has no -S/--server-response option).
+    """
+    return router.ssh(f"wget -q -O - 'http://127.0.0.1:2050{path}' 2>/dev/null", timeout=10)
+
+
 class TestBuiltinPortal:
     """Checks that run when the builtin portal is expected."""
 
@@ -67,13 +78,8 @@ class TestBuiltinPortal:
     @pytest.mark.skipif(PORTAL_TYPE != "builtin", reason="only for builtin portal")
     def test_builtin_portal_served_via_nds(self, router):
         _skip_unless_nds_responsive(router)
-        code = router.ssh(
-            "curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:2050/splash.html'",
-            timeout=10,
-        )
-        assert code.strip() in ("200", "301", "302", "500", "511"), (
-            f"nodogsplash gateway not responding on :2050 (got {code})"
-        )
+        body = _nds_serves(router, "/splash.html")
+        assert body.strip(), "nodogsplash gateway not serving splash.html on :2050"
 
     @pytest.mark.smoke
     @pytest.mark.skipif(PORTAL_TYPE != "builtin", reason="only for builtin portal")
@@ -103,13 +109,8 @@ class TestNet4satsPortal:
     @pytest.mark.skipif(PORTAL_TYPE != "net4sats", reason="only for net4sats portal")
     def test_net4sats_portal_served_via_nds(self, router):
         _skip_unless_nds_responsive(router)
-        code = router.ssh(
-            "curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:2050/portal.html'",
-            timeout=10,
-        )
-        assert code.strip() in ("200", "301", "302", "500", "511"), (
-            f"nodogsplash gateway not responding on :2050 (got {code})"
-        )
+        body = _nds_serves(router, "/portal.html")
+        assert body.strip(), "nodogsplash gateway not serving portal.html on :2050"
 
     @pytest.mark.smoke
     @pytest.mark.skipif(PORTAL_TYPE != "net4sats", reason="only for net4sats portal")
@@ -140,19 +141,13 @@ class TestPortalAgnostic:
     @pytest.mark.smoke
     def test_nds_gateway_responds(self, router):
         _skip_unless_nds_responsive(router)
-        code = router.ssh(
-            "curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:2050/'",
-            timeout=10,
-        )
-        assert code.strip() in ("200", "302", "301", "500", "511"), (
-            f"nodogsplash gateway not responding on :2050 (got {code})"
-        )
+        body = _nds_serves(router, "/")
+        assert body.strip(), "nodogsplash gateway not responding on :2050"
 
     @pytest.mark.smoke
     def test_tollgate_backend_healthy(self, router):
-        url = router.backend_url("/")
-        code = router.ssh(
-            f"curl -s -o /dev/null -w '%{{http_code}}' '{url}'",
-            timeout=10,
+        # Probe from the host via Router.api_status (uses the host's curl, so no
+        # curl/wget is required on the router).
+        assert router.api_status("/") == 200, (
+            f"tollgate backend not healthy at {router.backend_url('/')} (got non-200)"
         )
-        assert code.strip() == "200", f"tollgate backend not healthy at {url} (got {code!r})"
