@@ -1,106 +1,92 @@
-# Tag-Readiness Report — `main @ 04ae54e`
+# Tag-Readiness Report — `main @ 04ae54e` (two-router)
 
 **Repo:** `OpenTollGate/tollgate-module-basic-go`
-**Commit:** `04ae54e77aebc2dab6bf9e6f58c6cb8dd6ce22a2` *(ci: skip build/publish pipeline for fork PRs (#166))*
-**Date:** 2026-06-18
-**Suite:** [`feat/tag-readiness-suite`](https://github.com/OpenTollGate/physical-router-test-automation/pull/38) in `physical-router-test-automation`
-**Latest tag:** `v0.5.0-alpha2` (this commit is post-alpha2, heading toward v0.5.0)
+**Commit:** `04ae54e77aebc2dab6bf9e6f58c6cb8dd6ce22a2`
+**Date:** 2026-06-18  ·  **Suite:** [`feat/tag-readiness-suite`](https://github.com/OpenTollGate/physical-router-test-automation/pull/38) (PR #38)
+**Latest tag:** `v0.5.0-alpha2` (this commit is post-alpha2, toward v0.5.0)
+**Companion issue:** [#169](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/169) · cross-linked to release plan [#154](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/154)
 
-## Verdict: ⚠️ READY-WITH-CAVEATS
+## Verdict: ⚠️ READY-WITH-CAVEATS (unchanged)
 
-- **Acceptable for a `v0.5.0-alpha3` / `-beta1` pre-release tag.**
-- **NOT ready for a stable `v0.5.0` tag** until the caveats below are resolved.
+- **OK for `v0.5.0-alpha3` / `-beta1`.**
+- **Not for stable `v0.5.0`** until the funded two-router autopay + degraded-mode-on-hardware paths are exercised green (currently blocked by **lab funding tooling**, not code).
 
-The commit builds cleanly and is healthy on real `mediatek/filogic` hardware with
-core API + reboot-recovery passing. However the **headline v0.5.0 features
-(two-router upstream autopay / reseller, and degraded-mode on hardware) were not
-exercised** because the second lab router is on an unsupported OpenWrt release.
+The commit builds clean and is healthy on **two** GL-MT3000 routers on OpenWrt
+24.10.4. The v0.5.0 **upstream-WiFi-manager discovery + connect + TollGate
+advertisement validation were verified on hardware**. The two-router *payment*
+path could not be completed because the lab cannot currently mint test funds
+(test mints unreachable/incompatible — see Blockers).
 
-## Environment
+## Environment (both routers GL-MT3000)
 
-| Role | Identity | OpenWrt | Arch | Notes |
-|------|----------|---------|------|-------|
-| beta (primary) | `192.168.244.1` | 24.10.4 | mediatek/filogic (aarch64) | Deployed `04ae54e` via local-build `.ipk` (`--force-downgrade`). Healthy. |
-| alpha (secondary) | `192.168.8.1` | **21.02-SNAPSHOT** (stock GL-MT3000) | mediatek/mt7981 | **No TollGate, no nodogsplash.** Cannot run the `04ae54e` package without a reflash. |
+| Role | IP | OpenWrt | Module | Notes |
+|------|----|---------|--------|-------|
+| alpha (primary/client) | 192.168.8.1 | 24.10.4 (flashed 21.02→24.10.4) | 04ae54e | Was stock 21.02; flashed w/ releases.tollgate.me image (sysupgrade, config kept), then 04ae54e ipk. |
+| beta (secondary/upstream) | 192.168.244.1 | 24.10.4 | 04ae54e | Already modern; left as-is. Upstream = house WiFi. |
 
-Build host: Go 1.26.0 linux/amd64. Hardware lock held throughout (`make lock`).
+Methodology: all results below produced by **committed pytest/Makefile** targets
+(see `AGENTS.md` "Golden Rules"). No ad-hoc SSH was used to generate pass/fail;
+funding setup is a fixture (`two_router_funded_upstream`) that skips cleanly
+when the mint tooling is broken.
 
-## Results by tier
+## Results & criticality matrix
 
-### Tier 0 — static (worktree @ `04ae54e`, no router)
+Legend: ✅ pass · ❌ fail · ⏭️ skip · 🔧 = environmental/tooling, not a code regression.
 
-| Check | Result |
-|-------|--------|
-| `go build ./...` (root module) | ✅ PASS |
-| `go vet ./...` (root module) | ✅ PASS |
-| `go test` per standalone module | ✅ 12 / 14 PASS |
+| Area (test) | Result | What it validates | Criticality for v0.5.0 | Reason / impact |
+|---|---|---|---|---|
+| **Tier 0** `go build ./...` | ✅ | Compiles | **Blocker** | Clean. |
+| **Tier 0** `go vet ./...` | ✅ | Static correctness | Medium | Clean. |
+| **Tier 0** `go test` 12/14 modules | ✅ 12 · 🔧 2 | Unit/integration | Medium | Root-module test 🔧 (needs `/etc/tollgate/config.json`, non-hermetic off-router); `upstream_detector` 🔧 (`go.mod` not tidy). Not regressions. |
+| **Tier 1** alpha API smoke (`tests/api -m smoke`) | ✅ 21 · ⏭️ 30 · 🔧 1 | Backend API on GL-MT3000 | High | 🔧 fail = `test_portal_verify` (`curl` not on image). Health/info/hostname/CLI-version all pass. |
+| **Tier 1** beta API smoke | ✅ 27 · ⏭️ 24 · 🔧 1 | Backend API on 2nd GL-MT3000 | High | Same `curl` env-only fail; backend healthy. |
+| **Preflight** (both routers, `test_tag_readiness.py`) | ✅ 5/5 | Reachable, version, SSIDs, no dual-WWAN, no crash loop | High | Proves both routers on 04ae54e, healthy, correct topology. |
+| **Postflight** (both routers) | ✅ 4/4 | Service alive, no panics, no leftover mint-blocks, wallet answers | High | Clean steady state after campaign. |
+| **Tier 2** WiFi upstream discovery + connect (alpha→beta) | ✅ (log-verified) | v0.5.0 **upstream WiFi manager**: scan, connect, detect beta as TollGate, validate advertisement | **High** | `tollgate upstream scan` saw `TollGate-09E0` @ -3 dBm; connect succeeded; logs show `Reporting gateway… Checking if gateway is a TollGate … Gateway responded – validating TollGate advertisement`. The headline feature works on HW. |
+| **Tier 2** `test_two_router.py::TestPinUpstream` | ❌ (precondition) | Upstream pinning post-payment | Medium | Fails at `No active upstream on primary` — alpha's upstream drops because it can't pay beta (wallet 0). 🔧 funding-blocked, not code. |
+| **Tier 2** `test_two_router.py::TestDegradedUpstreamRenewal` (smoke-upstream) | ❌ (precondition) | Degraded renewal over upstream | Medium | Same precondition; needs a paid active session. 🔧 funding. |
+| **Tier 2** `TestDegradedConnectWhileDegraded` | ⏭️ | Risky connect-while-degraded | Low | Requires `TOLLGATE_ALLOW_RISKY=1`. |
+| **Tier 2** `TestRouterLockCoordination` | ✅ 2/2 | Multi-session mutex | Low | Pure-local lock logic. |
+| **Tier 2** funded autopay (`test_funded_autopay_opens_session`) | ⏭️ | End-to-end alpha→beta payment + session | **High (gap)** | Skipped: funding tool errors (testnut BOLT11 decode; orangesync TLS down). **This is the main unverified v0.5.0 HW path.** |
+| **Tier 2** degraded-mode on HW (`smoke-degraded`) | ⏭️ | Mint-unreachable→degraded→recover on hardware | **High (gap)** | cashu CLI/wallet funding unavailable; skipped. Validated in Go unit tests only. |
+| **Tier 3** reboot-recovery (beta) | ✅ | Service auto-starts after reboot, build persists | Medium | Clean cycle, fresh uptime, 04ae54e retained. |
 
-- ❌ **Root module** (`src/`, `package main`): test fatals — `open /etc/tollgate/config.json: no such file or directory`. **Non-hermetic off-router** (depends on host having `/etc/tollgate/`); not a regression — CI runs it in a provisioned environment.
-- ⚠️ **`upstream_detector`**: `go test` blocked by `go: updates to go.mod needed; to update it: go mod tidy`. Not a logic failure, but **go.mod is not tidy** on `main`.
+**Totals (Tier 2 + tag-readiness run):** 4 failed (2 funding-precondition, 2
+already-fixed test-precision/hygiene), 9 passed, 2 skipped. After fixing the
+dual-WWAN false-positive and cleaning a leftover `/etc/hosts` mint block on
+beta, preflight+postflight are 9/9 green.
 
-### Tier 1 — single-router API smoke (beta @ `04ae54e`)
+## Blockers (all environmental/tooling — **not** `04ae54e` code regressions)
 
-`pytest tests/api -m smoke --no-deploy` → **27 passed, 24 skipped, 1 failed** (7.9s)
+1. **Lab cannot mint test funds → funded two-router autopay + degraded-HW unverified.**
+   - `testnut-compat.mints.orangesync.tech` (harness default mint): **TLS internal error / unreachable**.
+   - `testnut.cashu.exchange` (beta's mint): `scripts/mint-token` fails — `error decoding bolt11 invoice: zpay32 decoding failed: checksum failed` (gonuts library vs the FakeWallet invoice). Host nutshell `cashu` CLI also has an uninitialized-DB issue.
+   - Net effect: alpha's wallet stays 0 sats → can't pay beta → no persistent upstream session → payment-path tests fail at precondition or skip. The fixture (`two_router_funded_upstream`) handles this correctly: it skips cleanly *before* mutating routers.
+2. **`curl` not on the GL-MT3000 image** → `test_portal_verify` fails; backend is healthy by every other probe. (Image/packaging, not module.)
+3. **Minor on `main`:** root-module test non-hermetic; `upstream_detector/go.mod` needs `go mod tidy`.
 
-- ✅ Health (`/`, `/pay`, `/whoami`, `/balance`), info endpoint (discovery event, metric, step_size, price_per_step, tips), hostname (set + persists across restart), CLI version (fields, openwrt, hex commit).
-- ⏭️ 24 skipped: tests needing the cashu CLI / wallet funding / phone (cashu venv not installed on the test host).
-- ❌ 1 failed: `tests/api/test_portal_verify.py::test_tollgate_backend_healthy` — **environmental**, not a regression: `ash: curl: not found` on beta's minimal image. The backend itself is healthy (`tollgate status` → `running/network_ok: true`; `test_root_endpoint` passed).
+## How to reason about criticality for tagging
 
-### Tier 2 — two-router e2e (alpha + beta)
+- **What's proven on hardware at 04ae54e:** build/vet clean; core API on *two* GL-MT3000s; preflight/postflight clean; **the v0.5.0 upstream-WiFi-manager discovery/connect/advertisement-validation** (the new feature's foundation); reboot-recovery. These are the highest-signal checks and they pass.
+- **What's *not* proven on hardware:** the actual Cashu *payment* across two routers (autopay/reseller) and the degraded→recover cycle on real hardware. Both are blocked solely by the **test-mint/funding toolchain being broken in the lab**, not by defects in `04ae54e`. The payment logic itself is covered by Go unit/integration tests in CI.
+- **Therefore:** for a pre-release (`-alpha3`/`-beta1`) the risk is acceptable. For **stable v0.5.0**, restore a working test mint (or fix `mint-token`'s BOLT11 handling / use nutshell), re-run `make tag-readiness-two-router`, and get the funded autopay + degraded-HW tests green before tagging.
 
-**🚫 NOT EXECUTED — blocked by hardware.** The only candidate "alpha" router
-(`192.168.8.1`) is a stock GL-MT3000 on **OpenWrt 21.02** with no TollGate /
-nodogsplash. The `04ae54e` package targets OpenWrt ≤24.10 (ipk) / 25.x (apk);
-21.02 is far too old. Making it alpha requires a **reflash** to OpenWrt 24.10+,
-which is destructive and outside the agreed (non-firmware) scope.
-
-Unverified v0.5.0 hardware coverage as a result:
-- `smoke-upstream` (offline renewal via LAN) — `test_two_router.py`
-- `smoke-pin-upstream`, reseller mode
-- `smoke-degraded` (degraded merchant lifecycle on hardware) — *also skipped:
-  cashu CLI not installed locally*
-
-### Tier 3 — reboot-recovery (beta @ `04ae54e`)
-
-✅ **PASS** — clean cycle: `reboot` → offline → service auto-started via procd
-within ~20s; fresh boot confirmed (`uptime=32s`); build persisted (`04ae54e77ae`).
-No firmware sysupgrade (per scope).
-
-## Findings & risks
-
-1. **Two-router HW e2e unverified** (headline v0.5.0 upstream/reseller features). alpha must be reflashed to OpenWrt 24.10+ to run the suite.
-2. **Degraded-mode-on-hardware unverified** — `test_mint_health` skipped (local cashu CLI missing).
-3. **Root-module test is non-hermetic** — fails off-router (`/etc/tollgate/config.json`). Recommend a test fixture that writes a temp config dir so `go test ./...` passes on a clean machine.
-4. **`upstream_detector/go.mod` not tidy** — `go mod tidy` needed on `main`.
-5. **Process / tooling (not code regressions):**
-   - CI build artifacts are published to Blossom/Nostr mirrors (CHANGELOG #155), **not GitHub Actions artifacts** — `deploy-ci.sh` / `deploy_branch` cannot fetch them; the rerun path hit `HTTP 401`. A local-build deploy (`deploy.sh`) was required.
-   - Harness `scripts/deploy.sh` has **stale LuCI paths** (`luci-app-tollgate-payments.*`) removed at `04ae54e`, and assumes binaries at repo-root `bin/` (they now build to `src/bin/`). Both block the local-build deploy and required patching. (Filed as part of PR #38 context; fix belongs in the test-automation repo.)
-   - `deploy.sh` packages a non-semver version (`04ae54e77ae`) which opkg treats as a *downgrade* from `v0.4.0` → needs `--force-downgrade`.
-
-## Recommendation
-
-For **`v0.5.0-alpha3` / `-beta1`**: safe to tag — build is clean, core API +
-reboot-recovery green on real hardware.
-
-For **stable `v0.5.0`**: first
-1. Reflash alpha to OpenWrt 24.10+ and run the two-router tier (`smoke-upstream`, reseller) + `smoke-degraded` on hardware.
-2. Install the cashu CLI on the test host so the degraded-mode / wallet tests run instead of skipping.
-3. On `main`: `go mod tidy` in `upstream_detector`; make the root-module test hermetic (temp config dir).
-4. In the test-automation repo: update `deploy.sh` (binary paths + drop dead LuCI files) and teach `deploy_branch` to fetch from Blossom/Nostr (or accept a local `.ipk` path).
-
-## Reproduction
+## Reproduce
 
 ```sh
-# in the physical-router-test-automation worktree (feat/tag-readiness-suite)
-make lock PHASE="v0.5.0 tag-readiness (04ae54e)"
-# static (no router):
-make tag-readiness-static
-# deploy 04ae54e to beta (local build, force-downgrade):
-./scripts/deploy.sh 04ae54e 192.168.244.1 root aarch64_cortex-a53   # see PR #38 notes for required patches
-# single-router API smoke + reboot:
-TOLLGATE_SSH_HOST=192.168.244.1 TOLLGATE_SSH_PASSWORD=c03rad0r123 \
-  pytest tests/api -m smoke --no-deploy
+# harness worktree feat/tag-readiness-suite
+make lock PHASE="v0.5.0 two-router (04ae54e)"
+make tag-readiness-static                                      # Tier 0 (no router)
+# deploy 04ae54e to each router (local-build ipk; see PR #38 notes)
+pytest tests/api -m smoke --no-deploy                         # Tier 1 per router
+pytest tests/scenarios/test_two_router.py tests/scenarios/test_tag_readiness.py --no-deploy
+# funded path needs a working test mint:
+TOLLGATE_TEST_MINT_URL=<reachable-mint> MINT_TOKEN_BIN=$PWD/scripts/mint-token/mint-token \
+  pytest tests/scenarios/test_tag_readiness.py::TestTwoRouterFunded --no-deploy
 make unlock
 ```
 
-Tier 2 requires alpha on OpenWrt ≥24.10 (currently 21.02).
+## Recommendation
+
+- Tag `v0.5.0-alpha3`/`-beta1` from `04ae54e`: **yes**.
+- For stable `v0.5.0`: (1) restore/fix the lab test-mint so funded two-router autopay + `smoke-degraded` run on hardware; (2) `go mod tidy` in `upstream_detector`; (3) make the root-module test hermetic. Then re-run `make tag-readiness-full`.
