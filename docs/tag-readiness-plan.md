@@ -61,3 +61,72 @@ analysis.
 - BoltDB degraded→full in-process upgrade is a known limitation; hotplug
   restart is the real recovery path on hardware
 - PATs embedded in the module repo's git remotes (security)
+
+---
+
+# Phase 2 — Flash alpha + two-router e2e (2026-06-18, follow-up)
+
+Correction from board probes: **both routers are GL-MT3000**. beta is
+`glinet,gl-mt3000` on OpenWrt **24.10.4** (already modern). alpha is
+`glinet,mt3000-snand` on OpenWrt **21.02** → needs the flash. Target module
+build on both: **main @ `04ae54e`**.
+
+Firmware image (GL-MT3000, 24.10.x sysupgrade, from releases.tollgate.me /
+Blossom):
+`https://blossom.primal.net/4c34ebf8b43790e07b40ad18d2a401bcea8ad9888105e7dcb48efc490795584c.bin`
+
+Decisions: **plain `sysupgrade` (keep config)** on alpha (preserves
+`192.168.8.1` + `c03rad0r123`); **leave beta as-is** (already 24.10.4).
+
+## Checklist
+
+- [ ] Download the blossom GL-MT3000 firmware image
+- [ ] Flash alpha `192.168.8.1` via `sysupgrade` (keep config) → verify OpenWrt
+      24.10.4 + still reachable at `192.168.8.1`
+- [ ] alpha: `opkg remove tollgate-wrt` + install `04ae54e` ipk → verify version
+- [ ] beta: verify still on OpenWrt 24.10.4 + `04ae54e`
+- [ ] Update `routers.env` alpha host (`192.168.8.1`); install cashu CLI
+      (`scripts/setup-cashu.sh`) so degraded/wallet tests run
+- [ ] Establish alpha↔beta topology (WiFi association; else flag cable needed)
+- [ ] `make lock`; preflight + Tier-1 smoke on **both** routers
+- [ ] **Tier-2 two-router e2e** (`smoke-upstream`, `smoke-pin-upstream`,
+      reseller, `payment-lifecycle`, `test_two_router*.py`)
+- [ ] Tier-3 reboot-recovery (both) + postflight
+- [ ] Update committed report + #169 with **pass/fail/skip × criticality ×
+      tag-impact** matrix; commit + push
+- [ ] Crosslink **#169 ↔ #154** (map results to #154's Hardware-Validation list)
+- [ ] Cleanup: `make unlock`
+
+## Risks (Phase 2)
+
+- sysupgrade can still drop access if the firmware resets dropbear/LAN →
+  U-Boot recovery via `scripts/uboot-recover.py` (GL-MT3000 supported).
+- Tier 2 depends on alpha↔beta network proximity (WiFi or alpha-WAN→beta-LAN
+  cable); separate USB-eth links to the host give them no direct path.
+
+---
+
+# Phase 3 — Resolve funding so router-to-router purchase can be verified (2026-06-18)
+
+Root cause: `testnut.cashu.exchange` is a **healthy FakeWallet mint**, but the
+funding **tool** is broken — `scripts/mint-token` pins `gonuts-tollgate v0.6.1`
+(BOLT11 decode regression; fix is v0.7.1+ / `9b2b84344c3a`, not applied to
+mint-token). The harness default `testnut-compat.mints.orangesync.tech` is also
+TLS-down. So alpha's wallet stayed at 0 sats and the autopay purchase never ran.
+
+Decisions: fund via the **host nutshell `cashu` CLI** (unblock now); give alpha
+internet by connecting to **`EnterSSID-5GHz` (PSK `c03rad0r123`)** — alpha's own
+upstream-WiFi path, cleaner than host NAT. Leave the `mint-token` gonuts bump as
+a documented follow-up.
+
+## Checklist
+
+- [ ] Connect alpha → `EnterSSID-5GHz c03rad0r123`; verify `network_ok`/mint reachable
+- [ ] Reconcile both routers `accepted_mints` → `testnut.cashu.exchange` (fixture `replace_mints`)
+- [ ] Host nutshell `cashu`: fresh wallet, mint ~1100 sats at testnut, `send` → token
+- [ ] Fund alpha (`tollgate wallet fund <token>`); verify balance > 0
+- [ ] Switch alpha upstream → beta `TollGate-09E0`; verify autopay session + `network_ok` (**real purchase**)
+- [ ] Re-run `TestTwoRouterFunded` + `test_two_router.py` via pytest
+- [ ] Commit nutshell funding-path note to `docs/tag-readiness.md` (+ fixture); push
+- [ ] Update report + #169 with funded two-router outcome
+- [ ] Cleanup: teardown host changes, restore routers' upstream/config, `make unlock`

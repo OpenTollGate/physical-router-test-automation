@@ -39,7 +39,7 @@
 ROUTER ?= alpha
 SSID   ?=
 PASS   ?=
-MINT   ?= https://testnut-compat.mints.orangesync.tech
+MINT   ?= https://nofee.testnut.cashu.space
 VIA    ?=
 PHASE  ?=
 
@@ -128,7 +128,7 @@ help: ## Show this help
 	@echo "  ROUTER  - router label from routers.env (default: alpha)"
 	@echo "  SSID    - upstream WiFi SSID"
 	@echo "  PASS    - upstream WiFi passphrase"
-	@echo "  MINT    - mint URL for block/unblock (default: https://testnut-compat.mints.orangesync.tech)"
+	@echo "  MINT    - mint URL for block/unblock (default: https://nofee.testnut.cashu.space)"
 	@echo "  VIA     - intermediate router for rescue"
 	@echo "  PHASE   - description for router lock"
 	@echo ""

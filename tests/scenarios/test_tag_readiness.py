@@ -407,3 +407,16 @@ class TestTwoRouterFunded:
             f"funded autopay did not open a session (network_ok false; active upstream={active!r}). "
             f"Recent logs:\n{logs}"
         )
+
+    def test_funded_session_persists(self, two_router_funded_upstream, router):
+        """The funded upstream session stays up (no immediate drop after autopay).
+
+        Shares the session-scoped funded fixture, so this is cheap. Guards
+        against the session being flaky right after the recovered first attempt.
+        """
+        status = router.get_tollgate_status()
+        data = status.get("data") or status
+        assert data.get("running") is True, f"alpha not running: {status}"
+        assert data.get("network_ok") is True, (
+            f"funded session dropped after autopay: {status}"
+        )

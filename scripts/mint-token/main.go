@@ -12,7 +12,7 @@ import (
 	"github.com/Origami74/gonuts-tollgate/wallet"
 )
 
-const defaultMintURL = "https://testnut-compat.mints.orangesync.tech"
+const defaultMintURL = "https://nofee.testnut.cashu.space"
 const defaultAmount = 1013
 const feeBuffer = 10
 

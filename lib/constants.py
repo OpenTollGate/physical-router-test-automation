@@ -4,7 +4,7 @@ BACKEND_PORT = 2121
 CGI_PORT = 8080
 PING_HOST = "1.1.1.1"
 
-TEST_MINT_URL = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
+TEST_MINT_URL = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://nofee.testnut.cashu.space")
 
 # Go backend (gonuts) only supports Keyset ID V1 (00-prefix, 8-byte).
 # CDK 0.16.0+ generates V2 (01-prefix, 33-byte). LOCAL_MINT_URL works

@@ -90,3 +90,23 @@ non-fatally with `-`). Each router-touching target enforces the hardware lock.
   fast (correct readiness signal).
 - BoltDB degraded→full in-process upgrade is a documented limitation; the
   hotplug restart is the real recovery path on hardware.
+
+## Funding recipe (for the two-router purchase test)
+
+The default test mint was repointed to **`nofee.testnut.cashu.space`** — a
+Nutshell-0.18.2 feeless FakeWallet that returns valid bolt11 and auto-pays.
+`testnut.cashu.exchange` returns non-bolt11 dummy strings (rejected by gonuts)
+and `testnut-compat.mints.orangesync.tech` is intermittently TLS-down, so both
+are unsuitable. The `two_router_funded_upstream` fixture:
+
+1. mints a token on the host via the nutshell `cashu` CLI (`scripts/setup-cashu.sh`) at `nofee`;
+2. reconciles both routers' `accepted_mints` to `nofee` (`Router.replace_mints`);
+3. gets the client router internet for the funding swap via `EnterSSID-5GHz`
+   (PSK `c03rad0r123!`, env `TOLLGATE_INTERNET_SSID`/`_PSK`) — backgrounded
+   (busybox has no `nohup`), verified via a wwan+internet poll;
+4. `tollgate wallet fund <token>`; then switches the client's upstream to the
+   secondary and waits for the autopay session.
+
+Teardown restores both routers' config and removes the test STAs. Override the
+mint with `TOLLGATE_TEST_MINT_URL`, the funding internet with
+`TOLLGATE_INTERNET_SSID`/`TOLLGATE_INTERNET_PSK`.

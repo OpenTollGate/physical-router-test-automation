@@ -5,7 +5,7 @@ ROUTER_HOST=${ROUTER_HOST:-10.99.99.1}
 ROUTER_PASSWORD=${ROUTER_PASSWORD:-tollgate}
 TOLLGATE_BINARY=${TOLLGATE_BINARY:-/tmp/tollgate-wrt}
 TOLLGATE_PACKAGING=${TOLLGATE_PACKAGING:-/tmp/tollgate-packaging.tar.gz}
-MINT_URL=${MINT_URL:-https://testnut.cashu.exchange}
+MINT_URL=${MINT_URL:-https://nofee.testnut.cashu.space}
 REDIRECT_URL=${REDIRECT_URL:-https://wallet.cashu.me/welcome}
 AUTH_DELAY=${AUTH_DELAY:-8}
 
