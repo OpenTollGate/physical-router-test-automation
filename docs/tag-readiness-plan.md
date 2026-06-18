@@ -27,36 +27,33 @@ analysis.
 - [ ] `git commit` → `git push -u github feat/tag-readiness-suite`
 - [ ] `gh pr create` on `OpenTollGate/physical-router-test-automation`
 
-## Configure (gitignored, uncommitted)
+## Configure / reality (2026-06-18)
 
-- [ ] Password-auth to identify `192.168.8.1` (expect alpha / `TollGate-EVXZ`)
-      and `192.168.244.1` (expect beta / `TollGate-24A6`); re-probe beta
-- [ ] Set `ROUTER_ALPHA_HOST/_LAN_HOST=192.168.8.1` in
-      `mint-health/routers.env` + `upstream-wifi/routers.env`
-- [ ] `export TOLLGATE_LUCI_PASSWORD=c03rad0r123`
+- [x] Password-auth: `c03rad0r123` works on both routers.
+- [x] **beta = `192.168.244.1`** (OpenWrt 24.10.4, mediatek/filogic, TollGate present) — viable.
+- [x] **`192.168.8.1` is NOT alpha** — stock GL-MT3000 on **OpenWrt 21.02**, no TollGate/nodogsplash. Cannot run `04ae54e` without a reflash (destructive; out of agreed scope). **alpha remains absent.**
 
-## Deploy + run (each tier gated on router health; lock held throughout)
+## Deploy + run (lock held)
 
-- [ ] `make lock PHASE="v0.5.0 tag-readiness (04ae54e)"`
-- [ ] Deploy CI artifact (`.ipk` built for `04ae54e`) to both routers
-- [ ] **Tier 0 — static:** `make tag-readiness-static` (go build/vet/test)
-- [ ] **Tier 1 — single-router smoke (alpha):** `make tag-readiness-smoke`
-- [ ] **Tier 2 — two-router e2e (alpha+beta):** `make tag-readiness-two-router`
-- [ ] **Tier 3 — reboot-recovery:** `make tag-readiness-reboot`
+- [x] `make lock PHASE="v0.5.0 tag-readiness (04ae54e)"`
+- [x] Deploy `04ae54e` to **beta** via **local build** (`deploy.sh` patched for
+      stale LuCI paths + binary location; `--force-downgrade` for opkg). CI
+      artifact path failed (Blossom/Nostr-only artifacts + 401 on rerun).
+- [x] **Tier 0 — static:** build+vet clean; 12/14 modules PASS (root non-hermetic; `upstream_detector` go.mod not tidy).
+- [x] **Tier 1 — single-router smoke (beta):** API smoke 27 passed / 24 skipped / 1 failed (env: `curl` not on image).
+- [🚫] **Tier 2 — two-router e2e:** NOT EXECUTED — alpha on OpenWrt 21.02.
+- [x] **Tier 3 — reboot-recovery (beta):** PASS (clean cycle, service auto-started).
 
 ## Report + issue
 
-- [ ] `make tag-readiness-report` (render run-dir)
-- [ ] Write `docs/tag-readiness-reports/TEST-REPORT-main-04ae54e.md` (committed)
+- [x] Write `docs/tag-readiness-reports/TEST-REPORT-main-04ae54e.md` (committed)
 - [ ] `gh issue create --repo OpenTollGate/tollgate-module-basic-go @ 04ae54e`
-      with verdict (READY / NOT-READY / READY-WITH-CAVEATS) + per-tier table +
-      links to this PR and the committed report
+      with verdict **READY-WITH-CAVEATS** + links to PR #38 and the report
 
 ## Cleanup
 
 - [ ] `make unlock`
 - [ ] `git worktree remove /home/c03rad0r/tollgate-worktrees/main-readiness`
-      (keep harness worktree until PR merges)
 
 ## Known risks to document regardless of outcome
 
