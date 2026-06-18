@@ -2,6 +2,52 @@
 
 This file contains hard-won operational knowledge for agents and humans working with physical OpenWrt routers (D-Link COVR-X1860, GL.iNet GL-MT3000). Read this before touching a router.
 
+## Golden Rules — Never Bypass the Test Harness
+
+These rules exist because an LLM session once "tested" two-router flows by
+hand-poking routers over SSH (`jq`-editing mint config, manual `tollgate
+upstream connect`, manual wallet funding) instead of using the committed
+pytest/Makefile suite. That produced results that were **neither reproducible
+nor committed**, and hid the fact that the harness already managed that state.
+
+1. **Every test runs through pytest and/or a Makefile target.** No ad-hoc
+   `sshpass ... ssh root@router '<assertion>'` for anything that claims to be a
+   test result. If it's worth checking, it's worth a committed test. One-off
+   SSH is fine for *inspection/diagnosis*, never for producing a pass/fail.
+2. **Setup and teardown are fixtures, not shell commands.** Anything that
+   mutates router state — mint config, wallet funding, upstream-WiFi
+   association, pricing/step-size, `/etc/hosts` mint blocks — belongs in a
+   pytest fixture (`setup`) with a matching `teardown` that **restores** state
+   (config backup/restore, disconnect upstream, unblock mint, drain wallet).
+   Never leave a test dependent on lab state you prepared by hand.
+3. **Don't disable the harness's own setup, then hand-replace it.** The
+   session-scoped `deploy_session` fixture (autouse, `tests/conftest.py`) runs
+   `router.ensure_test_mint()` + `router.replace_mints()`, which reconcile the
+   router to the test mint. `--no-deploy` skips it — use `--no-deploy` **only**
+   for read-only observation tests (preflight/postflight). If you skipped
+   `deploy_session` and then find yourself `jq`-editing
+   `/etc/tollgate/config.json` by hand to fix a mint mismatch, **stop** — you
+   have bypassed the fixture; restore it instead. To change the mint, set
+   `TOLLGATE_TEST_MINT_URL` / pass `--mint <url>` (the harness propagates it),
+   don't edit the router by hand.
+4. **Two-router tests must self-provision mint compatibility.** The primary and
+   secondary must share an accepted mint; this is a *setup* concern. A fixture
+   must call `router.replace_mints([COMMON_MINT])` **and**
+   `secondary_router.replace_mints([COMMON_MINT])`, fund the primary
+   (`scripts/mint-token` → `tollgate wallet fund`), and associate the primary's
+   upstream to the secondary's SSID — then **restore both configs + disconnect
+   upstream in teardown**. Never assume the lab pre-configured this.
+5. **Skip cleanly when a prerequisite is unmet.** If the test mint is
+   unreachable, the secondary router is absent, or the funding tool errors,
+   `pytest.skip(...)` with a clear reason and move on. Do **not** paper over it
+   with manual SSH that makes the run look green.
+
+Quick self-check before reporting results: *"Could another agent reproduce this
+exact pass/fail by running `make <target>` on a fresh checkout?"* If no — you
+bypassed the harness; go back and fix the fixture.
+
+
+
 ## What This Repository Does
 
 This is a **multi-tier test framework** for [tollgate-module-basic-go](https://github.com/OpenTollGate/tollgate-module-basic-go) (Go v1) and [tollgate-rs](https://github.com/OpenTollGate/tollgate-rs) (Rust v1) running on physical OpenWrt routers. It tests the TollGate WiFi payment system — Cashu ecash tokens for metered internet access through captive portals.

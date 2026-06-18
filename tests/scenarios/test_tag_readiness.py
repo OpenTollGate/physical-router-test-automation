@@ -191,3 +191,132 @@ class TestPostflight:
             if not re.search(r"\d", out):
                 bad.append(f"{label} ({rtr.host}): no balance returned (got: {out!r})")
         assert not bad, "wallet balance command did not answer:\n" + "\n".join(bad)
+
+
+# ---------------------------------------------------------------------------
+# Funded two-router setup (fixture-managed — do NOT hand-configure this).
+# See AGENTS.md "Golden Rules": mint reconciliation, wallet funding, and
+# upstream association belong in this fixture, with teardown that restores.
+# ---------------------------------------------------------------------------
+
+import json  # noqa: E402
+import subprocess  # noqa: E402
+import time  # noqa: E402
+
+# Common mint both routers will be reconciled to. testnut.cashu.exchange is the
+# only currently-reachable test mint; testnut-compat.mints.orangesync.tech is the
+# harness default but is intermittently down. Override via TOLLGATE_TEST_MINT_URL.
+COMMON_MINT = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
+# Funding tool: build with `cd scripts/mint-token && go build -o mint-token .`
+MINT_TOKEN_BIN = os.environ.get(
+    "MINT_TOKEN_BIN",
+    os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "mint-token", "mint-token"),
+)
+FUND_AMOUNT = int(os.environ.get("TOLLGATE_FUND_AMOUNT", "1013"))
+
+
+def _mint_token(mint_url: str, amount: int) -> str:
+    """Run scripts/mint-token to mint `amount` sats; return the token string."""
+    cp = subprocess.run(
+        [MINT_TOKEN_BIN, mint_url, str(amount)],
+        capture_output=True, text=True, timeout=90,
+    )
+    if cp.returncode != 0:
+        raise RuntimeError(f"mint-token failed ({cp.stderr.strip() or cp.stdout.strip()[:160]})")
+    try:
+        return json.loads(cp.stdout)["token"]
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"mint-token produced no token: {exc}; out={cp.stdout[:160]!r}")
+
+
+@pytest.fixture(scope="session")
+def two_router_funded_upstream(router, secondary_router):
+    """Reconcile both routers to COMMON_MINT, fund the primary, associate its
+    upstream WiFi to the secondary. Teardown restores configs + disconnects.
+
+    Skips (cleanly) when a prerequisite is unmet: no secondary, no SSID, or the
+    funding tool errors (e.g. test mint unreachable). Per AGENTS.md rule #5 we
+    never paper over a funding failure with manual SSH.
+    """
+    if secondary_router is None:
+        pytest.skip("secondary router not configured (TOLLGATE_SECONDARY_ROUTER_HOST)")
+    beta_ssid = os.environ.get("TOLLGATE_SECONDARY_ROUTER_SSID", "")
+    if not beta_ssid:
+        pytest.skip("TOLLGATE_SECONDARY_ROUTER_SSID not set")
+    if not os.path.exists(MINT_TOKEN_BIN):
+        pytest.skip(f"funding tool not built: {MINT_TOKEN_BIN} (cd scripts/mint-token && go build)")
+
+    # Mint the funding token on the HOST first — if the mint/tool is broken,
+    # skip BEFORE mutating any router state (AGENTS.md rule #5).
+    try:
+        token = _mint_token(COMMON_MINT, FUND_AMOUNT)
+    except RuntimeError as exc:
+        pytest.skip(f"funding unavailable — {exc}")
+
+    targets = [router, secondary_router]
+    for rtr in targets:
+        rtr.ssh("cp /etc/tollgate/config.json /etc/tollgate/config.json.tag-fund-bak", timeout=10)
+
+    connected = False
+    try:
+        # 1. Reconcile both routers to the common mint (Router.replace_mints).
+        for rtr in targets:
+            rtr.replace_mints([COMMON_MINT])
+            rtr.ssh("service tollgate-wrt restart", timeout=20)
+        time.sleep(8)
+
+        # 2. Associate primary upstream to secondary (pre-auth on beta's network;
+        #    beta's captive portal whitelists its accepted mint so alpha can fund).
+        try:
+            router.cli_command("upstream", ["connect", beta_ssid], timeout=30)
+        except Exception as exc:  # noqa: BLE001
+            pytest.skip(f"upstream connect to {beta_ssid} failed: {exc}")
+        time.sleep(25)
+        connected = True
+
+        # 3. Fund the primary.
+        router.ssh(f"echo {token!r} | tollgate wallet fund", timeout=90)
+        time.sleep(15)  # let the upstream session manager attempt autopay
+
+        yield
+
+    finally:
+        if connected:
+            try:
+                router.cli_command("upstream", ["disconnect", beta_ssid], timeout=15)
+            except Exception:  # noqa: BLE001
+                pass
+        for rtr in targets:
+            try:
+                rtr.ssh(
+                    "mv /etc/tollgate/config.json.tag-fund-bak /etc/tollgate/config.json "
+                    "&& service tollgate-wrt restart",
+                    timeout=20,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+
+class TestTwoRouterFunded:
+    """Funded two-router e2e: alpha pays beta and gets an active upstream session.
+
+    All tests here skip cleanly if the funded-upstream fixture cannot be
+    established (no secondary, funding tool broken, mint unreachable).
+    """
+
+    def test_funded_autopay_opens_session(self, two_router_funded_upstream, router):
+        """After funding, alpha's USM pays beta and network_ok becomes true."""
+        # Give the autopay a brief window, then inspect status + logs.
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            status = router.get_tollgate_status()
+            if str(status).lower().find("true") >= 0 and status.get("network_ok") is True:
+                break
+            time.sleep(5)
+        status = router.get_tollgate_status()
+        assert status.get("running") is True, f"alpha not running: {status}"
+        logs = router.ssh("logread 2>/dev/null | grep -iE 'session|payment|upstream' | tail -5", timeout=10)
+        # network_ok true => autopay succeeded; if false, surface the log for diagnosis.
+        assert status.get("network_ok") is True, (
+            f"autopay did not open a session (network_ok false). Recent logs:\n{logs}"
+        )
