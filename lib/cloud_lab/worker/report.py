@@ -181,6 +181,7 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
 
     return ""
 
+def post_pr_comment(config: WorkerConfig, report_url: str, counts: dict[str, Any]) -> None:
     if not config.sut_pr:
         return
     body = (
