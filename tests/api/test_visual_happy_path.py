@@ -214,6 +214,9 @@ def test_visual_time_metering_expiry(adb, cashu, router, wifi, test_pricing, res
 def test_visual_data_metering_cutoff(adb, cashu, router, wifi, test_pricing, results_dir, request):
     _skip_unless_virtual_lab()
 
+    if os.environ.get("TOLLGATE_VIRTUAL_LAB"):
+        pytest.skip("data metering cutoff requires physical network (nftables byte counting)")
+
     client = request.config.getoption("--client", default="adb")
     if client != "container":
         pytest.skip("visual metering test requires --client=container")
