@@ -83,7 +83,6 @@ on:
         description: "Run virtualizable reseller-mode scenario tests"
 
 permissions:
-  contents: write   # gh-pages push
   actions: read     # artifact download
 
 jobs:
@@ -160,18 +159,37 @@ jobs:
           echo "Starting cloud lab worker pipeline..."
           python3 -m lib.cloud_lab.worker --from-env
 
-      - name: Publish results
+      - name: Publish results to Blossom
         if: inputs.publish == true
         env:
-          GH_TOKEN: ${{ github.token }}
+          NSEC_HEX: ${{ secrets.BOT_NSEC_HEX }}
         run: |
           source /opt/tollgate-venv/bin/activate
+
+          # Ensure nak CLI is available
+          if ! command -v nak &>/dev/null; then
+            echo "Installing nak CLI..."
+            curl -sL "https://github.com/fiatjaf/nak/releases/download/v0.16.2/nak-v0.16.2-linux-amd64" -o /usr/local/bin/nak
+            chmod +x /usr/local/bin/nak
+          fi
+
+          # Write nsec to temp file (mode 0600)
+          NSEC_FILE=$(mktemp)
+          echo "$NSEC_HEX" > "$NSEC_FILE"
+          chmod 600 "$NSEC_FILE"
+          trap "rm -f $NSEC_FILE" EXIT
+
           RESULTS_DIR="/tmp/tollgate-results/${{ inputs.run_id }}"
-          if [ ! -f "$RESULTS_DIR/report/index.html" ]; then
-            echo "No report to publish (worker may have already published)"
+          if [ ! -d "$RESULTS_DIR" ]; then
+            echo "No results to publish"
             exit 0
           fi
-          TOLLGATE_GH_PAGES_CNAME=tests.tollgate.me ./scripts/publish-report.sh "$RESULTS_DIR"
+
+          python3 -m lib.result_publisher "$RESULTS_DIR" \
+            --nsec-file "$NSEC_FILE" \
+            --run-id "${{ inputs.run_id }}" \
+            --branch "${{ inputs.artifact_branch }}" \
+            --pr "${{ inputs.pr_number }}"
 
       # Post PR comment on success/failure.
       # Uses github.token for same-repo PRs; for cross-repo PRs the
@@ -182,19 +200,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           RUN_ID="${{ inputs.run_id }}"
-          COMMIT_SHORT="${{ inputs.artifact_commit }}"
-          [ -n "$COMMIT_SHORT" ] && COMMIT_SHORT="${COMMIT_SHORT:0:7}" || COMMIT_SHORT="unknown"
-          REPORT_URL="https://tests.tollgate.me/reports/${COMMIT_SHORT}/${RUN_ID}/report/index.html"
 
           cat <<EOF | gh pr comment "${{ inputs.pr_number }}" --body-file -
           ## Cloud Lab Run: \`${RUN_ID}\`
 
           **Status**: ${{ job.status }}
           **Backend**: ${{ inputs.backend }}
-          **Report**: [${REPORT_URL}](${REPORT_URL})
-          **Dashboard**: [tests.tollgate.me](https://tests.tollgate.me/)
+          **Results**: [tests.tollgate.me](https://tests.tollgate.me/) — select run \`${RUN_ID}\`
 
-          Ran on ephemeral GCP self-hosted runner.
+          Published to Blossom. Screenshots and reports fetched live from Nostr.
           EOF
 
       - name: Collect artifacts
