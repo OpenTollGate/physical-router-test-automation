@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TollGate Router Tests — Live Results</title>
+  <meta name="description" content="Physical router test automation results. Fetched live from Nostr relays, screenshots from Blossom.">
+  <link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+  <div id="app">
+
+    <header>
+      <div class="header-left">
+        <button id="menu-toggle" aria-label="Toggle runs list">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+        <div class="header-brand">
+          <span class="logo-mark">TG</span>
+          <h1>TollGate Router Tests</h1>
+        </div>
+        <span class="subtitle">Physical &amp; Cloud Lab — Live Results</span>
+      </div>
+      <div class="header-right">
+        <span id="conn-status" class="conn-badge offline">Offline</span>
+        <a href="https://github.com/OpenTollGate/physical-router-test-automation" target="_blank" class="link" rel="noopener">GitHub</a>
+        <span class="npub" title="Bot npub hex">npub1prta…</span>
+      </div>
+    </header>
+
+    <main>
+      <!-- Mobile backdrop -->
+      <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+
+      <aside id="runs-list">
+        <div class="loading" id="runs-loading">
+          <div class="connecting">
+            <div class="spinner"></div>
+            <p>Connecting to relays…</p>
+          </div>
+        </div>
+      </aside>
+
+      <section id="run-view">
+        <div class="empty-state">
+          <div class="empty-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+              <line x1="8" y1="21" x2="16" y2="21"/>
+              <line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+          </div>
+          <p class="empty-title">Select a test run</p>
+          <p class="hint">Runs are fetched live from Nostr relays.<br>
+          Screenshots and reports served from <a href="https://blossom.psbt.me" target="_blank" rel="noopener">blossom.psbt.me</a></p>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span>Powered by
+        <a href="https://github.com/nostr-protocol/nips/blob/master/94.md" target="_blank" rel="noopener">NIP-94</a> +
+        <a href="https://github.com/hzrd149/blossom" target="_blank" rel="noopener">Blossom</a> +
+        kind 30078 summaries
+      </span>
+    </footer>
+  </div>
+
+  <!-- Lightbox for full-size screenshots -->
+  <div id="lightbox" class="lightbox" hidden>
+    <div class="lightbox-backdrop"></div>
+    <img class="lightbox-img" alt="Screenshot full size">
+    <button class="lightbox-close" aria-label="Close">&times;</button>
+    <a class="lightbox-open" target="_blank" rel="noopener" title="Open original">Open original &#8599;</a>
+  </div>
+
+  <script defer src="app.js?v=1"></script>
+</body>
+</html>

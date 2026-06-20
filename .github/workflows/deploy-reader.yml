@@ -1,0 +1,31 @@
+name: Deploy Reader Page to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      - 'CNAME'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wipe gh-pages and deploy reader page
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan gh-pages-fresh
+          git reset --hard
+          cp -r docs/* .
+          cp CNAME . 2>/dev/null || true
+          git add -A
+          git commit -m "deploy: reader page $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push origin gh-pages-fresh:gh-pages --force
