@@ -360,6 +360,21 @@ def run_worker(config: WorkerConfig) -> int:
             timeout=10, check=False,
         )
 
+        if os.environ.get("TOLLGATE_VIRTUAL_LAB"):
+            _run(
+                f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+                f"-o LogLevel=ERROR -o ConnectTimeout=5 "
+                f"root@{OPENWRT_IP} 'logread' > {results_dir}/raw/openwrt-syslog.log 2>/dev/null || true",
+                timeout=30, check=False,
+            )
+            _run(
+                f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+                f"-o LogLevel=ERROR -o ConnectTimeout=5 "
+                f"root@{OPENWRT_IP} 'cat /tmp/tollgate-debug.log 2>/dev/null || true' "
+                f"> {results_dir}/raw/tollgate-service.log 2>/dev/null || true",
+                timeout=15, check=False,
+            )
+
         for name, path in [
             ("cdk-v2", "/tmp/cdk-mintd.log"),
             ("nutshell-v2", "/tmp/nutshell-v2-mint.log"),

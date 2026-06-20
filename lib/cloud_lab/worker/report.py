@@ -138,9 +138,14 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
     """
     import shutil
 
-    nsec_file = os.environ.get("NSEC_FILE", os.path.expanduser("~/nsec"))
-    if not Path(nsec_file).exists():
-        log.warning("Nostr publish skipped: nsec file not found at %s", nsec_file)
+    nsec_file = os.environ.get("NSEC_FILE", "")
+    if not nsec_file or not Path(nsec_file).exists():
+        for candidate in [os.path.expanduser("~/nsec"), "/root/nsec", "/home/macbook/nsec"]:
+            if Path(candidate).exists():
+                nsec_file = candidate
+                break
+    if not nsec_file or not Path(nsec_file).exists():
+        log.warning("Nostr publish skipped: nsec file not found")
         return ""
 
     if not shutil.which("nak"):
