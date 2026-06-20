@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -42,6 +43,7 @@ from lib.cloud_lab.worker.report import (
     create_minimal_run_json,
     post_pr_comment,
     publish_results,
+    publish_to_nostr,
 )
 from lib.cloud_lab.worker.runner import run_tests
 from lib.cloud_lab.worker.shell import _redact, _run, log
@@ -186,6 +188,25 @@ def run_worker(config: WorkerConfig) -> int:
                 _step_start("outer-deps")
                 log.info("[2/10] Outer deps (venv + cashu)")
                 ensure_outer_deps()
+
+                if not shutil.which("nak"):
+                    log.info("Installing nak v0.16.2...")
+                    _run(
+                        'curl -sL "https://github.com/fiatjaf/nak/releases/download/v0.16.2/nak-v0.16.2-linux-amd64" '
+                        '-o /usr/local/bin/nak && chmod +x /usr/local/bin/nak',
+                        timeout=60, check=False,
+                    )
+                    if shutil.which("nak"):
+                        log.info("nak installed")
+                    else:
+                        log.warning("nak install failed — Nostr publish will be skipped")
+
+                nsec_hex = os.environ.get("BOT_NSEC_HEX", "")
+                if nsec_hex:
+                    Path(os.path.expanduser("~/nsec")).write_text(nsec_hex)
+                    os.environ["NSEC_FILE"] = os.path.expanduser("~/nsec")
+                    log.info("NSEC provisioned for Nostr publishing")
+
                 _step_end("outer-deps")
 
                 _step_start("gh-cli-auth")
@@ -372,6 +393,11 @@ def run_worker(config: WorkerConfig) -> int:
                 post_pr_comment(config, report_url, counts)
             except Exception as pub_exc:
                 log.error("Publish failed (non-fatal): %s", _redact(str(pub_exc))[:500])
+
+            try:
+                publish_to_nostr(config, results_dir, counts)
+            except Exception as nostr_exc:
+                log.error("Nostr publish failed (non-fatal): %s", _redact(str(nostr_exc))[:500])
 
         _save_pipeline_timing(results_dir)
         _log_pipeline_summary()

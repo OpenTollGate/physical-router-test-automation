@@ -130,7 +130,57 @@ def publish_results(config: WorkerConfig, results_dir: str) -> str:
         raise
 
     return expected_url
-def post_pr_comment(config: WorkerConfig, report_url: str, counts: dict[str, Any]) -> None:
+def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, Any]) -> str:
+    """Publish test results to Blossom + Nostr (kind 30078).
+
+    Requires nak CLI and an nsec file on the VM. Falls back silently if
+    either is missing (non-fatal — gh-pages publish is the primary path).
+    """
+    import shutil
+
+    nsec_file = os.environ.get("NSEC_FILE", os.path.expanduser("~/nsec"))
+    if not Path(nsec_file).exists():
+        log.warning("Nostr publish skipped: nsec file not found at %s", nsec_file)
+        return ""
+
+    if not shutil.which("nak"):
+        log.warning("Nostr publish skipped: nak CLI not installed")
+        return ""
+
+    blossom = os.environ.get("BLOSSOM_SERVER", "https://blossom.psbt.me")
+    relays = os.environ.get("NOSTR_RELAYS", "wss://relay.cashu.email")
+
+    passed = counts.get("passed", 0)
+    failed = counts.get("failed", 0)
+    skipped = counts.get("skipped", 0)
+
+    cmd = (
+        f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && "
+        f"python3 -m lib.result_publisher {shlex.quote(results_dir)} "
+        f"--nsec-file {shlex.quote(nsec_file)} "
+        f"--blossom-server {shlex.quote(blossom)} "
+        f"--relays {shlex.quote(relays)} "
+        f"--branch {shlex.quote(config.sut_branch or 'main')} "
+        f"--passed {passed} --failed {failed} --skipped {skipped} "
+        f"--router gcp-cloud "
+        f"-v"
+    )
+
+    try:
+        log.info("Publishing to Blossom (%s) + Nostr (%s)...", blossom, relays)
+        r = _run(cmd, timeout=300, check=False)
+        stdout = (r.stdout or "").strip()
+        if r.returncode == 0:
+            for line in stdout.splitlines()[-5:]:
+                log.info("nostr-publish: %s", line)
+            log.info("Nostr publish complete")
+        else:
+            log.error("Nostr publish failed (rc=%d): %s", r.returncode, stdout[-300:])
+    except Exception as exc:
+        log.error("Nostr publish error (non-fatal): %s", _redact(str(exc))[:500])
+
+    return ""
+
     if not config.sut_pr:
         return
     body = (
