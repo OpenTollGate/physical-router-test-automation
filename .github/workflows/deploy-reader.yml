@@ -18,14 +18,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Wipe gh-pages and deploy reader page
+      - name: Deploy reader page to gh-pages
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stage docs/ content + CNAME into a temp dir
+          mkdir /tmp/deploy
+          cp -r docs/* /tmp/deploy/
+          cp CNAME /tmp/deploy/ 2>/dev/null || true
+
+          # Create orphan branch with only the reader page
           git checkout --orphan gh-pages-fresh
-          git reset --hard
-          cp -r docs/* .
-          cp CNAME . 2>/dev/null || true
+          git rm -rf . 2>/dev/null || true
+
+          # Copy reader page content
+          cp -r /tmp/deploy/* .
           git add -A
           git commit -m "deploy: reader page $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           git push origin gh-pages-fresh:gh-pages --force
