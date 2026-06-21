@@ -353,6 +353,7 @@ def ensure_artifact(
     deadline = time.time() + timeout_s
 
     while time.time() < deadline:
+        # Try Blossom/Nostr first (instant if nak is available)
         blossom_binary = _resolve_blossom_binary(commit, arch)
         if blossom_binary:
             log.info(
@@ -361,9 +362,7 @@ def ensure_artifact(
             )
             return "blossom"
 
-        actions_url = f"https://github.com/{repo}/actions/workflows"
-
-    while time.time() < deadline:
+        # Fall back to GitHub Actions artifact API
         try:
             runs = _list_workflow_runs(repo, workflow, branch=branch, commit=commit, limit=15)
         except RuntimeError as exc:
@@ -440,7 +439,7 @@ def ensure_artifact(
     ref = commit or branch
     raise RuntimeError(
         f"No downloadable {arch} CI artifact for {repo}@{ref} within {timeout_s}s. "
-        f"Push to the branch and wait for workflow '{workflow}' to complete: {actions_url}"
+        f"Push to the branch and wait for workflow '{workflow}' to complete."
     )
 
 

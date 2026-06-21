@@ -120,6 +120,12 @@ jobs:
       - name: Configure gcloud project
         run: gcloud config set project tollgate-test-lab
 
+      - name: Install nak CLI
+        run: |
+          curl -sL "https://github.com/fiatjaf/nak/releases/download/v0.16.2/nak-v0.16.2-linux-amd64" -o /usr/local/bin/nak
+          chmod +x /usr/local/bin/nak
+          nak --version
+
       # Step 1: Resolve target (PR/branch/commit) and wait for upstream CI artifact
       - name: Resolve target and wait for CI artifact
         id: resolve
