@@ -12,6 +12,13 @@ log = logging.getLogger("tollgate.deploy")
 REPO = "OpenTollGate/tollgate-module-basic-go"
 WORKFLOW = "Build and Publish"
 BUILD_DIR = Path("/tmp/tollgate-build")
+COORDINATION_RELAYS = [
+    "wss://relay.damus.io",
+    "wss://nos.lol",
+    "wss://nostr.mom",
+    "wss://relay1.orangesync.tech",
+    "wss://relay2.orangesync.tech",
+]
 
 # Packages required by the test framework on the router.
 # Factory reset wipes all opkg packages; these must be reinstalled.
@@ -340,10 +347,21 @@ def ensure_artifact(
 ) -> str:
     """Wait until a CI run has a downloadable artifact for arch. Never triggers builds.
 
-    Returns the GitHub Actions run database ID.
+    Returns the GitHub Actions run database ID, or 'blossom' if the artifact
+    is available on Blossom via Nostr.
     """
     deadline = time.time() + timeout_s
-    actions_url = f"https://github.com/{repo}/actions/workflows"
+
+    while time.time() < deadline:
+        blossom_binary = _resolve_blossom_binary(commit, arch)
+        if blossom_binary:
+            log.info(
+                "Found artifact '%s' via Blossom/Nostr",
+                blossom_binary.get("filename", "?"),
+            )
+            return "blossom"
+
+        actions_url = f"https://github.com/{repo}/actions/workflows"
 
     while time.time() < deadline:
         try:
@@ -426,6 +444,68 @@ def ensure_artifact(
     )
 
 
+def _resolve_blossom_binary(commit: str | None, arch: str) -> dict | None:
+    """Query coordination relays for latest tollgate-build event matching arch.
+
+    Returns dict with url, filename, sha256 from the event content, or None.
+    """
+    nak = shutil.which("nak")
+    if not nak:
+        return None
+
+    cmd = [nak, "req", "-k", "30078", "-t", "t=tollgate-build", "-l", "20"]
+    cmd.extend(COORDINATION_RELAYS)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except Exception:
+        return None
+
+    best = None
+    best_ts = 0
+    for line in (r.stdout or "").strip().splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            e = json.loads(line)
+            content = json.loads(e.get("content", "{}"))
+            if content.get("architecture") != arch:
+                continue
+            if content.get("compression", "none") != "none":
+                continue
+            if commit:
+                build_id = ""
+                for tag in e.get("tags", []):
+                    if tag[0] == "r" and len(tag) > 1:
+                        build_id = tag[1]
+                if not build_id.startswith(commit[:7]):
+                    continue
+            ts = e.get("created_at", 0)
+            if ts > best_ts:
+                best_ts = ts
+                best = content
+        except (json.JSONDecodeError, KeyError):
+            continue
+    return best
+
+
+def _download_blossom_binary(url: str, build_dir: Path) -> Path | None:
+    """Download .ipk from Blossom URL. Returns path or None."""
+    filename = url.rsplit("/", 1)[-1]
+    dest = build_dir / filename
+    try:
+        subprocess.run(
+            ["curl", "-sL", "-o", str(dest), url],
+            timeout=120, check=True, capture_output=True,
+        )
+        if dest.exists() and dest.stat().st_size > 1000:
+            log.info("Downloaded from Blossom: %s (%d bytes)", filename, dest.stat().st_size)
+            return dest
+    except Exception as exc:
+        log.warning("Blossom download failed: %s", exc)
+    return None
+
+
 def download_artifact(branch: str, arch: str, run_id: str | None = None,
                       repo: str | None = None, workflow: str | None = None,
                       output_name: str | None = None) -> Path:
@@ -434,6 +514,17 @@ def download_artifact(branch: str, arch: str, run_id: str | None = None,
     if BUILD_DIR.exists():
         shutil.rmtree(BUILD_DIR)
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
+
+    target_commit = os.environ.get("TOLLGATE_SUT_COMMIT", "")
+    blossom_binary = _resolve_blossom_binary(target_commit or None, arch)
+    if blossom_binary:
+        log.info("Found Blossom binary: %s", blossom_binary.get("filename", "?"))
+        blossom_path = _download_blossom_binary(blossom_binary["url"], BUILD_DIR)
+        if blossom_path:
+            return blossom_path
+        log.warning("Blossom download failed, falling back to GitHub Actions")
+    else:
+        log.info("No Blossom binary found for arch=%s, using GitHub Actions", arch)
 
     if not run_id:
         log.info("Finding latest build for branch '%s'", branch)
