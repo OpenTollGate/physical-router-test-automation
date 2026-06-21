@@ -333,6 +333,8 @@ def build_parser() -> argparse.ArgumentParser:
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument("--zone", default=DEFAULT_ZONE)
         p.add_argument("--vm-name", default=VM_NAME)
+        p.add_argument("--cloud", default="gcp", choices=["gcp", "shc"],
+                       help="Cloud provider: gcp (Google Cloud) or shc (Sovereign Hybrid Compute)")
 
     def target_flags(p: argparse.ArgumentParser) -> None:
         g = p.add_mutually_exclusive_group(required=True)
@@ -471,6 +473,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+    cloud = getattr(args, "cloud", "gcp")
+    if cloud == "shc":
+        os.environ["CLOUD_BIN"] = "shc-compute"
+        os.environ.setdefault("SHC_API_KEY", "")
     func = cast(Callable[[argparse.Namespace], int], args.func)
     return func(args)
 

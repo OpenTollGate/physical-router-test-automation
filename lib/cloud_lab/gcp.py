@@ -27,16 +27,18 @@ from lib.cloud_lab.constants import (
 )
 from lib.cloud_lab.resolve import RunTarget
 
+_CLOUD_BIN = os.environ.get("CLOUD_BIN", "gcloud")
+
 
 def _run_gcloud(args: list[str], timeout: int = 120) -> subprocess.CompletedProcess[str]:
     markers = (
         "NameResolutionError", "Failed to resolve", "ConnectionError",
         "Max retries exceeded", "Network is unreachable", "timed out",
     )
-    last = subprocess.CompletedProcess(args=["gcloud"], returncode=1, stdout="", stderr="")
+    last = subprocess.CompletedProcess(args=[_CLOUD_BIN], returncode=1, stdout="", stderr="")
     for attempt in range(1, 4):
         last = subprocess.run(
-            ["gcloud", *args],
+            [_CLOUD_BIN, *args],
             capture_output=True,
             text=True,
             timeout=timeout,
