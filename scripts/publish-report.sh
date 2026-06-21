@@ -1,24 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ── publish-report.sh ────────────────────────────────────────────────
-# Publish a test report to gh-pages, preserving existing reports and
-# generating a self-contained HTML dashboard.
-#
-# Usage: ./scripts/publish-report.sh <run-dir>
-#
-# <run-dir> is a canonical run directory like results/20260516T172600Z-abc1234
-# and must contain:
-#   run.json          — canonical run metadata (new or old schema)
-#   summary.json      — test summary
-#   report/index.html — HTML test report
-#
-# Delegates to:
-#   scripts/render-dashboard.py  — Jinja2 dashboard generation
-#   scripts/inject-report-ui.py  — pytest-html video fix + report explorer
-#
-# Standalone script — does NOT import from lib/.
-# ─────────────────────────────────────────────────────────────────────
+# DEPRECATED: Pushes static HTML to gh-pages. The dashboard at tests.tollgate.me
+# is now a Nostr/Blossom SPA served from docs/ on main. Use lib.result_publisher.
+# Retained for backward compat with local runs (test-pr.sh --publish).
 
 # Use venv Python if available (has jinja2), else system python3
 if [ -x "/opt/tollgate-venv/bin/python3" ]; then

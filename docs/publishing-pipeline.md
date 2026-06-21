@@ -1,23 +1,18 @@
 # Test Report Publishing Pipeline
 
-Test results are published through two parallel channels: gh-pages (primary, always works) and Blossom + Nostr (secondary, requires nak + NSEC on the VM).
+Test results are published through Blossom + Nostr. The dashboard at
+[tests.tollgate.me](https://tests.tollgate.me) is a client-side SPA that
+reads kind 30078 events from Nostr relays and fetches artifacts from Blossom
+servers — no static HTML is pushed anywhere.
 
 ## Architecture
 
 ```
-pytest suites → collect_and_render → publish_results (gh-pages)
-                                   → publish_to_nostr (Blossom + kind 30078)
+pytest suites → collect_and_render → publish_to_nostr (Blossom + kind 30078)
+                                     → verify_nostr_publish (relay query + blob fetch)
 ```
 
-### gh-pages (primary)
-
-`publish-report.sh` renders an HTML dashboard and pushes it to the `gh-pages` branch of physical-router-test-automation. The dashboard is available at `tests.tollgate.me/reports/<commit>/<run-id>/report/index.html`.
-
-The main index at `tests.tollgate.me/` shows a summary dashboard with all runs, their status, and links to detailed reports.
-
-Enabled by: `--publish` flag on `cloud-lab.py submit`.
-
-### Blossom + Nostr (secondary)
+### Blossom + Nostr
 
 `publish_to_nostr` in `report.py` calls `lib.result_publisher` which:
 
@@ -25,11 +20,27 @@ Enabled by: `--publish` flag on `cloud-lab.py submit`.
 2. Uploads clean files to Blossom (`blossom.psbt.me`)
 3. Emits a Nostr kind 30078 parameterized replaceable event with all file URLs + JSON summary
 
-The kind 30078 event is published to `relay.cashu.email`. The event contains:
+The kind 30078 event is published to `relay.tollgate.me` and `relay1.orangesync.tech`.
+The event contains:
 - `d` tag: run ID (makes it replaceable)
 - `t` tag: `test-run`
 - `file` tags: Blossom URLs for each published file
 - Content: JSON summary with run_id, timestamp, file list, scan results, metadata
+
+After publishing, `verify_nostr_publish` queries the relay with `nak fetch` for
+the kind 30078 event and fetches one Blossom URL to confirm the blob is live.
+This runs inside the cloud lab VM as part of the pipeline.
+
+### Dashboard SPA
+
+The dashboard at `tests.tollgate.me` is a static SPA served from the `docs/`
+directory on the `main` branch via GitHub Pages. It:
+- Connects to Nostr relays (`wss://relay.tollgate.me`, `wss://relay1.orangesync.tech`)
+- Fetches kind 30078 + kind 1063 events from the bot's npub
+- Renders a sidebar of test runs with pass/fail/skip stats
+- Shows screenshots and file links fetched directly from Blossom URLs
+
+Files: `docs/index.html`, `docs/app.js`, `docs/style.css`.
 
 ### Requirements for Nostr publishing
 
@@ -38,9 +49,9 @@ The kind 30078 event is published to `relay.cashu.email`. The event contains:
 | nak CLI | Installed during pipeline outer-deps step (v0.16.2 from fiatjaf/nak) |
 | NSEC file | Checked at `NSEC_FILE` env → `~/nsec` → `/root/nsec` → `/home/macbook/nsec` |
 | Blossom server | Defaults to `https://blossom.psbt.me` (override via `BLOSSOM_SERVER` env) |
-| Nostr relay | Defaults to `wss://relay.cashu.email` (override via `NOSTR_RELAYS` env) |
+| Nostr relay | Defaults to `wss://relay.tollgate.me,wss://relay1.orangesync.tech` (override via `NOSTR_RELAYS` env) |
 
-If nak or NSEC is missing, Nostr publishing is silently skipped (non-fatal). The gh-pages report is always published when `--publish` is set.
+If nak or NSEC is missing, Nostr publishing is silently skipped (non-fatal).
 
 ### Provisioning NSEC on cloud VMs
 
@@ -73,33 +84,6 @@ The pipeline collects the following artifacts into `results_dir/raw/`:
 | *.webm | Per test | Video recordings of visual tests |
 
 Syslog and service log collection is gated on `TOLLGATE_VIRTUAL_LAB` because physical router runs don't have SSH-accessible syslog from the test host.
-
-## Known test failures (complete mode)
-
-Two `@pytest.mark.extended` tests fail consistently in cloud lab complete mode. Neither is a v0.5.0 blocker (smoke tests all pass).
-
-### test_multiple_recovery_cycles
-
-**File:** `tests/api/test_recovery_lifecycle.py`
-**Error:** Service did not enter degraded mode within 180s timeout after mint blocking.
-
-**Likely cause:** PR #167 (register all accepted mints in wallet) changed the wallet initialization path. The health tracker's degraded mode trigger depends on the wallet init flow. The new `AddMint()` loop may not trigger the same health-check behavior as the old single-mint `LoadWallet()`.
-
-### test_wallet_logs_show_mint_fallback
-
-**File:** `tests/api/test_try_all_mints.py`
-**Error:** Expected log message "Trying to load wallet with mint: http://10.99.99.1:9999" not found.
-
-**Likely cause:** PR #167 changed the wallet init logging. The `ensureMintRegistered()` lazy fallback (added in #167) may produce different log messages than the test expects. The test needs to be updated to match the new log format, or the log message needs to be restored in the wallet code.
-
-## Dashboard at tests.tollgate.me
-
-The main page (`tests.tollgate.me/`) shows a static dashboard generated by `publish-report.sh`. It displays:
-- Total runs and commits tested
-- Per-run results table with pass/fail/skip counts
-- Links to detailed reports
-
-A separate Nostr-based SPA existed previously but was replaced by the static dashboard during gh-pages publish. The kind 30078 events on `relay.cashu.email` contain all file URLs and can be consumed by any Nostr client.
 
 ## Test modes
 

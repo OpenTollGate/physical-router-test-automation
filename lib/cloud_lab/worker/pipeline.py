@@ -42,8 +42,8 @@ from lib.cloud_lab.worker.report import (
     collect_and_render,
     create_minimal_run_json,
     post_pr_comment,
-    publish_results,
     publish_to_nostr,
+    verify_nostr_publish,
 )
 from lib.cloud_lab.worker.runner import run_tests
 from lib.cloud_lab.worker.shell import _redact, _run, log
@@ -404,6 +404,7 @@ def run_worker(config: WorkerConfig) -> int:
             try:
                 log.info("Publishing results to Blossom + Nostr (total_tests=%d)...", total_run)
                 publish_to_nostr(config, results_dir, counts)
+                verify_nostr_publish(config)
                 report_url = "https://tests.tollgate.me/"
                 post_pr_comment(config, report_url, counts)
             except Exception as pub_exc:

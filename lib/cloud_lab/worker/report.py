@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shlex
+import time
 from pathlib import Path
 from typing import Any
 
@@ -134,7 +135,7 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
     """Publish test results to Blossom + Nostr (kind 30078).
 
     Requires nak CLI and an nsec file on the VM. Falls back silently if
-    either is missing (non-fatal — gh-pages publish is the primary path).
+    either is missing (non-fatal).
     """
     import shutil
 
@@ -165,6 +166,7 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
         f"--nsec-file {shlex.quote(nsec_file)} "
         f"--blossom-server {shlex.quote(blossom)} "
         f"--relays {shlex.quote(relays)} "
+        f"--run-id {shlex.quote(config.run_id)} "
         f"--branch {shlex.quote(config.sut_branch or 'main')} "
         f"--passed {passed} --failed {failed} --skipped {skipped} "
         f"--router gcp-cloud "
@@ -183,8 +185,126 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
             log.error("Nostr publish failed (rc=%d): %s", r.returncode, stdout[-300:])
     except Exception as exc:
         log.error("Nostr publish error (non-fatal): %s", _redact(str(exc))[:500])
-
     return ""
+
+
+def verify_nostr_publish(config: WorkerConfig) -> dict[str, Any]:
+    """Verify that the kind 30078 event and Blossom blobs are retrievable.
+
+    Called after :func:`publish_to_nostr`. Uses ``nak fetch`` to query the
+    relay for the kind 30078 event with ``d`` = ``config.run_id``, then
+    fetches one Blossom URL from the event's ``file`` tags to confirm the
+    blob is live.
+
+    Returns a dict with ``event_found``, ``event_id``, ``blob_url_checked``,
+    ``blob_retrievable`` keys. Non-fatal — logs warnings on failure.
+    """
+    import shutil
+
+    result: dict[str, Any] = {
+        "event_found": False,
+        "event_id": "",
+        "blob_url_checked": "",
+        "blob_retrievable": False,
+    }
+
+    if not shutil.which("nak"):
+        log.warning("verify_nostr_publish skipped: nak CLI not found")
+        return result
+
+    relays_env = os.environ.get("NOSTR_RELAYS", "wss://relay.tollgate.me,wss://relay1.orangesync.tech")
+    relay = relays_env.split(",")[0].strip()
+
+    # Allow a brief window for relay propagation
+    time.sleep(2)
+
+    nak_cmd = (
+        f"nak fetch -k 30078 -d {shlex.quote(config.run_id)} "
+        f"--limit 1 -r {shlex.quote(relay)}"
+    )
+    try:
+        r = _run(nak_cmd, timeout=30, check=False)
+    except Exception as exc:
+        log.warning("verify_nostr_publish: nak fetch error: %s", _redact(str(exc))[:200])
+        return result
+
+    stdout = (r.stdout or "").strip()
+    if r.returncode != 0 or not stdout:
+        log.warning(
+            "verify_nostr_publish: kind 30078 event not found on %s (rc=%d) — "
+            "relay propagation may be slow",
+            relay, r.returncode,
+        )
+        return result
+
+    # nak may print log lines before the JSON event; find the last JSON object
+    event: dict[str, Any] = {}
+    for line in reversed(stdout.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                event = json.loads(line)
+                break
+            except json.JSONDecodeError:
+                continue
+
+    if not event:
+        log.warning("verify_nostr_publish: could not parse event from nak output")
+        return result
+
+    result["event_found"] = True
+    result["event_id"] = event.get("id", "")
+    log.info("verify_nostr_publish: ✓ kind 30078 event found (id=%s)", result["event_id"][:16])
+
+    file_urls: list[str] = []
+    for tag in event.get("tags", []):
+        if len(tag) >= 2 and tag[0] == "file":
+            file_urls.append(tag[1])
+
+    if not file_urls:
+        try:
+            content = json.loads(event.get("content", "{}"))
+            file_urls = [f.get("url", "") for f in content.get("files", []) if f.get("url")]
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    if not file_urls:
+        log.warning("verify_nostr_publish: event has no file URLs to verify")
+        return result
+
+    blob_url = file_urls[0]
+    result["blob_url_checked"] = blob_url
+
+    try:
+        blob_r = _run(
+            f"curl -sSf -o /dev/null -w '%{{http_code}}' {shlex.quote(blob_url)}",
+            timeout=15, check=False,
+        )
+        http_code = (blob_r.stdout or "").strip().strip("'")
+        if http_code == "200":
+            result["blob_retrievable"] = True
+            log.info("verify_nostr_publish: ✓ Blossom blob retrievable (%s)", blob_url[:80])
+        else:
+            log.warning(
+                "verify_nostr_publish: Blossom blob returned HTTP %s (%s)",
+                http_code, blob_url[:80],
+            )
+    except Exception as exc:
+        log.warning("verify_nostr_publish: Blossom fetch error: %s", _redact(str(exc))[:200])
+
+    if result["event_found"] and result["blob_retrievable"]:
+        log.info(
+            "verify_nostr_publish: ✓ PASS — event %s + %d blobs verified on %s",
+            result["event_id"][:16], len(file_urls), relay,
+        )
+    else:
+        log.warning(
+            "verify_nostr_publish: ⚠ PARTIAL — event_found=%s blob_retrievable=%s",
+            result["event_found"], result["blob_retrievable"],
+        )
+
+    return result
+
 
 def post_pr_comment(config: WorkerConfig, report_url: str, counts: dict[str, Any]) -> None:
     if not config.sut_pr:
