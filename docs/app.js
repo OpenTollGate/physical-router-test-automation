@@ -29,8 +29,8 @@
 const BOT_NPUB_HEX = "9a515b0f08d554b582e54202c7ca0e6ee56d81559957cbf9b40047d391b95fd5"; // shared with bcr-agent
 
 const RELAYS = [
+  "wss://relay.cashu.email",
   "wss://relay.tollgate.me",
-  "wss://relay1.orangesync.tech",
 ];
 const FETCH_TIMEOUT_MS = 12000;
 const FETCH_SINCE_DAYS = 90;
