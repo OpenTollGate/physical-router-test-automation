@@ -402,17 +402,12 @@ def run_worker(config: WorkerConfig) -> int:
         total_run = sum(counts.get(k, 0) for k in ("passed", "failed", "skipped", "error"))
         if config.publish and run_json.exists():
             try:
-                log.info("Publishing results to gh-pages (total_tests=%d)...", total_run)
-                report_url = publish_results(config, results_dir)
-                log.info("Published: %s", report_url)
+                log.info("Publishing results to Blossom + Nostr (total_tests=%d)...", total_run)
+                publish_to_nostr(config, results_dir, counts)
+                report_url = "https://tests.tollgate.me/"
                 post_pr_comment(config, report_url, counts)
             except Exception as pub_exc:
                 log.error("Publish failed (non-fatal): %s", _redact(str(pub_exc))[:500])
-
-            try:
-                publish_to_nostr(config, results_dir, counts)
-            except Exception as nostr_exc:
-                log.error("Nostr publish failed (non-fatal): %s", _redact(str(nostr_exc))[:500])
 
         _save_pipeline_timing(results_dir)
         _log_pipeline_summary()

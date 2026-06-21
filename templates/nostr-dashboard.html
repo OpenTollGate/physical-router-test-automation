@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TollGate Test Reports</title>
+<style>
+:root {
+  --bg: #0d1117; --surface: #161b22; --border: #30363d;
+  --text: #e6edf3; --text-dim: #8b949e; --accent: #58a6ff;
+  --green: #3fb950; --red: #f85149; --yellow: #d29922;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; font-size: 14px; }
+.header { display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.header h1 { font-size: 18px; font-weight: 600; }
+.relay-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); transition: background 0.3s; }
+.dot.connected { background: var(--green); }
+.dot.connecting { background: var(--yellow); }
+.layout { display: grid; grid-template-columns: 320px 1fr; height: calc(100vh - 57px); }
+.sidebar { border-right: 1px solid var(--border); overflow-y: auto; background: var(--surface); }
+.sidebar-header { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+.run-item { padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.15s; }
+.run-item:hover { background: rgba(88,166,255,0.05); }
+.run-item.active { background: rgba(88,166,255,0.1); border-left: 3px solid var(--accent); }
+.run-item .run-id { font-weight: 600; font-size: 13px; }
+.run-item .run-meta { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+.badge.passed { background: rgba(63,185,80,0.15); color: var(--green); }
+.badge.failed { background: rgba(248,81,73,0.15); color: var(--red); }
+.main { padding: 24px; overflow-y: auto; }
+.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-dim); }
+.empty-state h2 { font-size: 16px; margin-bottom: 8px; }
+.detail-header { margin-bottom: 24px; }
+.detail-header h2 { font-size: 20px; margin-bottom: 4px; }
+.detail-header .meta { color: var(--text-dim); font-size: 13px; }
+.stats { display: flex; gap: 16px; margin: 16px 0; }
+.stat { padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; min-width: 80px; text-align: center; }
+.stat .num { font-size: 24px; font-weight: 700; }
+.stat .label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+.stat.pass .num { color: var(--green); }
+.stat.fail .num { color: var(--red); }
+.stat.skip .num { color: var(--yellow); }
+.file-list { margin-top: 16px; }
+.file-list h3 { font-size: 14px; margin-bottom: 12px; }
+.file-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.file-item:hover { background: var(--surface); }
+.file-item .name { font-size: 13px; }
+.file-item .name img { width: 16px; height: 16px; margin-right: 8px; vertical-align: middle; }
+.file-item a { color: var(--accent); text-decoration: none; font-size: 12px; }
+.file-item a:hover { text-decoration: underline; }
+.filter-bar { padding: 8px 16px; border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
+.filter-bar select, .filter-bar input { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; }
+.screenshot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin-top: 16px; }
+.screenshot { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; cursor: pointer; }
+.screenshot img { width: 100%; display: block; }
+.screenshot .label { padding: 6px 10px; font-size: 11px; color: var(--text-dim); }
+.loading { text-align: center; padding: 40px; color: var(--text-dim); }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>📡 TollGate Test Reports</h1>
+  <div class="relay-status">
+    <span class="dot connecting" id="relay-dot"></span>
+    <span id="relay-text">Connecting…</span>
+  </div>
+</div>
+<div class="layout">
+  <div class="sidebar">
+    <div class="filter-bar">
+      <input type="text" id="search" placeholder="Search runs…" style="flex:1">
+    </div>
+    <div class="sidebar-header">Runs (<span id="run-count">0</span>)</div>
+    <div id="run-list"><div class="loading">Loading…</div></div>
+  </div>
+  <div class="main" id="main">
+    <div class="empty-state">
+      <h2>Select a test run</h2>
+      <p>Runs are fetched live from Nostr relays.</p>
+      <p style="margin-top:8px">Artifacts served from <a href="https://blossom.psbt.me" style="color:var(--accent)">blossom.psbt.me</a></p>
+    </div>
+  </div>
+</div>
+<script>
+const RELAYS = ["wss://relay.cashu.email", "wss://relay.damus.io", "wss://nos.lol"];
+const BLOSSOM_SERVERS = ["blossom.psbt.me", "blossom.primal.net"];
+let runs = [];
+let selectedRun = null;
+let activeRelay = null;
+
+function connect() {
+  for (const relay of RELAYS) {
+    try {
+      const ws = new WebSocket(relay);
+      ws.onopen = () => {
+        activeRelay = ws;
+        document.getElementById("relay-dot").className = "dot connected";
+        document.getElementById("relay-text").textContent = relay.replace("wss://", "");
+        ws.send(JSON.stringify(["REQ", "runs", {
+          kinds: [30078],
+          "#t": ["test-run"],
+          limit: 50
+        }]));
+      };
+      ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg[0] === "EVENT") handleEvent(msg[2]);
+        if (msg[0] === "EOSE" && msg[1] === "runs") renderRunList();
+      };
+      ws.onerror = () => { if (ws === activeRelay) tryNextRelay(); };
+      ws.onclose = () => { if (ws === activeRelay) tryNextRelay(); };
+      return;
+    } catch (e) {}
+  }
+  document.getElementById("relay-dot").className = "dot";
+  document.getElementById("relay-text").textContent = "All relays failed";
+}
+
+function tryNextRelay() {
+  document.getElementById("relay-dot").className = "dot connecting";
+  document.getElementById("relay-text").textContent = "Reconnecting…";
+  setTimeout(connect, 2000);
+}
+
+function handleEvent(event) {
+  const tags = {};
+  for (const tag of event.tags || []) {
+    if (!tags[tag[0]]) tags[tag[0]] = [];
+    tags[tag[0]].push(tag.slice(1));
+  }
+  if (!tags.t || !tags.t.some(t => t.includes("test-run"))) return;
+
+  let content = {};
+  try { content = JSON.parse(event.content); } catch (e) { return; }
+
+  const dTag = tags.d ? tags.d[0][0] : event.id;
+  const existing = runs.findIndex(r => r.d === dTag);
+  const run = {
+    d: dTag,
+    id: event.id,
+    pubkey: event.pubkey,
+    created_at: event.created_at,
+    content: content,
+    files: tags.file ? tags.file.map(f => f[0]) : [],
+    metadata: content.metadata || {},
+  };
+
+  if (existing >= 0) {
+    if (event.created_at > runs[existing].created_at) runs[existing] = run;
+  } else {
+    runs.push(run);
+  }
+  renderRunList();
+  if (selectedRun && selectedRun.d === dTag) renderDetail(run);
+}
+
+function renderRunList() {
+  runs.sort((a, b) => b.created_at - a.created_at);
+  document.getElementById("run-count").textContent = runs.length;
+  const search = document.getElementById("search").value.toLowerCase();
+  const filtered = runs.filter(r => {
+    if (!search) return true;
+    const meta = r.metadata || {};
+    return JSON.stringify(r).toLowerCase().includes(search);
+  });
+
+  const list = document.getElementById("run-list");
+  if (filtered.length === 0) {
+    list.innerHTML = '<div class="loading">' + (runs.length === 0 ? 'No runs found' : 'No matches') + '</div>';
+    return;
+  }
+
+  list.innerHTML = filtered.map(r => {
+    const meta = r.metadata || {};
+    const passed = meta.passed || 0;
+    const failed = meta.failed || 0;
+    const statusClass = failed > 0 ? "failed" : "passed";
+    const statusText = failed > 0 ? "failed" : "passed";
+    const date = new Date(r.created_at * 1000).toLocaleString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    const branch = meta.branch || "?";
+    return `<div class="run-item ${selectedRun && selectedRun.d === r.d ? 'active' : ''}" onclick="selectRun('${r.d}')">
+      <div class="run-id">${r.d}</div>
+      <div class="run-meta">${branch} · ${date}</div>
+      <div style="margin-top:4px"><span class="badge ${statusClass}">${statusText}</span> <span style="font-size:11px;color:var(--text-dim)">${passed}✓ ${failed}✗</span></div>
+    </div>`;
+  }).join("");
+}
+
+function selectRun(d) {
+  selectedRun = runs.find(r => r.d === d);
+  if (selectedRun) renderDetail(selectedRun);
+  renderRunList();
+}
+
+function getFileIcon(mime) {
+  if (mime && mime.startsWith("image/")) return "🖼️";
+  if (mime && mime.startsWith("video/")) return "🎬";
+  if (mime && mime.includes("json")) return "📋";
+  if (mime && mime.includes("xml")) return "📊";
+  if (mime && mime.includes("html")) return "📄";
+  if (mime && mime.includes("text/")) return "📝";
+  return "📎";
+}
+
+function renderDetail(run) {
+  const meta = run.metadata || {};
+  const content = run.content || {};
+  const scan = content.scan_summary || {};
+  const passed = meta.passed || 0;
+  const failed = meta.failed || 0;
+  const skipped = meta.skipped || 0;
+  const date = new Date(run.created_at * 1000).toLocaleString();
+
+  const files = (content.files || []).filter(f => !f.redacted);
+  const screenshots = files.filter(f => f.mime && f.mime.startsWith("image/") && f.path && f.path.includes("raw/"));
+  const reports = files.filter(f => f.mime && (f.mime.includes("html") || f.mime.includes("json") || f.mime.includes("xml") || f.mime.includes("text/")));
+  const logs = files.filter(f => f.path && (f.path.includes("output.log") || f.path.includes("worker.log") || f.path.includes("syslog") || f.path.includes("service.log")));
+
+  let screenshotsHtml = "";
+  if (screenshots.length > 0) {
+    screenshotsHtml = `<div class="screenshot-grid">` + screenshots.slice(0, 12).map(f =>
+      `<div class="screenshot" onclick="window.open('${f.url}','_blank')">
+        <img src="${f.url}" loading="lazy" onerror="this.style.display='none'">
+        <div class="label">${f.path.split('/').pop()}</div>
+      </div>`
+    ).join("") + `</div>`;
+  }
+
+  let filesHtml = "";
+  if (reports.length > 0) {
+    filesHtml = `<div class="file-list"><h3>Reports & Data (${reports.length})</h3>` +
+      reports.map(f => `<div class="file-item">
+        <span class="name">${getFileIcon(f.mime)} ${f.path}</span>
+        <a href="${f.url}" target="_blank">Open ↗</a>
+      </div>`).join("") + `</div>`;
+  }
+
+  let logsHtml = "";
+  if (logs.length > 0) {
+    logsHtml = `<div class="file-list"><h3>Logs (${logs.length})</h3>` +
+      logs.map(f => `<div class="file-item">
+        <span class="name">${getFileIcon(f.mime)} ${f.path}</span>
+        <a href="${f.url}" target="_blank">Open ↗</a>
+      </div>`).join("") + `</div>`;
+  }
+
+  document.getElementById("main").innerHTML = `
+    <div class="detail-header">
+      <h2>${run.d}</h2>
+      <div class="meta">${meta.branch || "?"} · ${meta.router || "?"} · ${date}</div>
+    </div>
+    <div class="stats">
+      <div class="stat pass"><div class="num">${passed}</div><div class="label">Passed</div></div>
+      <div class="stat fail"><div class="num">${failed}</div><div class="label">Failed</div></div>
+      <div class="stat skip"><div class="num">${skipped}</div><div class="label">Skipped</div></div>
+    </div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:16px">
+      ${files.length} files on Blossom · ${scan.blocked || 0} blocked · ${scan.redacted || 0} redacted
+    </div>
+    ${screenshotsHtml}
+    ${filesHtml}
+    ${logsHtml}
+  `;
+}
+
+document.getElementById("search").addEventListener("input", renderRunList);
+connect();
+setInterval(() => { if (activeRelay && activeRelay.readyState === WebSocket.OPEN) {
+  activeRelay.send(JSON.stringify(["REQ", "refresh_" + Date.now(), {kinds:[30078], "#t":["test-run"], limit: 50, since: Math.floor(Date.now()/1000) - 60}]));
+}}, 60000);
+</script>
+</body>
+</html>
