@@ -131,9 +131,29 @@ jobs:
           "
 
       - name: Set up environment
+        env:
+          BOT_NSEC_HEX: ${{ secrets.BOT_NSEC_HEX }}
         run: |
           source /opt/tollgate-venv/bin/activate || true
           mkdir -p "/tmp/tollgate-results/${{ inputs.run_id }}/raw"
+
+          # Install nak CLI (needed for Blossom download + Nostr publish)
+          if ! command -v nak &>/dev/null; then
+            echo "Installing nak CLI..."
+            curl -sL "https://github.com/fiatjaf/nak/releases/download/v0.16.2/nak-v0.16.2-linux-amd64" -o /usr/local/bin/nak
+            chmod +x /usr/local/bin/nak
+          fi
+          nak --version
+
+          # Write NSEC to ~/nsec so the pipeline's internal publish step can find it
+          if [ -n "$BOT_NSEC_HEX" ]; then
+            echo "$BOT_NSEC_HEX" > /root/nsec
+            chmod 600 /root/nsec
+            echo "NSEC written to /root/nsec"
+          else
+            echo "WARNING: BOT_NSEC_HEX not set — Nostr publishing will be skipped"
+          fi
+
           echo "Environment configured for run ${{ inputs.run_id }}"
 
       - name: Run test pipeline
@@ -161,27 +181,20 @@ jobs:
 
       - name: Publish results to Blossom
         if: inputs.publish == true
-        env:
-          NSEC_HEX: ${{ secrets.BOT_NSEC_HEX }}
         run: |
           source /opt/tollgate-venv/bin/activate
-
-          # Ensure nak CLI is available
-          if ! command -v nak &>/dev/null; then
-            echo "Installing nak CLI..."
-            curl -sL "https://github.com/fiatjaf/nak/releases/download/v0.16.2/nak-v0.16.2-linux-amd64" -o /usr/local/bin/nak
-            chmod +x /usr/local/bin/nak
-          fi
-
-          # Write nsec to temp file (mode 0600)
-          NSEC_FILE=$(mktemp)
-          echo "$NSEC_HEX" > "$NSEC_FILE"
-          chmod 600 "$NSEC_FILE"
-          trap "rm -f $NSEC_FILE" EXIT
 
           RESULTS_DIR="/tmp/tollgate-results/${{ inputs.run_id }}"
           if [ ! -d "$RESULTS_DIR" ]; then
             echo "No results to publish"
+            exit 0
+          fi
+
+          # nak CLI + NSEC already set up in "Set up environment" step
+          NSEC_FILE="/root/nsec"
+          if [ ! -f "$NSEC_FILE" ]; then
+            echo "WARNING: NSEC file not found at $NSEC_FILE — skipping external publish"
+            echo "Pipeline may have already published internally."
             exit 0
           fi
 
