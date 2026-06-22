@@ -45,6 +45,11 @@ from lib.cloud_lab.worker.report import (
     publish_to_nostr,
     verify_nostr_publish,
 )
+from lib.cloud_lab.worker.dvm_events import (
+    publish_feedback as dvm_feedback,
+    publish_job_request as dvm_job_request,
+    publish_job_result as dvm_job_result,
+)
 from lib.cloud_lab.worker.runner import run_tests
 from lib.cloud_lab.worker.shell import _redact, _run, log
 from lib.cloud_lab.worker.vms import delete_self, start_inner_vms, stop_inner_vms
@@ -208,6 +213,9 @@ def run_worker(config: WorkerConfig) -> int:
                     log.info("NSEC provisioned for Nostr publishing")
 
                 _step_end("outer-deps")
+
+                dvm_job_request(config)
+                dvm_feedback("processing", f"Cloud lab pipeline starting (run_id={config.run_id})")
 
                 _step_start("gh-cli-auth")
                 log.info("[3/10] GitHub CLI auth (token=***%s)", config.gh_token[-4:] if len(config.gh_token) > 8 else "***")
@@ -405,10 +413,13 @@ def run_worker(config: WorkerConfig) -> int:
                 log.info("Publishing results to Blossom + Nostr (total_tests=%d)...", total_run)
                 publish_to_nostr(config, results_dir, counts)
                 verify_nostr_publish(config)
+                dvm_job_result(config, counts)
                 report_url = "https://tests.tollgate.me/"
                 post_pr_comment(config, report_url, counts)
             except Exception as pub_exc:
                 log.error("Publish failed (non-fatal): %s", _redact(str(pub_exc))[:500])
+
+        dvm_feedback("success" if test_exit == 0 else "error", f"exit={test_exit}")
 
         _save_pipeline_timing(results_dir)
         _log_pipeline_summary()
