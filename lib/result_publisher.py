@@ -84,6 +84,11 @@ DEFAULT_RELAYS = [
 #: Defense-in-depth: files never uploaded even if the scanner marks them clean.
 #: Adds coverage (sqlite/db/log) the scanner's own suffix list lacks.
 HARD_BLOCKED_NAMES = {".env", "credentials", "routers.env", "routers.json", "report.html"}
+
+
+def _is_artifact_for_skipped_test(file_path: Path) -> bool:
+    name = file_path.name
+    return "-skipped." in name
 HARD_BLOCKED_SUFFIXES = {
     ".env", ".pem", ".key", ".p12", ".pfx", ".keystore",
     ".kdbx", ".sqlite", ".db",
@@ -521,6 +526,9 @@ def publish_results(
 def _hard_filter(p: Path, blocked: list[str]) -> bool:
     """Return True if ``p`` is hard-blocked; append to ``blocked`` if so."""
     if _is_hard_blocked(p):
+        blocked.append(str(p))
+        return True
+    if _is_artifact_for_skipped_test(p):
         blocked.append(str(p))
         return True
     return False

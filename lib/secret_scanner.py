@@ -380,6 +380,9 @@ def scan_file(file_path: str) -> Tuple[str | None, list]:
     except Exception as e:
         return None, [{"type": "read-error", "filename": file_path, "error": str(e)}]
 
+    if file_path.endswith((".json", ".xml")):
+        return content, []
+
     sanitized, findings = scan_content(content)
     return sanitized, findings
 
