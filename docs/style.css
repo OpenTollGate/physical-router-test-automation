@@ -1370,14 +1370,6 @@ footer a:hover { color: var(--accent); }
   background: var(--bg-hover);
 }
 
-.test-case.no-artifacts .test-case-header {
-  cursor: default;
-}
-
-.test-case.no-artifacts .test-case-header:hover {
-  background: transparent;
-}
-
 .test-toggle {
   font-size: 10px;
   color: var(--text-dim);
@@ -1388,10 +1380,6 @@ footer a:hover { color: var(--accent); }
 
 .test-case.expanded .test-toggle {
   transform: rotate(90deg);
-}
-
-.test-case.no-artifacts .test-toggle {
-  visibility: hidden;
 }
 
 .test-status-icon {
