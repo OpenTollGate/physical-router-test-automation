@@ -52,3 +52,5 @@ actions-runner/
 
 # Experimental Sovereign Hybrid Compute (SHC) client — not yet integrated
 lib/cloud_lab/shc.py
+*.pyc
+__pycache__/

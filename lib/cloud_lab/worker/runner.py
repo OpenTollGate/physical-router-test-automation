@@ -162,7 +162,10 @@ def _build_pytest_cmd(config: WorkerConfig, spec: RunnerSpec, results_dir: str) 
     ignore = " ".join(f"--ignore={p}" for p in spec.ignore_paths)
     ignore_sp = f"{ignore} " if ignore else ""
     pytest_cmd = (
-        f"python3 -m pytest {target} "
+        # -u: unbuffered stdout/stderr so `tail -f output.log` during a cloud
+        # run is truly live (Python block-buffers when stdout is redirected to
+        # a file, which would make real-time monitoring lag by many seconds).
+        f"python3 -u -m pytest {target} "
         f"-v --tb=short --timeout={spec.timeout} {marker}"
         f"--backend={config.backend} "
         f"{expected_pr}--client=container --results {results_dir} "

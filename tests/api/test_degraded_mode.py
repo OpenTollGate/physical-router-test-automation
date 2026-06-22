@@ -47,11 +47,19 @@ def _get_mint_urls(router):
 
 
 def _resolve_mint_ips(router, mint_urls):
-    """Resolve mint hostnames to IPs from the router's perspective."""
+    """Resolve mint hostnames to IPs from the router's perspective.
+
+    For IP-literal URLs (e.g. http://10.99.99.2:8385), the hostname IS the
+    IP — no DNS lookup needed. For hostname URLs, use nslookup on the router.
+    """
     ip_map = {}
     for url in mint_urls:
         parsed = urlparse(url)
         hostname = parsed.hostname
+        # If hostname is already an IPv4 literal, use it directly (skip nslookup)
+        if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", hostname):
+            ip_map[url] = hostname
+            continue
         out = router.ssh(f"nslookup {hostname} 2>/dev/null || echo FAILED")
         ips = re.findall(r"Address:\s*(\d+\.\d+\.\d+\.\d+)", out)
         # nslookup prints DNS server first, then resolved address; take last non-loopback
@@ -63,22 +71,32 @@ def _resolve_mint_ips(router, mint_urls):
 
 
 def _block_mints(router, mint_ip_map):
-    """Add iptables rules to block outbound HTTPS to mint IPs.
+    """Add iptables rules to block outbound traffic to mint IPs.
 
-    Returns a list of (url, ip, rule_index) tuples for cleanup.
+    Derives the port from each mint URL (default 443 for HTTPS, 80 for HTTP).
+    Returns a list of (url, ip, port) tuples for cleanup.
     """
     rules = []
     for url, ip in mint_ip_map.items():
-        router.ssh(f"iptables -I OUTPUT -d {ip} -p tcp --dport 443 -j REJECT")
-        rules.append((url, ip))
+        parsed = urlparse(url)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        router.ssh(f"iptables -I OUTPUT -d {ip} -p tcp --dport {port} -j REJECT")
+        rules.append((url, ip, port))
     return rules
 
 
 def _unblock_mints(router, rules):
     """Remove iptables rules that were added to block mints."""
-    for url, ip in rules:
-        router.ssh(f"iptables -D OUTPUT -d {ip} -p tcp --dport 443 -j REJECT"
-                   f" 2>/dev/null || true")
+    for rule in rules:
+        if len(rule) == 3:
+            url, ip, port = rule
+        else:
+            url, ip = rule
+            port = 443
+        router.ssh(
+            f"iptables -D OUTPUT -d {ip} -p tcp --dport {port} -j REJECT"
+            f" 2>/dev/null || true"
+        )
 
 
 def _restart_and_wait(router):
@@ -219,9 +237,11 @@ def block_one_mint(router, mint_ip_map, mint_urls):
     target_ip = mint_ip_map.get(target_url)
     if not target_ip:
         pytest.skip(f"Could not resolve IP for {target_url}")
-    rules = [(target_url, target_ip)]
-    router.ssh(f"iptables -I OUTPUT -d {target_ip} -p tcp --dport 443 -j REJECT")
-    log.info("Blocked one mint IP (%s -> %s) via iptables", target_url, target_ip)
+    parsed = urlparse(target_url)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    rules = [(target_url, target_ip, port)]
+    router.ssh(f"iptables -I OUTPUT -d {target_ip} -p tcp --dport {port} -j REJECT")
+    log.info("Blocked one mint IP (%s -> %s:%d) via iptables", target_url, target_ip, port)
     yield rules
     try:
         _unblock_mints(router, rules)

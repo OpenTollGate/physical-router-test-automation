@@ -42,7 +42,7 @@ class BackendConfig:
 
     @property
     def has_cli_socket(self) -> bool:
-        return self.is_go
+        return True  # Rust V1Server now has CLI socket (Phase 2, experimental branch)
 
     @property
     def has_sessions_json(self) -> bool:
