@@ -20,7 +20,7 @@ pytest suites → collect_and_render → publish_to_nostr (Blossom + kind 30078)
 2. Uploads clean files to Blossom (`blossom.psbt.me`)
 3. Emits a Nostr kind 30078 parameterized replaceable event with all file URLs + JSON summary
 
-The kind 30078 event is published to `relay.tollgate.me` and `relay1.orangesync.tech`.
+The kind 30078 event is published to `relay.cashu.email`.
 The event contains:
 - `d` tag: run ID (makes it replaceable)
 - `t` tag: `test-run`
@@ -35,7 +35,7 @@ This runs inside the cloud lab VM as part of the pipeline.
 
 The dashboard at `tests.tollgate.me` is a static SPA served from the `docs/`
 directory on the `main` branch via GitHub Pages. It:
-- Connects to Nostr relays (`wss://relay.tollgate.me`, `wss://relay1.orangesync.tech`)
+- Connects to Nostr relay (`wss://relay.cashu.email`)
 - Fetches kind 30078 + kind 1063 events from the bot's npub
 - Renders a sidebar of test runs with pass/fail/skip stats
 - Shows screenshots and file links fetched directly from Blossom URLs
@@ -49,7 +49,7 @@ Files: `docs/index.html`, `docs/app.js`, `docs/style.css`.
 | nak CLI | Installed during pipeline outer-deps step (v0.16.2 from fiatjaf/nak) |
 | NSEC file | Checked at `NSEC_FILE` env → `~/nsec` → `/root/nsec` → `/home/macbook/nsec` |
 | Blossom server | Defaults to `https://blossom.psbt.me` (override via `BLOSSOM_SERVER` env) |
-| Nostr relay | Defaults to `wss://relay.tollgate.me,wss://relay1.orangesync.tech` (override via `NOSTR_RELAYS` env) |
+| Nostr relay | Defaults to `wss://relay.cashu.email` (override via `NOSTR_RELAYS` env) |
 
 If nak or NSEC is missing, Nostr publishing is silently skipped (non-fatal).
 

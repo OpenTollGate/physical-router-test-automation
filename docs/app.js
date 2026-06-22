@@ -30,7 +30,6 @@ const BOT_NPUB_HEX = "9a515b0f08d554b582e54202c7ca0e6ee56d81559957cbf9b40047d391
 
 const RELAYS = [
   "wss://relay.cashu.email",
-  "wss://relay.tollgate.me",
 ];
 const FETCH_TIMEOUT_MS = 12000;
 const FETCH_SINCE_DAYS = 90;

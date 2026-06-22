@@ -35,7 +35,6 @@ from typing import Any
 # --- Constants ---
 
 DEFAULT_RELAYS = [
-    "wss://relay.tollgate.me",
     "wss://relay.cashu.email",
 ]
 

@@ -47,13 +47,12 @@ def _get_nsec_file() -> str | None:
 
 
 def _get_relays() -> list[str]:
-    raw = os.environ.get("NOSTR_RELAYS", "wss://relay.tollgate.me,wss://relay.cashu.email")
+    raw = os.environ.get("NOSTR_RELAYS", "wss://relay.cashu.email")
     return [r.strip() for r in raw.split(",") if r.strip()]
 
 
-def _nak_available() -> bool:
-    import shutil
-    return shutil.which("nak") is not None
+def _relay_args(relays: list[str]) -> str:
+    return " ".join(shlex.quote(r) for r in relays)
 
 
 def _run_nak(cmd: str, nsec_file: str, timeout: int = 15) -> subprocess.CompletedProcess[str] | None:
@@ -100,7 +99,7 @@ def publish_job_request(config: WorkerConfig) -> str:
         f"-t param=branch;{shlex.quote(config.sut_branch)} "
         f"-t param=backend;{shlex.quote(config.backend)} "
         f"-t param=scope;cloud-api "
-        f"{shlex.quote(relays[0])}"
+        f"{_relay_args(relays)}"
     )
 
     r = _run_nak(cmd, nsec_file)
@@ -145,7 +144,7 @@ def publish_feedback(status: str, extra_info: str = "") -> None:
         f"nak event -k {KIND_JOB_FEEDBACK} "
         f"-c {shlex.quote(content)} "
         f"{' '.join(tags)} "
-        f"{shlex.quote(relays[0])}"
+        f"{_relay_args(relays)}"
     )
 
     r = _run_nak(cmd, nsec_file)
@@ -198,7 +197,7 @@ def publish_job_result(config: WorkerConfig, counts: dict[str, Any], result_urls
         f"nak event -k {KIND_JOB_RESULT} "
         f"-c {shlex.quote(content)} "
         f"{' '.join(tags)} "
-        f"{shlex.quote(relays[0])}"
+        f"{_relay_args(relays)}"
     )
 
     r = _run_nak(cmd, nsec_file)
