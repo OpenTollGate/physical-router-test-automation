@@ -846,6 +846,64 @@ def _auto_portal_screenshot(item, report, results_dir, adb):
             log.debug("auto portal screenshot embed failed: %s", exc)
 
 
+def _video_is_static(video_path: str, psnr_threshold: float = 60.0) -> bool:
+    """Check if a video shows no meaningful visual change.
+
+    Extracts first and last frames, compares with PSNR.
+    Returns True if frames are visually identical (video should be skipped).
+    A threshold of 60 dB means only near-pixel-perfect duplicates are static;
+    even a few characters of text change produce PSNR ~50-58 dB and are kept.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        first = os.path.join(tmpdir, "first.png")
+        last = os.path.join(tmpdir, "last.png")
+
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", video_path, "-vframes", "1", first],
+            capture_output=True, timeout=15,
+        )
+        if not os.path.exists(first):
+            return False
+
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=nb_frames", "-of", "csv=p=0", video_path],
+            capture_output=True, text=True, timeout=10,
+        )
+        try:
+            n_frames = int(probe.stdout.strip())
+        except (ValueError, IndexError):
+            n_frames = 30
+
+        if n_frames <= 1:
+            return True
+
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", video_path,
+             "-vf", f"select='eq(n\\,{n_frames - 1})'", "-vframes", "1", last],
+            capture_output=True, timeout=15,
+        )
+        if not os.path.exists(last):
+            return False
+
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", first, "-i", last,
+             "-filter_complex", "psnr", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=10,
+        )
+
+        match = re.search(r"average:(inf|[\d.]+)", result.stderr)
+        if match:
+            val = match.group(1)
+            if val == "inf":
+                return True
+            return float(val) > psnr_threshold
+
+    return False
+
+
 def _auto_portal_video(item, report, results_dir, adb):
     if not _is_container_client(item.config):
         return
@@ -874,6 +932,11 @@ def _auto_portal_video(item, report, results_dir, adb):
         return
 
     if not ok or not os.path.isfile(video_path):
+        return
+
+    if _video_is_static(video_path):
+        os.remove(video_path)
+        log.debug("skipped static video (no visual change): %s", video_path)
         return
 
     if html_extras is None:
