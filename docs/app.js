@@ -1362,6 +1362,7 @@ async function selectRun(run) {
   if (myLoadId !== detailLoadId) return;
 
   const body = view.querySelector(".detail-body");
+  if (!body) return;
 
   if (summary && summary.tests) {
     const hierarchy = buildTestHierarchy(run, summary);
@@ -1512,7 +1513,11 @@ function showGlobalError(message) {
   }
 
   window.addEventListener("popstate", () => {
-    showPlaceholder();
+    if (location.hash) {
+      selectRunFromHash();
+    } else {
+      showPlaceholder();
+    }
   });
 
   // Mobile sidebar toggle

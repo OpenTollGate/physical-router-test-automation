@@ -18,6 +18,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Inject cache-bust version
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          sed -i "s/__BUILD_SHA__/$SHA/g" docs/index.html
+          echo "Cache version: $SHA"
+          grep -o 'v=[a-f0-9]*' docs/index.html
+
       - name: Deploy reader page to gh-pages
         run: |
           git config user.name "github-actions[bot]"
