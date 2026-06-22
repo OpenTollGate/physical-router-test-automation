@@ -134,6 +134,92 @@ def ensure_outer_deps() -> None:
             log.warning("Cashu CLI install failed (non-fatal, some tests will skip)")
 
     ensure_cdk_binary()
+
+    ensure_blossomfs()
+def ensure_blossomfs() -> None:
+    try:
+        mountpoint = "/mnt/blossomfs"
+        r = _run(f"mountpoint -q {mountpoint} && echo MOUNTED", timeout=10, check=False)
+        if "MOUNTED" in r.stdout:
+            log.info("BlossomFS already mounted at %s", mountpoint)
+            os.environ["BLOSSOMFS_MOUNT"] = mountpoint
+            return
+
+        _run(
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
+            "fuse3 libfuse3-dev pkg-config build-essential git curl >/dev/null",
+            timeout=120, check=False,
+        )
+
+        r = _run('command -v cargo >/dev/null 2>&1 && echo RUST_OK', timeout=10, check=False)
+        if "RUST_OK" not in r.stdout:
+            log.info("Installing Rust toolchain for BlossomFS...")
+            _run(
+                'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y',
+                timeout=120,
+            )
+
+        clone_dir = "/opt/blossomfs"
+        repo_url = "https://github.com/Amperstrand/blossomfs"
+        r = _run(f"test -d {clone_dir}/.git && echo CLONE_OK", timeout=10, check=False)
+        if "CLONE_OK" not in r.stdout:
+            log.info("Cloning BlossomFS...")
+            _run(f"rm -rf {clone_dir} && git clone --depth 1 {shlex.quote(repo_url)} {clone_dir}", timeout=120)
+
+        r = _run(f"test -x {clone_dir}/target/release/blossomfs && echo BUILD_OK", timeout=10, check=False)
+        if "BUILD_OK" not in r.stdout:
+            log.info("Building BlossomFS (cargo build --release)...")
+            _run(
+                f'. "$HOME/.cargo/env" && cd {clone_dir} && cargo build --release 2>&1',
+                timeout=300,
+            )
+
+        nsec_file = os.environ.get("NSEC_FILE", "")
+        if not nsec_file or not Path(nsec_file).exists():
+            for candidate in [os.path.expanduser("~/nsec"), "/root/nsec"]:
+                if Path(candidate).exists():
+                    nsec_file = candidate
+                    break
+        if not nsec_file or not Path(nsec_file).exists():
+            nsec_hex = os.environ.get("BOT_NSEC_HEX", "").strip()
+            if nsec_hex:
+                nsec_file = os.path.expanduser("~/nsec")
+                Path(nsec_file).write_text(nsec_hex)
+
+        if not nsec_file or not Path(nsec_file).exists():
+            log.warning("BlossomFS skipped: no nsec file available")
+            return
+
+        if not shutil.which("nak"):
+            log.warning("BlossomFS skipped: nak CLI not available for npub derivation")
+            return
+
+        r = _run(
+            f"NOSTR_SECRET_KEY=$(cat {shlex.quote(nsec_file)}) nak key public 2>/dev/null",
+            timeout=15, check=False,
+        )
+        npub = r.stdout.strip()
+        if not npub.startswith("npub1"):
+            log.warning("BlossomFS skipped: could not derive npub from nsec")
+            return
+
+        server_url = "https://blossom.psbt.me"
+        _run(f"mkdir -p {mountpoint}", timeout=10, check=False)
+        _run(
+            f'. "$HOME/.cargo/env" && {clone_dir}/target/release/blossomfs mount '
+            f"--mountpoint {mountpoint} "
+            f"--npub {shlex.quote(npub)} "
+            f"--server {shlex.quote(server_url)} "
+            f"--nsec-file {shlex.quote(nsec_file)} "
+            f"--read-only false "
+            f"--cache-dir /tmp/blossomfs-cache "
+            f"--daemon",
+            timeout=30,
+        )
+        log.info("BlossomFS mounted at %s (RW, npub=%s...)", mountpoint, npub[:16])
+        os.environ["BLOSSOMFS_MOUNT"] = mountpoint
+    except Exception as exc:
+        log.warning("BlossomFS setup failed (non-fatal): %s", str(exc)[:200])
 def wait_for_dpkg_lock(timeout: int = 300) -> None:
     """Wait for unattended-upgrades to release the dpkg lock at boot."""
     for attempt in range(timeout // 5):
