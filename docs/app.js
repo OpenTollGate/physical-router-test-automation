@@ -1137,8 +1137,6 @@ async function selectRun(run) {
 
   const summary = await fetchTestSummary(run);
 
-  const summary = await fetchTestSummary(run);
-
   const backBtn = view.querySelector("#back-to-list");
   if (backBtn) {
     backBtn.addEventListener("click", () => {
