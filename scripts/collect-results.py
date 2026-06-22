@@ -649,10 +649,9 @@ def main():
                     test["markers"] = meta["markers"]
                 break
 
-        safe_name = re.sub(r"[^\w\-.]", "_", test["name"])
-        debug_path = os.path.join(run_dir, "debug", f"{safe_name}.log")
-        if os.path.isfile(debug_path):
-            test["debug_log"] = f"debug/{safe_name}.log"
+    debug_json_path = os.path.join(run_dir, "debug-logs.json")
+    if os.path.isfile(debug_json_path):
+        summary_json["debug_logs"] = "debug-logs.json"
 
     failed_tests = [t for t in all_tests if t["outcome"] in ("failed", "error")]
     skipped_tests = [t for t in all_tests if t["outcome"] == "skipped"]

@@ -762,37 +762,47 @@ def pytest_sessionfinish(session, exitstatus):
     with open(meta_path, "w") as f:
         json.dump(existing, f, indent=2)
 
+    if _debug_log_data:
+        debug_path = os.path.join(results_dir, "debug-logs.json")
+        existing_debug = {}
+        if os.path.isfile(debug_path):
+            try:
+                with open(debug_path) as f:
+                    existing_debug = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
+        existing_debug.update(_debug_log_data)
+        with open(debug_path, "w") as f:
+            json.dump(existing_debug, f, indent=2)
+
+
+_debug_log_data = {}
+
 
 def _write_debug_log(item, report, results_dir):
     if not results_dir or not report:
         return
     if report.passed:
         return
-    safe_name = re.sub(r"[^\w\-.]", "_", item.name)
-    debug_dir = os.path.join(results_dir, "debug")
-    os.makedirs(debug_dir, exist_ok=True)
 
-    lines = [
-        f"Test: {item.name}",
-        f"Outcome: {report.outcome}",
-        f"Duration: {report.duration:.3f}s",
-        "",
-    ]
+    entry = {
+        "outcome": report.outcome,
+        "duration_ms": round(report.duration * 1000),
+        "stdout": getattr(report, "capstdout", "") or "",
+        "stderr": getattr(report, "capstderr", "") or "",
+        "logs": getattr(report, "caplog", "") or "",
+        "traceback": str(report.longrepr) if report.failed and report.longrepr else None,
+        "failure_message": None,
+    }
 
-    stdout = getattr(report, "capstdout", "")
-    if stdout:
-        lines.extend(["=== stdout ===", stdout])
-    stderr = getattr(report, "capstderr", "")
-    if stderr:
-        lines.extend(["=== stderr ===", stderr])
-    caplog_text = getattr(report, "caplog", "")
-    if caplog_text:
-        lines.extend(["=== log ===", caplog_text])
-    if report.failed and report.longrepr:
-        lines.extend(["=== traceback ===", str(report.longrepr)])
+    if report.failed:
+        for attr in ("longreprtext", "longrepr"):
+            val = getattr(report, attr, None)
+            if val:
+                entry["failure_message"] = str(val)[:500]
+                break
 
-    with open(os.path.join(debug_dir, f"{safe_name}.log"), "w") as f:
-        f.write("\n".join(lines))
+    _debug_log_data[item.name] = entry
 
 
 def _get_pr_marker(item):

@@ -1000,6 +1000,7 @@ function buildTestHierarchy(run, summary) {
 
   const allFiles = [...(run.screenshots || []), ...(run.files || [])];
   const matchedUrls = new Set();
+  let debugLogsUrl = null;
 
   const testsByName = new Map();
   for (const t of summary.tests) {
@@ -1053,16 +1054,9 @@ function buildTestHierarchy(run, summary) {
         suiteFiles[suiteName].push(file);
       }
     }
-    const dm = path.match(/^debug\/(.+)\.log$/);
-    if (dm) {
-      const logSafeName = dm[1];
-      for (const [tname, tarts] of testArtifacts) {
-        if (tname.replace(/[^\w\-.]/g, "_") === logSafeName) {
-          tarts.debugLog = file.url;
-          matchedUrls.add(file.url);
-          break;
-        }
-      }
+    if (path === "debug-logs.json") {
+      debugLogsUrl = file.url;
+      matchedUrls.add(file.url);
     }
   }
 
@@ -1156,7 +1150,7 @@ function buildTestHierarchy(run, summary) {
     }
   }
 
-  return { suites: [...suiteMap.values()], generalArtifacts, reports, featuredVideos };
+  return { suites: [...suiteMap.values()], generalArtifacts, reports, featuredVideos, debugLogsUrl };
 }
 
 function outcomeIcon(outcome) {
@@ -1318,19 +1312,19 @@ function renderTestArtifacts(test) {
     `);
   }
 
-  if (a.debugLog) {
+  if (currentHierarchy && currentHierarchy.debugLogsUrl) {
     parts.push(`
       <div class="test-artifact-group">
-        <h4 class="test-artifact-title">Debug Log</h4>
+        <h4 class="test-artifact-title">Debug Output</h4>
         <details class="debug-log-section">
           <summary class="debug-log-toggle">Show debug output</summary>
-          <pre class="debug-log-content" data-url="${escapeHtml(a.debugLog)}">Loading\u2026</pre>
+          <pre class="debug-log-content" data-debug-url="${escapeHtml(currentHierarchy.debugLogsUrl)}" data-test-name="${escapeHtml(test.name)}">Loading\u2026</pre>
         </details>
       </div>
     `);
   }
 
-  if (a.screenshots.length === 0 && a.videos.length === 0 && a.html.length === 0 && !a.debugLog) {
+  if (a.screenshots.length === 0 && a.videos.length === 0 && a.html.length === 0 && !(currentHierarchy && currentHierarchy.debugLogsUrl)) {
     parts.push(`<p class="test-no-artifacts">No screenshots or videos captured for this test.</p>`);
   }
 
@@ -1491,11 +1485,28 @@ function wireUpTestTree(view) {
               const pre = details.querySelector(".debug-log-content");
               if (!pre || pre.dataset.loaded) return;
               try {
-                const resp = await fetch(pre.dataset.url);
-                pre.textContent = await resp.text();
+                const resp = await fetch(pre.dataset.debugUrl);
+                const data = await resp.json();
+                const testName = pre.dataset.testName;
+                const entry = data[testName];
+                if (!entry) {
+                  pre.textContent = "No debug data for this test.";
+                  pre.dataset.loaded = "1";
+                  return;
+                }
+                const lines = [
+                  `Outcome: ${entry.outcome || "unknown"}`,
+                  `Duration: ${(entry.duration_ms / 1000).toFixed(1)}s`,
+                ];
+                if (entry.failure_message) lines.push(`\nFailure: ${entry.failure_message}`);
+                if (entry.stdout) lines.push(`\n=== stdout ===\n${entry.stdout}`);
+                if (entry.stderr) lines.push(`\n=== stderr ===\n${entry.stderr}`);
+                if (entry.logs) lines.push(`\n=== logs ===\n${entry.logs}`);
+                if (entry.traceback) lines.push(`\n=== traceback ===\n${entry.traceback}`);
+                pre.textContent = lines.join("\n") || "No output captured.";
                 pre.dataset.loaded = "1";
               } catch {
-                pre.textContent = "Failed to load debug log.";
+                pre.textContent = "Failed to load debug data.";
               }
             });
           });
