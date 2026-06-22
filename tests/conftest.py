@@ -846,60 +846,38 @@ def _auto_portal_screenshot(item, report, results_dir, adb):
             log.debug("auto portal screenshot embed failed: %s", exc)
 
 
-def _video_is_static(video_path: str, psnr_threshold: float = 60.0) -> bool:
-    """Check if a video shows no meaningful visual change.
+def _video_is_static(video_path: str, pixel_threshold: int = 5, min_diff_pixels: int = 10) -> bool:
+    """Check if a video shows no meaningful visual change across ALL frames.
 
-    Extracts first and last frames, compares with PSNR.
-    Returns True if frames are visually identical (video should be skipped).
-    A threshold of 60 dB means only near-pixel-perfect duplicates are static;
-    even a few characters of text change produce PSNR ~50-58 dB and are kept.
+    Extracts every frame at 160x90, compares each consecutive pair at the
+    raw byte level. Returns True only if every pair is near-identical.
+    Catches changes anywhere in the video, not just first vs last frame.
     """
-    import tempfile
+    extract = subprocess.run(
+        ["ffmpeg", "-y", "-i", video_path,
+         "-vf", "scale=160:90",
+         "-f", "image2pipe", "-vcodec", "rawvideo", "-pix_fmt", "rgb24", "-"],
+        capture_output=True, timeout=30,
+    )
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        first = os.path.join(tmpdir, "first.png")
-        last = os.path.join(tmpdir, "last.png")
+    raw = extract.stdout
+    if not raw:
+        return False
 
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", video_path, "-vframes", "1", first],
-            capture_output=True, timeout=15,
-        )
-        if not os.path.exists(first):
+    frame_size = 160 * 90 * 3
+    n_frames = len(raw) // frame_size
+
+    if n_frames <= 1:
+        return True
+
+    for i in range(n_frames - 1):
+        f1 = raw[i * frame_size : (i + 1) * frame_size]
+        f2 = raw[(i + 1) * frame_size : (i + 2) * frame_size]
+        diffs = sum(1 for a, b in zip(f1, f2) if abs(a - b) > pixel_threshold)
+        if diffs > min_diff_pixels:
             return False
 
-        probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=nb_frames", "-of", "csv=p=0", video_path],
-            capture_output=True, text=True, timeout=10,
-        )
-        try:
-            n_frames = int(probe.stdout.strip())
-        except (ValueError, IndexError):
-            n_frames = 30
-
-        if n_frames <= 1:
-            return True
-
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", video_path,
-             "-vf", f"select='eq(n\\,{n_frames - 1})'", "-vframes", "1", last],
-            capture_output=True, timeout=15,
-        )
-        if not os.path.exists(last):
-            return False
-
-        result = subprocess.run(
-            ["ffmpeg", "-y", "-i", first, "-i", last,
-             "-filter_complex", "psnr", "-f", "null", "-"],
-            capture_output=True, text=True, timeout=10,
-        )
-
-        match = re.search(r"average:(inf|[\d.]+)", result.stderr)
-        if match:
-            val = match.group(1)
-            if val == "inf":
-                return True
-            return float(val) > psnr_threshold
+    return True
 
     return False
 
