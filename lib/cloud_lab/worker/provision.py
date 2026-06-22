@@ -88,8 +88,10 @@ def write_env_file(config: WorkerConfig) -> None:
         f"TOLLGATE_ENABLE_HWSIM={'1' if config.hwsim_enabled else ''}\n"
         f"TOLLGATE_ENABLE_VWIFI={'1' if config.vwifi_enabled else ''}\n"
         f"TOLLGATE_WIFI_PLANE={config.wifi_plane}\n"
-        f"GH_TOKEN={os.environ.get('GH_TOKEN', '')}\n"
     )
+    gh_token = os.environ.get("GH_TOKEN", "")
+    if gh_token:
+        env_content += f"GH_TOKEN={gh_token}\n"
     Path(TEST_DIR, ".env").write_text(env_content)
 def ensure_outer_deps() -> None:
     r = _run(

@@ -218,10 +218,13 @@ def run_worker(config: WorkerConfig) -> int:
                 dvm_job_request(config)
                 dvm_feedback("processing", f"Cloud lab pipeline starting (run_id={config.run_id})")
 
-                _step_start("gh-cli-auth")
-                log.info("[3/10] GitHub CLI auth (token=***%s)", config.gh_token[-4:] if len(config.gh_token) > 8 else "***")
-                ensure_github_cli(config.gh_token)
-                _step_end("gh-cli-auth")
+                if config.gh_token:
+                    _step_start("gh-cli-auth")
+                    log.info("[3/10] GitHub CLI auth (token=***%s)", config.gh_token[-4:])
+                    ensure_github_cli(config.gh_token)
+                    _step_end("gh-cli-auth")
+                else:
+                    log.info("[3/10] GitHub CLI auth skipped (no GH_TOKEN — Nostr-only mode)")
             else:
                 log.info("[runner mode] Skipping steps 1-3 (GitHub Actions provides checkout/deps/auth)")
 
@@ -416,7 +419,8 @@ def run_worker(config: WorkerConfig) -> int:
                 verify_nostr_publish(config)
                 dvm_job_result(config, counts)
                 report_url = "https://tests.tollgate.me/"
-                post_pr_comment(config, report_url, counts)
+                if config.gh_token:
+                    post_pr_comment(config, report_url, counts)
             except Exception as pub_exc:
                 log.error("Publish failed (non-fatal): %s", _redact(str(pub_exc))[:500])
 
