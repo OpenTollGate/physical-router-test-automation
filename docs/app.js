@@ -678,6 +678,17 @@ function buildTestHierarchy(run, summary) {
       }
       matchedUrls.add(file.url);
     }
+    const dm = path.match(/^debug\/(.+)\.log$/);
+    if (dm) {
+      const logSafeName = dm[1];
+      for (const [tname, tarts] of testArtifacts) {
+        if (tname.replace(/[^\w\-.]/g, "_") === logSafeName) {
+          tarts.debugLog = file.url;
+          matchedUrls.add(file.url);
+          break;
+        }
+      }
+    }
   }
 
   const suiteMap = new Map();
@@ -812,7 +823,9 @@ function renderTestArtifacts(test) {
 
   parts.push(`
     <div class="test-detail-meta">
-      ${test.failure_message ? `<div class="test-failure-detail">\u26A0 ${escapeHtml(test.failure_message)}</div>` : ""}
+      ${test.description ? `<div class="test-description">${escapeHtml(test.description)}</div>` : ""}
+      ${test.human_failure ? `<div class="test-failure-detail">\u26A0 ${escapeHtml(test.human_failure)}</div>` : ""}
+      ${test.markers && test.markers.length ? `<div class="test-markers">${test.markers.map(m => `<span class="test-marker">${escapeHtml(m)}</span>`).join("")}</div>` : ""}
       <div class="test-detail-info">
         <span>Framework: ${escapeHtml(test.framework || "unknown")}</span>
         ${test.file ? `<span>File: ${escapeHtml(test.file)}</span>` : ""}
@@ -859,7 +872,19 @@ function renderTestArtifacts(test) {
     `);
   }
 
-  if (a.screenshots.length === 0 && a.videos.length === 0 && a.html.length === 0) {
+  if (a.debugLog) {
+    parts.push(`
+      <div class="test-artifact-group">
+        <h4 class="test-artifact-title">Debug Log</h4>
+        <details class="debug-log-section">
+          <summary class="debug-log-toggle">Show debug output</summary>
+          <pre class="debug-log-content" data-url="${escapeHtml(a.debugLog)}">Loading\u2026</pre>
+        </details>
+      </div>
+    `);
+  }
+
+  if (a.screenshots.length === 0 && a.videos.length === 0 && a.html.length === 0 && !a.debugLog) {
     parts.push(`<p class="test-no-artifacts">No screenshots or videos captured for this test.</p>`);
   }
 
@@ -999,6 +1024,21 @@ function wireUpTestTree(view) {
 
           body.querySelectorAll(".html-view-btn").forEach((btn) => {
             btn.addEventListener("click", () => openHtmlViewer(btn.dataset.url, btn.dataset.name));
+          });
+
+          body.querySelectorAll(".debug-log-section").forEach((details) => {
+            details.addEventListener("toggle", async () => {
+              if (!details.open) return;
+              const pre = details.querySelector(".debug-log-content");
+              if (!pre || pre.dataset.loaded) return;
+              try {
+                const resp = await fetch(pre.dataset.url);
+                pre.textContent = await resp.text();
+                pre.dataset.loaded = "1";
+              } catch {
+                pre.textContent = "Failed to load debug log.";
+              }
+            });
           });
 
           observeNewThumbnails(body);
