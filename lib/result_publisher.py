@@ -606,6 +606,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write the manifest JSON to this path (default: stdout only)",
     )
     p.add_argument(
+        "--lab-type", default=os.environ.get("TOLLGATE_LAB_TYPE", "physical"),
+        choices=["gcloud", "virtual-lab", "physical", "shc"],
+        help="Lab environment type. gcloud/virtual-lab/shc = publish without IP/MAC redaction. "
+             "physical = redact all network identifiers. (env: TOLLGATE_LAB_TYPE)",
+    )
+    p.add_argument(
         "-v", "--verbose", action="store_true",
         help="Enable debug logging",
     )
