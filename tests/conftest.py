@@ -1,4 +1,5 @@
 import base64
+import inspect
 import json
 import os
 import re
@@ -728,6 +729,61 @@ def pytest_collection_modifyitems(config, items):
     other = [t for t in items if "api" not in t.keywords and "phone" not in t.keywords]
     items[:] = api + other + phone
 
+    metadata = {}
+    for item in items:
+        doc = ""
+        if hasattr(item, "function") and item.function.__doc__:
+            doc = inspect.getdoc(item.function) or ""
+        markers = sorted(set(m.name for m in item.iter_markers() if m.name))
+        metadata[item.nodeid] = {
+            "name": item.name,
+            "description": doc,
+            "markers": markers,
+            "file": str(item.fspath).replace(os.sep, "/"),
+        }
+    config._tollgate_test_metadata = metadata
+
+
+def pytest_sessionfinish(session, exitstatus):
+    metadata = getattr(session.config, "_tollgate_test_metadata", None)
+    if not metadata:
+        return
+    results_dir = session.config.getoption("--results") or _results_dir()
+    os.makedirs(results_dir, exist_ok=True)
+    meta_path = os.path.join(results_dir, "test-metadata.json")
+    with open(meta_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+
+
+def _write_debug_log(item, report, results_dir):
+    if not results_dir or not report:
+        return
+    safe_name = re.sub(r"[^\w\-.]", "_", item.name)
+    debug_dir = os.path.join(results_dir, "debug")
+    os.makedirs(debug_dir, exist_ok=True)
+
+    lines = [
+        f"Test: {item.name}",
+        f"Outcome: {report.outcome}",
+        f"Duration: {report.duration:.3f}s",
+        "",
+    ]
+
+    stdout = getattr(report, "capstdout", "")
+    if stdout:
+        lines.extend(["=== stdout ===", stdout])
+    stderr = getattr(report, "capstderr", "")
+    if stderr:
+        lines.extend(["=== stderr ===", stderr])
+    caplog_text = getattr(report, "caplog", "")
+    if caplog_text:
+        lines.extend(["=== log ===", caplog_text])
+    if report.failed and report.longrepr:
+        lines.extend(["=== traceback ===", str(report.longrepr)])
+
+    with open(os.path.join(debug_dir, f"{safe_name}.log"), "w") as f:
+        f.write("\n".join(lines))
+
 
 def _get_pr_marker(item):
     """Extract PR number from @pytest.mark.pr(N) marker."""
@@ -962,6 +1018,7 @@ def pytest_runtest_makereport(item, call):
 
         _auto_portal_screenshot(item, report, results_dir, adb)
         _auto_portal_video(item, report, results_dir, adb)
+        _write_debug_log(item, report, results_dir)
 
         if report.failed:
             raw = os.path.join(results_dir, "raw") if results_dir else None

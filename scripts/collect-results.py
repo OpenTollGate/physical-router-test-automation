@@ -361,6 +361,33 @@ def _query_router_version(router_ip):
         return None
 
 
+def _humanize_test_name(name):
+    if name.startswith("test_"):
+        name = name[5:]
+    return "Tests " + name.replace("_", " ").capitalize()
+
+
+def _humanize_failure(message):
+    if not message:
+        return None
+    m = re.search(r"assert\s+(.+?)\s*==\s*(.+?)(?:\s|$)", message)
+    if m:
+        return f"Expected {m.group(2).strip()} but got {m.group(1).strip()}"
+    m = re.search(r"assert\s+(.+?)\s*!=\s*(.+?)(?:\s|$)", message)
+    if m:
+        return f"Expected {m.group(1).strip()} to not equal {m.group(2).strip()}"
+    m = re.search(r"assert\s+(.+?)\s+in\s+(.+?)(?:\s|$)", message)
+    if m:
+        return f"Expected {m.group(1).strip()} to be present in {m.group(2).strip()}"
+    m = re.match(r"assert\s+not\s+(.+)", message)
+    if m:
+        return f"Expected {m.group(1).strip()} to be falsy"
+    m = re.match(r"assert\s+(.+)", message)
+    if m:
+        return f"Expected {m.group(1).strip()} to be truthy"
+    return message[:300] + ("..." if len(message) > 300 else "")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Collect test results into canonical JSON")
     parser.add_argument("--run-dir", required=True, help="Root directory for this test run")
@@ -600,6 +627,32 @@ def main():
                 run_json["pipeline_steps"] = json.load(f)
         except (json.JSONDecodeError, OSError):
             pass
+
+    meta_path = os.path.join(run_dir, "test-metadata.json")
+    metadata = {}
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path) as f:
+                metadata = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    for test in all_tests:
+        test["description"] = _humanize_test_name(test["name"])
+        test["human_failure"] = _humanize_failure(test.get("failure_message"))
+
+        for meta in metadata.values():
+            if meta.get("name") == test["name"]:
+                if meta.get("description"):
+                    test["description"] = meta["description"]
+                if meta.get("markers"):
+                    test["markers"] = meta["markers"]
+                break
+
+        safe_name = re.sub(r"[^\w\-.]", "_", test["name"])
+        debug_path = os.path.join(run_dir, "debug", f"{safe_name}.log")
+        if os.path.isfile(debug_path):
+            test["debug_log"] = f"debug/{safe_name}.log"
 
     failed_tests = [t for t in all_tests if t["outcome"] in ("failed", "error")]
     skipped_tests = [t for t in all_tests if t["outcome"] == "skipped"]
