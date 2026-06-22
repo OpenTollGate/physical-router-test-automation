@@ -702,6 +702,11 @@ section#run-view {
   object-position: top center;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
+  opacity: 0;
+  transition: opacity 300ms ease;
+}
+.shot-thumb.loaded {
+  opacity: 1;
 }
 
 .shot-name {

@@ -38,6 +38,10 @@ const FETCH_SINCE_DAYS = 90;
 // === STATE ==================================================================
 let allRuns = [];
 let selectedRunId = null;
+let imgObserver = null;
+let activeImgLoads = 0;
+const MAX_CONCURRENT_IMG_LOADS = 3;
+const imgLoadQueue = [];
 
 // ===========================================================================
 // WebSocket: Fetch kind 30078 + 1063 events from multiple relays
@@ -422,6 +426,57 @@ function renderRunsList(runs) {
 }
 
 // ===========================================================================
+// Lazy image loading (Intersection Observer + request throttle)
+// ===========================================================================
+
+function lazyLoadScreenshots(container) {
+  if (imgObserver) imgObserver.disconnect();
+  imgLoadQueue.length = 0;
+  activeImgLoads = 0;
+
+  imgObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        const img = entry.target;
+        imgObserver.unobserve(img);
+        enqueueImageLoad(img);
+      }
+    });
+  }, { rootMargin: "300px" });
+
+  container.querySelectorAll(".shot-thumb[data-src]").forEach((img) => {
+    imgObserver.observe(img);
+  });
+}
+
+function enqueueImageLoad(img) {
+  imgLoadQueue.push(img);
+  processImageQueue();
+}
+
+function processImageQueue() {
+  while (activeImgLoads < MAX_CONCURRENT_IMG_LOADS && imgLoadQueue.length > 0) {
+    const img = imgLoadQueue.shift();
+    activeImgLoads++;
+
+    img.addEventListener("load", () => {
+      img.classList.add("loaded");
+      activeImgLoads--;
+      processImageQueue();
+    }, { once: true });
+
+    img.addEventListener("error", () => {
+      img.parentElement.classList.add("shot-error");
+      activeImgLoads--;
+      processImageQueue();
+    }, { once: true });
+
+    img.src = img.dataset.src;
+    img.removeAttribute("data-src");
+  }
+}
+
+// ===========================================================================
 // Rendering: detail view
 // ===========================================================================
 
@@ -492,6 +547,8 @@ function selectRun(run) {
   view.querySelectorAll(".shot-thumb").forEach((img) => {
     img.addEventListener("click", () => openLightbox(img.dataset.fullUrl, img.dataset.filename));
   });
+
+  lazyLoadScreenshots(view);
 }
 
 function metric(value, label, cls) {
@@ -515,12 +572,10 @@ function renderScreenshots(screenshots) {
   return `<div class="shot-grid">` + screenshots.map((s) => `
     <div class="shot-card">
       <img class="shot-thumb"
-           src="${escapeHtml(s.url)}"
+           data-src="${escapeHtml(s.url)}"
            data-full-url="${escapeHtml(s.url)}"
            data-filename="${escapeHtml(s.path)}"
-           loading="lazy"
-           alt="${escapeHtml(s.path)}"
-           onerror="this.parentElement.classList.add('shot-error')">
+           alt="${escapeHtml(s.path)}">
       <div class="shot-name" title="${escapeHtml(s.path)}">${escapeHtml(s.path)}</div>
     </div>
   `).join("") + `</div>`;
