@@ -597,6 +597,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Router model metadata",
     )
     p.add_argument(
+        "--commit", default=None,
+        help="SUT commit hash (short) metadata",
+    )
+    p.add_argument(
+        "--portal", default=None,
+        help="Portal/addon name (e.g., net4sats, builtin)",
+    )
+    p.add_argument(
         "--max-file-size", type=int, default=DEFAULT_MAX_FILE_SIZE,
         help=f"Skip files larger than this many bytes (default: {DEFAULT_MAX_FILE_SIZE})",
     )
@@ -648,6 +656,10 @@ def main(argv: list[str] | None = None) -> int:
         metadata["skipped"] = args.skipped
     if args.router:
         metadata["router"] = args.router
+    if args.commit:
+        metadata["commit"] = args.commit
+    if args.portal:
+        metadata["portal"] = args.portal
 
     start = time.monotonic()
     try:

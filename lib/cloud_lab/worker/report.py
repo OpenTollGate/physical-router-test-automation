@@ -170,6 +170,9 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
         f"--branch {shlex.quote(config.sut_branch or 'main')} "
         f"--passed {passed} --failed {failed} --skipped {skipped} "
         f"--router gcp-cloud "
+        f"--commit {shlex.quote((config.sut_commit or 'unknown')[:7])} "
+        f"--portal {shlex.quote(config.portal or 'builtin')} "
+        f"--lab-type gcloud "
         f"-v"
     )
 

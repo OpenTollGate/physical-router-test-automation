@@ -312,6 +312,7 @@ function parseRunFromKind30078(event, fileMeta) {
     commit: meta.commit || null,
     router: meta.router || null,
     backend: meta.backend || null,
+    portal: meta.portal || null,
     clientType: meta.client_type || null,
     viewport: meta.viewport || null,
     blossomServer: payload ? payload.blossom_server : null,
@@ -1645,7 +1646,11 @@ async function selectRun(run) {
   if (run.pr) metaItems.push(metaItem("PR", "#" + escapeHtml(run.pr)));
   if (run.commit) {
     const c = shortCommit(run.commit);
-    metaItems.push(metaItem("Commit", `<code>${escapeHtml(c)}</code>`));
+    const repo = "Amperstrand/tollgate-module-basic-go";
+    metaItems.push(metaItem("Commit", `<a href="https://github.com/${repo}/commit/${escapeHtml(run.commit)}" target="_blank" rel="noopener" class="meta-link"><code>${escapeHtml(c)}</code> \u2197</a>`));
+  }
+  if (run.portal && run.portal !== "builtin") {
+    metaItems.push(metaItem("Portal", `<span class="meta-chip meta-chip-portal">${escapeHtml(run.portal)}</span>`));
   }
   if (run.router) metaItems.push(metaItem("Router", escapeHtml(run.router)));
   if (run.backend) metaItems.push(metaItem("Backend", escapeHtml(run.backend)));
