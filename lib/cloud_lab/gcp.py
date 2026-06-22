@@ -298,6 +298,21 @@ def _gh_token() -> str:
     return token
 
 
+def _nsec_hex() -> str:
+    nsec = os.environ.get("BOT_NSEC_HEX") or os.environ.get("NSEC_HEX", "")
+    if nsec:
+        return nsec.strip()
+    for candidate in [
+        os.path.expanduser("~/.config/prta/nsec"),
+        os.path.expanduser("~/nsec"),
+    ]:
+        try:
+            return Path(candidate).read_text().strip()
+        except (OSError, FileNotFoundError):
+            continue
+    return ""
+
+
 _OVERLAY_ALLOWLIST = {
     "docs/virtual-lab.md",
     "docs/virtual-wifi-architecture.md",
@@ -435,6 +450,8 @@ def _build_startup_script(suite_overlay_b64: str = "") -> str:
         export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         export GH_TOKEN=$(curl -sf -H "Metadata-Flavor: Google" \\
             http://metadata.google.internal/computeMetadata/v1/instance/attributes/tollgate-gh-token)
+        export BOT_NSEC_HEX=$(curl -sf -H "Metadata-Flavor: Google" \\
+            http://metadata.google.internal/computeMetadata/v1/instance/attributes/tollgate-nsec-hex 2>/dev/null || echo "")
 
         cleanup() {{
             STATUS=$?
@@ -625,6 +642,7 @@ def submit_run(
     vm_name = _sanitize_vm_name(run_id)
     suite_ref = _suite_ref()
     token = _gh_token()
+    nsec = _nsec_hex()
 
     startup_script = _build_startup_script(_working_tree_overlay())
     script_path = Path(f"/tmp/tollgate-startup-{vm_name}.sh")
@@ -645,6 +663,7 @@ def submit_run(
         "tollgate-zone": zone,
         "tollgate-vm-name": vm_name,
         "tollgate-gh-token": token,
+        "tollgate-nsec-hex": nsec,
         "tollgate-reseller-scenarios": "true" if reseller_scenarios else "false",
         "tollgate-two-router": "true" if two_router else "false",
         "tollgate-secondary-router-host": secondary_router_host,
