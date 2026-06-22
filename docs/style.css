@@ -452,6 +452,70 @@ aside#runs-list {
   justify-content: space-between;
 }
 
+.run-card-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.runner-npub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.runner-code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-light);
+}
+
+.dvm-status-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.dvm-status-processing {
+  color: var(--yellow);
+  background: var(--yellow-dim);
+  border-color: rgba(210, 153, 34, 0.3);
+}
+
+.dvm-status-success {
+  color: var(--green);
+  background: var(--green-dim);
+  border-color: rgba(63, 185, 80, 0.3);
+}
+
+.dvm-status-error,
+.dvm-status-failed {
+  color: var(--red);
+  background: var(--red-dim);
+  border-color: rgba(248, 81, 73, 0.3);
+}
+
+.dvm-status-partial {
+  color: var(--yellow);
+  background: var(--yellow-dim);
+  border-color: rgba(210, 153, 34, 0.3);
+}
+
 .run-card .timestamp {
   font-family: var(--font-mono);
   font-size: 11px;

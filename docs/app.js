@@ -43,7 +43,7 @@ let activeImgLoads = 0;
 const MAX_CONCURRENT_IMG_LOADS = 3;
 const imgLoadQueue = [];
 
-const CACHE_KEY = "prta:runs:v3";
+const CACHE_KEY = "prta:runs:v4";
 const filterState = { search: "", status: "all", sort: "newest" };
 let detailLoadId = 0;
 let currentTestFilter = "all";
@@ -92,6 +92,82 @@ function fetchNostrEvents(pubkeyHex, kinds = [30078, 1063], limit = 200) {
           },
         ]));
         updateConnectionStatus(connectedCount, RELAYS.length);
+      };
+
+      ws.onmessage = (msg) => {
+        try {
+          const data = JSON.parse(msg.data);
+          if (data[0] === "EVENT" && data[1] === subId && data[2]) {
+            const evt = data[2];
+            events.set(evt.id, evt);
+          } else if (data[0] === "EOSE" && data[1] === subId) {
+            ws.send(JSON.stringify(["CLOSE", subId]));
+            ws.close();
+          }
+        } catch (e) { /* ignore parse errors */ }
+      };
+
+      ws.onerror = () => {
+        closedRelays++;
+        checkDone();
+      };
+
+      ws.onclose = () => {
+        closedRelays++;
+        checkDone();
+      };
+    });
+
+    function checkDone() {
+      if (closedRelays >= RELAYS.length && !resolved) {
+        clearTimeout(timeout);
+        resolved = true;
+        resolve({ events: [...events.values()], connected: connectedCount });
+      }
+    }
+  });
+}
+
+// ===========================================================================
+// WebSocket: Fetch NIP-90 DVM events (kind 5900/6900/7000) from ALL pubkeys
+// ===========================================================================
+
+function fetchDvmEvents(kinds = [5900, 6900, 7000], limit = 200) {
+  return new Promise((resolve) => {
+    const events = new Map();
+    let resolved = false;
+    let closedRelays = 0;
+    let connectedCount = 0;
+
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        resolve({ events: [...events.values()], connected: connectedCount });
+      }
+    }, FETCH_TIMEOUT_MS);
+
+    RELAYS.forEach((relayUrl) => {
+      let ws;
+      try {
+        ws = new WebSocket(relayUrl);
+      } catch (e) {
+        closedRelays++;
+        checkDone();
+        return;
+      }
+
+      const subId = "prta-dvm-" + Math.random().toString(36).slice(2, 8);
+
+      ws.onopen = () => {
+        connectedCount++;
+        ws.send(JSON.stringify([
+          "REQ", subId,
+          {
+            kinds,
+            limit,
+            since: Math.floor(Date.now() / 1000) - 86400 * FETCH_SINCE_DAYS,
+          },
+        ]));
       };
 
       ws.onmessage = (msg) => {
@@ -272,6 +348,265 @@ function dedupeRuns(events, fileMeta) {
 }
 
 // ===========================================================================
+// NIP-19 npub encoding (bech32) for runner pubkey display
+// ===========================================================================
+
+const BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+
+function bech32Polymod(values) {
+  const gen = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+  let chk = 1;
+  for (const v of values) {
+    const b = chk >> 25;
+    chk = (chk & 0x1ffffff) << 5 ^ v;
+    for (let i = 0; i < 5; i++) {
+      if (((b >> i) & 1) === 1) chk ^= gen[i];
+    }
+  }
+  return chk;
+}
+
+function bech32HrpExpand(hrp) {
+  return [...hrp].map((c) => c.charCodeAt(0) >> 5)
+    .concat([...hrp].map((c) => c.charCodeAt(0) & 31));
+}
+
+function bech32CreateChecksum(hrp, data) {
+  const values = bech32HrpExpand(hrp).concat(data, [0, 0, 0, 0, 0, 0]);
+  const mod = bech32Polymod(values) ^ 1;
+  const ret = [];
+  for (let i = 0; i < 6; i++) {
+    ret.push((mod >> (5 * (5 - i))) & 31);
+  }
+  return ret;
+}
+
+function convertBits(data, fromBits, toBits, pad) {
+  let acc = 0, bits = 0;
+  const ret = [];
+  const maxv = (1 << toBits) - 1;
+  for (const v of data) {
+    if (v < 0 || (v >> fromBits) !== 0) return null;
+    acc = (acc << fromBits) | v;
+    bits += fromBits;
+    while (bits >= toBits) {
+      bits -= toBits;
+      ret.push((acc >> bits) & maxv);
+    }
+  }
+  if (pad) {
+    if (bits > 0) ret.push((acc << (toBits - bits)) & maxv);
+  } else if (bits >= fromBits || ((acc << (toBits - bits)) & maxv)) {
+    return null;
+  }
+  return ret;
+}
+
+function hexToBytes(hex) {
+  const bytes = [];
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes.push(parseInt(hex.substr(i, 2), 16));
+  }
+  return bytes;
+}
+
+function hexToNpub(hex) {
+  if (!hex || hex.length !== 64) return "";
+  const hrp = "npub";
+  const data = convertBits(hexToBytes(hex), 8, 5, true);
+  if (!data) return "";
+  const checksum = bech32CreateChecksum(hrp, data);
+  const combined = data.concat(checksum);
+  return hrp + "1" + combined.map((v) => BECH32_CHARSET[v]).join("");
+}
+
+function shortNpub(hex) {
+  const npub = hexToNpub(hex);
+  if (!npub) return "";
+  return npub.slice(0, 10) + "\u2026";
+}
+
+// ===========================================================================
+// NIP-90 DVM event parsing (kind 5900/6900/7000)
+// ===========================================================================
+
+// Parse kind 6900 (DVM job result) -> run object.
+// The event carries test results as a DVM job completion. Content may be
+// JSON with pass/fail counts and file URLs. Tags carry param values and
+// file references. The linked 5900 request event provides the run_id via
+// its d-tag.
+function parseRunFromKind6900(event, fileMeta) {
+  const tags = event.tags || [];
+
+  let payload = null;
+  try {
+    payload = JSON.parse(event.content || "{}");
+  } catch (e) { /* non-JSON content */ }
+
+  const contentFiles = (payload && Array.isArray(payload.files)) ? payload.files : [];
+  const passed = payload && payload.passed != null ? payload.passed : getTagNum(tags, "passed");
+  const failed = payload && payload.failed != null ? payload.failed : getTagNum(tags, "failed");
+  const skipped = payload && payload.skipped != null ? payload.skipped : getTagNum(tags, "skipped");
+  const total = payload && payload.total != null
+    ? payload.total
+    : (passed != null || failed != null || skipped != null
+      ? (passed || 0) + (failed || 0) + (skipped || 0)
+      : null);
+
+  const branch = (payload && payload.branch)
+    || getParam(tags, "branch")
+    || getTag(tags, "branch");
+  const backend = (payload && payload.backend)
+    || getParam(tags, "backend")
+    || getTag(tags, "backend");
+  const router = (payload && payload.router)
+    || getParam(tags, "router")
+    || getTag(tags, "router");
+  const pr = (payload && payload.pr) || getParam(tags, "pr") || getTag(tags, "pr");
+
+  let files = contentFiles;
+  if (files.length === 0) {
+    files = getAllTags(tags, "file").map((t) => ({ url: t[1] || "" }));
+  }
+
+  files = files.map((f) => {
+    const fm = fileMeta.get(f.url) || {};
+    return {
+      path: f.path || fm.filename || "",
+      url: f.url,
+      sha256: f.sha256 || fm.sha256 || "",
+      mime: f.mime || fm.mime || "application/octet-stream",
+      size: f.size != null ? f.size : (fm.size != null ? fm.size : null),
+      redacted: !!f.redacted,
+    };
+  });
+
+  const screenshots = files.filter((f) => (f.mime || "").startsWith("image/"));
+  const nonScreenshotFiles = files.filter(
+    (f) => !(f.mime || "").startsWith("image/")
+  );
+
+  let runId = (payload && payload.run_id) || getTag(tags, "d") || event.id;
+
+  let status = "success";
+  if (failed != null && failed > 0) status = "error";
+  else if (passed != null && passed === 0 && total != null && total > 0) status = "error";
+
+  return {
+    id: event.id,
+    eventId: event.id,
+    runId,
+    timestamp: event.created_at,
+    status,
+    passed,
+    failed,
+    skipped,
+    total,
+    branch: branch || null,
+    pr: pr || null,
+    commit: (payload && payload.commit) || getTag(tags, "commit") || null,
+    router: router || null,
+    backend: backend || null,
+    clientType: (payload && payload.client_type) || getTag(tags, "client_type") || null,
+    viewport: (payload && payload.viewport) || getTag(tags, "viewport") || null,
+    blossomServer: payload ? payload.blossom_server : null,
+    scanSummary: (payload && payload.scan_summary) ? payload.scan_summary : {},
+    files: nonScreenshotFiles,
+    screenshots,
+    content: event.content || "",
+    rawEvent: event,
+    source: "dvm",
+    runnerNpub: event.pubkey,
+    feedbackStatus: null,
+  };
+}
+
+function getParam(tags, name) {
+  const t = (tags || []).find((tg) => tg[0] === "param" && tg[1] === name);
+  return t ? t[2] : null;
+}
+
+// Parse kind 7000 (DVM job feedback) -> status object.
+function parseFeedbackFromKind7000(event) {
+  const tags = event.tags || [];
+  const status = getTag(tags, "status") || "processing";
+  const requestId = getTag(tags, "e");
+  return {
+    status,
+    requestId,
+    runnerNpub: event.pubkey,
+    timestamp: event.created_at,
+    eventId: event.id,
+  };
+}
+
+// Merge kind 30078 runs with kind 6900 (DVM) runs and kind 7000 feedback.
+// If a run appears in both 30078 and 6900, prefer the 6900 version but
+// keep the 30078's detailed file list when the DVM version has none.
+function mergeRuns(events30078, dvmEvents, fileMeta, feedback) {
+  const k30078 = events30078.filter((e) => e.kind === 30078);
+  const k6900 = dvmEvents.filter((e) => e.kind === 6900);
+
+  const byRunId = new Map();
+
+  for (const evt of k30078) {
+    try {
+      const run = parseRunFromKind30078(evt, fileMeta);
+      run.source = "legacy";
+      run.runnerNpub = evt.pubkey;
+      run.feedbackStatus = null;
+      byRunId.set(run.runId, run);
+    } catch (e) {
+      console.warn("[PRTA] Failed to parse 30078", evt.id, e);
+    }
+  }
+
+  for (const evt of k6900) {
+    try {
+      const dvmRun = parseRunFromKind6900(evt, fileMeta);
+      const existing = byRunId.get(dvmRun.runId);
+      if (existing) {
+        if (existing.files.length > 0 && dvmRun.files.length === 0) {
+          dvmRun.files = existing.files;
+          dvmRun.screenshots = existing.screenshots;
+        }
+        if (!dvmRun.branch && existing.branch) dvmRun.branch = existing.branch;
+        if (!dvmRun.pr && existing.pr) dvmRun.pr = existing.pr;
+        if (!dvmRun.router && existing.router) dvmRun.router = existing.router;
+        if (!dvmRun.blossomServer && existing.blossomServer) {
+          dvmRun.blossomServer = existing.blossomServer;
+        }
+        if (!dvmRun.scanSummary || Object.keys(dvmRun.scanSummary).length === 0) {
+          dvmRun.scanSummary = existing.scanSummary;
+        }
+      }
+      byRunId.set(dvmRun.runId, dvmRun);
+    } catch (e) {
+      console.warn("[PRTA] Failed to parse 6900", evt.id, e);
+    }
+  }
+
+  // Attach feedback status to matching runs.
+  // FUTURE: filter by runner npub
+  if (feedback && feedback.length > 0) {
+    const fbByRun = new Map();
+    for (const fb of feedback) {
+      const runId = fb.requestId || fb.eventId;
+      const prev = fbByRun.get(runId);
+      if (!prev || fb.timestamp > prev.timestamp) {
+        fbByRun.set(runId, fb);
+      }
+    }
+    for (const run of byRunId.values()) {
+      const fb = fbByRun.get(run.runId) || fbByRun.get(run.eventId);
+      if (fb) run.feedbackStatus = fb.status;
+    }
+  }
+
+  return [...byRunId.values()].sort((a, b) => b.timestamp - a.timestamp);
+}
+
+// ===========================================================================
 // Formatting helpers
 // ===========================================================================
 
@@ -415,8 +750,9 @@ function getFilteredRuns() {
   if (filterState.search) {
     const q = filterState.search;
     runs = runs.filter((r) => {
-      const hay = [r.runId, r.branch, r.router, r.backend, r.pr]
-        .filter(Boolean).join(" ").toLowerCase();
+      const hay = [r.runId, r.branch, r.router, r.backend, r.pr,
+        r.runnerNpub ? hexToNpub(r.runnerNpub) : null,
+      ].filter(Boolean).join(" ").toLowerCase();
       return hay.includes(q);
     });
   }
@@ -535,10 +871,19 @@ function renderRunsList() {
 
     const noData = run.passed == null && run.failed == null;
 
+    const feedbackBadge = run.feedbackStatus
+      ? `<span class="dvm-status-badge dvm-status-${escapeHtml(run.feedbackStatus)}">${escapeHtml(run.feedbackStatus)}</span>`
+      : "";
+
+    const npubLabel = run.runnerNpub && run.source === "dvm"
+      ? `<span class="runner-npub" title="${escapeHtml(hexToNpub(run.runnerNpub))}">${escapeHtml(shortNpub(run.runnerNpub))}</span>`
+      : "";
+
     card.innerHTML = `
       <div class="run-card-header">
         <span class="run-id">${escapeHtml(shortRunId(run.runId))}</span>
         <div class="run-card-pf">
+          ${feedbackBadge}
           ${statusIcon(run.status)}
           ${noData
             ? `<span class="pf-text pf-no-data">No data</span>`
@@ -554,7 +899,10 @@ function renderRunsList() {
       </div>
       <div class="run-card-footer">
         <span class="timestamp">${escapeHtml(formatDateShort(run.timestamp))}</span>
-        <span class="relative">${escapeHtml(formatRelative(run.timestamp))}</span>
+        <div class="run-card-footer-right">
+          ${npubLabel}
+          <span class="relative">${escapeHtml(formatRelative(run.timestamp))}</span>
+        </div>
       </div>
     `;
 
@@ -1303,6 +1651,9 @@ async function selectRun(run) {
   if (run.backend) metaItems.push(metaItem("Backend", escapeHtml(run.backend)));
   if (run.clientType) metaItems.push(metaItem("Client", escapeHtml(run.clientType)));
   if (run.viewport) metaItems.push(metaItem("Viewport", escapeHtml(run.viewport)));
+  if (run.runnerNpub) {
+    metaItems.push(metaItem("Runner", `<code class="runner-code">${escapeHtml(shortNpub(run.runnerNpub))}</code>`));
+  }
 
   if (run.scanSummary && run.scanSummary.scanned != null) {
     metaItems.push(metaItem("Scanned", String(run.scanSummary.scanned)));
@@ -1492,7 +1843,8 @@ function showGlobalError(message) {
   console.log("[PRTA] Initializing\u2026");
   console.log("[PRTA] Relays:", RELAYS);
   console.log("[PRTA] Bot npub (hex):", BOT_NPUB_HEX);
-  console.log("[PRTA] Fetching kinds [30078, 1063]");
+  console.log("[PRTA] Phase 1: Fetching kinds [30078, 1063] from bot npub");
+  console.log("[PRTA] Phase 2: Fetching kinds [5900, 6900, 7000] from all pubkeys");
 
   // Lightbox wiring
   const lb = document.getElementById("lightbox");
@@ -1560,20 +1912,36 @@ function showGlobalError(message) {
   }
 
   try {
-    const { events, connected } = await fetchNostrEvents(BOT_NPUB_HEX, [30078, 1063], 200);
+    const [phase1, phase2] = await Promise.all([
+      fetchNostrEvents(BOT_NPUB_HEX, [30078, 1063], 200),
+      fetchDvmEvents([5900, 6900, 7000], 200),
+    ]);
+
+    const { events, connected } = phase1;
+    const dvmEvents = phase2.events;
 
     const n30078 = events.filter((e) => e.kind === 30078).length;
     const n1063 = events.filter((e) => e.kind === 1063).length;
+    const n5900 = dvmEvents.filter((e) => e.kind === 5900).length;
+    const n6900 = dvmEvents.filter((e) => e.kind === 6900).length;
+    const n7000 = dvmEvents.filter((e) => e.kind === 7000).length;
     console.log("[PRTA] Connected to " + connected + "/" + RELAYS.length + " relays");
-    console.log("[PRTA] Received " + events.length + " events (30078: " + n30078 + ", 1063: " + n1063 + ")");
+    console.log("[PRTA] Phase 1: " + events.length + " events (30078: " + n30078 + ", 1063: " + n1063 + ")");
+    console.log("[PRTA] Phase 2: " + dvmEvents.length + " DVM events (5900: " + n5900 + ", 6900: " + n6900 + ", 7000: " + n7000 + ")");
 
     const fileMeta = buildFileMeta(events);
     console.log("[PRTA] File metadata map: " + fileMeta.size + " entries");
 
-    const freshRuns = dedupeRuns(events, fileMeta);
-    console.log("[PRTA] Parsed " + freshRuns.length + " test runs");
+    const k7000 = dvmEvents.filter((e) => e.kind === 7000)
+      .map(parseFeedbackFromKind7000);
 
-    if (connected === 0 && events.length === 0) {
+    const freshRuns = mergeRuns(events, dvmEvents, fileMeta, k7000);
+    console.log("[PRTA] Merged " + freshRuns.length + " test runs ("
+      + freshRuns.filter((r) => r.source === "dvm").length + " DVM, "
+      + freshRuns.filter((r) => r.source === "legacy").length + " legacy)");
+
+    const totalConnected = Math.max(connected, phase2.connected);
+    if (totalConnected === 0 && events.length === 0 && dvmEvents.length === 0) {
       if (!cached || cached.length === 0) {
         showGlobalError("Could not connect to any relay.");
       }
