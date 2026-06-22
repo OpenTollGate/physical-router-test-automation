@@ -41,13 +41,9 @@ def ensure_cdk_binary() -> None:
     if "CDK_BINARY_OK" in r.stdout:
         log.info("CDK mintd binary already cached")
     else:
-        log.info("Downloading CDK mintd v%s...", CDK_VERSION)
         _run(f"mkdir -p {shlex.quote(CDK_MINT_DIR)}", timeout=10)
-        _run(
-            f"wget -q -O {shlex.quote(binary)} "
-            f"https://github.com/cashubtc/cdk/releases/download/v{CDK_VERSION}/cdk-mintd-{CDK_VERSION}-x86_64",
-            timeout=120,
-        )
+        _download_cdk_cached(binary, "cdk-mintd")
+
         _run(f"chmod +x {shlex.quote(binary)}", timeout=10)
         r = _run(f"{shlex.quote(binary)} --version 2>&1 || {shlex.quote(binary)} --help 2>&1 | head -1", timeout=10, check=False)
         log.info("CDK binary verified: %s", (r.stdout or "").strip()[:80])
@@ -56,17 +52,36 @@ def ensure_cdk_binary() -> None:
     if "CDK_CLI_OK" in r.stdout:
         log.info("CDK CLI binary already cached")
     else:
-        log.info("Downloading CDK CLI v%s...", CDK_VERSION)
         _run(f"mkdir -p {shlex.quote(CDK_MINT_DIR)}", timeout=10)
-        _run(
-            f"wget -q -O {shlex.quote(cli_binary)} "
-            f"https://github.com/cashubtc/cdk/releases/download/v{CDK_VERSION}/cdk-cli-{CDK_VERSION}-x86_64",
-            timeout=120,
-        )
+        _download_cdk_cached(cli_binary, "cdk-cli")
+
         _run(f"chmod +x {shlex.quote(cli_binary)}", timeout=10)
         _run(f"ln -sf {shlex.quote(cli_binary)} /usr/local/bin/cdk-cli 2>/dev/null || true", timeout=10)
         r = _run(f"{shlex.quote(cli_binary)} --version 2>&1 || {shlex.quote(cli_binary)} --help 2>&1 | head -1", timeout=10, check=False)
         log.info("CDK CLI binary verified: %s", (r.stdout or "").strip()[:80])
+
+
+def _download_cdk_cached(dest: str, binary_name: str) -> None:
+    nsec_file = os.environ.get("NSEC_FILE", "")
+    if not nsec_file or not Path(nsec_file).exists():
+        for candidate in [os.path.expanduser("~/nsec"), "/root/nsec"]:
+            if Path(candidate).exists():
+                nsec_file = candidate
+                break
+
+    if nsec_file and Path(nsec_file).exists():
+        from lib.cloud_lab.worker.blossom_cache import cached_build, compute_cache_key
+        cache_key = compute_cache_key("cdk", CDK_VERSION, binary_name, "x86_64")
+        url = f"https://github.com/cashubtc/cdk/releases/download/v{CDK_VERSION}/{binary_name}-{CDK_VERSION}-x86_64"
+        def _wget():
+            _run(f"wget -q -O {shlex.quote(dest)} {shlex.quote(url)}", timeout=120)
+            return dest
+        log.info("CDK %s: checking Blossom cache (key=%s...)", binary_name, cache_key[:12])
+        cached_build(cache_key, _wget, dest, nsec_file)
+    else:
+        log.info("Downloading CDK %s v%s (no cache — no nsec)", binary_name, CDK_VERSION)
+        url = f"https://github.com/cashubtc/cdk/releases/download/v{CDK_VERSION}/{binary_name}-{CDK_VERSION}-x86_64"
+        _run(f"wget -q -O {shlex.quote(dest)} {shlex.quote(url)}", timeout=120)
 def start_local_mints(config: WorkerConfig) -> dict[str, subprocess.Popen[str]]:
     mints: dict[str, subprocess.Popen[str]] = {}
 

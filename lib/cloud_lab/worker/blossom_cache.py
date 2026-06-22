@@ -132,4 +132,6 @@ def cached_build(
 
 
 def _copy_artifact(src: str, dest: str) -> None:
+    if os.path.abspath(src) == os.path.abspath(dest):
+        return
     subprocess.run(["cp", src, dest], check=True, timeout=30)
