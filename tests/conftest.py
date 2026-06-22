@@ -758,6 +758,8 @@ def pytest_sessionfinish(session, exitstatus):
 def _write_debug_log(item, report, results_dir):
     if not results_dir or not report:
         return
+    if report.passed:
+        return
     safe_name = re.sub(r"[^\w\-.]", "_", item.name)
     debug_dir = os.path.join(results_dir, "debug")
     os.makedirs(debug_dir, exist_ok=True)

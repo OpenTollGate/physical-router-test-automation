@@ -83,7 +83,7 @@ DEFAULT_RELAYS = [
 
 #: Defense-in-depth: files never uploaded even if the scanner marks them clean.
 #: Adds coverage (sqlite/db/log) the scanner's own suffix list lacks.
-HARD_BLOCKED_NAMES = {".env", "credentials", "routers.env", "routers.json"}
+HARD_BLOCKED_NAMES = {".env", "credentials", "routers.env", "routers.json", "report.html"}
 HARD_BLOCKED_SUFFIXES = {
     ".env", ".pem", ".key", ".p12", ".pfx", ".keystore",
     ".kdbx", ".sqlite", ".db",
