@@ -351,6 +351,8 @@ aside#runs-list {
   border: 1px solid transparent;
   margin-bottom: 4px;
   position: relative;
+  animation: fadeInUp 0.3s ease forwards;
+  opacity: 0;
 }
 
 .run-card:hover {
@@ -571,6 +573,16 @@ aside#runs-list {
   to { transform: rotate(360deg); }
 }
 
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 .relay-list {
   display: flex;
   flex-wrap: wrap;
@@ -627,11 +639,29 @@ section#run-view {
 .empty-state a { color: var(--accent); text-decoration: none; }
 .empty-state a:hover { text-decoration: underline; }
 
+.empty-icon-arrow {
+  animation: fadeInUp 0.4s ease;
+}
+.empty-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-weight: 500;
+  animation: nudgeLeft 2s ease-in-out infinite;
+}
+.empty-hint-desktop { display: block; }
+.empty-hint-mobile { display: none; }
+
+@keyframes nudgeLeft {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(-4px); }
+}
+
 /* Detail header */
 .detail-header {
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
   padding: 24px 32px;
+  animation: fadeIn 0.25s ease;
 }
 
 .back-to-list {
@@ -762,6 +792,7 @@ section#run-view {
   padding: 24px 32px 60px;
   max-width: 1100px;
   margin: 0 auto;
+  animation: fadeIn 0.25s ease;
 }
 
 .section-title {
@@ -1683,11 +1714,15 @@ footer a:hover { color: var(--accent); }
   .detail-body { padding: 18px 16px 40px; }
 
   .shot-grid {
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 10px;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
   }
 
-  .shot-thumb { height: 110px; }
+  .shot-thumb,
+  .shot-card:has(.shot-thumb:not(.loaded))::before {
+    height: 120px;
+  }
+  .shot-error .shot-thumb { height: 120px; }
 
   .file-name { max-width: 160px; }
 
@@ -1721,6 +1756,9 @@ footer a:hover { color: var(--accent); }
     height: 90px;
   }
 
+  .empty-hint-desktop { display: none; }
+  .empty-hint-mobile { display: block; }
+
   footer { font-size: 10px; padding: 6px 12px; }
 }
 
@@ -1745,5 +1783,17 @@ footer a:hover { color: var(--accent); }
   aside#runs-list,
   section#run-view {
     top: 50px;
+  }
+}
+
+/* ============================================================
+   Reduced motion
+   ============================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

@@ -521,11 +521,17 @@ function renderRunsList() {
   countEl.textContent = runs.length + " run" + (runs.length !== 1 ? "s" : "");
   container.appendChild(countEl);
 
-  runs.forEach((run) => {
+  runs.forEach((run, index) => {
     const card = document.createElement("div");
     card.className = "run-card";
     card.dataset.runId = run.runId;
     if (run.runId === selectedRunId) card.classList.add("active");
+    if (index < 10) {
+      card.style.animationDelay = (index * 30) + "ms";
+    } else {
+      card.style.animationDelay = "0ms";
+      card.style.animationDuration = "0s";
+    }
 
     const noData = run.passed == null && run.failed == null;
 
