@@ -37,35 +37,35 @@ from lib.cloud_lab.worker.shell import _run, log
 def ensure_cdk_binary() -> None:
     binary = f"{CDK_MINT_DIR}/cdk-mintd"
     cli_binary = f"{CDK_MINT_DIR}/cdk-cli"
-    r = _run(f"test -x {binary} && echo CDK_BINARY_OK", timeout=10, check=False)
+    r = _run(f"test -x {shlex.quote(binary)} && echo CDK_BINARY_OK", timeout=10, check=False)
     if "CDK_BINARY_OK" in r.stdout:
         log.info("CDK mintd binary already cached")
     else:
         log.info("Downloading CDK mintd v%s...", CDK_VERSION)
-        _run(f"mkdir -p {CDK_MINT_DIR}", timeout=10)
+        _run(f"mkdir -p {shlex.quote(CDK_MINT_DIR)}", timeout=10)
         _run(
-            f"wget -q -O {binary} "
+            f"wget -q -O {shlex.quote(binary)} "
             f"https://github.com/cashubtc/cdk/releases/download/v{CDK_VERSION}/cdk-mintd-{CDK_VERSION}-x86_64",
             timeout=120,
         )
-        _run(f"chmod +x {binary}", timeout=10)
-        r = _run(f"{binary} --version 2>&1 || {binary} --help 2>&1 | head -1", timeout=10, check=False)
+        _run(f"chmod +x {shlex.quote(binary)}", timeout=10)
+        r = _run(f"{shlex.quote(binary)} --version 2>&1 || {shlex.quote(binary)} --help 2>&1 | head -1", timeout=10, check=False)
         log.info("CDK binary verified: %s", (r.stdout or "").strip()[:80])
 
-    r = _run(f"test -x {cli_binary} && echo CDK_CLI_OK", timeout=10, check=False)
+    r = _run(f"test -x {shlex.quote(cli_binary)} && echo CDK_CLI_OK", timeout=10, check=False)
     if "CDK_CLI_OK" in r.stdout:
         log.info("CDK CLI binary already cached")
     else:
         log.info("Downloading CDK CLI v%s...", CDK_VERSION)
-        _run(f"mkdir -p {CDK_MINT_DIR}", timeout=10)
+        _run(f"mkdir -p {shlex.quote(CDK_MINT_DIR)}", timeout=10)
         _run(
-            f"wget -q -O {cli_binary} "
+            f"wget -q -O {shlex.quote(cli_binary)} "
             f"https://github.com/cashubtc/cdk/releases/download/v{CDK_VERSION}/cdk-cli-{CDK_VERSION}-x86_64",
             timeout=120,
         )
-        _run(f"chmod +x {cli_binary}", timeout=10)
-        _run(f"ln -sf {cli_binary} /usr/local/bin/cdk-cli 2>/dev/null || true", timeout=10)
-        r = _run(f"{cli_binary} --version 2>&1 || {cli_binary} --help 2>&1 | head -1", timeout=10, check=False)
+        _run(f"chmod +x {shlex.quote(cli_binary)}", timeout=10)
+        _run(f"ln -sf {shlex.quote(cli_binary)} /usr/local/bin/cdk-cli 2>/dev/null || true", timeout=10)
+        r = _run(f"{shlex.quote(cli_binary)} --version 2>&1 || {shlex.quote(cli_binary)} --help 2>&1 | head -1", timeout=10, check=False)
         log.info("CDK CLI binary verified: %s", (r.stdout or "").strip()[:80])
 def start_local_mints(config: WorkerConfig) -> dict[str, subprocess.Popen[str]]:
     mints: dict[str, subprocess.Popen[str]] = {}
@@ -99,7 +99,7 @@ reserve_fee_min = 0
 min_delay_time = 0
 max_delay_time = 0
 """
-    _run(f"mkdir -p {CDK_MINT_DIR}", timeout=10)
+    _run(f"mkdir -p {shlex.quote(CDK_MINT_DIR)}", timeout=10)
     Path(f"{CDK_MINT_DIR}/config.toml").write_text(cdk_config)
 
     cdk_log = Path("/tmp/cdk-mintd.log")

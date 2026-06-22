@@ -3,6 +3,7 @@ import json
 import time
 import logging
 import os
+import shlex
 
 log = logging.getLogger("tollgate.wifi_client")
 
@@ -56,7 +57,7 @@ class DesktopAdapter:
     def shell(self, cmd: str, timeout: int = 30) -> str:
         if cmd.strip().startswith("curl"):
             try:
-                r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+                r = subprocess.run(shlex.split(cmd), capture_output=True, text=True, timeout=timeout)
                 return r.stdout.strip()
             except (subprocess.SubprocessError, OSError):
                 return ""

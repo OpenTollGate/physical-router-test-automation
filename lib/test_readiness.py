@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -37,24 +38,24 @@ log = logging.getLogger("tollgate.readiness")
 
 def _ssh(ip: str, cmd: str, password: str, timeout: int = 15) -> tuple[str, int]:
     full = (
-        f"sshpass -p '{password}' ssh "
+        f"sshpass -p {shlex.quote(password)} ssh "
         f"-o StrictHostKeyChecking=no "
         f"-o UserKnownHostsFile=/dev/null "
         f"-o PreferredAuthentications=password "
         f"-o ConnectTimeout=5 "
-        f"root@{ip} '{cmd}'"
+        f"root@{shlex.quote(ip)} {shlex.quote(cmd)}"
     )
     r = subprocess.run(full, shell=True, capture_output=True, text=True, timeout=timeout)
     return r.stdout.strip(), r.returncode
 
 
 def _adb(cmd: str, timeout: int = 15) -> tuple[str, int]:
-    r = subprocess.run(f"adb shell {cmd}", shell=True, capture_output=True, text=True, timeout=timeout)
+    r = subprocess.run(["adb", "shell", cmd], capture_output=True, text=True, timeout=timeout)
     return r.stdout.strip(), r.returncode
 
 
 def _adb_local(cmd: str, timeout: int = 20) -> tuple[str, int]:
-    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+    r = subprocess.run(shlex.split(cmd), capture_output=True, text=True, timeout=timeout)
     return r.stdout.strip(), r.returncode
 
 

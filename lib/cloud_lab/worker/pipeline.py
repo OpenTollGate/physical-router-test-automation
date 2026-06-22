@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import threading
@@ -388,7 +389,7 @@ def run_worker(config: WorkerConfig) -> int:
             ("nutshell-v2", "/tmp/nutshell-v2-mint.log"),
             ("nutshell-v1", "/tmp/nutshell-v1-mint.log"),
         ]:
-            _run(f"cp {path} {results_dir}/raw/{name}.log 2>/dev/null || true", timeout=5, check=False)
+            _run(f"cp {shlex.quote(str(path))} {shlex.quote(str(results_dir))}/raw/{shlex.quote(str(name))}.log 2>/dev/null || true", timeout=5, check=False)
 
         _step_start("collect-render")
         try:

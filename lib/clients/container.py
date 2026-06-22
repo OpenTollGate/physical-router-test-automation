@@ -115,7 +115,7 @@ class ContainerClient:
                 else:
                     flags.append(f"--{k_dashed}={shlex.quote(str(v))}")
         flag_str = " ".join(flags)
-        cmd = f"curl --connect-timeout {timeout} --max-time {timeout + 5} {flag_str} '{url}'".strip()
+        cmd = f"curl --connect-timeout {timeout} --max-time {timeout + 5} {flag_str} {shlex.quote(url)}".strip()
         return self._exec(cmd, timeout=timeout + 10)
 
     def ping(self, host: str = "1.1.1.1", count: int = 2, timeout: int = 3,
