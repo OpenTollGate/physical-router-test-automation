@@ -544,9 +544,6 @@ function renderRunsList() {
 
     card.addEventListener("click", () => {
       selectRun(run);
-      if (window.innerWidth <= 768) {
-        document.getElementById("app").classList.remove("sidebar-open");
-      }
     });
 
     container.appendChild(card);
@@ -617,6 +614,10 @@ function selectRun(run) {
     el.classList.toggle("active", el.dataset.runId === run.runId);
   });
 
+  if (window.innerWidth <= 768) {
+    document.getElementById("app").classList.add("mobile-view-detail");
+  }
+
   const view = document.getElementById("run-view");
   view.scrollTop = 0;
 
@@ -647,6 +648,12 @@ function selectRun(run) {
 
   view.innerHTML = `
     <div class="detail-header">
+      <button id="back-to-list" class="back-to-list" aria-label="Back to runs list">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 18 9 12 15 6"></polyline>
+        </svg>
+        <span>Runs</span>
+      </button>
       <div class="detail-titles">
         <div class="detail-run">
           ${statusBadge(run)}
@@ -676,6 +683,13 @@ function selectRun(run) {
   view.querySelectorAll(".shot-thumb").forEach((img) => {
     img.addEventListener("click", () => openLightbox(img.dataset.fullUrl, img.dataset.filename));
   });
+
+  const backBtn = view.querySelector("#back-to-list");
+  if (backBtn) {
+    backBtn.addEventListener("click", () => {
+      document.getElementById("app").classList.remove("mobile-view-detail");
+    });
+  }
 
   lazyLoadScreenshots(view);
 }
