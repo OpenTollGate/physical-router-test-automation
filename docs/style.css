@@ -677,10 +677,28 @@ section#run-view {
   overflow: hidden;
   transition: var(--transition);
   cursor: pointer;
+  position: relative;
 }
 .shot-card:hover {
   border-color: var(--accent);
   box-shadow: var(--shadow);
+}
+.shot-card:has(.shot-thumb:not(.loaded))::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 160px;
+  background: linear-gradient(110deg, var(--bg) 0%, rgba(255,255,255,0.04) 20%, var(--bg) 40%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s linear infinite;
+  border-bottom: 1px solid var(--border);
+  z-index: 0;
+  pointer-events: none;
+}
+@keyframes shimmer {
+  to { background-position: -200% 0; }
 }
 .shot-error {
   opacity: 0.4;
