@@ -494,16 +494,6 @@ function selectRun(run) {
   });
 }
 
-function showRunPlaceholder() {
-  const view = document.getElementById("run-view");
-  view.innerHTML = `
-    <div class="run-placeholder">
-      <div class="run-placeholder-icon">\u{1F50E}</div>
-      <p>Select a test run to view details</p>
-      <p class="hint">Screenshots load on demand to be gentle on Blossom servers.</p>
-    </div>`;
-}
-
 function metric(value, label, cls) {
   return `<div class="metric metric-${cls || ""}">
     <span class="metric-value">${value}</span>
@@ -669,9 +659,6 @@ function showGlobalError(message) {
     }
 
     renderRunsList(allRuns);
-    if (allRuns.length > 0) {
-      showRunPlaceholder();
-    }
   } catch (e) {
     console.error("[PRTA] Init error:", e);
     showGlobalError("Initialization failed: " + e.message);
