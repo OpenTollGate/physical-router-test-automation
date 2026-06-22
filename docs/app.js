@@ -791,15 +791,11 @@ function renderTestTree(hierarchy) {
 
 function renderTestCase(test) {
   const outcome = test.outcome || "unknown";
-  const hasArtifacts = test.artifacts &&
-    (test.artifacts.screenshots.length > 0 ||
-     test.artifacts.videos.length > 0 ||
-     test.artifacts.html.length > 0);
 
   return `
-    <div class="test-case${hasArtifacts ? "" : " no-artifacts"}" data-test-name="${escapeHtml(test.name)}" data-outcome="${escapeHtml(outcome)}">
+    <div class="test-case" data-test-name="${escapeHtml(test.name)}" data-outcome="${escapeHtml(outcome)}">
       <div class="test-case-header">
-        <span class="test-toggle">${hasArtifacts ? "\u25B8" : ""}</span>
+        <span class="test-toggle">\u25B8</span>
         <span class="test-status-icon test-status-${escapeHtml(outcome)}">${outcomeIcon(outcome)}</span>
         <span class="test-name">${escapeHtml(test.name)}</span>
         ${test.duration_ms != null ? `<span class="test-duration">${formatDuration(test.duration_ms)}</span>` : ""}
@@ -813,6 +809,16 @@ function renderTestArtifacts(test) {
   const a = test.artifacts;
   if (!a) return "";
   const parts = [];
+
+  parts.push(`
+    <div class="test-detail-meta">
+      ${test.failure_message ? `<div class="test-failure-detail">\u26A0 ${escapeHtml(test.failure_message)}</div>` : ""}
+      <div class="test-detail-info">
+        <span>Framework: ${escapeHtml(test.framework || "unknown")}</span>
+        ${test.file ? `<span>File: ${escapeHtml(test.file)}</span>` : ""}
+      </div>
+    </div>
+  `);
 
   if (a.screenshots.length > 0) {
     parts.push(`
@@ -851,6 +857,10 @@ function renderTestArtifacts(test) {
         `).join("")}
       </div>
     `);
+  }
+
+  if (a.screenshots.length === 0 && a.videos.length === 0 && a.html.length === 0) {
+    parts.push(`<p class="test-no-artifacts">No screenshots or videos captured for this test.</p>`);
   }
 
   return `<div class="test-case-body-inner">${parts.join("")}</div>`;
@@ -924,10 +934,12 @@ function renderGeneralArtifacts(hierarchy) {
 
   if (hierarchy.reports.length > 0) {
     parts.push(`
-      <section class="general-section">
-        <h3 class="section-title">Reports <span class="section-count">${hierarchy.reports.length}</span></h3>
-        ${renderFileList(hierarchy.reports)}
-      </section>
+      <details class="advanced-section">
+        <summary class="advanced-header">Advanced \u2014 Raw Reports &amp; Data <span class="section-count">${hierarchy.reports.length}</span></summary>
+        <div class="advanced-body">
+          ${renderFileList(hierarchy.reports)}
+        </div>
+      </details>
     `);
   }
 
@@ -970,7 +982,6 @@ function wireUpTestTree(view) {
   view.querySelectorAll(".test-case-header").forEach((header) => {
     header.addEventListener("click", () => {
       const testCase = header.parentElement;
-      if (testCase.classList.contains("no-artifacts")) return;
 
       const expanded = testCase.classList.toggle("expanded");
       if (expanded) {
@@ -1036,16 +1047,25 @@ function renderFlatBody(view, run) {
 // HTML viewer modal
 // ===========================================================================
 
-function openHtmlViewer(url, filename) {
+async function openHtmlViewer(url, filename) {
   const modal = document.getElementById("html-viewer");
   if (!modal) return;
   const frame = modal.querySelector(".html-viewer-frame");
   const title = modal.querySelector(".html-viewer-title");
   const open = modal.querySelector(".html-viewer-open");
 
-  frame.src = url;
-  open.href = url;
   title.textContent = filename || "";
+  open.href = url;
+
+  try {
+    const resp = await fetch(url);
+    const html = await resp.text();
+    const blob = new Blob([html], { type: "text/html" });
+    frame.src = URL.createObjectURL(blob);
+  } catch {
+    frame.src = url;
+  }
+
   modal.hidden = false;
   requestAnimationFrame(() => modal.classList.add("open"));
 }
@@ -1053,10 +1073,12 @@ function openHtmlViewer(url, filename) {
 function closeHtmlViewer() {
   const modal = document.getElementById("html-viewer");
   if (!modal) return;
+  const frame = modal.querySelector(".html-viewer-frame");
   modal.classList.remove("open");
   setTimeout(() => {
     modal.hidden = true;
-    modal.querySelector(".html-viewer-frame").src = "about:blank";
+    if (frame.src.startsWith("blob:")) URL.revokeObjectURL(frame.src);
+    frame.src = "about:blank";
   }, 200);
 }
 
@@ -1064,11 +1086,49 @@ function closeHtmlViewer() {
 // Detail view: selectRun
 // ===========================================================================
 
+function selectRunFromHash() {
+  const hashRunId = location.hash.slice(1);
+  if (!hashRunId || selectedRunId === hashRunId) return;
+  const run = allRuns.find((r) => r.runId === hashRunId);
+  if (run) selectRun(run);
+}
+
+function showPlaceholder() {
+  selectedRunId = null;
+  currentRun = null;
+  currentHierarchy = null;
+  document.getElementById("app").classList.remove("mobile-view-detail");
+  document.querySelectorAll(".run-card").forEach((el) => el.classList.remove("active"));
+
+  const view = document.getElementById("run-view");
+  view.scrollTop = 0;
+  view.innerHTML = `
+    <div class="empty-state">
+      <div class="empty-icon empty-icon-arrow">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+          <line x1="8" y1="21" x2="16" y2="21"/>
+          <line x1="12" y1="17" x2="12" y2="21"/>
+        </svg>
+      </div>
+      <p class="empty-title">Select a test run</p>
+      <p class="empty-hint empty-hint-desktop">&larr; Select a run from the list</p>
+      <p class="empty-hint empty-hint-mobile">Tap a run to view details</p>
+      <p class="hint">Runs are fetched live from Nostr relays.<br>
+      Screenshots load on demand to be gentle on <a href="https://blossom.psbt.me" target="_blank" rel="noopener">blossom.psbt.me</a></p>
+    </div>
+  `;
+}
+
 async function selectRun(run) {
   selectedRunId = run.runId;
   currentRun = run;
   currentHierarchy = null;
   const myLoadId = ++detailLoadId;
+
+  if (location.hash !== "#" + run.runId) {
+    history.pushState({ runId: run.runId }, "", "#" + run.runId);
+  }
 
   document.querySelectorAll(".run-card").forEach((el) => {
     el.classList.toggle("active", el.dataset.runId === run.runId);
@@ -1140,7 +1200,11 @@ async function selectRun(run) {
   const backBtn = view.querySelector("#back-to-list");
   if (backBtn) {
     backBtn.addEventListener("click", () => {
-      document.getElementById("app").classList.remove("mobile-view-detail");
+      if (history.state && history.state.runId) {
+        history.back();
+      } else {
+        showPlaceholder();
+      }
     });
   }
 
@@ -1295,6 +1359,10 @@ function showGlobalError(message) {
     hv.querySelector(".html-viewer-close").addEventListener("click", closeHtmlViewer);
   }
 
+  window.addEventListener("popstate", () => {
+    showPlaceholder();
+  });
+
   // Mobile sidebar toggle
   const menuBtn = document.getElementById("menu-toggle");
   const backdrop = document.getElementById("sidebar-backdrop");
@@ -1331,6 +1399,7 @@ function showGlobalError(message) {
     allRuns = cached;
     renderRunsList();
     console.log("[PRTA] Rendered " + cached.length + " runs from cache (instant)");
+    selectRunFromHash();
   }
 
   try {
@@ -1365,6 +1434,7 @@ function showGlobalError(message) {
       allRuns = freshRuns;
       saveCachedRuns(freshRuns);
       renderRunsList();
+      selectRunFromHash();
     }
   } catch (e) {
     console.error("[PRTA] Init error:", e);
