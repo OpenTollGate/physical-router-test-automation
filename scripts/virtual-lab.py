@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import secrets
 import shlex
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, cast
 
 
@@ -55,7 +58,58 @@ POC_OPENWRT_MAC = "52:54:00:12:34:56"
 DEBIAN_CLIENT_IP = "10.99.99.100"
 POC_GATEWAY = "10.99.99.1"
 POC_HOST_BRIDGE_IP = "10.99.99.2/24"
-POC_PASSWORD = "tollgate"
+
+
+def _generate_password():
+    env_pw = os.environ.get("TOLLGATE_FIRMWARE_PASSWORD") or os.environ.get("TOLLGATE_VIRTUAL_LAB_PASSWORD")
+    if env_pw:
+        return env_pw
+    return ''.join(secrets.choice('abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789') for _ in range(24))
+
+
+def _save_credentials(password):
+    import json
+    creds_dir = Path(__file__).parent.parent / "credentials"
+    creds_dir.mkdir(exist_ok=True)
+    creds_path = creds_dir / "virtual-lab-credentials.json"
+    creds = {"password": password, "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    if creds_path.exists():
+        try:
+            existing = json.loads(creds_path.read_text())
+            creds.update(existing)
+            creds["password"] = password
+        except Exception:
+            pass
+    creds_path.write_text(json.dumps(creds, indent=2))
+    creds_path.chmod(0o600)
+
+
+def _update_env_file(password):
+    env_path = Path(__file__).parent.parent / ".env"
+    lines = []
+    found_ssh = False
+    found_luci = False
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if line.startswith("TOLLGATE_SSH_PASSWORD="):
+                lines.append(f"TOLLGATE_SSH_PASSWORD={password}")
+                found_ssh = True
+            elif line.startswith("TOLLGATE_LUCI_PASSWORD="):
+                lines.append(f"TOLLGATE_LUCI_PASSWORD={password}")
+                found_luci = True
+            else:
+                lines.append(line)
+    if not found_ssh:
+        lines.append(f"TOLLGATE_SSH_PASSWORD={password}")
+    if not found_luci:
+        lines.append(f"TOLLGATE_LUCI_PASSWORD={password}")
+    env_path.write_text("\n".join(lines) + "\n")
+
+
+POC_PASSWORD = _generate_password()
+_save_credentials(POC_PASSWORD)
+_update_env_file(POC_PASSWORD)
+
 POC_SUBNET = "10.99.99.0/24"
 
 # Template for the serial-console provisioning script.  Placeholders
@@ -147,6 +201,15 @@ print('Enabling SSH password auth...')
 send_and_wait(s, "uci set dropbear.@dropbear[0].PasswordAuth='on'", wait=2)
 send_and_wait(s, 'uci commit dropbear', wait=2)
 send_and_wait(s, '/etc/init.d/dropbear restart', wait=3)
+
+# --- Inject SSH public key ---
+ssh_key_path = os.path.expanduser("~/.ssh/id_ed25519.pub")
+if not os.path.exists(ssh_key_path):
+    ssh_key_path = os.path.expanduser("~/.ssh/id_rsa.pub")
+if os.path.exists(ssh_key_path):
+    ssh_pubkey = open(ssh_key_path).read().strip()
+    print('Injecting SSH public key...')
+    send_and_wait(s, f"mkdir -p /etc/dropbear && echo '{ssh_pubkey}' > /etc/dropbear/authorized_keys && chmod 600 /etc/dropbear/authorized_keys", wait=2)
 
 # --- Add WAN SSH firewall rule ---
 print('Adding WAN SSH firewall rule...')
