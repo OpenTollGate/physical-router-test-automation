@@ -383,6 +383,25 @@ aside#runs-list {
 .runs-empty p { margin-bottom: 8px; font-size: 13px; }
 .runs-empty .hint { font-size: 12px; line-height: 1.8; color: var(--text-dim); }
 
+/* Detail view placeholder (lazy load) */
+.run-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  height: 100%;
+  min-height: 300px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.run-placeholder-icon {
+  font-size: 40px;
+  opacity: 0.4;
+}
+.run-placeholder p { font-size: 14px; margin: 0; }
+.run-placeholder .hint { font-size: 12px; color: var(--text-dim); }
+
 /* ============================================================
    Loading & Connecting States
    ============================================================ */
