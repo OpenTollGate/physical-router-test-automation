@@ -751,8 +751,16 @@ def pytest_sessionfinish(session, exitstatus):
     results_dir = session.config.getoption("--results") or _results_dir()
     os.makedirs(results_dir, exist_ok=True)
     meta_path = os.path.join(results_dir, "test-metadata.json")
+    existing = {}
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path) as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    existing.update(metadata)
     with open(meta_path, "w") as f:
-        json.dump(metadata, f, indent=2)
+        json.dump(existing, f, indent=2)
 
 
 def _write_debug_log(item, report, results_dir):
