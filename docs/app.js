@@ -43,6 +43,9 @@ let activeImgLoads = 0;
 const MAX_CONCURRENT_IMG_LOADS = 3;
 const imgLoadQueue = [];
 
+const CACHE_KEY = "prta:runs:v3";
+const filterState = { search: "", status: "all", sort: "newest" };
+
 // ===========================================================================
 // WebSocket: Fetch kind 30078 + 1063 events from multiple relays
 // ===========================================================================
@@ -330,6 +333,19 @@ function statusIcon(status) {
   return "";
 }
 
+function statusBadge(run) {
+  if (run.passed == null && run.failed == null) {
+    return `<span class="status-badge unknown">NO DATA</span>`;
+  }
+  if (run.status === "error") {
+    return `<span class="status-badge failed">FAILED</span>`;
+  }
+  if (run.status === "success" && run.passed != null && run.passed > 0) {
+    return `<span class="status-badge passed">PASSED</span>`;
+  }
+  return `<span class="status-badge unknown">NO DATA</span>`;
+}
+
 function passFailBar(run) {
   const passed = run.passed || 0;
   const failed = run.failed || 0;
@@ -342,6 +358,26 @@ function passFailBar(run) {
     ${failed > 0 ? `<div class="pf-seg pf-fail" style="width:${pct(failed)}%" title="${failed} failed"></div>` : ""}
     ${skipped > 0 ? `<div class="pf-seg pf-skip" style="width:${pct(skipped)}%" title="${skipped} skipped"></div>` : ""}
   </div>`;
+}
+
+function loadCachedRuns() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const runs = JSON.parse(raw);
+    return Array.isArray(runs) ? runs : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveCachedRuns(runs) {
+  try {
+    const stripped = runs.map(({ rawEvent, content, ...rest }) => rest);
+    localStorage.setItem(CACHE_KEY, JSON.stringify(stripped));
+  } catch (e) {
+    console.warn("[PRTA] Cache save failed:", e);
+  }
 }
 
 // ===========================================================================
@@ -363,17 +399,110 @@ function updateConnectionStatus(connected, total) {
   }
 }
 
-function renderRunsList(runs) {
-  const container = document.getElementById("runs-list");
+function getFilteredRuns() {
+  let runs = allRuns.slice();
+
+  if (filterState.search) {
+    const q = filterState.search;
+    runs = runs.filter((r) => {
+      const hay = [r.runId, r.branch, r.router, r.backend, r.pr]
+        .filter(Boolean).join(" ").toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
+  if (filterState.status === "passed") {
+    runs = runs.filter((r) => r.status === "success" && r.passed != null && r.passed > 0);
+  } else if (filterState.status === "failed") {
+    runs = runs.filter((r) => r.status === "error");
+  }
+
+  if (filterState.sort === "oldest") {
+    runs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+  } else if (filterState.sort === "most") {
+    runs.sort((a, b) => {
+      const ta = a.total != null ? a.total : (a.passed || 0) + (a.failed || 0) + (a.skipped || 0);
+      const tb = b.total != null ? b.total : (b.passed || 0) + (b.failed || 0) + (b.skipped || 0);
+      return tb - ta;
+    });
+  } else {
+    runs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  }
+
+  return runs;
+}
+
+function buildSidebar() {
+  const aside = document.getElementById("runs-list");
+  aside.innerHTML = `
+    <div class="sidebar-controls">
+      <input type="text" id="search-input" class="search-input" placeholder="Search runs\u2026" autocomplete="off" />
+      <div class="filter-toggles">
+        <button class="filter-btn active" data-filter="all" type="button">All</button>
+        <button class="filter-btn" data-filter="passed" type="button">Passed</button>
+        <button class="filter-btn" data-filter="failed" type="button">Failed</button>
+      </div>
+      <select id="sort-select" class="sort-select">
+        <option value="newest">Newest</option>
+        <option value="oldest">Oldest</option>
+        <option value="most">Most tests</option>
+      </select>
+    </div>
+    <div class="runs-scroll" id="runs-scroll"></div>
+  `;
+  wireSidebarControls();
+}
+
+function wireSidebarControls() {
+  const searchInput = document.getElementById("search-input");
+  if (searchInput) {
+    let timer = null;
+    searchInput.addEventListener("input", (e) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        filterState.search = e.target.value.toLowerCase().trim();
+        renderRunsList();
+      }, 200);
+    });
+  }
+
+  document.querySelectorAll(".filter-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      filterState.status = btn.dataset.filter;
+      renderRunsList();
+    });
+  });
+
+  const sortSelect = document.getElementById("sort-select");
+  if (sortSelect) {
+    sortSelect.addEventListener("change", (e) => {
+      filterState.sort = e.target.value;
+      renderRunsList();
+    });
+  }
+}
+
+function renderRunsList() {
+  const container = document.getElementById("runs-scroll");
+  if (!container) return;
   container.innerHTML = "";
 
-  if (runs.length === 0) {
+  if (allRuns.length === 0) {
     container.innerHTML = `
       <div class="runs-empty">
         <div class="runs-empty-icon">\u26A0</div>
         <p>No test runs found from the bot.</p>
         <p class="hint">Make sure the publisher has emitted<br>kind 30078 events.</p>
       </div>`;
+    return;
+  }
+
+  const runs = getFilteredRuns();
+
+  if (runs.length === 0) {
+    container.innerHTML = `<div class="no-match">No runs match your filters.</div>`;
     return;
   }
 
@@ -388,18 +517,17 @@ function renderRunsList(runs) {
     card.dataset.runId = run.runId;
     if (run.runId === selectedRunId) card.classList.add("active");
 
-    const passedTxt = run.passed != null ? run.passed : "?";
-    const failedTxt = run.failed != null ? run.failed : "?";
+    const noData = run.passed == null && run.failed == null;
 
     card.innerHTML = `
       <div class="run-card-header">
         <span class="run-id">${escapeHtml(shortRunId(run.runId))}</span>
         <div class="run-card-pf">
           ${statusIcon(run.status)}
-          <span class="pf-text">
-            <span class="pf-pass-num">${passedTxt}</span>pass
-            <span class="pf-fail-num">${failedTxt}</span>fail
-          </span>
+          ${noData
+            ? `<span class="pf-text pf-no-data">No data</span>`
+            : `<span class="pf-text"><span class="pf-pass-num">${run.passed != null ? run.passed : "?"}</span>pass <span class="pf-fail-num">${run.failed != null ? run.failed : "?"}</span>fail</span>`
+          }
         </div>
       </div>
       ${passFailBar(run)}
@@ -521,6 +649,7 @@ function selectRun(run) {
     <div class="detail-header">
       <div class="detail-titles">
         <div class="detail-run">
+          ${statusBadge(run)}
           ${statusIcon(run.status)}
           <span class="run-id-lg">${escapeHtml(run.runId)}</span>
         </div>
@@ -639,7 +768,8 @@ function closeLightbox() {
 // ===========================================================================
 
 function showGlobalError(message) {
-  const container = document.getElementById("runs-list");
+  const container = document.getElementById("runs-scroll") || document.getElementById("runs-list");
+  if (!container) return;
   container.innerHTML = `
     <div class="runs-empty">
       <div class="runs-empty-icon">\u26A0</div>
@@ -677,14 +807,17 @@ function showGlobalError(message) {
     backdrop.addEventListener("click", () => app.classList.remove("sidebar-open"));
   }
 
-  // Loading state
-  const loadingEl = document.getElementById("runs-loading");
-  if (loadingEl) {
-    loadingEl.innerHTML = `
-      <div class="connecting">
-        <div class="spinner"></div>
-        <p>Connecting to relays\u2026</p>
-        <div class="relay-list">${RELAYS.map((r) => `<span class="relay-chip">${r.replace("wss://", "")}</span>`).join("")}</div>
+  buildSidebar();
+
+  const scrollEl = document.getElementById("runs-scroll");
+  if (scrollEl) {
+    scrollEl.innerHTML = `
+      <div class="loading">
+        <div class="connecting">
+          <div class="spinner"></div>
+          <p>Connecting to relays\u2026</p>
+          <div class="relay-list">${RELAYS.map((r) => `<span class="relay-chip">${r.replace("wss://", "")}</span>`).join("")}</div>
+        </div>
       </div>`;
   }
 
@@ -692,6 +825,13 @@ function showGlobalError(message) {
     showGlobalError("Bot npub not configured. Set BOT_NPUB_HEX in app.js.");
     console.error("[PRTA] BOT_NPUB_HEX is a placeholder. Replace it with the PRTA bot's 64-char hex npub.");
     return;
+  }
+
+  const cached = loadCachedRuns();
+  if (cached && cached.length > 0) {
+    allRuns = cached;
+    renderRunsList();
+    console.log("[PRTA] Rendered " + cached.length + " runs from cache (instant)");
   }
 
   try {
@@ -705,17 +845,32 @@ function showGlobalError(message) {
     const fileMeta = buildFileMeta(events);
     console.log("[PRTA] File metadata map: " + fileMeta.size + " entries");
 
-    allRuns = dedupeRuns(events, fileMeta);
-    console.log("[PRTA] Parsed " + allRuns.length + " test runs");
+    const freshRuns = dedupeRuns(events, fileMeta);
+    console.log("[PRTA] Parsed " + freshRuns.length + " test runs");
 
     if (connected === 0 && events.length === 0) {
-      showGlobalError("Could not connect to any relay.");
+      if (!cached || cached.length === 0) {
+        showGlobalError("Could not connect to any relay.");
+      }
       return;
     }
 
-    renderRunsList(allRuns);
+    const cachedNewest = cached && cached.length > 0
+      ? cached.reduce((mx, r) => Math.max(mx, r.timestamp || 0), 0)
+      : 0;
+    const freshNewest = freshRuns.length > 0
+      ? freshRuns.reduce((mx, r) => Math.max(mx, r.timestamp || 0), 0)
+      : 0;
+
+    if (freshNewest > cachedNewest || (!cached || cached.length === 0)) {
+      allRuns = freshRuns;
+      saveCachedRuns(freshRuns);
+      renderRunsList();
+    }
   } catch (e) {
     console.error("[PRTA] Init error:", e);
-    showGlobalError("Initialization failed: " + e.message);
+    if (!cached || cached.length === 0) {
+      showGlobalError("Initialization failed: " + e.message);
+    }
   }
 })();
