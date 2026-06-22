@@ -86,7 +86,7 @@ DEFAULT_RELAYS = [
 HARD_BLOCKED_NAMES = {".env", "credentials", "routers.env", "routers.json"}
 HARD_BLOCKED_SUFFIXES = {
     ".env", ".pem", ".key", ".p12", ".pfx", ".keystore",
-    ".kdbx", ".sqlite", ".db", ".log",
+    ".kdbx", ".sqlite", ".db",
 }
 
 logger = logging.getLogger("result_publisher")
