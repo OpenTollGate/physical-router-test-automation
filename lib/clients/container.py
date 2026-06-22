@@ -194,10 +194,43 @@ class ContainerClient:
             return False
 
     def record_portal_video(self, output_path: str, timeout: int = 20) -> bool:
+        return self.record_url_video(_PORTAL_URL, output_path, timeout)
+
+    def screenshot_url(self, url: str, path: str) -> bool:
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            remote_png = "/tmp/tg-screenshot.png"
+            remote_html = "/tmp/tg-page.html"
+            ok = self._run_playwright_screenshot(url=url, png_path=remote_png, html_path=remote_html)
+            if not ok:
+                return False
+            self._scp_from(remote_png, path)
+            html_path = path.replace(".png", ".html")
+            self._scp_from(remote_html, html_path)
+            return os.path.exists(path)
+        except Exception as exc:
+            log.warning("screenshot_url failed: %s", exc)
+            return False
+
+    def record_url_video(self, url: str, output_path: str, timeout: int = 20,
+                         click_selectors: list[str] | None = None) -> bool:
         try:
             os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
             remote_dir = "/tmp/tg-auto-video"
             remote_video = "/tmp/tg-portal-video.webm"
+
+            click_lines = ""
+            if click_selectors:
+                for sel in click_selectors:
+                    safe_sel = sel.replace("'", "\\'")
+                    click_lines += (
+                        f"    try:\n"
+                        f"        page.click('{safe_sel}', timeout=3000)\n"
+                        f"        time.sleep(2)\n"
+                        f"    except Exception:\n"
+                        f"        pass\n"
+                    )
+
             script = (
                 "from pathlib import Path\n"
                 "from playwright.sync_api import sync_playwright\n"
@@ -215,8 +248,9 @@ class ContainerClient:
                 "        record_video_size={'width': 1280, 'height': 720},\n"
                 "    )\n"
                 "    page = ctx.new_page()\n"
-                f"    page.goto('{_PORTAL_URL}', timeout=15000, wait_until='domcontentloaded')\n"
-                "    time.sleep(2)\n"
+                f"    page.goto('{url}', timeout=15000, wait_until='domcontentloaded')\n"
+                "    time.sleep(3)\n"
+                f"{click_lines}"
                 "    src = page.video.path() if page.video else None\n"
                 "    ctx.close()\n"
                 "    if src:\n"
@@ -237,7 +271,7 @@ class ContainerClient:
             self._scp_from(remote_video, output_path, timeout=timeout + 10)
             return os.path.exists(output_path)
         except Exception as exc:
-            log.warning("record_portal_video failed: %s", exc)
+            log.warning("record_url_video failed: %s", exc)
             return False
 
     def _run_playwright_screenshot(self, url: str, png_path: str = "/tmp/tg-screenshot.png",
