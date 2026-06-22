@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TollGate Router Tests — Live Results</title>
   <meta name="description" content="Physical router test automation results. Fetched live from Nostr relays, screenshots from Blossom.">
-  <link rel="stylesheet" href="style.css?v=7">
+  <link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
   <div id="app">
@@ -78,6 +78,21 @@
     <a class="lightbox-open" target="_blank" rel="noopener" title="Open original">Open original &#8599;</a>
   </div>
 
-  <script defer src="app.js?v=7"></script>
+  <!-- HTML viewer modal (inline iframe) -->
+  <div id="html-viewer" class="html-viewer-modal" hidden>
+    <div class="html-viewer-backdrop"></div>
+    <div class="html-viewer-content">
+      <div class="html-viewer-header">
+        <span class="html-viewer-title"></span>
+        <div class="html-viewer-actions">
+          <a class="html-viewer-open" target="_blank" rel="noopener">Open original &#8599;</a>
+          <button class="html-viewer-close" aria-label="Close">&times;</button>
+        </div>
+      </div>
+      <iframe sandbox="allow-same-origin" class="html-viewer-frame"></iframe>
+    </div>
+  </div>
+
+  <script defer src="app.js?v=8"></script>
 </body>
 </html>

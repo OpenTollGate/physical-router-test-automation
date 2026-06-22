@@ -45,6 +45,10 @@ const imgLoadQueue = [];
 
 const CACHE_KEY = "prta:runs:v3";
 const filterState = { search: "", status: "all", sort: "newest" };
+let detailLoadId = 0;
+let currentTestFilter = "all";
+let currentTestSearch = "";
+let currentHierarchy = null;
 
 // ===========================================================================
 // WebSocket: Fetch kind 30078 + 1063 events from multiple relays
@@ -326,6 +330,12 @@ function formatBytes(bytes) {
   return (bytes / 1048576).toFixed(1) + " MB";
 }
 
+function formatDuration(ms) {
+  if (ms == null) return "";
+  if (ms < 1000) return ms + "ms";
+  return (ms / 1000).toFixed(1) + "s";
+}
+
 function statusIcon(status) {
   if (status === "success") return `<span class="status-dot status-success" title="All tests passed"></span>`;
   if (status === "error") return `<span class="status-dot status-error" title="Failures"></span>`;
@@ -601,15 +611,459 @@ function processImageQueue() {
   }
 }
 
+function observeNewThumbnails(container) {
+  if (!imgObserver) return;
+  container.querySelectorAll(".shot-thumb[data-src]").forEach((img) => {
+    imgObserver.observe(img);
+  });
+}
+
 // ===========================================================================
 // Rendering: detail view
 // ===========================================================================
 
 let currentRun = null;
 
-function selectRun(run) {
+// ===========================================================================
+// Test hierarchy: fetch summary.json, group artifacts by test
+// ===========================================================================
+
+async function fetchTestSummary(run) {
+  const summaryFile = [...(run.files || []), ...(run.screenshots || [])]
+    .find((f) => f.path === "summary.json");
+  if (!summaryFile) return null;
+  try {
+    const resp = await fetch(summaryFile.url);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+function buildTestHierarchy(run, summary) {
+  if (!summary || !Array.isArray(summary.tests)) return null;
+
+  const allFiles = [...(run.screenshots || []), ...(run.files || [])];
+  const matchedUrls = new Set();
+
+  const testsByName = new Map();
+  for (const t of summary.tests) {
+    testsByName.set(t.name, t);
+  }
+
+  const testArtifacts = new Map();
+  for (const file of allFiles) {
+    const path = file.path || "";
+    if (path === "summary.json") continue;
+    const m = path.match(/^(?:.*\/)?(.+)-(passed|failed|skipped|error)\.[^.]+$/);
+    if (m && testsByName.has(m[1])) {
+      const name = m[1];
+      if (!testArtifacts.has(name)) {
+        testArtifacts.set(name, { screenshots: [], videos: [], html: [] });
+      }
+      const mime = file.mime || "";
+      if (mime.startsWith("image/")) {
+        testArtifacts.get(name).screenshots.push(file);
+      } else if (mime.startsWith("video/")) {
+        testArtifacts.get(name).videos.push(file);
+      } else if (mime.includes("html")) {
+        testArtifacts.get(name).html.push(file);
+      }
+      matchedUrls.add(file.url);
+    }
+  }
+
+  const suiteMap = new Map();
+  for (const test of summary.tests) {
+    const runner = test.runner || "ungrouped";
+    if (!suiteMap.has(runner)) {
+      const runnerInfo = (summary.runners || []).find((r) => r.name === runner);
+      suiteMap.set(runner, {
+        name: runner,
+        status: runnerInfo ? runnerInfo.status : null,
+        counts: runnerInfo ? runnerInfo.counts : null,
+        tests: [],
+      });
+    }
+    const artifacts = testArtifacts.get(test.name) || { screenshots: [], videos: [], html: [] };
+    suiteMap.get(runner).tests.push({ ...test, artifacts });
+  }
+
+  const generalArtifacts = { screenshots: [], html: [], other: [] };
+  const reports = [];
+
+  for (const file of allFiles) {
+    if (matchedUrls.has(file.url)) continue;
+    const path = file.path || "";
+    if (path === "summary.json") continue;
+
+    const mime = file.mime || "";
+    const isReport = /\.(json|xml|txt|log|csv)$/i.test(path) || mime.includes("json") || mime.includes("xml");
+
+    if (mime.startsWith("image/")) {
+      generalArtifacts.screenshots.push(file);
+    } else if (mime.includes("html")) {
+      generalArtifacts.html.push(file);
+    } else if (isReport) {
+      reports.push(file);
+    } else {
+      generalArtifacts.other.push(file);
+    }
+  }
+
+  return { suites: [...suiteMap.values()], generalArtifacts, reports };
+}
+
+function outcomeIcon(outcome) {
+  switch (outcome) {
+    case "passed": return "\u2713";
+    case "failed":
+    case "error": return "\u2717";
+    case "skipped": return "\u2298";
+    default: return "?";
+  }
+}
+
+function suiteStatusClass(suite) {
+  const tests = suite.tests || [];
+  if (tests.some((t) => t.outcome === "failed" || t.outcome === "error")) return "error";
+  if (tests.some((t) => t.outcome === "passed")) return "success";
+  return "partial";
+}
+
+function renderFilterBar(summary) {
+  const counts = summary.counts || {};
+  const total = counts.total || 0;
+  const passed = counts.passed || 0;
+  const failed = counts.failed || 0;
+  const skipped = counts.skipped || 0;
+
+  return `
+    <div class="filter-bar">
+      <div class="filter-buttons">
+        <button class="filter-btn active" data-filter="all">All <span class="filter-count">${total}</span></button>
+        <button class="filter-btn" data-filter="passed">Passed <span class="filter-count">${passed}</span></button>
+        <button class="filter-btn" data-filter="failed">Failed <span class="filter-count">${failed}</span></button>
+        <button class="filter-btn" data-filter="skipped">Skipped <span class="filter-count">${skipped}</span></button>
+      </div>
+      <input type="search" class="test-search" placeholder="Search tests\u2026" />
+    </div>
+  `;
+}
+
+function renderTestTree(hierarchy) {
+  if (!hierarchy || hierarchy.suites.length === 0) return "";
+
+  const suiteHtml = hierarchy.suites.map((suite) => {
+    const tests = suite.tests || [];
+    const passed = tests.filter((t) => t.outcome === "passed").length;
+    const failed = tests.filter((t) => t.outcome === "failed" || t.outcome === "error").length;
+    const skipped = tests.filter((t) => t.outcome === "skipped").length;
+
+    return `
+      <div class="test-suite" data-suite="${escapeHtml(suite.name)}">
+        <div class="test-suite-header">
+          <span class="test-suite-toggle">\u25BC</span>
+          <span class="test-suite-name">${escapeHtml(suite.name)}</span>
+          <span class="test-suite-badges">
+            ${passed > 0 ? `<span class="suite-badge suite-badge-passed">${passed}</span>` : ""}
+            ${failed > 0 ? `<span class="suite-badge suite-badge-failed">${failed}</span>` : ""}
+            ${skipped > 0 ? `<span class="suite-badge suite-badge-skipped">${skipped}</span>` : ""}
+          </span>
+          <span class="status-dot status-${suiteStatusClass(suite)}"></span>
+        </div>
+        <div class="test-suite-body">
+          ${tests.map((test) => renderTestCase(test)).join("")}
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  return `<div class="test-tree">${suiteHtml}</div>`;
+}
+
+function renderTestCase(test) {
+  const outcome = test.outcome || "unknown";
+  const hasArtifacts = test.artifacts &&
+    (test.artifacts.screenshots.length > 0 ||
+     test.artifacts.videos.length > 0 ||
+     test.artifacts.html.length > 0);
+
+  return `
+    <div class="test-case${hasArtifacts ? "" : " no-artifacts"}" data-test-name="${escapeHtml(test.name)}" data-outcome="${escapeHtml(outcome)}">
+      <div class="test-case-header">
+        <span class="test-toggle">${hasArtifacts ? "\u25B8" : ""}</span>
+        <span class="test-status-icon test-status-${escapeHtml(outcome)}">${outcomeIcon(outcome)}</span>
+        <span class="test-name">${escapeHtml(test.name)}</span>
+        ${test.duration_ms != null ? `<span class="test-duration">${formatDuration(test.duration_ms)}</span>` : ""}
+        ${test.failure_message ? `<span class="test-failure" title="${escapeHtml(test.failure_message)}">\u26A0</span>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderTestArtifacts(test) {
+  const a = test.artifacts;
+  if (!a) return "";
+  const parts = [];
+
+  if (a.screenshots.length > 0) {
+    parts.push(`
+      <div class="test-artifact-group">
+        <h4 class="test-artifact-title">Screenshots <span class="test-artifact-count">${a.screenshots.length}</span></h4>
+        ${renderScreenshots(a.screenshots)}
+      </div>
+    `);
+  }
+
+  if (a.videos.length > 0) {
+    parts.push(`
+      <div class="test-artifact-group">
+        <h4 class="test-artifact-title">Videos <span class="test-artifact-count">${a.videos.length}</span></h4>
+        <div class="test-video-grid">
+          ${a.videos.map((v) => `
+            <div class="test-video-card">
+              <video controls preload="metadata" src="${escapeHtml(v.url)}" class="test-video"></video>
+              <div class="test-video-name" title="${escapeHtml(v.path)}">${escapeHtml(v.path)}</div>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    `);
+  }
+
+  if (a.html.length > 0) {
+    parts.push(`
+      <div class="test-artifact-group">
+        <h4 class="test-artifact-title">HTML Snapshots <span class="test-artifact-count">${a.html.length}</span></h4>
+        ${a.html.map((h) => `
+          <div class="html-inline-row">
+            <button class="html-view-btn" data-url="${escapeHtml(h.url)}" data-name="${escapeHtml(h.path)}">View Inline</button>
+            <a href="${escapeHtml(h.url)}" target="_blank" rel="noopener" class="html-open-link">${escapeHtml(h.path)} \u2197</a>
+          </div>
+        `).join("")}
+      </div>
+    `);
+  }
+
+  return `<div class="test-case-body-inner">${parts.join("")}</div>`;
+}
+
+function findTestInHierarchy(hierarchy, testName) {
+  if (!hierarchy) return null;
+  for (const suite of hierarchy.suites) {
+    for (const test of suite.tests) {
+      if (test.name === testName) return test;
+    }
+  }
+  return null;
+}
+
+function applyTestFilters() {
+  const view = document.getElementById("run-view");
+  const filter = currentTestFilter;
+  const search = currentTestSearch.toLowerCase().trim();
+
+  view.querySelectorAll(".test-case").forEach((el) => {
+    const outcome = el.dataset.outcome;
+    const name = (el.dataset.testName || "").toLowerCase();
+
+    let visible = true;
+    if (filter === "passed") visible = outcome === "passed";
+    else if (filter === "failed") visible = outcome === "failed" || outcome === "error";
+    else if (filter === "skipped") visible = outcome === "skipped";
+
+    if (visible && search) {
+      visible = name.includes(search);
+    }
+
+    el.classList.toggle("hidden", !visible);
+  });
+
+  view.querySelectorAll(".test-suite").forEach((suite) => {
+    const hasVisible = suite.querySelector(".test-case:not(.hidden)");
+    suite.classList.toggle("hidden", !hasVisible);
+  });
+}
+
+function renderGeneralArtifacts(hierarchy) {
+  const parts = [];
+  const ga = hierarchy.generalArtifacts;
+
+  if (ga.screenshots.length > 0) {
+    parts.push(`
+      <section class="general-section">
+        <h3 class="section-title">General Screenshots <span class="section-count">${ga.screenshots.length}</span></h3>
+        ${renderScreenshots(ga.screenshots)}
+      </section>
+    `);
+  }
+
+  if (ga.html.length > 0) {
+    parts.push(`
+      <section class="general-section">
+        <h3 class="section-title">HTML Snapshots <span class="section-count">${ga.html.length}</span></h3>
+        <div class="html-list">
+          ${ga.html.map((h) => `
+            <div class="html-inline-row">
+              <button class="html-view-btn" data-url="${escapeHtml(h.url)}" data-name="${escapeHtml(h.path)}">View Inline</button>
+              <a href="${escapeHtml(h.url)}" target="_blank" rel="noopener" class="html-open-link">${escapeHtml(h.path)} \u2197</a>
+            </div>
+          `).join("")}
+        </div>
+      </section>
+    `);
+  }
+
+  if (hierarchy.reports.length > 0) {
+    parts.push(`
+      <section class="general-section">
+        <h3 class="section-title">Reports <span class="section-count">${hierarchy.reports.length}</span></h3>
+        ${renderFileList(hierarchy.reports)}
+      </section>
+    `);
+  }
+
+  if (ga.other.length > 0) {
+    parts.push(`
+      <section class="general-section">
+        <h3 class="section-title">Other Files <span class="section-count">${ga.other.length}</span></h3>
+        ${renderFileList(ga.other)}
+      </section>
+    `);
+  }
+
+  return parts.join("");
+}
+
+function wireUpTestTree(view) {
+  view.querySelectorAll(".filter-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      view.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      currentTestFilter = btn.dataset.filter;
+      applyTestFilters();
+    });
+  });
+
+  const search = view.querySelector(".test-search");
+  if (search) {
+    search.addEventListener("input", () => {
+      currentTestSearch = search.value;
+      applyTestFilters();
+    });
+  }
+
+  view.querySelectorAll(".test-suite-header").forEach((header) => {
+    header.addEventListener("click", () => {
+      header.parentElement.classList.toggle("collapsed");
+    });
+  });
+
+  view.querySelectorAll(".test-case-header").forEach((header) => {
+    header.addEventListener("click", () => {
+      const testCase = header.parentElement;
+      if (testCase.classList.contains("no-artifacts")) return;
+
+      const expanded = testCase.classList.toggle("expanded");
+      if (expanded) {
+        const testName = testCase.dataset.testName;
+        const test = findTestInHierarchy(currentHierarchy, testName);
+        if (test) {
+          const body = document.createElement("div");
+          body.className = "test-case-body";
+          body.innerHTML = renderTestArtifacts(test);
+          testCase.appendChild(body);
+
+          body.querySelectorAll(".shot-thumb").forEach((img) => {
+            img.addEventListener("click", () => openLightbox(img.dataset.fullUrl, img.dataset.filename));
+          });
+
+          body.querySelectorAll(".html-view-btn").forEach((btn) => {
+            btn.addEventListener("click", () => openHtmlViewer(btn.dataset.url, btn.dataset.name));
+          });
+
+          observeNewThumbnails(body);
+        }
+      } else {
+        const body = testCase.querySelector(".test-case-body");
+        if (body) body.remove();
+      }
+    });
+  });
+
+  view.querySelectorAll(".general-section .html-view-btn").forEach((btn) => {
+    btn.addEventListener("click", () => openHtmlViewer(btn.dataset.url, btn.dataset.name));
+  });
+
+  view.querySelectorAll(".general-section .shot-thumb").forEach((img) => {
+    img.addEventListener("click", () => openLightbox(img.dataset.fullUrl, img.dataset.filename));
+  });
+
+  lazyLoadScreenshots(view);
+}
+
+function renderFlatBody(view, run) {
+  const body = view.querySelector(".detail-body");
+  if (!body) return;
+
+  body.innerHTML = `
+    <section class="screenshot-section">
+      <h3 class="section-title">Screenshots <span class="section-count">${run.screenshots.length}</span></h3>
+      ${renderScreenshots(run.screenshots)}
+    </section>
+    <section class="files-section">
+      <h3 class="section-title">Files <span class="section-count">${run.files.length}</span></h3>
+      ${renderFileList(run.files)}
+    </section>
+  `;
+
+  view.querySelectorAll(".shot-thumb").forEach((img) => {
+    img.addEventListener("click", () => openLightbox(img.dataset.fullUrl, img.dataset.filename));
+  });
+
+  lazyLoadScreenshots(view);
+}
+
+// ===========================================================================
+// HTML viewer modal
+// ===========================================================================
+
+function openHtmlViewer(url, filename) {
+  const modal = document.getElementById("html-viewer");
+  if (!modal) return;
+  const frame = modal.querySelector(".html-viewer-frame");
+  const title = modal.querySelector(".html-viewer-title");
+  const open = modal.querySelector(".html-viewer-open");
+
+  frame.src = url;
+  open.href = url;
+  title.textContent = filename || "";
+  modal.hidden = false;
+  requestAnimationFrame(() => modal.classList.add("open"));
+}
+
+function closeHtmlViewer() {
+  const modal = document.getElementById("html-viewer");
+  if (!modal) return;
+  modal.classList.remove("open");
+  setTimeout(() => {
+    modal.hidden = true;
+    modal.querySelector(".html-viewer-frame").src = "about:blank";
+  }, 200);
+}
+
+// ===========================================================================
+// Detail view: selectRun
+// ===========================================================================
+
+async function selectRun(run) {
   selectedRunId = run.runId;
   currentRun = run;
+  currentHierarchy = null;
+  const myLoadId = ++detailLoadId;
+
   document.querySelectorAll(".run-card").forEach((el) => {
     el.classList.toggle("active", el.dataset.runId === run.runId);
   });
@@ -668,21 +1122,16 @@ function selectRun(run) {
       </div>
     </div>
     <div class="detail-body">
-      <section class="screenshot-section">
-        <h3 class="section-title">Screenshots <span class="section-count">${run.screenshots.length}</span></h3>
-        ${renderScreenshots(run.screenshots)}
-      </section>
-      <section class="files-section">
-        <h3 class="section-title">Files <span class="section-count">${run.files.length}</span></h3>
-        ${renderFileList(run.files)}
-      </section>
+      <div class="test-tree-loading">
+        <div class="spinner"></div>
+        <p>Loading test results\u2026</p>
+      </div>
     </div>
   `;
 
-  // Wire up screenshot clicks -> lightbox
-  view.querySelectorAll(".shot-thumb").forEach((img) => {
-    img.addEventListener("click", () => openLightbox(img.dataset.fullUrl, img.dataset.filename));
-  });
+  const summary = await fetchTestSummary(run);
+
+  const summary = await fetchTestSummary(run);
 
   const backBtn = view.querySelector("#back-to-list");
   if (backBtn) {
@@ -691,7 +1140,29 @@ function selectRun(run) {
     });
   }
 
-  lazyLoadScreenshots(view);
+  if (myLoadId !== detailLoadId) return;
+
+  const body = view.querySelector(".detail-body");
+
+  if (summary && summary.tests) {
+    const hierarchy = buildTestHierarchy(run, summary);
+    if (hierarchy) {
+      currentHierarchy = hierarchy;
+      currentTestFilter = "all";
+      currentTestSearch = "";
+
+      body.innerHTML = `
+        ${renderFilterBar(summary)}
+        ${renderTestTree(hierarchy)}
+        ${renderGeneralArtifacts(hierarchy)}
+      `;
+
+      wireUpTestTree(view);
+      return;
+    }
+  }
+
+  renderFlatBody(view, run);
 }
 
 function metric(value, label, cls) {
@@ -807,8 +1278,18 @@ function showGlobalError(message) {
   lb.querySelector(".lightbox-backdrop").addEventListener("click", closeLightbox);
   lb.querySelector(".lightbox-close").addEventListener("click", closeLightbox);
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeLightbox();
+    if (e.key === "Escape") {
+      closeLightbox();
+      closeHtmlViewer();
+    }
   });
+
+  // HTML viewer wiring
+  const hv = document.getElementById("html-viewer");
+  if (hv) {
+    hv.querySelector(".html-viewer-backdrop").addEventListener("click", closeHtmlViewer);
+    hv.querySelector(".html-viewer-close").addEventListener("click", closeHtmlViewer);
+  }
 
   // Mobile sidebar toggle
   const menuBtn = document.getElementById("menu-toggle");
