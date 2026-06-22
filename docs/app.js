@@ -683,6 +683,20 @@ function buildTestHierarchy(run, summary) {
       matched = true;
     }
 
+    if (!matched && m) {
+      const mime = file.mime || "";
+      if (mime.startsWith("video/")) {
+        const name = m[1];
+        if (!testArtifacts.has(name)) {
+          testArtifacts.set(name, { screenshots: [], videos: [], html: [] });
+        }
+        testArtifacts.get(name).videos.push(file);
+        testArtifacts.get(name)._standalone = true;
+        matchedUrls.add(file.url);
+        matched = true;
+      }
+    }
+
     if (!matched) {
       const vm = path.match(/^raw\/([^/]+)\//);
       if (vm) {
@@ -718,6 +732,26 @@ function buildTestHierarchy(run, summary) {
     }
     const artifacts = testArtifacts.get(test.name) || { screenshots: [], videos: [], html: [] };
     suiteMap.get(runner).tests.push({ ...test, artifacts });
+  }
+
+  const standaloneArtifacts = [];
+  for (const [name, arts] of testArtifacts) {
+    if (arts._standalone && (arts.videos.length > 0 || arts.screenshots.length > 0)) {
+      standaloneArtifacts.push({
+        name,
+        outcome: "unknown",
+        runner: "artifacts",
+        artifacts: arts,
+      });
+    }
+  }
+  if (standaloneArtifacts.length > 0) {
+    suiteMap.set("artifacts", {
+      name: "Artifacts",
+      status: null,
+      counts: null,
+      tests: standaloneArtifacts,
+    });
   }
 
   for (const [suiteName, files] of Object.entries(suiteFiles)) {
