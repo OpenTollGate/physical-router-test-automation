@@ -26,9 +26,11 @@ into hackathon-tooling or any CI pipeline.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+from typing import Any
 
 # --- Constants ---
 
@@ -55,6 +57,31 @@ def _nak_available() -> bool:
     return result.returncode == 0
 
 
+def _parse_nak_publish_output(stderr: str) -> dict[str, Any]:
+    relay_results: dict[str, dict[str, Any]] = {}
+    pattern = re.compile(r"^publishing to (.+?)\.\.\. (success\.|failed:)\s*(.*)$")
+    for line in stderr.splitlines():
+        line = line.strip()
+        m = pattern.match(line)
+        if not m:
+            continue
+        relay, status_raw, message = m.group(1), m.group(2), m.group(3).strip()
+        accepted = status_raw.startswith("success")
+        relay_results[relay] = {
+            "accepted": accepted,
+            "message": message if message else ("" if accepted else "unknown"),
+        }
+    any_accepted = any(r["accepted"] for r in relay_results.values())
+    all_rejected_reasons = [
+        f"{relay}: {r['message']}" for relay, r in relay_results.items() if not r["accepted"]
+    ]
+    return {
+        "relay_results": relay_results,
+        "any_accepted": any_accepted,
+        "all_rejected_reasons": all_rejected_reasons,
+    }
+
+
 def _publish_event(
     nsec_file: str,
     kind: int,
@@ -64,20 +91,10 @@ def _publish_event(
 ) -> dict:
     """Sign and publish a Nostr event via nak CLI.
 
-    Args:
-        nsec_file: Path to file containing hex Nostr private key.
-        kind: Event kind (e.g. 1063, 30078).
-        content: Event content string.
-        tags: List of tag arrays, e.g. [["url", "https://..."], ["m", "text/html"]].
-        relays: Relay list to publish to (default: DEFAULT_RELAYS).
-
-    Returns:
-        {"success": bool, "event_id": str, "event": dict} on success.
-        {"success": False, "error": str} on failure.
-
-    The key is passed via NOSTR_SECRET_KEY env var (not visible in ps).
-    Tag values within a single tag are joined with ";" so nak's -t flag
-    receives them as a single argument: -t "key=val1;val2".
+    nak exits 0 even when relays reject events (e.g. whitelist blocks).
+    The relay status lines (``publishing to <relay>... success|failed``)
+    are printed to stderr — stdout contains only the signed event JSON.
+    stderr is parsed to detect silent rejections.
     """
     if relays is None:
         relays = DEFAULT_RELAYS
@@ -115,11 +132,32 @@ def _publish_event(
             "error": f"nak event failed: {result.stderr.strip()[:300]}",
         }
 
+    nak_status = _parse_nak_publish_output(result.stderr)
+
+    event: dict = {}
+    event_id = ""
     try:
         event = json.loads(result.stdout.strip().split("\n")[-1])
-        return {"success": True, "event_id": event.get("id", ""), "event": event}
+        event_id = event.get("id", "")
     except (json.JSONDecodeError, IndexError):
-        return {"success": True, "event_id": "", "raw_output": result.stdout.strip()[:200]}
+        pass
+
+    if not nak_status["any_accepted"]:
+        reasons = "; ".join(nak_status["all_rejected_reasons"]) or "all relays rejected (no detail)"
+        return {
+            "success": False,
+            "error": f"Event signed but rejected by all relays: {reasons}",
+            "event_id": event_id,
+            "event": event,
+            "relay_status": nak_status,
+        }
+
+    return {
+        "success": True,
+        "event_id": event_id,
+        "event": event,
+        "relay_status": nak_status,
+    }
 
 
 # --- Public API ---

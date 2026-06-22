@@ -16,7 +16,6 @@ COORDINATION_RELAYS = [
     "wss://relay.damus.io",
     "wss://nos.lol",
     "wss://nostr.mom",
-    "wss://relay1.orangesync.tech",
     "wss://relay2.orangesync.tech",
 ]
 

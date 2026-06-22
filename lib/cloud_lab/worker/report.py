@@ -154,7 +154,7 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
         return ""
 
     blossom = os.environ.get("BLOSSOM_SERVER", "https://blossom.psbt.me")
-    relays = os.environ.get("NOSTR_RELAYS", "wss://relay.cashu.email")
+    relays = os.environ.get("NOSTR_RELAYS", "wss://relay.tollgate.me,wss://relay.cashu.email")
 
     passed = counts.get("passed", 0)
     failed = counts.get("failed", 0)
@@ -191,7 +191,7 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
 def verify_nostr_publish(config: WorkerConfig) -> dict[str, Any]:
     """Verify that the kind 30078 event and Blossom blobs are retrievable.
 
-    Called after :func:`publish_to_nostr`. Uses ``nak fetch`` to query the
+    Called after :func:`publish_to_nostr`. Uses ``nak req`` to query the
     relay for the kind 30078 event with ``d`` = ``config.run_id``, then
     fetches one Blossom URL from the event's ``file`` tags to confirm the
     blob is live.
@@ -212,20 +212,20 @@ def verify_nostr_publish(config: WorkerConfig) -> dict[str, Any]:
         log.warning("verify_nostr_publish skipped: nak CLI not found")
         return result
 
-    relays_env = os.environ.get("NOSTR_RELAYS", "wss://relay.tollgate.me,wss://relay1.orangesync.tech")
+    relays_env = os.environ.get("NOSTR_RELAYS", "wss://relay.tollgate.me,wss://relay.cashu.email")
     relay = relays_env.split(",")[0].strip()
 
     # Allow a brief window for relay propagation
     time.sleep(2)
 
     nak_cmd = (
-        f"nak fetch -k 30078 -d {shlex.quote(config.run_id)} "
-        f"--limit 1 -r {shlex.quote(relay)}"
+        f"nak req -k 30078 -d {shlex.quote(config.run_id)} "
+        f"-l 1 {shlex.quote(relay)}"
     )
     try:
         r = _run(nak_cmd, timeout=30, check=False)
     except Exception as exc:
-        log.warning("verify_nostr_publish: nak fetch error: %s", _redact(str(exc))[:200])
+        log.warning("verify_nostr_publish: nak req error: %s", _redact(str(exc))[:200])
         return result
 
     stdout = (r.stdout or "").strip()
