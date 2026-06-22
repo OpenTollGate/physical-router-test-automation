@@ -99,11 +99,11 @@ def publish_job_request(config: WorkerConfig) -> str:
     cmd = (
         f"nak event -k {KIND_JOB_REQUEST} "
         f"-c {shlex.quote(content)} "
-        f"-t t=ci/cd "
-        f"-t t=tollgate "
-        f"-t param=branch;{shlex.quote(config.sut_branch)} "
-        f"-t param=backend;{shlex.quote(config.backend)} "
-        f"-t param=scope;cloud-api "
+        f"-t {shlex.quote('t=ci/cd')} "
+        f"-t {shlex.quote('t=tollgate')} "
+        f"-t {shlex.quote(f'param=branch;{config.sut_branch}')} "
+        f"-t {shlex.quote(f'param=backend;{config.backend}')} "
+        f"-t {shlex.quote('param=scope;cloud-api')} "
         f"{_relay_args(relays)}"
     )
 
@@ -139,11 +139,11 @@ def publish_feedback(status: str, extra_info: str = "") -> None:
     content = extra_info or ""
 
     tags = [
-        f"-t status={status}",
-        f"-t e={_job_request_event_id}",
+        f"-t {shlex.quote(f'status={status}')}",
+        f"-t {shlex.quote(f'e={_job_request_event_id}')}",
     ]
     if extra_info:
-        tags.append(f"-t info={shlex.quote(extra_info[:200])}")
+        tags.append(f"-t {shlex.quote(f'info={extra_info[:200]}')}")
 
     cmd = (
         f"nak event -k {KIND_JOB_FEEDBACK} "
@@ -190,13 +190,13 @@ def publish_job_result(config: WorkerConfig, counts: dict[str, Any], result_urls
     })
 
     tags = [
-        f"-t e={_job_request_event_id}",
-        f"-t param=branch;{shlex.quote(config.sut_branch)}",
-        f"-t param=passed;{passed}",
-        f"-t param=failed;{failed}",
+        f"-t {shlex.quote(f'e={_job_request_event_id}')}",
+        f"-t {shlex.quote(f'param=branch;{config.sut_branch}')}",
+        f"-t {shlex.quote(f'param=passed;{passed}')}",
+        f"-t {shlex.quote(f'param=failed;{failed}')}",
     ]
     for url in (result_urls or [])[:10]:
-        tags.append(f"-t file={shlex.quote(url)}")
+        tags.append(f"-t {shlex.quote(f'file={url}')}")
 
     cmd = (
         f"nak event -k {KIND_JOB_RESULT} "
