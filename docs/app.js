@@ -659,9 +659,12 @@ function buildTestHierarchy(run, summary) {
   }
 
   const testArtifacts = new Map();
+  const suiteFiles = {};
   for (const file of allFiles) {
     const path = file.path || "";
     if (path === "summary.json") continue;
+    let matched = false;
+
     const m = path.match(/^(?:.*\/)?(.+)-(passed|failed|skipped|error)\.[^.]+$/);
     if (m && testsByName.has(m[1])) {
       const name = m[1];
@@ -677,6 +680,16 @@ function buildTestHierarchy(run, summary) {
         testArtifacts.get(name).html.push(file);
       }
       matchedUrls.add(file.url);
+      matched = true;
+    }
+
+    if (!matched) {
+      const vm = path.match(/^raw\/([^/]+)\//);
+      if (vm) {
+        const suiteName = vm[1];
+        if (!suiteFiles[suiteName]) suiteFiles[suiteName] = [];
+        suiteFiles[suiteName].push(file);
+      }
     }
     const dm = path.match(/^debug\/(.+)\.log$/);
     if (dm) {
@@ -707,6 +720,38 @@ function buildTestHierarchy(run, summary) {
     suiteMap.get(runner).tests.push({ ...test, artifacts });
   }
 
+  for (const [suiteName, files] of Object.entries(suiteFiles)) {
+    const suite = suiteMap.get(suiteName);
+    if (!suite) continue;
+    const passedTest = suite.tests.find(t => t.outcome === "passed") || suite.tests[0];
+    if (!passedTest) continue;
+    for (const file of files) {
+      const mime = file.mime || "";
+      if (mime.startsWith("image/")) {
+        passedTest.artifacts.screenshots.push(file);
+      } else if (mime.startsWith("video/")) {
+        passedTest.artifacts.videos.push(file);
+      } else if (mime.includes("html")) {
+        passedTest.artifacts.html.push(file);
+      }
+      matchedUrls.add(file.url);
+    }
+  }
+
+  const featuredVideos = [];
+  for (const suite of suiteMap.values()) {
+    for (const test of suite.tests) {
+      if (test.artifacts.videos && test.artifacts.videos.length > 0) {
+        featuredVideos.push({
+          name: test.name,
+          outcome: test.outcome,
+          suite: suite.name,
+          videos: test.artifacts.videos,
+        });
+      }
+    }
+  }
+
   const generalArtifacts = { screenshots: [], html: [], other: [] };
   const reports = [];
 
@@ -729,7 +774,7 @@ function buildTestHierarchy(run, summary) {
     }
   }
 
-  return { suites: [...suiteMap.values()], generalArtifacts, reports };
+  return { suites: [...suiteMap.values()], generalArtifacts, reports, featuredVideos };
 }
 
 function outcomeIcon(outcome) {
@@ -766,6 +811,25 @@ function renderFilterBar(summary) {
       </div>
       <input type="search" class="test-search" placeholder="Search tests\u2026" />
     </div>
+  `;
+}
+
+function renderFeaturedVideos(hierarchy) {
+  const vids = hierarchy.featuredVideos || [];
+  if (vids.length === 0 || vids.length > 5) return "";
+  return `
+    <section class="featured-videos">
+      <h3 class="featured-videos-title">\u{1F4F9} Featured Videos <span class="featured-videos-count">${vids.length}</span></h3>
+      <div class="featured-videos-grid">
+        ${vids.map((v) => `
+          <button class="featured-video-card test-status-${v.outcome}" data-test-name="${escapeHtml(v.name)}">
+            <span class="featured-video-play">\u25B6</span>
+            <span class="featured-video-name">${escapeHtml(v.name)}</span>
+            <span class="featured-video-suite">${escapeHtml(v.suite)}</span>
+          </button>
+        `).join("")}
+      </div>
+    </section>
   `;
 }
 
@@ -1001,6 +1065,19 @@ function wireUpTestTree(view) {
   view.querySelectorAll(".test-suite-header").forEach((header) => {
     header.addEventListener("click", () => {
       header.parentElement.classList.toggle("collapsed");
+    });
+  });
+
+  view.querySelectorAll(".featured-video-card").forEach((card) => {
+    card.addEventListener("click", () => {
+      const testName = card.dataset.testName;
+      const tc = view.querySelector(`.test-case[data-test-name="${CSS.escape(testName)}"]`);
+      if (tc) {
+        if (!tc.classList.contains("expanded")) {
+          tc.querySelector(".test-case-header")?.click();
+        }
+        tc.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
     });
   });
 
@@ -1261,6 +1338,7 @@ async function selectRun(run) {
 
       body.innerHTML = `
         ${renderFilterBar(summary)}
+        ${renderFeaturedVideos(hierarchy)}
         ${renderTestTree(hierarchy)}
         ${renderGeneralArtifacts(hierarchy)}
       `;
