@@ -65,7 +65,7 @@ from .secret_scanner import is_blocked_file, scan_directory, scan_file
 # ---------------------------------------------------------------------------
 
 #: Default per-file size cap (matches Blossom free tier, 1 MB).
-DEFAULT_MAX_FILE_SIZE = 1_000_000
+DEFAULT_MAX_FILE_SIZE = 10_000_000
 
 #: Default Blossom server if neither CLI nor env provides one.
 DEFAULT_BLOSSOM_SERVER = os.environ.get(
