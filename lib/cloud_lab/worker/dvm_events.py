@@ -55,6 +55,11 @@ def _relay_args(relays: list[str]) -> str:
     return " ".join(shlex.quote(r) for r in relays)
 
 
+def _nak_available() -> bool:
+    import shutil
+    return shutil.which("nak") is not None
+
+
 def _run_nak(cmd: str, nsec_file: str, timeout: int = 15) -> subprocess.CompletedProcess[str] | None:
     env = os.environ.copy()
     with open(nsec_file) as f:
