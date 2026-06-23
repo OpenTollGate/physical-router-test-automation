@@ -1,33 +1,24 @@
 // TollGate Router Tests — Nostr reader for GitHub Pages
-// Fetches kind 30078 (test run summaries) + kind 1063 (NIP-94 file metadata)
-// from the bot npub, parses file lists + pass/fail metadata, renders test run
-// cards with screenshots from Blossom URLs. Pure vanilla JS, no build step.
+// Fetches DVM-native events (kind 5900/6900/7000) + kind 1063 file metadata
+// from ALL pubkeys via NIP-90 DVM protocol, renders test run cards with
+// screenshots from Blossom URLs. Pure vanilla JS, no build step.
 //
-// Event contract (emitted by lib/result_publisher.py + nostr_publisher.py):
+// Event contract (emitted by nostr_publisher.py):
 //
-//   kind 30078 (parameterized replaceable, d-tag = run_id):
-//     tags:
-//       ["d", run_id]
-//       ["t", "test-run"]
-//       ["timestamp", "<unix>"]
-//       ["file", blossom_url]            (one per uploaded file)
-//     content: JSON string:
-//       {
-//         "run_id": "...",
-//         "timestamp": "ISO-8601",
-//         "blossom_server": "https://blossom.psbt.me",
-//         "scan_summary": {"blocked": N, "redacted": N, "clean": N, "scanned": N},
-//         "files": [{"path","url","sha256","mime","size","redacted"}, ...],
-//         "metadata": {"branch","pr","passed","failed","skipped","router",...}
-//       }
+//   kind 5900 (DVM job request):
+//     tags: ["param", key, value], ["e", request_id]
+//
+//   kind 6900 (DVM job result — primary run parser):
+//     tags: ["param", key, value], ["e", request_id], ["file", url]
+//     content: JSON with pass/fail counts, file URLs, metadata
+//
+//   kind 7000 (DVM job feedback):
+//     tags: ["status", "processing|success|error"], ["e", request_id]
 //
 //   kind 1063 (NIP-94 file metadata, per file, BlossomFS):
 //     tags: ["url", ...], ["x", sha256], ["m", mime], ["filename", ...], ["size", ...]
 
 // === CONFIGURATION ==========================================================
-// Replace with the PRTA bot's npub (hex, 64 chars, no 0x prefix).
-const BOT_NPUB_HEX = "9a515b0f08d554b582e54202c7ca0e6ee56d81559957cbf9b40047d391b95fd5"; // shared with bcr-agent
-
 const RELAYS = [
   "wss://relay.cashu.email",
 ];
@@ -42,7 +33,7 @@ let activeImgLoads = 0;
 const MAX_CONCURRENT_IMG_LOADS = 3;
 const imgLoadQueue = [];
 
-const CACHE_KEY = "prta:runs:v4";
+const CACHE_KEY = "prta:runs:v5";
 const filterState = { search: "", status: "all", sort: "newest" };
 let detailLoadId = 0;
 let currentTestFilter = "all";
@@ -50,88 +41,10 @@ let currentTestSearch = "";
 let currentHierarchy = null;
 
 // ===========================================================================
-// WebSocket: Fetch kind 30078 + 1063 events from multiple relays
+// WebSocket: Fetch NIP-90 DVM events (kind 5900/6900/7000) + 1063 from ALL pubkeys
 // ===========================================================================
 
-function fetchNostrEvents(pubkeyHex, kinds = [30078, 1063], limit = 200) {
-  return new Promise((resolve) => {
-    const events = new Map(); // dedup by event id
-    let resolved = false;
-    let closedRelays = 0;
-    let connectedCount = 0;
-
-    const timeout = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        resolve({ events: [...events.values()], connected: connectedCount });
-      }
-    }, FETCH_TIMEOUT_MS);
-
-    RELAYS.forEach((relayUrl) => {
-      let ws;
-      try {
-        ws = new WebSocket(relayUrl);
-      } catch (e) {
-        closedRelays++;
-        checkDone();
-        return;
-      }
-
-      const subId = "prta-" + Math.random().toString(36).slice(2, 8);
-
-      ws.onopen = () => {
-        connectedCount++;
-        ws.send(JSON.stringify([
-          "REQ", subId,
-          {
-            authors: [pubkeyHex],
-            kinds,
-            limit,
-            since: Math.floor(Date.now() / 1000) - 86400 * FETCH_SINCE_DAYS,
-          },
-        ]));
-        updateConnectionStatus(connectedCount, RELAYS.length);
-      };
-
-      ws.onmessage = (msg) => {
-        try {
-          const data = JSON.parse(msg.data);
-          if (data[0] === "EVENT" && data[1] === subId && data[2]) {
-            const evt = data[2];
-            events.set(evt.id, evt);
-          } else if (data[0] === "EOSE" && data[1] === subId) {
-            ws.send(JSON.stringify(["CLOSE", subId]));
-            ws.close();
-          }
-        } catch (e) { /* ignore parse errors */ }
-      };
-
-      ws.onerror = () => {
-        closedRelays++;
-        checkDone();
-      };
-
-      ws.onclose = () => {
-        closedRelays++;
-        checkDone();
-      };
-    });
-
-    function checkDone() {
-      if (closedRelays >= RELAYS.length && !resolved) {
-        clearTimeout(timeout);
-        resolved = true;
-        resolve({ events: [...events.values()], connected: connectedCount });
-      }
-    }
-  });
-}
-
-// ===========================================================================
-// WebSocket: Fetch NIP-90 DVM events (kind 5900/6900/7000) from ALL pubkeys
-// ===========================================================================
-
-function fetchDvmEvents(kinds = [5900, 6900, 7000], limit = 200) {
+function fetchDvmEvents(kinds = [5900, 6900, 7000, 1063], limit = 200) {
   return new Promise((resolve) => {
     const events = new Map();
     let resolved = false;
@@ -167,6 +80,7 @@ function fetchDvmEvents(kinds = [5900, 6900, 7000], limit = 200) {
             since: Math.floor(Date.now() / 1000) - 86400 * FETCH_SINCE_DAYS,
           },
         ]));
+        updateConnectionStatus(connectedCount, RELAYS.length);
       };
 
       ws.onmessage = (msg) => {
@@ -241,110 +155,6 @@ function buildFileMeta(events) {
     });
   }
   return meta;
-}
-
-// Parse kind 30078 -> run object.
-// The content field carries a JSON summary with full file metadata; the tags
-// carry the d-tag (run_id) and per-file URL list. We prefer the content JSON
-// and cross-reference kind 1063 metadata for anything missing.
-function parseRunFromKind30078(event, fileMeta) {
-  const tags = event.tags || [];
-  const runId = getTag(tags, "d") || event.id;
-
-  // Parse the JSON content payload emitted by the orchestrator.
-  let payload = null;
-  try {
-    payload = JSON.parse(event.content || "{}");
-  } catch (e) {
-    // Older or hand-written events may carry plain text.
-  }
-
-  const contentFiles = (payload && Array.isArray(payload.files)) ? payload.files : [];
-  const meta = (payload && payload.metadata) ? payload.metadata : {};
-  const scanSummary = (payload && payload.scan_summary) ? payload.scan_summary : {};
-
-  // Fallback: build file list from ["file", url] tags if content has none.
-  let files = contentFiles;
-  if (files.length === 0) {
-    files = getAllTags(tags, "file").map((t) => ({ url: t[1] || "" }));
-  }
-
-  // Enrich each file with 1063 metadata when available.
-  files = files.map((f) => {
-    const fm = fileMeta.get(f.url) || {};
-    return {
-      path: f.path || fm.filename || "",
-      url: f.url,
-      sha256: f.sha256 || fm.sha256 || "",
-      mime: f.mime || fm.mime || "application/octet-stream",
-      size: f.size != null ? f.size : (fm.size != null ? fm.size : null),
-      redacted: !!f.redacted,
-    };
-  });
-
-  const screenshots = files.filter((f) => (f.mime || "").startsWith("image/"));
-  const nonScreenshotFiles = files.filter(
-    (f) => !(f.mime || "").startsWith("image/")
-  );
-
-  const passed = meta.passed != null ? meta.passed : null;
-  const failed = meta.failed != null ? meta.failed : null;
-  const skipped = meta.skipped != null ? meta.skipped : null;
-  const total = meta.total != null ? meta.total : null;
-
-  let status = "success";
-  if (failed != null && failed > 0) status = "error";
-  else if (passed != null && passed === 0 && total != null && total > 0) status = "error";
-
-  return {
-    id: event.id,
-    eventId: event.id,
-    runId,
-    timestamp: event.created_at,
-    status,
-    passed,
-    failed,
-    skipped,
-    total,
-    branch: meta.branch || null,
-    pr: meta.pr || null,
-    commit: meta.commit || null,
-    router: meta.router || null,
-    backend: meta.backend || null,
-    portal: meta.portal || null,
-    clientType: meta.client_type || null,
-    viewport: meta.viewport || null,
-    blossomServer: payload ? payload.blossom_server : null,
-    scanSummary: scanSummary,
-    files: nonScreenshotFiles,
-    screenshots,
-    content: event.content || "",
-    rawEvent: event,
-  };
-}
-
-// Keep only the latest kind 30078 event per run_id (parameterized replaceable).
-function dedupeRuns(events, fileMeta) {
-  const k30078 = events.filter((e) => e.kind === 30078);
-  const parsed = k30078
-    .map((evt) => {
-      try {
-        return parseRunFromKind30078(evt, fileMeta);
-      } catch (e) {
-        console.warn("[PRTA] Failed to parse event", evt.id, e);
-        return null;
-      }
-    })
-    .filter(Boolean);
-
-  const byRunId = new Map();
-  for (const run of parsed) {
-    const existing = byRunId.get(run.runId);
-    if (!existing || run.timestamp > existing.timestamp) {
-      byRunId.set(run.runId, run);
-    }
-  }
-  return [...byRunId.values()].sort((a, b) => b.timestamp - a.timestamp);
 }
 
 // ===========================================================================
@@ -540,54 +350,23 @@ function parseFeedbackFromKind7000(event) {
   };
 }
 
-// Merge kind 30078 runs with kind 6900 (DVM) runs and kind 7000 feedback.
-// If a run appears in both 30078 and 6900, prefer the 6900 version but
-// keep the 30078's detailed file list when the DVM version has none.
-function mergeRuns(events30078, dvmEvents, fileMeta, feedback) {
-  const k30078 = events30078.filter((e) => e.kind === 30078);
-  const k6900 = dvmEvents.filter((e) => e.kind === 6900);
+function dedupeDvmRuns(events, fileMeta, feedback) {
+  const k6900 = events.filter((e) => e.kind === 6900);
 
   const byRunId = new Map();
 
-  for (const evt of k30078) {
-    try {
-      const run = parseRunFromKind30078(evt, fileMeta);
-      run.source = "legacy";
-      run.runnerNpub = evt.pubkey;
-      run.feedbackStatus = null;
-      byRunId.set(run.runId, run);
-    } catch (e) {
-      console.warn("[PRTA] Failed to parse 30078", evt.id, e);
-    }
-  }
-
   for (const evt of k6900) {
     try {
-      const dvmRun = parseRunFromKind6900(evt, fileMeta);
-      const existing = byRunId.get(dvmRun.runId);
-      if (existing) {
-        if (existing.files.length > 0 && dvmRun.files.length === 0) {
-          dvmRun.files = existing.files;
-          dvmRun.screenshots = existing.screenshots;
-        }
-        if (!dvmRun.branch && existing.branch) dvmRun.branch = existing.branch;
-        if (!dvmRun.pr && existing.pr) dvmRun.pr = existing.pr;
-        if (!dvmRun.router && existing.router) dvmRun.router = existing.router;
-        if (!dvmRun.blossomServer && existing.blossomServer) {
-          dvmRun.blossomServer = existing.blossomServer;
-        }
-        if (!dvmRun.scanSummary || Object.keys(dvmRun.scanSummary).length === 0) {
-          dvmRun.scanSummary = existing.scanSummary;
-        }
+      const run = parseRunFromKind6900(evt, fileMeta);
+      const existing = byRunId.get(run.runId);
+      if (!existing || run.timestamp > existing.timestamp) {
+        byRunId.set(run.runId, run);
       }
-      byRunId.set(dvmRun.runId, dvmRun);
     } catch (e) {
       console.warn("[PRTA] Failed to parse 6900", evt.id, e);
     }
   }
 
-  // Attach feedback status to matching runs.
-  // FUTURE: filter by runner npub
   if (feedback && feedback.length > 0) {
     const fbByRun = new Map();
     for (const fb of feedback) {
@@ -839,8 +618,8 @@ function renderRunsList() {
     container.innerHTML = `
       <div class="runs-empty">
         <div class="runs-empty-icon">\u26A0</div>
-        <p>No test runs found from the bot.</p>
-        <p class="hint">Make sure the publisher has emitted<br>kind 30078 events.</p>
+        <p>No test runs found.</p>
+        <p class="hint">Make sure the publisher has emitted<br>kind 6900 DVM result events.</p>
       </div>`;
     return;
   }
@@ -1857,11 +1636,8 @@ function showGlobalError(message) {
 (async function init() {
   console.log("[PRTA] Initializing\u2026");
   console.log("[PRTA] Relays:", RELAYS);
-  console.log("[PRTA] Bot npub (hex):", BOT_NPUB_HEX);
-  console.log("[PRTA] Phase 1: Fetching kinds [30078, 1063] from bot npub");
-  console.log("[PRTA] Phase 2: Fetching kinds [5900, 6900, 7000] from all pubkeys");
+  console.log("[PRTA] Fetching kinds [5900, 6900, 7000, 1063] from all pubkeys");
 
-  // Lightbox wiring
   const lb = document.getElementById("lightbox");
   lb.querySelector(".lightbox-backdrop").addEventListener("click", closeLightbox);
   lb.querySelector(".lightbox-close").addEventListener("click", closeLightbox);
@@ -1872,7 +1648,6 @@ function showGlobalError(message) {
     }
   });
 
-  // HTML viewer wiring
   const hv = document.getElementById("html-viewer");
   if (hv) {
     hv.querySelector(".html-viewer-backdrop").addEventListener("click", closeHtmlViewer);
@@ -1887,7 +1662,6 @@ function showGlobalError(message) {
     }
   });
 
-  // Mobile sidebar toggle
   const menuBtn = document.getElementById("menu-toggle");
   const backdrop = document.getElementById("sidebar-backdrop");
   const app = document.getElementById("app");
@@ -1912,12 +1686,6 @@ function showGlobalError(message) {
       </div>`;
   }
 
-  if (BOT_NPUB_HEX === "REPLACE_WITH_PRTA_BOT_NPUB" || BOT_NPUB_HEX.length !== 64) {
-    showGlobalError("Bot npub not configured. Set BOT_NPUB_HEX in app.js.");
-    console.error("[PRTA] BOT_NPUB_HEX is a placeholder. Replace it with the PRTA bot's 64-char hex npub.");
-    return;
-  }
-
   const cached = loadCachedRuns();
   if (cached && cached.length > 0) {
     allRuns = cached;
@@ -1927,36 +1695,26 @@ function showGlobalError(message) {
   }
 
   try {
-    const [phase1, phase2] = await Promise.all([
-      fetchNostrEvents(BOT_NPUB_HEX, [30078, 1063], 200),
-      fetchDvmEvents([5900, 6900, 7000], 200),
-    ]);
+    const { events, connected } = await fetchDvmEvents([5900, 6900, 7000, 1063], 200);
 
-    const { events, connected } = phase1;
-    const dvmEvents = phase2.events;
-
-    const n30078 = events.filter((e) => e.kind === 30078).length;
+    const n5900 = events.filter((e) => e.kind === 5900).length;
+    const n6900 = events.filter((e) => e.kind === 6900).length;
+    const n7000 = events.filter((e) => e.kind === 7000).length;
     const n1063 = events.filter((e) => e.kind === 1063).length;
-    const n5900 = dvmEvents.filter((e) => e.kind === 5900).length;
-    const n6900 = dvmEvents.filter((e) => e.kind === 6900).length;
-    const n7000 = dvmEvents.filter((e) => e.kind === 7000).length;
     console.log("[PRTA] Connected to " + connected + "/" + RELAYS.length + " relays");
-    console.log("[PRTA] Phase 1: " + events.length + " events (30078: " + n30078 + ", 1063: " + n1063 + ")");
-    console.log("[PRTA] Phase 2: " + dvmEvents.length + " DVM events (5900: " + n5900 + ", 6900: " + n6900 + ", 7000: " + n7000 + ")");
+    console.log("[PRTA] " + events.length + " events (5900: " + n5900 + ", 6900: " + n6900 + ", 7000: " + n7000 + ", 1063: " + n1063 + ")");
 
     const fileMeta = buildFileMeta(events);
     console.log("[PRTA] File metadata map: " + fileMeta.size + " entries");
 
-    const k7000 = dvmEvents.filter((e) => e.kind === 7000)
+    const feedback = events
+      .filter((e) => e.kind === 7000)
       .map(parseFeedbackFromKind7000);
 
-    const freshRuns = mergeRuns(events, dvmEvents, fileMeta, k7000);
-    console.log("[PRTA] Merged " + freshRuns.length + " test runs ("
-      + freshRuns.filter((r) => r.source === "dvm").length + " DVM, "
-      + freshRuns.filter((r) => r.source === "legacy").length + " legacy)");
+    const freshRuns = dedupeDvmRuns(events, fileMeta, feedback);
+    console.log("[PRTA] " + freshRuns.length + " test runs");
 
-    const totalConnected = Math.max(connected, phase2.connected);
-    if (totalConnected === 0 && events.length === 0 && dvmEvents.length === 0) {
+    if (connected === 0 && events.length === 0) {
       if (!cached || cached.length === 0) {
         showGlobalError("Could not connect to any relay.");
       }
