@@ -746,7 +746,7 @@ The fallback logic in `_create_vm_with_fallback()` tries all Tier 1 zones, then 
 │    [7] Select mint (CDK V2 if backend supports it, else V1)     │
 │    [7.5] If --two-router: configure Beta merchant + Alpha reseller + fund wallet
 │    [8] Run tests: visual → API → vl-scenarios → scenarios       │
-│    [9] Collect results, publish to gh-pages, self-delete        │
+│    [9] Collect results, publish to Nostr+Blossom (DVM lifecycle), self-delete        │
 │                                                                  │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -778,14 +778,14 @@ Each runner writes junit.xml + report.html to `raw/<runner>/`. The overall exit 
 ### Flow
 
 1. **Local (blocking):** `ensure_artifact()` waits for upstream CI to finish and expose an `x86_64` `.ipk` (never triggers new builds).
-2. **GCP VM (async):** startup script clones this repo, runs `lib.cloud_lab.worker`, publishes to gh-pages, self-deletes.
+2. **GCP VM (async):** startup script clones this repo, runs `lib.cloud_lab.worker`, publishes to Nostr+Blossom, self-deletes.
 3. **Publishing:** `publish-report.sh` uses non-force pushes with up to 10 pull/rebase/push retries and random 0-60s backoff so multiple cloud runs can publish concurrently.
 
 ### Secrets
 
 | Variable | Purpose |
 |----------|---------|
-| `GH_TOKEN` or `GITHUB_TOKEN` | Passed to VM metadata for `gh` artifact download, gh-pages push, PR comments |
+| `GH_TOKEN` or `GITHUB_TOKEN` | Passed to VM metadata for `gh` artifact download, PR comments (no longer used for gh-pages push — pipeline publishes via Nostr+Blossom) |
 | `TOLLGATE_GCP_SSH_KEY` | SSH key for `gcloud compute ssh` / debugging (default `~/.ssh/google_compute_engine`) |
 
 `GH_TOKEN` in instance metadata is acceptable for a private lab; prefer Secret Manager for shared projects.
@@ -841,7 +841,7 @@ The worker (`lib/cloud_lab/worker.py`) detects pre-provisioned OpenWrt bases aut
 | Deploy TollGate | ~50s | Download + install .ipk |
 | Select test mint | ~5s | V2 probe, then V1 fallback |
 | Run tests | ~20m | 94 tests with local mint (no timeouts) |
-| Collect + publish | ~2m | Shallow clone gh-pages + push |
+| Collect + publish | ~2m | Blossom upload + Nostr event publish |
 | **Total (single-router)** | **~30min** | |
 | **Total (two-router)** | **~50min** | Extra Beta VM + serial provisioning + deploy |
 
@@ -883,17 +883,12 @@ Cloud lab VMs use a three-layer safety mechanism:
 | Hard backstop (3h max) | ~$0.29 |
 
 **Operational rule**: Do not kill VMs until you have either:
-- Verified the publish step completed (check `tests.tollgate.me` or gh-pages branch)
+- Verified the publish step completed (check `tests.tollgate.me`)
 - Examined the logs via `gcloud compute ssh <vm> --command='cat /var/log/tollgate-run.log'`
 
-### Publish to gh-pages — known pitfalls
+### Publish to Nostr+Blossom
 
-The publish step (`publish-report.sh`) clones the `gh-pages` branch, copies the report, and pushes. Common failure modes:
-
-1. **Large repo clone timeout**: The repo is ~1.4GB. Without `--depth 1`, a full clone can take 3-5 minutes from a GCP VM. Always use shallow clones.
-2. **`collect_and_render` failure**: If this step fails, no `report/index.html` exists, and `publish-report.sh` exits immediately with "report/index.html not found". Check the worker log for "collect_and_render failed".
-3. **gh-pages push race**: Multiple concurrent VMs pushing to gh-pages can cause git conflicts. The script retries 10 times with random backoff, but the worker publish timeout (1200s) may not be enough for many retries.
-4. **`gh auth setup-git` failure**: If the GitHub token is invalid or expired, git operations fail. The `|| true` suppresses the error, but subsequent git push fails.
+The publish step uses Nostr events + Blossom uploads. No git operations are involved, so there are no push races, conflicts, or concurrent run issues. Each run publishes independently with its own DVM lifecycle events (kind 5900/7000/6900).
 
 ### mac80211_hwsim virtual WiFi (experimental, opt-in)
 

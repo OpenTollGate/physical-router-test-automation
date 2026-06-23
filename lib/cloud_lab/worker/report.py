@@ -101,6 +101,11 @@ def create_minimal_run_json(
             f"<p>collect_and_render failed — minimal report</p></body></html>"
         )
 def publish_results(config: WorkerConfig, results_dir: str) -> str:
+    """Publish results to gh-pages (DEPRECATED: Cloud lab no longer uses this function).
+
+    Deprecated: Cloud lab no longer uses this function. Physical lab (test-pr.sh) still
+    uses it for gh-pages publishing. The cloud lab pipeline uses Nostr+Blossom (DVM lifecycle) instead.
+    """
     run_json = Path(results_dir) / "run.json"
     if not run_json.exists():
         log.error("Cannot publish: run.json not found in %s", results_dir)
