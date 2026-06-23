@@ -34,11 +34,14 @@ const MAX_CONCURRENT_IMG_LOADS = 3;
 const imgLoadQueue = [];
 
 const CACHE_KEY = "prta:runs:v5";
-const filterState = { search: "", status: "all", sort: "newest" };
+const filterState = { search: "", status: "all", sort: "newest", runner: "" };
 let detailLoadId = 0;
 let currentTestFilter = "all";
 let currentTestSearch = "";
 let currentHierarchy = null;
+let liveSockets = [];
+let liveConnectedCount = 0;
+let displayIdCache = new Map();
 
 // ===========================================================================
 // WebSocket: Fetch NIP-90 DVM events (kind 5900/6900/7000) + 1063 from ALL pubkeys
@@ -115,6 +118,101 @@ function fetchDvmEvents(kinds = [5900, 6900, 7000, 1063], limit = 200) {
       }
     }
   });
+}
+
+// ===========================================================================
+// Real-time WebSocket subscription for live DVM events
+// ===========================================================================
+
+function subscribeToRealtimeUpdates() {
+  liveSockets = [];
+  liveConnectedCount = 0;
+
+  RELAYS.forEach((relayUrl) => {
+    let ws;
+    try {
+      ws = new WebSocket(relayUrl);
+    } catch (e) {
+      return;
+    }
+
+    ws.onopen = () => {
+      liveSockets.push(ws);
+      liveConnectedCount++;
+      updateLiveIndicator();
+      ws.send(JSON.stringify(["REQ", "prta-live", {
+        kinds: [5900, 6900, 7000],
+        since: Math.floor(Date.now() / 1000),
+      }]));
+    };
+
+    ws.onmessage = (msg) => {
+      try {
+        const data = JSON.parse(msg.data);
+        if (data[0] === "EVENT" && data[1] === "prta-live" && data[2]) {
+          handleLiveEvent(data[2]);
+        }
+      } catch (e) { /* ignore parse errors */ }
+    };
+
+    ws.onerror = () => {
+      ws.close();
+    };
+
+    ws.onclose = () => {
+      const idx = liveSockets.indexOf(ws);
+      if (idx >= 0) liveSockets.splice(idx, 1);
+      liveConnectedCount = Math.max(0, liveConnectedCount - 1);
+      updateLiveIndicator();
+    };
+  });
+}
+
+function handleLiveEvent(event) {
+  if (!event || !event.kind) return;
+
+  if (event.kind === 7000) {
+    const tags = event.tags || [];
+    const status = getTag(tags, "status") || "processing";
+    const requestId = getTag(tags, "e");
+    if (!requestId) return;
+
+    const run = allRuns.find(
+      (r) => r.runId === requestId || r.eventId === requestId
+    );
+    if (run && run.feedbackStatus !== status) {
+      run.feedbackStatus = status;
+      renderRunsList();
+    }
+    return;
+  }
+
+  if (event.kind === 6900) {
+    const run = parseRunFromKind6900(event, new Map());
+    if (!run) return;
+    if (allRuns.find((r) => r.runId === run.runId)) return;
+
+    allRuns.unshift(run);
+    displayIdCache.clear();
+    saveCachedRuns(allRuns);
+    populateRunnerFilter();
+    renderRunsList();
+    return;
+  }
+}
+
+function updateLiveIndicator() {
+  const el = document.getElementById("live-indicator");
+  if (!el) return;
+  if (liveConnectedCount > 0) {
+    el.classList.add("live");
+    el.classList.remove("idle");
+    el.title = "Live — " + liveConnectedCount + "/" + RELAYS.length + " relays connected";
+  } else {
+    el.classList.remove("live");
+    el.classList.add("idle");
+    el.title = "Connecting\u2026";
+  }
 }
 
 // ===========================================================================
@@ -526,6 +624,10 @@ function updateConnectionStatus(connected, total) {
 function getFilteredRuns() {
   let runs = allRuns.slice();
 
+  if (filterState.runner) {
+    runs = runs.filter((r) => r.runnerNpub === filterState.runner);
+  }
+
   if (filterState.search) {
     const q = filterState.search;
     runs = runs.filter((r) => {
@@ -557,6 +659,48 @@ function getFilteredRuns() {
   return runs;
 }
 
+function computeDisplayId(run) {
+  if (!run.runnerNpub) return shortRunId(run.runId);
+  const cacheKey = run.runId + ":" + run.runnerNpub;
+  if (displayIdCache.has(cacheKey)) return displayIdCache.get(cacheKey);
+
+  const runnerRuns = allRuns
+    .filter((r) => r.runnerNpub === run.runnerNpub)
+    .sort((a, b) => b.timestamp - a.timestamp);
+  const idx = runnerRuns.findIndex((r) => r.runId === run.runId);
+  const displayId = `${shortNpub(run.runnerNpub)} #${runnerRuns.length - idx}`;
+  displayIdCache.set(cacheKey, displayId);
+  return displayId;
+}
+
+function populateRunnerFilter() {
+  const select = document.getElementById("runner-filter");
+  if (!select) return;
+
+  const runners = [...new Set(
+    allRuns.map((r) => r.runnerNpub).filter(Boolean)
+  )].sort((a, b) => {
+    const aNewest = allRuns.filter((r) => r.runnerNpub === a).reduce((mx, r) => Math.max(mx, r.timestamp || 0), 0);
+    const bNewest = allRuns.filter((r) => r.runnerNpub === b).reduce((mx, r) => Math.max(mx, r.timestamp || 0), 0);
+    return bNewest - aNewest;
+  });
+
+  const currentValue = filterState.runner;
+  select.innerHTML = `<option value="">All runners</option>` +
+    runners.map((npub) => {
+      const count = allRuns.filter((r) => r.runnerNpub === npub).length;
+      const label = shortNpub(npub);
+      return `<option value="${escapeHtml(npub)}">${escapeHtml(label)} (${count})</option>`;
+    }).join("");
+
+  if (runners.includes(currentValue)) {
+    select.value = currentValue;
+  } else {
+    filterState.runner = "";
+    select.value = "";
+  }
+}
+
 function buildSidebar() {
   const aside = document.getElementById("runs-list");
   aside.innerHTML = `
@@ -567,6 +711,9 @@ function buildSidebar() {
         <button class="filter-btn" data-filter="passed" type="button">Passed</button>
         <button class="filter-btn" data-filter="failed" type="button">Failed</button>
       </div>
+      <select id="runner-filter" class="runner-filter">
+        <option value="">All runners</option>
+      </select>
       <select id="sort-select" class="sort-select">
         <option value="newest">Newest</option>
         <option value="oldest">Oldest</option>
@@ -604,6 +751,14 @@ function wireSidebarControls() {
   if (sortSelect) {
     sortSelect.addEventListener("change", (e) => {
       filterState.sort = e.target.value;
+      renderRunsList();
+    });
+  }
+
+  const runnerFilter = document.getElementById("runner-filter");
+  if (runnerFilter) {
+    runnerFilter.addEventListener("change", (e) => {
+      filterState.runner = e.target.value;
       renderRunsList();
     });
   }
@@ -658,9 +813,11 @@ function renderRunsList() {
       ? `<span class="runner-npub" title="${escapeHtml(hexToNpub(run.runnerNpub))}">${escapeHtml(shortNpub(run.runnerNpub))}</span>`
       : "";
 
+    const displayId = computeDisplayId(run);
+
     card.innerHTML = `
       <div class="run-card-header">
-        <span class="run-id">${escapeHtml(shortRunId(run.runId))}</span>
+        <span class="run-id" title="${escapeHtml(run.runId)}">${escapeHtml(displayId)}</span>
         <div class="run-card-pf">
           ${feedbackBadge}
           ${statusIcon(run.status)}
@@ -1689,6 +1846,7 @@ function showGlobalError(message) {
   const cached = loadCachedRuns();
   if (cached && cached.length > 0) {
     allRuns = cached;
+    populateRunnerFilter();
     renderRunsList();
     console.log("[PRTA] Rendered " + cached.length + " runs from cache (instant)");
     selectRunFromHash();
@@ -1730,7 +1888,9 @@ function showGlobalError(message) {
 
     if (freshNewest > cachedNewest || (!cached || cached.length === 0)) {
       allRuns = freshRuns;
+      displayIdCache.clear();
       saveCachedRuns(freshRuns);
+      populateRunnerFilter();
       renderRunsList();
       selectRunFromHash();
     }
@@ -1740,4 +1900,6 @@ function showGlobalError(message) {
       showGlobalError("Initialization failed: " + e.message);
     }
   }
+
+  subscribeToRealtimeUpdates();
 })();
