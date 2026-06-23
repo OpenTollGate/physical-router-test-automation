@@ -27,6 +27,7 @@ KIND_JOB_RESULT = 6900
 KIND_JOB_FEEDBACK = 7000
 
 _job_request_event_id: str | None = None
+_job_request_event_json: str | None = None
 
 
 def _get_nsec_file() -> str | None:
@@ -111,6 +112,8 @@ def publish_job_request(config: WorkerConfig) -> str:
                 event = json.loads(line)
                 event_id: str = event.get("id", "")
                 _job_request_event_id = event_id
+                global _job_request_event_json
+                _job_request_event_json = json.dumps(event)
                 log.info("DVM job request published (kind=%d, id=%s)", KIND_JOB_REQUEST, event_id[:16])
                 return event_id
 
@@ -194,6 +197,15 @@ def publish_job_result(config: WorkerConfig, counts: dict[str, Any], result_urls
         f"-t {shlex.quote(f'param=passed;{passed}')}",
         f"-t {shlex.quote(f'param=failed;{failed}')}",
     ]
+    if _job_request_event_json:
+        tags.append(f"-t {shlex.quote(f'request={_job_request_event_json}')}")
+        try:
+            req_event = json.loads(_job_request_event_json)
+            customer_pubkey = req_event.get("pubkey", "")
+            if customer_pubkey:
+                tags.append(f"-t {shlex.quote(f'p={customer_pubkey}')}")
+        except (json.JSONDecodeError, KeyError):
+            pass
     for url in (result_urls or [])[:10]:
         tags.append(f"-t {shlex.quote(f'file={url}')}")
 
