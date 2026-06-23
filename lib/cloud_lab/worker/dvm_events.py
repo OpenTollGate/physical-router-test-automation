@@ -182,6 +182,9 @@ def publish_job_result(config: WorkerConfig, counts: dict[str, Any], result_urls
         "skipped": skipped,
         "branch": config.sut_branch,
         "backend": config.backend,
+        "commit": config.sut_commit or "",
+        "pr": config.sut_pr or "",
+        "portal": config.portal,
         "files": result_urls or [],
     })
 

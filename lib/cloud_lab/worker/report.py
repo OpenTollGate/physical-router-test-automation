@@ -192,11 +192,11 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
 
 
 def verify_nostr_publish(config: WorkerConfig) -> dict[str, Any]:
-    """Verify that the kind 30078 event and Blossom blobs are retrievable.
+    """Verify that the kind 6900 DVM result event and Blossom blobs are retrievable.
 
     Called after :func:`publish_to_nostr`. Uses ``nak req`` to query the
-    relay for the kind 30078 event with ``d`` = ``config.run_id``, then
-    fetches one Blossom URL from the event's ``file`` tags to confirm the
+    relay for kind 6900 events, finds the one matching ``config.run_id``
+    in the content JSON, then fetches one Blossom URL to confirm the
     blob is live.
 
     Returns a dict with ``event_found``, ``event_id``, ``blob_url_checked``,
@@ -218,12 +218,10 @@ def verify_nostr_publish(config: WorkerConfig) -> dict[str, Any]:
     relays_env = os.environ.get("NOSTR_RELAYS", "wss://relay.cashu.email")
     relay = relays_env.split(",")[0].strip()
 
-    # Allow a brief window for relay propagation
     time.sleep(2)
 
     nak_cmd = (
-        f"nak req -k 30078 -d {shlex.quote(config.run_id)} "
-        f"-l 1 {shlex.quote(relay)}"
+        f"nak req -k 6900 -l 5 {shlex.quote(relay)}"
     )
     try:
         r = _run(nak_cmd, timeout=30, check=False)
@@ -234,34 +232,36 @@ def verify_nostr_publish(config: WorkerConfig) -> dict[str, Any]:
     stdout = (r.stdout or "").strip()
     if r.returncode != 0 or not stdout:
         log.warning(
-            "verify_nostr_publish: kind 30078 event not found on %s (rc=%d) — "
+            "verify_nostr_publish: kind 6900 events not found on %s (rc=%d) — "
             "relay propagation may be slow",
             relay, r.returncode,
         )
         return result
 
-    # nak may print log lines before the JSON event; find the last JSON object
     event: dict[str, Any] = {}
     for line in reversed(stdout.splitlines()):
         line = line.strip()
         if line.startswith("{"):
             try:
-                event = json.loads(line)
-                break
-            except json.JSONDecodeError:
+                candidate = json.loads(line)
+                content = json.loads(candidate.get("content", "{}"))
+                if content.get("run_id") == config.run_id:
+                    event = candidate
+                    break
+            except (json.JSONDecodeError, KeyError):
                 continue
 
     if not event:
-        log.warning("verify_nostr_publish: could not parse event from nak output")
+        log.warning("verify_nostr_publish: kind 6900 event for run_id=%s not found", config.run_id[:20])
         return result
 
     result["event_found"] = True
     result["event_id"] = event.get("id", "")
-    log.info("verify_nostr_publish: ✓ kind 30078 event found (id=%s)", result["event_id"][:16])
+    log.info("verify_nostr_publish: ✓ kind 6900 event found (id=%s)", result["event_id"][:16])
 
     file_urls: list[str] = []
     for tag in event.get("tags", []):
-        if len(tag) >= 2 and tag[0] == "file":
+        if len(tag) >= 2 and tag[0] in ("file", "i"):
             file_urls.append(tag[1])
 
     if not file_urls:

@@ -415,9 +415,11 @@ def run_worker(config: WorkerConfig) -> int:
         if config.publish and run_json.exists():
             try:
                 log.info("Publishing results to Blossom + Nostr (total_tests=%d)...", total_run)
-                publish_to_nostr(config, results_dir, counts)
+                os.environ["SKIP_30078_SUMMARY"] = "true"
+                manifest = publish_to_nostr(config, results_dir, counts)
                 verify_nostr_publish(config)
-                dvm_job_result(config, counts)
+                result_urls = [f["url"] for f in manifest.get("files", [])] if manifest else []
+                dvm_job_result(config, counts, result_urls)
                 report_url = "https://tests.tollgate.me/"
                 if config.gh_token:
                     post_pr_comment(config, report_url, counts)

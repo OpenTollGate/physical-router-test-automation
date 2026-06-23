@@ -473,28 +473,31 @@ def publish_results(
     summary_content = json.dumps(summary_payload, separators=(",", ":"))
 
     summary_event_id: str | None = None
-    try:
-        result = publish_test_run_event(
-            nsec_file=nsec_file,
-            run_id=run_id,
-            timestamp=timestamp_unix,
-            file_urls=file_urls,
-            summary=summary_content,
-            relays=relays,
-        )
-        if result.get("success"):
-            summary_event_id = result.get("event_id") or None
-            logger.info(
-                "Summary event %s published for run %s",
-                summary_event_id, run_id,
+    if os.environ.get("SKIP_30078_SUMMARY"):
+        logger.info("Skipping kind 30078 summary (SKIP_30078_SUMMARY set)")
+    else:
+        try:
+            result = publish_test_run_event(
+                nsec_file=nsec_file,
+                run_id=run_id,
+                timestamp=timestamp_unix,
+                file_urls=file_urls,
+                summary=summary_content,
+                relays=relays,
             )
-        else:
-            logger.error(
-                "Summary event publish failed: %s",
-                result.get("error", "unknown"),
-            )
-    except Exception:
-        logger.exception("Failed to publish summary event for run %s", run_id)
+            if result.get("success"):
+                summary_event_id = result.get("event_id") or None
+                logger.info(
+                    "Summary event %s published for run %s",
+                    summary_event_id, run_id,
+                )
+            else:
+                logger.error(
+                    "Summary event publish failed: %s",
+                    result.get("error", "unknown"),
+                )
+        except Exception:
+            logger.exception("Failed to publish summary event for run %s", run_id)
 
     manifest = {
         "run_id": run_id,
