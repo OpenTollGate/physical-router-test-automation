@@ -19,13 +19,16 @@ from pathlib import Path
 from typing import Callable
 
 from lib.cloud_lab.worker.shell import _redact, log
+from lib.constants import BLOSSOM_SERVERS, NOSTR_RELAYS
 
 
 def compute_cache_key(*parts: str) -> str:
     return hashlib.sha256(":".join(parts).encode()).hexdigest()
 
 
-def _check_blossom_cache(cache_key: str, nsec_file: str, relay: str = "wss://relay.cashu.email") -> str | None:
+def _check_blossom_cache(cache_key: str, nsec_file: str, relay: str = None) -> str | None:
+    if relay is None:
+        relay = NOSTR_RELAYS[0] if NOSTR_RELAYS else "wss://relay.cashu.email"
     r = subprocess.run(
         ["bash", "-c", f"nak req -k 1063 -t d={shlex.quote(cache_key)} -l 1 {shlex.quote(relay)}"],
         capture_output=True, text=True, timeout=15,
@@ -89,8 +92,8 @@ def cached_build(
     build_fn: Callable[[], str],
     dest: str,
     nsec_file: str | None = None,
-    blossom_server: str = "https://blossom.psbt.me",
-    relay: str = "wss://relay.cashu.email",
+    blossom_server: str = None,
+    relay: str = None,
 ) -> str:
     """Build an artifact with Blossom content-addressable cache.
 
@@ -106,6 +109,10 @@ def cached_build(
     Returns:
         Path to the artifact at dest.
     """
+    if blossom_server is None:
+        blossom_server = BLOSSOM_SERVERS[0] if BLOSSOM_SERVERS else "https://blossom.psbt.me"
+    if relay is None:
+        relay = NOSTR_RELAYS[0] if NOSTR_RELAYS else "wss://relay.cashu.email"
     if not nsec_file or not Path(nsec_file).exists():
         log.info("Cache disabled (no nsec) — building %s", Path(dest).name)
         result = build_fn()

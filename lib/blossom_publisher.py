@@ -33,7 +33,9 @@ import urllib.request
 
 # --- Constants ---
 
-DEFAULT_BLOSSOM_SERVER = "https://blossom.psbt.me"
+from lib.constants import BLOSSOM_SERVERS
+
+DEFAULT_BLOSSOM_SERVER = BLOSSOM_SERVERS[0] if BLOSSOM_SERVERS else "https://blossom.psbt.me"
 FREE_TIER_SIZE_LIMIT = 1_000_000  # 1 MB -- files under this get 30 days free
 
 

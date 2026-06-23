@@ -20,6 +20,7 @@ from typing import Any
 
 from lib.cloud_lab.worker.config import WorkerConfig
 from lib.cloud_lab.worker.shell import _redact, log
+from lib.constants import BLOSSOM_SERVERS, NOSTR_RELAYS
 
 KIND_JOB_REQUEST = 5900
 KIND_JOB_RESULT = 6900
@@ -44,11 +45,6 @@ def _get_nsec_file() -> str | None:
             return nsec_path
         return None
     return nsec_file
-
-
-def _get_relays() -> list[str]:
-    raw = os.environ.get("NOSTR_RELAYS", "wss://relay.cashu.email")
-    return [r.strip() for r in raw.split(",") if r.strip()]
 
 
 def _relay_args(relays: list[str]) -> str:
@@ -87,7 +83,7 @@ def publish_job_request(config: WorkerConfig) -> str:
         log.info("DVM job request skipped (no nsec or nak)")
         return ""
 
-    relays = _get_relays()
+    relays = NOSTR_RELAYS
     content = json.dumps({
         "run_id": config.run_id,
         "branch": config.sut_branch,
@@ -135,7 +131,7 @@ def publish_feedback(status: str, extra_info: str = "") -> None:
     if not nsec_file:
         return
 
-    relays = _get_relays()
+    relays = NOSTR_RELAYS
     content = extra_info or ""
 
     tags = [
@@ -174,7 +170,7 @@ def publish_job_result(config: WorkerConfig, counts: dict[str, Any], result_urls
     if not nsec_file:
         return
 
-    relays = _get_relays()
+    relays = NOSTR_RELAYS
     passed = counts.get("passed", 0)
     failed = counts.get("failed", 0)
     skipped = counts.get("skipped", 0)
