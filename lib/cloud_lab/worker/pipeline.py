@@ -417,16 +417,17 @@ def run_worker(config: WorkerConfig) -> int:
                 log.info("Publishing results to Blossom + Nostr (total_tests=%d)...", total_run)
                 os.environ["SKIP_30078_SUMMARY"] = "true"
                 manifest = publish_to_nostr(config, results_dir, counts)
-                verify_nostr_publish(config)
                 result_urls = [f["url"] for f in manifest.get("files", [])] if manifest else []
                 dvm_job_result(config, counts, result_urls)
+                verify_nostr_publish(config)
                 report_url = "https://tests.tollgate.me/"
                 if config.gh_token:
                     post_pr_comment(config, report_url, counts)
             except Exception as pub_exc:
                 log.error("Publish failed (non-fatal): %s", _redact(str(pub_exc))[:500])
 
-        dvm_feedback("success" if test_exit == 0 else "error", f"exit={test_exit}")
+        has_failures = counts.get("failed", 0) > 0 or counts.get("error", 0) > 0
+        dvm_feedback("error" if has_failures else "success", f"exit={test_exit}")
 
         _save_pipeline_timing(results_dir)
         _log_pipeline_summary()

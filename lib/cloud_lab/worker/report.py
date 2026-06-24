@@ -136,11 +136,11 @@ def publish_results(config: WorkerConfig, results_dir: str) -> str:
         raise
 
     return expected_url
-def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, Any]) -> str:
-    """Publish test results to Blossom + Nostr (kind 30078).
+def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, Any]) -> dict[str, Any]:
+    """Publish test results to Blossom + Nostr.
 
-    Requires nak CLI and an nsec file on the VM. Falls back silently if
-    either is missing (non-fatal).
+    Uploads artifacts to Blossom via result_publisher, returns the manifest
+    dict with file URLs for the caller to include in DVM result events.
     """
     import shutil
 
@@ -152,11 +152,11 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
                 break
     if not nsec_file or not Path(nsec_file).exists():
         log.warning("Nostr publish skipped: nsec file not found")
-        return ""
+        return {}
 
     if not shutil.which("nak"):
         log.warning("Nostr publish skipped: nak CLI not installed")
-        return ""
+        return {}
 
     blossom = os.environ.get("BLOSSOM_SERVER", "https://blossom.psbt.me")
     relays = os.environ.get("NOSTR_RELAYS", "wss://relay.cashu.email")
@@ -181,11 +181,20 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
         f"-v"
     )
 
+    manifest: dict[str, Any] = {}
     try:
         log.info("Publishing to Blossom (%s) + Nostr (%s)...", blossom, relays)
         r = _run(cmd, timeout=600, check=False)
         stdout = (r.stdout or "").strip()
         if r.returncode == 0:
+            for line in reversed(stdout.splitlines()):
+                line = line.strip()
+                if line.startswith("{"):
+                    try:
+                        manifest = json.loads(line)
+                        break
+                    except json.JSONDecodeError:
+                        continue
             for line in stdout.splitlines()[-5:]:
                 log.info("nostr-publish: %s", line)
             log.info("Nostr publish complete")
@@ -193,7 +202,7 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
             log.error("Nostr publish failed (rc=%d): %s", r.returncode, stdout[-300:])
     except Exception as exc:
         log.error("Nostr publish error (non-fatal): %s", _redact(str(exc))[:500])
-    return ""
+    return manifest
 
 
 def verify_nostr_publish(config: WorkerConfig) -> dict[str, Any]:
