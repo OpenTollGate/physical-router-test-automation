@@ -172,7 +172,7 @@ def ensure_blossomfs() -> None:
             log.info("Building BlossomFS (cargo build --release)...")
             _run(
                 f'. "$HOME/.cargo/env" && cd {clone_dir} && cargo build --release 2>&1',
-                timeout=300,
+                timeout=600,
             )
 
         nsec_file = os.environ.get("NSEC_FILE", "")
