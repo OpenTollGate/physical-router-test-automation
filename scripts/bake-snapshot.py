@@ -114,7 +114,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
     disk_size_gb = cast(int, args.disk_size)
     project = get_project()
 
-    total_steps = 12
+    total_steps = 13
     vm_name = f"tollgate-bake-{int(time.time())}"
 
     print(f"Bake configuration:")
@@ -629,7 +629,28 @@ def cmd_bake(args: argparse.Namespace) -> int:
             return 1
         print(f"  Base image replaced in {time.monotonic() - t0:.1f}s")
 
-        # Step 11: Stop VM and create snapshot
+        # Step 12: Pre-compile BlossomFS
+        _step(13, total_steps, "Pre-compiling BlossomFS (Rust + cargo)")
+        t0 = time.monotonic()
+        blossomfs_cmd = (
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
+            "fuse3 libfuse3-dev pkg-config build-essential libssl-dev openssl >/dev/null 2>&1 || true; "
+            "if command -v cargo >/dev/null 2>&1; then echo 'Rust already installed'; else "
+            "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; fi && "
+            ". \"$HOME/.cargo/env\" && "
+            "if [ -x /opt/blossomfs/target/release/blossomfs ]; then echo 'BlossomFS already built'; else "
+            "rm -rf /opt/blossomfs && "
+            "git clone --depth 1 https://github.com/Amperstrand/blossomfs /opt/blossomfs && "
+            "cd /opt/blossomfs && cargo build --release 2>&1; fi && "
+            "test -x /opt/blossomfs/target/release/blossomfs && echo BLOSSOMFS_OK"
+        )
+        r = _gcloud_ssh(vm_name, blossomfs_cmd, zone, project, timeout=900)
+        if r.returncode != 0 or "BLOSSOMFS_OK" not in (r.stdout or ""):
+            print(f"WARNING: BlossomFS build may have failed: {r.stderr[:300]}", file=sys.stderr)
+        else:
+            print(f"  BlossomFS pre-compiled in {time.monotonic() - t0:.1f}s")
+
+        # Step 13: Stop VM and create snapshot
         _step(12, total_steps, "Stopping VM and creating snapshot")
         t0 = time.monotonic()
         r = _run_gcloud([
