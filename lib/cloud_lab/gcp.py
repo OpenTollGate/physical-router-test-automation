@@ -639,7 +639,7 @@ def submit_run(
     short = (target.sut_commit or target.branch)[:7]
     # Sanitize slashes from branch names (e.g. fix/v2-keyset-ids → fix-v2-)
     # Slashes in run_id create nested directory paths that break results
-    # collection and gh-pages publish.
+    # collection and Nostr/Blossom publish.
     short = short.replace("/", "-")
     run_id = f"{timestamp}-{short}"
     vm_name = _sanitize_vm_name(run_id)

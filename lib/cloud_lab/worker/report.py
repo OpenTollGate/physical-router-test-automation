@@ -100,42 +100,6 @@ def create_minimal_run_json(
             f"<p>passed={passed} failed={failed} skipped={skipped}</p>"
             f"<p>collect_and_render failed — minimal report</p></body></html>"
         )
-def publish_results(config: WorkerConfig, results_dir: str) -> str:
-    """Publish results to gh-pages (DEPRECATED: Cloud lab no longer uses this function).
-
-    Deprecated: Cloud lab no longer uses this function. Physical lab (test-pr.sh) still
-    uses it for gh-pages publishing. The cloud lab pipeline uses Nostr+Blossom (DVM lifecycle) instead.
-    """
-    run_json = Path(results_dir) / "run.json"
-    if not run_json.exists():
-        log.error("Cannot publish: run.json not found in %s", results_dir)
-        return "https://tests.tollgate.me/"
-
-    commit_short = config.sut_commit[:7]
-    data = json.loads(run_json.read_text())
-    nested = data.get("sut") or {}
-    commit_short = nested.get("commit_short") or commit_short
-    expected_url = f"https://tests.tollgate.me/reports/{commit_short}/{config.run_id}/report/index.html"
-    log.info("Publishing from results_dir=%s → expected_url=%s", results_dir, expected_url)
-
-    try:
-        gh_token = os.environ.get("GH_TOKEN", "")
-        _run(
-            f"git config --global user.email 'tollgate-ci@users.noreply.github.com' && "
-            f"git config --global user.name 'TollGate CI' && "
-            f"git config --global --add safe.directory '*' && "
-            f"cd {TEST_DIR} && GH_TOKEN={shlex.quote(gh_token)} TOLLGATE_GH_PAGES_CNAME=tests.tollgate.me "
-            f"./scripts/publish-report.sh {shlex.quote(results_dir)}",
-            timeout=1200,
-        )
-    except RuntimeError as exc:
-        log.error("publish-report.sh failed: %s", _redact(str(exc))[:500])
-        raise
-    except Exception as exc:
-        log.error("publish-report.sh unexpected error: %s", _redact(str(exc))[:500])
-        raise
-
-    return expected_url
 def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, Any]) -> dict[str, Any]:
     """Publish test results to Blossom + Nostr.
 
