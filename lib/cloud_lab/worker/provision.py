@@ -147,7 +147,8 @@ def ensure_blossomfs() -> None:
 
         _run(
             "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
-            "fuse3 libfuse3-dev pkg-config build-essential git curl >/dev/null",
+            "fuse3 libfuse3-dev pkg-config build-essential git curl "
+            "libssl-dev libssl3 openssl >/dev/null",
             timeout=120, check=False,
         )
 
