@@ -1,0 +1,26 @@
+# physical-router-test-automation
+
+> Multi-tier test framework for [tollgate-module-basic-go](https://github.com/OpenTollGate/tollgate-module-basic-go) running against physical OpenWrt routers. Combines Playwright LuCI UI tests, pytest…
+
+Project orientation for LLMs (see https://llmstxt.org/). Cross-link: AGENTS.md (workflow rules), HANDOVER.md (session state).
+
+## Stack
+
+Languages/build: npm/TS-JS, Make.
+
+## Structure (top file types)
+
+- `.py`: 174 files
+- `.md`: 27 files
+- `.sh`: 26 files
+- `.mjs`: 25 files
+- `.yaml`: 20 files
+- `.json`: 5 files
+
+## Build & test
+
+- Inspect `Makefile` / `package.json` / `Cargo.toml` / `platformio.ini` for the canonical commands.
+
+## Optional
+
+- [README](./README.md): human readme
