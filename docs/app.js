@@ -480,7 +480,7 @@ function dedupeDvmRuns(events, fileMeta, feedback) {
       }
     }
     for (const run of byRunId.values()) {
-      const fb = fbByRun.get(run.runId) || fbByRun.get(run.eventId);
+      const fb = fbByRun.get(run.requestEventId) || fbByRun.get(run.runId) || fbByRun.get(run.eventId);
       if (fb) run.feedbackStatus = fb.status;
     }
   }
@@ -1539,7 +1539,14 @@ function closeHtmlViewer() {
 
 function selectRunFromHash() {
   const hashRunId = location.hash.slice(1);
-  if (!hashRunId || selectedRunId === hashRunId) return;
+  if (!hashRunId) {
+    if (allRuns.length > 0 && !selectedRunId) {
+      const newest = [...allRuns].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))[0];
+      selectRun(newest);
+    }
+    return;
+  }
+  if (selectedRunId === hashRunId) return;
   const run = allRuns.find((r) => r.runId === hashRunId);
   if (run) selectRun(run);
 }
