@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import os
 
-DEFAULT_ZONE = "us-central1-a"
-DEFAULT_MACHINE_TYPE = "n1-standard-2"
+DEFAULT_ZONE = "us-east1-b"
+DEFAULT_MACHINE_TYPE = "n2-standard-2"
 DEFAULT_DISK_SIZE_GB = 50
 VM_NAME = "tollgate-test-runner"
-SNAPSHOT_NAME = "tollgate-runner-baked-v15"
+SNAPSHOT_NAME = "tollgate-runner-baked-v14"
 FIREWALL_RULE_SSH = "tollgate-allow-ssh"
 VIRT_LAB_PASSWORD = "tollgate"
 OPENWRT_IP = "10.99.99.1"
