@@ -667,9 +667,14 @@ def deploy(router, ipk_path: Path, reboot: bool = False, backend=None) -> dict[s
     log.info("Copying %s to router", ipk_path.name)
     _scp_to_router(router, ipk_path, "/tmp/tollgate-wrt.ipk")
 
-    log.info("Installing tollgate-wrt")
+    log.info("Stopping old service and installing tollgate-wrt")
     router.ssh(
-        "opkg install --force-overwrite /tmp/tollgate-wrt.ipk"
+        "/etc/init.d/tollgate-wrt stop 2>/dev/null;"
+        "killall tollgate 2>/dev/null;"
+        "sleep 2;"
+        "opkg remove tollgate-wrt 2>/dev/null;"
+        "rm -f /usr/bin/tollgate 2>/dev/null;"
+        "opkg install /tmp/tollgate-wrt.ipk"
         " && /etc/init.d/tollgate-wrt restart"
         " && /etc/init.d/tollgate-basic restart 2>/dev/null"
         "; /etc/init.d/uhttpd restart 2>/dev/null"
