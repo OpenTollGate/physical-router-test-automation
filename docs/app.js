@@ -1698,8 +1698,6 @@ async function selectRun(run) {
   renderFlatBody(view, run);
 }
 
-function metric(value, label, cls) {
-
 function renderNostrEventsSection(run) {
   const parts = [];
 
