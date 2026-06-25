@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import logging
 import os
 import shlex
@@ -129,6 +130,7 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
     failed = counts.get("failed", 0)
     skipped = counts.get("skipped", 0)
 
+    manifest_path = tempfile.mktemp(suffix=".json")
     cmd = (
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && "
         f"python3 -m lib.result_publisher {shlex.quote(results_dir)} "
@@ -142,6 +144,7 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
         f"--commit {shlex.quote((config.sut_commit or 'unknown')[:7])} "
         f"--portal {shlex.quote(config.portal or 'builtin')} "
         f"--lab-type gcloud "
+        f"--manifest-out {shlex.quote(manifest_path)} "
         f"-v"
     )
 
@@ -151,17 +154,15 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
         r = _run(cmd, timeout=600, check=False)
         stdout = (r.stdout or "").strip()
         if r.returncode == 0:
-            for line in reversed(stdout.splitlines()):
-                line = line.strip()
-                if line.startswith("{"):
-                    try:
-                        manifest = json.loads(line)
-                        break
-                    except json.JSONDecodeError:
-                        continue
+            mp = Path(manifest_path)
+            if mp.exists():
+                manifest = json.loads(mp.read_text())
+                log.info("Nostr publish complete: %d files in manifest",
+                         len(manifest.get("files", [])))
+            else:
+                log.warning("result_publisher succeeded but manifest file missing")
             for line in stdout.splitlines()[-5:]:
                 log.info("nostr-publish: %s", line)
-            log.info("Nostr publish complete")
         else:
             log.error("Nostr publish failed (rc=%d): %s", r.returncode, stdout[-300:])
     except Exception as exc:
