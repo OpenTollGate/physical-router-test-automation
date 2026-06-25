@@ -380,6 +380,7 @@ function parseRunFromKind6900(event, fileMeta) {
   }
 
   files = files.map((f) => {
+    if (typeof f === "string") f = { url: f };
     const fm = fileMeta.get(f.url) || {};
     return {
       path: f.path || fm.filename || "",

@@ -105,7 +105,7 @@ def publish_feedback(status: str, extra_info: str = "") -> None:
         log.warning("DVM feedback failed: %s", result.get("error", "unknown")[:200])
 
 
-def publish_job_result(config: WorkerConfig, counts: dict[str, Any], result_urls: list[str] | None = None) -> None:
+def publish_job_result(config: WorkerConfig, counts: dict[str, Any], result_files: list[Any] | None = None) -> None:
     if not _job_request_event_id:
         return
 
@@ -117,6 +117,9 @@ def publish_job_result(config: WorkerConfig, counts: dict[str, Any], result_urls
     failed = counts.get("failed", 0)
     skipped = counts.get("skipped", 0)
 
+    files = result_files or []
+    file_urls = [f["url"] if isinstance(f, dict) else str(f) for f in files]
+
     content = json.dumps({
         "run_id": config.run_id,
         "passed": passed,
@@ -127,7 +130,7 @@ def publish_job_result(config: WorkerConfig, counts: dict[str, Any], result_urls
         "commit": config.sut_commit or "",
         "pr": config.sut_pr or "",
         "portal": config.portal,
-        "files": result_urls or [],
+        "files": files,
     })
 
     tags: list[list[str]] = [
@@ -147,12 +150,12 @@ def publish_job_result(config: WorkerConfig, counts: dict[str, Any], result_urls
         except (json.JSONDecodeError, KeyError):
             pass
 
-    for url in (result_urls or [])[:10]:
+    for url in file_urls[:10]:
         tags.append(["file", url])
 
     result = _publish_event(nsec_file, KIND_JOB_RESULT, content, tags, NOSTR_RELAYS)
 
     if result.get("success"):
-        log.info("DVM job result published (kind=%d, %d passed, %d failed)", KIND_JOB_RESULT, passed, failed)
+        log.info("DVM job result published (kind=%d, %d passed, %d failed, %d files)", KIND_JOB_RESULT, passed, failed, len(files))
     else:
         log.warning("DVM job result failed: %s", result.get("error", "unknown")[:200])
