@@ -2132,3 +2132,20 @@ footer a:hover { color: var(--accent); }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* === Nostr DVM Events Section === */
+.nostr-events-section{margin:0.5rem 0 1rem;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.nostr-events-section summary{cursor:pointer;padding:0.6rem 1rem;font-size:0.82rem;color:var(--text-2);font-weight:500;list-style:none;display:flex;align-items:center;gap:0.4rem;background:var(--surface)}
+.nostr-events-section summary::-webkit-details-marker{display:none}
+.nostr-events-section summary::before{content:"\25B6";font-size:0.6rem;transition:transform 0.15s}
+.nostr-events-section[open] summary::before{transform:rotate(90deg)}
+.nostr-events-list{padding:0.5rem;display:flex;flex-direction:column;gap:0.5rem}
+.nostr-event-block{background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:0.5rem 0.75rem;font-size:0.78rem}
+.nostr-event-kind{font-weight:600;color:var(--text);margin-bottom:0.3rem}
+.nostr-event-meta{display:flex;flex-wrap:wrap;gap:0.5rem;color:var(--text-3);font-size:0.72rem;margin-bottom:0.3rem;align-items:center}
+.nostr-event-meta code{font-family:var(--mono);background:var(--surface-3);padding:1px 4px;border-radius:3px}
+.nostr-event-content{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:0.5rem;font-size:0.72rem;font-family:var(--mono);overflow-x:auto;max-height:300px;color:var(--text-2);line-height:1.5;white-space:pre-wrap;word-break:break-all}
+.nostr-event-feedback .feedback-success{color:var(--green-text);font-weight:600}
+.nostr-event-feedback .feedback-error{color:var(--red-text);font-weight:600}
+.nostr-event-result{border-left:3px solid var(--green)}
+.nostr-event-request{border-left:3px solid var(--blue)}

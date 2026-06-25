@@ -415,7 +415,9 @@ function parseRunFromKind6900(event, fileMeta) {
     total,
     branch: branch || null,
     pr: pr || null,
+    repo: (payload && payload.repo) || null,
     commit: (payload && payload.commit) || getTag(tags, "commit") || null,
+    requestEventId: getTag(tags, "e") || null,
     router: router || null,
     backend: backend || null,
     clientType: (payload && payload.client_type) || getTag(tags, "client_type") || null,
@@ -1593,10 +1595,14 @@ async function selectRun(run) {
   const metaItems = [];
   if (run.branch) metaItems.push(metaItem("Branch", escapeHtml(run.branch)));
   if (run.pr) metaItems.push(metaItem("PR", "#" + escapeHtml(run.pr)));
-  if (run.commit) {
+
+  const repo = run.repo || (run.backend === "rust" ? "Amperstrand/tollgate-rs-ai-research-and-experiments" : "OpenTollGate/tollgate-module-basic-go");
+  if (repo) {
+    metaItems.push(metaItem("Repo", `<a href="https://github.com/${escapeHtml(repo)}" target="_blank" rel="noopener" class="meta-link">${escapeHtml(repo)} \u2197</a>`));
+  }
+  if (run.commit && run.commit !== "(branch head)" && run.commit.length >= 7) {
     const c = shortCommit(run.commit);
-    const repo = "Amperstrand/tollgate-module-basic-go";
-    metaItems.push(metaItem("Commit", `<a href="https://github.com/${repo}/commit/${escapeHtml(run.commit)}" target="_blank" rel="noopener" class="meta-link"><code>${escapeHtml(c)}</code> \u2197</a>`));
+    metaItems.push(metaItem("Commit", `<a href="https://github.com/${escapeHtml(repo)}/commit/${escapeHtml(run.commit)}" target="_blank" rel="noopener" class="meta-link"><code>${escapeHtml(c)}</code> \u2197</a>`));
   }
   if (run.portal && run.portal !== "builtin") {
     metaItems.push(metaItem("Portal", `<span class="meta-chip meta-chip-portal">${escapeHtml(run.portal)}</span>`));
@@ -1642,6 +1648,7 @@ async function selectRun(run) {
       <div class="detail-links">
         <a href="https://njump.me/${run.eventId}" target="_blank" class="detail-link" rel="noopener">Nostr event \u2197</a>
       </div>
+      ${renderNostrEventsSection(run)}
     </div>
     <div class="detail-body">
       <div class="test-tree-loading">
@@ -1689,6 +1696,65 @@ async function selectRun(run) {
   }
 
   renderFlatBody(view, run);
+}
+
+function metric(value, label, cls) {
+
+function renderNostrEventsSection(run) {
+  const parts = [];
+
+  const k6900 = run.rawEvent || null;
+  let requestEvent = null;
+  if (k6900) {
+    const reqTag = (k6900.tags || []).find((t) => t[0] === "request");
+    if (reqTag && reqTag[1]) {
+      try { requestEvent = JSON.parse(reqTag[1]); } catch (e) {}
+    }
+  }
+  const reqId = run.requestEventId || (requestEvent && requestEvent.id);
+
+  if (requestEvent) {
+    parts.push(renderEventBlock("Kind 5900 \u2014 DVM Job Request", requestEvent, "request"));
+  } else if (reqId) {
+    parts.push(`<div class="nostr-event-block"><div class="nostr-event-kind">Kind 5900 \u2014 DVM Job Request</div><div class="nostr-event-body"><a href="https://njump.me/${escapeHtml(reqId)}" target="_blank" rel="noopener" class="detail-link">${escapeHtml(reqId.slice(0,16))}\u2026 \u2197</a></div></div>`);
+  }
+
+  if (k6900) {
+    parts.push(renderEventBlock("Kind 6900 \u2014 DVM Job Result", k6900, "result"));
+  }
+
+  if (run.feedbackStatus) {
+    parts.push(`<div class="nostr-event-block nostr-event-feedback"><div class="nostr-event-kind">Kind 7000 \u2014 DVM Feedback: <span class="feedback-${escapeHtml(run.feedbackStatus)}">${escapeHtml(run.feedbackStatus)}</span></div>${reqId ? `<div class="nostr-event-body"><a href="https://njump.me/${escapeHtml(reqId)}" target="_blank" rel="noopener" class="detail-link">View on njump \u2197</a></div>` : ""}</div>`);
+  }
+
+  if (parts.length === 0) return "";
+
+  return `<details class="nostr-events-section"><summary>Nostr DVM Events (${parts.length})</summary><div class="nostr-events-list">${parts.join("")}</div></details>`;
+}
+
+function renderEventBlock(title, event, cls) {
+  const time = event.created_at ? new Date(event.created_at * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC" : "?";
+  const paramTags = (event.tags || []).filter((t) => t[0] === "param").map((t) => `${t[1]}=${t[2]}`).join(", ");
+  let contentPreview = "";
+  try {
+    const parsed = JSON.parse(event.content || "{}");
+    const display = {...parsed};
+    if (display.files) display.files = `[${display.files.length} files]`;
+    contentPreview = JSON.stringify(display, null, 2);
+  } catch (e) {
+    contentPreview = event.content || "";
+  }
+  const eventId = event.id || "?";
+  return `<div class="nostr-event-block nostr-event-${cls}">
+    <div class="nostr-event-kind">${escapeHtml(title)}</div>
+    <div class="nostr-event-meta">
+      <span>id: <code>${escapeHtml(eventId.slice(0,16))}\u2026</code></span>
+      <span>time: ${escapeHtml(time)}</span>
+      ${paramTags ? `<span>params: ${escapeHtml(paramTags)}</span>` : ""}
+      <a href="https://njump.me/${escapeHtml(eventId)}" target="_blank" rel="noopener" class="detail-link">njump \u2197</a>
+    </div>
+    <pre class="nostr-event-content">${escapeHtml(contentPreview)}</pre>
+  </div>`;
 }
 
 function metric(value, label, cls) {
