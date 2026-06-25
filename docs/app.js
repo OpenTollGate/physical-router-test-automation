@@ -21,6 +21,8 @@
 // === CONFIGURATION ==========================================================
 const RELAYS = [
   "wss://relay.cashu.email",
+  "wss://relay.damus.io",
+  "wss://nos.lol",
 ];
 const FETCH_TIMEOUT_MS = 12000;
 const FETCH_SINCE_DAYS = 90;
@@ -1879,17 +1881,12 @@ function showGlobalError(message) {
       return;
     }
 
-    const cachedNewest = cached && cached.length > 0
-      ? cached.reduce((mx, r) => Math.max(mx, r.timestamp || 0), 0)
-      : 0;
-    const freshNewest = freshRuns.length > 0
-      ? freshRuns.reduce((mx, r) => Math.max(mx, r.timestamp || 0), 0)
-      : 0;
-
-    if (freshNewest > cachedNewest || (!cached || cached.length === 0)) {
-      allRuns = freshRuns;
+    if (freshRuns.length > 0 || (!cached || cached.length === 0)) {
+      const freshIds = new Set(freshRuns.map((r) => r.runId));
+      const keptCached = (cached || []).filter((r) => !freshIds.has(r.runId));
+      allRuns = [...freshRuns, ...keptCached];
       displayIdCache.clear();
-      saveCachedRuns(freshRuns);
+      saveCachedRuns(allRuns);
       populateRunnerFilter();
       renderRunsList();
       selectRunFromHash();
