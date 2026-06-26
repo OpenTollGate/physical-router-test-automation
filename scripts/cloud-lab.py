@@ -225,6 +225,32 @@ def cmd_submit(args: argparse.Namespace) -> int:
         backend=cast(str, args.backend),
         repo_override=cast(str | None, args.repo),
     )
+
+    cloud = getattr(args, "cloud", "gcp")
+    if cloud == "shc":
+        from lib.cloud_lab.shc_submit import submit_run_shc
+        info = submit_run_shc(
+            target,
+            publish=cast(bool, args.publish),
+            quick=cast(bool, args.quick),
+            smoke=cast(bool, getattr(args, "smoke", False)),
+            complete=cast(bool, getattr(args, "complete", False)),
+            mint=cast(str, args.mint),
+            portal=cast(str, args.portal),
+            keep_vm_on_failure=not getattr(args, "self_delete", False),
+            lease_minutes=cast(int, getattr(args, "lease", 90)),
+        )
+        print(f"""
+Submitted SHC run {info['run_id']}
+  Branch:       {target.repo}@{target.branch}
+  VM:           {info['vm_name']} ({info.get('ip', '?')})
+  Service ID:   {info.get('service_id', '?')}
+  Artifact run: {info['artifact_run_id']}
+  Suite ref:    {info['suite_ref']}
+  Logs:         {info['log_hint']}
+""")
+        return 0
+
     info = submit_run(
         target,
         zone=cast(str, args.zone),
