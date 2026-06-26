@@ -372,11 +372,15 @@ def start_inner_vms(config: WorkerConfig) -> None:
         else:
             log.warning("nft masquerade failed (rc=%d): %s", r.returncode, (r.stderr or "")[:200])
 
-    _run(
-        f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
-        f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@{OPENWRT_IP} "
-        f"\"grep -q {DEBIAN_MAC} /tmp/dhcp.leases 2>/dev/null || "
-        f"echo '0 {DEBIAN_MAC} {DEBIAN_IP} debian-client *' >> /tmp/dhcp.leases\"",
+    inner_ssh(
+        OPENWRT_IP,
+        f"uci add dhcp host 2>/dev/null; "
+        f"uci set dhcp.@host[-1].mac='{DEBIAN_MAC}'; "
+        f"uci set dhcp.@host[-1].ip='{DEBIAN_IP}'; "
+        f"uci set dhcp.@host[-1].name='debian-client'; "
+        f"uci commit dhcp; "
+        f"/etc/init.d/dnsmasq restart 2>/dev/null; "
+        f"echo DHCP_RESERVED",
         timeout=15,
     )
 
