@@ -408,6 +408,8 @@ def submit_run_shc(
     ]
 
     # 5. Wait for SSH daemon (key propagation can take 2-5 min)
+    use_sshpass = False
+    vm_password = ""
     try:
         _wait_for_ssh(ssh_base, ssh_target, timeout=300)
     except TimeoutError:
@@ -422,19 +424,16 @@ def submit_run_shc(
         )
         if sshpass_check.returncode != 0:
             raise TimeoutError(f"Neither key nor password auth worked on {ssh_target}")
-        print("  Password auth works — injecting SSH key manually...")
-        pubkey_content = Path(ssh_key_path).read_text().strip()
-        subprocess.run(
-            ["sshpass", "-p", vm_password, *ssh_base, ssh_target,
-             f"mkdir -p ~/.ssh && echo '{pubkey_content}' >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"],
-            capture_output=True, text=True, timeout=15,
-        )
-        time.sleep(2)
-        _wait_for_ssh(ssh_base, ssh_target, timeout=30)
+        print("  Password auth works — using sshpass for bootstrap")
+        use_sshpass = True
 
-    # Clear any previous status
+    def ssh_cmd(cmd: str) -> list[str]:
+        if use_sshpass:
+            return ["sshpass", "-p", vm_password, *ssh_base, ssh_target, cmd]
+        return [*ssh_base, ssh_target, cmd]
+
     subprocess.run(
-        [*ssh_base, ssh_target, "sudo rm -f /tmp/tollgate-status /tmp/tollgate-done /var/log/tollgate-run.log"],
+        ssh_cmd("sudo rm -f /tmp/tollgate-status /tmp/tollgate-done /var/log/tollgate-run.log"),
         capture_output=True, text=True, timeout=15,
     )
 
@@ -477,16 +476,15 @@ def submit_run_shc(
     script_path = "/tmp/tollgate-shc-worker.sh"
     print("Uploading bootstrap script...")
     proc = subprocess.run(
-        [*ssh_base, ssh_target, f"cat > {script_path} && chmod +x {script_path}"],
+        ssh_cmd(f"cat > {script_path} && chmod +x {script_path}"),
         input=bootstrap_script, capture_output=True, text=True, timeout=30,
     )
     if proc.returncode != 0:
         raise RuntimeError(f"Failed to write bootstrap script: {proc.stderr}")
 
-    # 8. Launch in background
     print("Launching worker pipeline...")
     subprocess.run(
-        [*ssh_base, ssh_target, f"nohup sudo bash {script_path} > /dev/null 2>&1 & echo LAUNCHED"],
+        ssh_cmd(f"nohup sudo bash {script_path} > /dev/null 2>&1 & echo LAUNCHED"),
         capture_output=True, text=True, timeout=30,
     )
 
