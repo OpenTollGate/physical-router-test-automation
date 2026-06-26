@@ -62,6 +62,7 @@ def _launch_qemu(
     vsock_cid: int | None = None,
     mgmt_tap: str | None = None,
     mgmt_mac: str | None = None,
+    seed_iso: str | None = None,
 ) -> subprocess.Popen[str]:
     workdir = _virt_lab_workdir()
     run_dir = workdir / "run"
@@ -111,6 +112,8 @@ def _launch_qemu(
             "-netdev", f"tap,id=mgmt,ifname={mgmt_tap},script=no,downscript=no",
             "-device", f"virtio-net-pci,netdev=mgmt,mac={mgmt_mac}",
         ]
+    if seed_iso:
+        cmd += ["-cdrom", str(seed_iso)]
     log.info("Launching %s QEMU: disk=%s tap=%s mac=%s", name, disk_name, tap_name, mac)
     with qemu_log.open("w") as log_file:
         proc = subprocess.Popen(
@@ -247,7 +250,9 @@ def reset_openwrt_overlay_only() -> None:
         log.warning("Debian overlay missing — creating from base image")
         _run(
             f"cd {VIRT_LAB_WORKDIR} && "
-            "DEB_BASE=images/debian-12-nocloud-amd64.qcow2; "
+            "DEB_BASE=images/debian-12-base.qcow2; "
+            "[ -f \"$DEB_BASE\" ] || DEB_BASE=../images/debian-12-base.qcow2; "
+            "[ -f \"$DEB_BASE\" ] || DEB_BASE=images/debian-12-nocloud-amd64.qcow2; "
             "[ -f \"$DEB_BASE\" ] || DEB_BASE=../images/debian-12-nocloud-amd64.qcow2; "
             "DEB_BASE=$(readlink -f \"$DEB_BASE\"); "
             "qemu-img create -f qcow2 -F qcow2 -b \"$DEB_BASE\" overlays/debian-client.qcow2 >/dev/null && "
@@ -434,6 +439,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
     )
 
     log.info("Starting Debian VM (cached overlay)...")
+    debian_seed = _virt_lab_workdir() / "images" / "debian-seed.iso"
     debian_proc = _launch_qemu(
         name="debian",
         memory_mb=1536,
@@ -444,12 +450,12 @@ def start_inner_vms(config: WorkerConfig) -> None:
         vsock_cid=20 if config.vwifi_enabled else None,
         mgmt_tap=MGMT_TAP_DEBIAN,
         mgmt_mac=MGMT_DEBIAN_MAC,
+        seed_iso=str(debian_seed) if debian_seed.exists() else None,
     )
-    time.sleep(10)
+    time.sleep(30)
     if debian_proc.poll() is not None:
         raise RuntimeError(f"Debian VM exited before SSH with rc={debian_proc.returncode}")
-    _provision_debian_serial("debian")
-    if not wait_inner_ssh(DEBIAN_IP):
+    if not wait_inner_ssh(DEBIAN_IP, timeout=120):
         raise RuntimeError("Debian VM did not become reachable")
     log.info("Debian VM SSH OK")
     configure_mgmt_nic(DEBIAN_IP, MGMT_DEBIAN_IP, MGMT_DEBIAN_MAC)

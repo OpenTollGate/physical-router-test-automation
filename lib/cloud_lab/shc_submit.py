@@ -179,7 +179,7 @@ sudo apt-get update -qq || fail 1 "apt-get update"
 sudo apt-get install -y -qq qemu-system-x86 qemu-utils sshpass git curl wget \
   python3-venv python3-pip net-tools iproute2 socat nftables \
   build-essential libssl-dev pkg-config fuse3 libfuse3-dev \
-  cmake g++ libnl-3-dev libnl-genl-3-dev jq || fail 1 "apt-get install"
+  cmake g++ libnl-3-dev libnl-genl-3-dev jq genisoimage || fail 1 "apt-get install"
 echo "[1/$N_STEPS] done"
 
 step 2 "Installing Rust..."
@@ -245,7 +245,12 @@ sudo wget -q "https://downloads.openwrt.org/releases/${{OPENWRT_VERSION}}/target
 sudo gunzip -kf "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz" || true
 sudo qemu-img convert -f raw -O qcow2 "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img" openwrt-base.qcow2 || fail 10 "qemu-img convert"
 sudo qemu-img resize openwrt-base.qcow2 2G || fail 10 "qemu-img resize"
-sudo wget -q "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-nocloud-amd64.qcow2" || fail 10 "debian download"
+sudo wget -q "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2" || fail 10 "debian download"
+sudo mv debian-12-genericcloud-amd64.qcow2 debian-12-base.qcow2 2>/dev/null || true
+sudo mkdir -p /tmp/ci-seed
+printf '#cloud-config\npassword: tollgate\nchpasswd: {{ expire: false }}\nssh_pwauth: true\nruncmd:\n  - sed -i "s/^#*PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config\n  - sed -i "s/^#*PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config\n  - grep -q PermitRootLogin /etc/ssh/sshd_config || echo "PermitRootLogin yes" >> /etc/ssh/sshd_config\n  - systemctl restart ssh\n' > /tmp/ci-seed/user-data
+printf 'instance-id: debian-client-001\nlocal-hostname: debian-client\n' > /tmp/ci-seed/meta-data
+genisoimage -quiet -output "$WORKDIR/images/debian-seed.iso" -volid cidata -joliet -rock /tmp/ci-seed/user-data /tmp/ci-seed/meta-data || fail 10 "genisoimage"
 echo "[10/$N_STEPS] done"
 
 step 11 "Installing BlossomFS (from cache)..."
