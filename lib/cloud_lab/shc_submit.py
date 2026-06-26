@@ -294,15 +294,19 @@ if ! command -v gh >/dev/null 2>&1; then
 fi
 echo "[13/$N_STEPS] done"
 
-step 14 "Configuring network bridge..."
+step 14 "Loading kernel modules + verifying KVM..."
+sudo modprobe bridge 2>/dev/null || true
+sudo modprobe tun 2>/dev/null || true
+sudo modprobe kvm 2>/dev/null || true
+sudo modprobe kvm_intel 2>/dev/null || true
+sudo modprobe vhost_net 2>/dev/null || true
 sudo sysctl -w net.ipv4.ip_forward=1 > /dev/null
-sudo ip link add name tg-poc-br type bridge 2>/dev/null || true
-sudo ip addr add 10.99.99.2/24 dev tg-poc-br 2>/dev/null || true
-sudo ip link set tg-poc-br up
-sudo ip tuntap add dev tg-poc-tap mode tap user root 2>/dev/null || true
-sudo ip link set tg-poc-tap master tg-poc-br 2>/dev/null || true
-sudo ip link set tg-poc-tap up
-sudo iptables -t nat -A POSTROUTING -s 10.99.99.0/24 ! -o tg-poc-br -j MASQUERADE 2>/dev/null || true
+echo "  Kernel modules: $(lsmod | grep -E '^(bridge|tun|kvm|vhost_net)' | awk '{{print $1}}' | tr '\\n' ' ')"
+if [ -e /dev/kvm ]; then
+  echo "  /dev/kvm: present"
+else
+  echo "  WARNING: /dev/kvm not found — QEMU will use slow TCG emulation"
+fi
 echo "[14/$N_STEPS] done"
 
 step 15 "Running worker pipeline..."
