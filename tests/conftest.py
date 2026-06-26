@@ -305,7 +305,9 @@ def router(request, backend):
         phone_mac = phone_mac or ""
     domain = os.environ.get("TOLLGATE_DOMAIN", "")
 
-    assert host, "TOLLGATE_SSH_HOST or ROUTER_IP not set in .env"
+    if not host:
+        log.warning("TOLLGATE_SSH_HOST or ROUTER_IP not set — router fixture returns None")
+        return None
 
     ssh_port = os.environ.get("TOLLGATE_SSH_PORT", "")
 
@@ -367,6 +369,11 @@ def secondary_router(backend):
 @pytest.fixture(scope="session", autouse=True)
 def deploy_session(request, router, backend):
     from lib import deploy as deploy_lib
+
+    if router is None:
+        log.info("Skipping deployment (no router available)")
+        yield
+        return
 
     binary = request.config.getoption("--binary")
     restore = request.config.getoption("--restore")

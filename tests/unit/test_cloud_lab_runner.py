@@ -40,7 +40,9 @@ def _base_config(**overrides) -> WorkerConfig:
         hwsim_enabled=False,
         vwifi_enabled=False,
         smoke=False,
+        complete=False,
         wifi_plane="tap",
+        lease_minutes=60,
     )
     defaults.update(overrides)
     return WorkerConfig(**defaults)
