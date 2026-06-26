@@ -249,6 +249,23 @@ Submitted SHC run {info['run_id']}
   Suite ref:    {info['suite_ref']}
   Logs:         {info['log_hint']}
 """)
+        if cast(bool, getattr(args, "wait", False)):
+            from lib.cloud_lab.shc_submit import wait_for_shc_run
+            from shc_toolkit.client import SHCClient
+            ssh_base = [
+                "ssh", "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR",
+                "-o", "ConnectTimeout=10",
+            ]
+            return wait_for_shc_run(
+                SHCClient(),
+                int(info["service_id"]),
+                info["ssh_target"],
+                ssh_base,
+                timeout_s=5400,
+                keep_vm_on_failure=not getattr(args, "self_delete", False),
+            )
         return 0
 
     info = submit_run(
