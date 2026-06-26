@@ -28,7 +28,7 @@ from lib.cloud_lab.resolve import RunTarget, resolve_target
 from lib.deploy import ensure_artifact
 
 log = logging.getLogger(__name__)
-log.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s", datefmt="%H:%M:%S")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s", datefmt="%H:%M:%S")
 
 SHC_TOOLKIT_PATH = os.environ.get("SHC_TOOLKIT_PATH", str(Path(__file__).resolve().parents[3] / "shc-toolkit"))
 if SHC_TOOLKIT_PATH not in sys.path:

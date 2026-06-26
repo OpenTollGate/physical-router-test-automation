@@ -1,0 +1,151 @@
+# =============================================================================
+# Cloud Lab CI — SHC (Sovereign Hybrid Compute) backend
+# =============================================================================
+# Same test pipeline as cloud-lab.yml but runs on SHC VMs instead of GCP.
+#
+# The SHC flow is simpler than GCP:
+#   1. No JIT runner config — direct SSH to the VM
+#   2. No snapshot boot — provision from Debian template
+#   3. No gcloud SDK — uses shc-toolkit Python API
+#
+# The worker pipeline (lib/cloud_lab/worker/) is identical — it runs inside
+# the VM and uses SSH/subprocess, not cloud APIs.
+#
+# Secrets required:
+#   SHC_API_KEY     — SHC API key (shc_live_...)
+#   CROSS_REPO_TOKEN — GitHub PAT for artifact download + PR comments
+#   BOT_NSEC_HEX    — Nostr bot nsec for Blossom publishing (hex)
+#
+# Usage:
+#   gh workflow run cloud-lab-shc.yml --field pr=42 --field smoke=true
+#   gh workflow run cloud-lab-shc.yml --field branch=main
+# =============================================================================
+
+name: Cloud Lab (SHC)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number to test"
+        required: false
+        default: ""
+      branch:
+        description: "Branch to test"
+        required: false
+        default: ""
+      commit:
+        description: "Commit hash (requires branch)"
+        required: false
+        default: ""
+      backend:
+        description: "Backend to test"
+        type: choice
+        options: [go, rust]
+        default: go
+      repo:
+        description: "Override artifact repo"
+        required: false
+        default: ""
+      smoke:
+        description: "Smoke mode (~8min)"
+        type: boolean
+        default: false
+      quick:
+        description: "Quick mode (~5min)"
+        type: boolean
+        default: false
+      publish:
+        description: "Publish report"
+        type: boolean
+        default: true
+      self-delete:
+        description: "Cancel VM after tests"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  shc-test:
+    name: "SHC cloud lab run"
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -q -r requirements.txt
+          pip install -q -e /dev/null 2>/dev/null || true
+          # Install shc-toolkit from GitHub
+          pip install -q git+https://github.com/Amperstrand/shc-toolkit.git || true
+
+      - name: Configure SHC credentials
+        env:
+          SHC_API_KEY: ${{ secrets.SHC_API_KEY }}
+        run: |
+          if [ -z "$SHC_API_KEY" ]; then
+            echo "ERROR: SHC_API_KEY secret is not set"
+            exit 1
+          fi
+          echo "SHC_API_KEY is set (${#SHC_API_KEY} chars)"
+
+      - name: Write Nostr nsec
+        if: env.BOT_NSEC_HEX != ''
+        env:
+          BOT_NSEC_HEX: ${{ secrets.BOT_NSEC_HEX }}
+        run: |
+          mkdir -p ~/.config/prta
+          echo -n "$BOT_NSEC_HEX" > ~/.config/prta/nsec
+          chmod 600 ~/.config/prta/nsec
+
+      - name: Submit SHC cloud lab run
+        id: submit
+        env:
+          SHC_API_KEY: ${{ secrets.SHC_API_KEY }}
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || secrets.GH_TOKEN }}
+          BOT_NSEC_HEX: ${{ secrets.BOT_NSEC_HEX }}
+        run: |
+          ARGS=""
+          [ -n "${{ inputs.pr }}" ] && ARGS="$ARGS --pr ${{ inputs.pr }}"
+          [ -n "${{ inputs.branch }}" ] && ARGS="$ARGS --branch ${{ inputs.branch }}"
+          [ -n "${{ inputs.commit }}" ] && ARGS="$ARGS --commit ${{ inputs.commit }}"
+          [ -n "${{ inputs.repo }}" ] && ARGS="$ARGS --repo ${{ inputs.repo }}"
+          [ "${{ inputs.smoke }}" = "true" ] && ARGS="$ARGS --smoke"
+          [ "${{ inputs.quick }}" = "true" ] && ARGS="$ARGS --quick"
+          [ "${{ inputs.publish }}" = "true" ] && ARGS="$ARGS --publish"
+          [ "${{ inputs.self-delete }}" = "true" ] && ARGS="$ARGS --self-delete"
+
+          python3 scripts/cloud-lab.py submit --cloud shc \
+            --backend ${{ inputs.backend }} \
+            $ARGS \
+            --lease 90
+
+      - name: Post PR comment
+        if: always() && inputs.pr != ''
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || secrets.GH_TOKEN }}
+        run: |
+          REPO="${{ inputs.repo || 'OpenTollGate/tollgate-module-basic-go' }}"
+          if [ "${{ inputs.backend }}" = "rust" ]; then
+            REPO="Amperstrand/tollgate-rs-ai-research-and-experiments"
+          fi
+
+          cat <<EOF | gh pr comment "${{ inputs.pr }}" --repo "$REPO" --body-file -
+          ## Cloud Lab Run (SHC)
+
+          **Status**: ${{ job.status }}
+          **Backend**: ${{ inputs.backend }}
+          **Provider**: SHC (Sovereign Hybrid Compute)
+          **Report**: [tests.tollgate.me](https://tests.tollgate.me/)
+
+          Triggered by @${{ github.actor }}
+          EOF

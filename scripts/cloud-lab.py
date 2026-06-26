@@ -470,6 +470,8 @@ def build_parser() -> argparse.ArgumentParser:
     ssh.set_defaults(func=cmd_ssh)
 
     submit = sub.add_parser("submit", help="Fire-and-forget: wait for CI artifact, spawn autonomous test VM")
+    submit.add_argument("--cloud", default="gcp", choices=["gcp", "shc"],
+                        help="Cloud provider: gcp (Google Cloud) or shc (Sovereign Hybrid Compute)")
     submit.add_argument("--zone", default=DEFAULT_ZONE)
     submit.add_argument("--machine-type", default=DEFAULT_MACHINE_TYPE)
     submit.add_argument("--disk-size", type=int, default=DEFAULT_DISK_SIZE_GB)
@@ -551,6 +553,8 @@ def build_parser() -> argparse.ArgumentParser:
     reaper.set_defaults(func=cmd_install_reaper)
 
     run = sub.add_parser("run-tests", help="Submit cloud run and wait (alias for submit --wait --publish)")
+    run.add_argument("--cloud", default="gcp", choices=["gcp", "shc"],
+                     help="Cloud provider: gcp or shc")
     run.add_argument("--zone", default=DEFAULT_ZONE)
     run.add_argument("--machine-type", default=DEFAULT_MACHINE_TYPE)
     run.add_argument("--disk-size", type=int, default=DEFAULT_DISK_SIZE_GB)
@@ -582,21 +586,6 @@ def main() -> int:
     if cloud == "shc":
         os.environ.setdefault("SHC_API_KEY", "")
         os.environ["TOLLGATE_VM_PROVIDER"] = "shc"
-
-    submit_cmd = getattr(args, "func", None)
-    func_name = getattr(submit_cmd, "__name__", "")
-
-    if cloud == "shc" and func_name in ("cmd_submit", "cmd_run_tests"):
-        print(
-            "ERROR: 'submit' is not yet supported on SHC.\n"
-            "Use 'up --cloud shc' to create a VM, then SSH in and run tests manually:\n"
-            "  python3 scripts/cloud-lab.py up --cloud shc --vm-name my-test\n"
-            "  ssh debian@<ip>\n"
-            "  # Inside VM: cd /opt/tollgate-test && pytest tests/api -m api\n"
-            "  python3 scripts/cloud-lab.py down --cloud shc --vm-name my-test\n",
-            file=sys.stderr,
-        )
-        return 1
 
     func = cast(Callable[[argparse.Namespace], int], args.func)
     return func(args)
