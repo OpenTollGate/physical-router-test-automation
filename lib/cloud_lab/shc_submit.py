@@ -109,8 +109,11 @@ def _working_tree_overlay_b64() -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def _wait_for_ssh(ssh_base: list[str], ssh_target: str, timeout: int = 120) -> None:
-    """Retry SSH until the VM accepts connections."""
+def _wait_for_ssh(ssh_base: list[str], ssh_target: str, timeout: int = 300) -> None:
+    """Retry SSH until the VM accepts connections.
+
+    Key propagation can take 2-5 minutes after apply_ssh_key_live returns.
+    """
     print("Waiting for SSH daemon...", end="", flush=True)
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -404,8 +407,30 @@ def submit_run_shc(
         "-o", "ConnectTimeout=10",
     ]
 
-    # 5. Wait for SSH daemon
-    _wait_for_ssh(ssh_base, ssh_target, timeout=120)
+    # 5. Wait for SSH daemon (key propagation can take 2-5 min)
+    try:
+        _wait_for_ssh(ssh_base, ssh_target, timeout=300)
+    except TimeoutError:
+        print(" key auth not ready, trying password fallback...")
+        creds = client.get_vm_credentials(service_id)
+        vm_password = creds.get("password", "")
+        if not vm_password:
+            raise
+        sshpass_check = subprocess.run(
+            ["sshpass", "-p", vm_password, *ssh_base, ssh_target, "echo OK"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if sshpass_check.returncode != 0:
+            raise TimeoutError(f"Neither key nor password auth worked on {ssh_target}")
+        print("  Password auth works — injecting SSH key manually...")
+        pubkey_content = Path(ssh_key_path).read_text().strip()
+        subprocess.run(
+            ["sshpass", "-p", vm_password, *ssh_base, ssh_target,
+             f"mkdir -p ~/.ssh && echo '{pubkey_content}' >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"],
+            capture_output=True, text=True, timeout=15,
+        )
+        time.sleep(2)
+        _wait_for_ssh(ssh_base, ssh_target, timeout=30)
 
     # Clear any previous status
     subprocess.run(
