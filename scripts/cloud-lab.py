@@ -41,6 +41,16 @@ from lib.cloud_lab.gcp import (
     vm_up,
 )
 from lib.cloud_lab.resolve import resolve_target
+from lib.cloud_lab.provider import get_provider, VMProvider
+
+
+def _get_provider(args: argparse.Namespace) -> VMProvider | None:
+    cloud = getattr(args, "cloud", "gcp")
+    if cloud == "shc":
+        os.environ.setdefault("SHC_API_KEY", "")
+        os.environ["TOLLGATE_VM_PROVIDER"] = "shc"
+        return get_provider("shc")
+    return None
 
 
 def _warn_running_vms() -> None:
@@ -91,6 +101,22 @@ def _warn_running_vms() -> None:
 
 
 def cmd_up(args: argparse.Namespace) -> int:
+    provider = _get_provider(args)
+    if provider:
+        name = cast(str, getattr(args, "vm_name", VM_NAME) or VM_NAME)
+        machine = cast(str, args.machine_type) or "n1-standard-2"
+        print(f"Creating SHC VM '{name}'...")
+        vm = provider.create_vm(name, machine_type=machine)
+        print(f"Ordered service #{vm.service_id}, waiting for provisioning...")
+        vm = provider.wait_for_ready(vm, timeout=300)
+        ssh_key_path = os.path.expanduser("~/.ssh/id_rsa.pub")
+        if os.path.exists(ssh_key_path):
+            with open(ssh_key_path) as f:
+                provider.apply_ssh_key(vm, f.read().strip())
+            print(f"SSH key applied.")
+        print(f"VM ready: {vm.hostname} @ {vm.ip}")
+        print(f"SSH: ssh debian@{vm.ip}")
+        return 0
     return vm_up(
         cast(str, getattr(args, "vm_name", VM_NAME) or VM_NAME),
         zone=cast(str, args.zone),
@@ -100,6 +126,19 @@ def cmd_up(args: argparse.Namespace) -> int:
 
 
 def cmd_down(args: argparse.Namespace) -> int:
+    provider = _get_provider(args)
+    if provider:
+        vms = provider.list_vms()
+        target_name = cast(str, getattr(args, "vm_name", VM_NAME) or VM_NAME)
+        for vm in vms:
+            if target_name in vm.name:
+                print(f"Cancelling SHC VM '{vm.name}' (service #{vm.service_id})...")
+                provider.destroy_vm(vm, immediate=True)
+                print("VM cancelled.")
+                return 0
+        print(f"No SHC VM matching '{target_name}' found.")
+        return 1
+
     vm_name = cast(str, getattr(args, "vm_name", VM_NAME) or VM_NAME)
     project = get_project()
     if vm_status(project, cast(str, args.zone), vm_name) is None:
@@ -110,6 +149,20 @@ def cmd_down(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
+    provider = _get_provider(args)
+    if provider:
+        vms = provider.list_vms()
+        if not vms:
+            print("No SHC VMs found.")
+            return 1
+        for vm in vms:
+            print(f"VM: {vm.name}")
+            print(f"  Service ID: {vm.service_id}")
+            print(f"  IP: {vm.ip or 'N/A'}")
+            print(f"  SSH: ssh debian@{vm.ip}" if vm.ip else "  SSH: (no IP)")
+            print()
+        return 0
+
     project = get_project()
     zone = cast(str, args.zone)
     vm_name = cast(str, getattr(args, "vm_name", VM_NAME) or VM_NAME)
@@ -127,6 +180,22 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_ssh(args: argparse.Namespace) -> int:
+    provider = _get_provider(args)
+    if provider:
+        target_name = cast(str, getattr(args, "vm_name", VM_NAME) or VM_NAME)
+        vms = provider.list_vms()
+        for vm in vms:
+            if target_name in vm.name and vm.ip:
+                user = getattr(args, "user", "debian") or "debian"
+                os.execvp(
+                    "ssh",
+                    ["ssh", "-o", "StrictHostKeyChecking=no",
+                     "-o", "UserKnownHostsFile=/dev/null",
+                     f"{user}@{vm.ip}"],
+                )
+        print(f"No SHC VM matching '{target_name}' with an IP found.", file=sys.stderr)
+        return 1
+
     project = get_project()
     zone = cast(str, args.zone)
     vm_name = cast(str, getattr(args, "vm_name", VM_NAME) or VM_NAME)
@@ -272,10 +341,20 @@ def cmd_status_run(args: argparse.Namespace) -> int:
 
 
 def cmd_cleanup_stale(args: argparse.Namespace) -> int:
+    provider = _get_provider(args)
+    if provider:
+        count = provider.cleanup_stale(max_age_hours=cast(int, args.max_age_hours))
+        print(f"Cleaned up {count} stale SHC VM(s).")
+        return 0
     return cleanup_stale(zone=cast(str, args.zone), max_age_hours=cast(int, args.max_age_hours))
 
 
 def cmd_cleanup_all(args: argparse.Namespace) -> int:
+    provider = _get_provider(args)
+    if provider:
+        count = provider.cleanup_stale(max_age_hours=0)
+        print(f"Cleaned up {count} SHC VM(s).")
+        return 0
     return cleanup_all(zone=cast(str, args.zone))
 
 
@@ -475,8 +554,24 @@ def main() -> int:
     args = build_parser().parse_args()
     cloud = getattr(args, "cloud", "gcp")
     if cloud == "shc":
-        os.environ["CLOUD_BIN"] = "shc-compute"
         os.environ.setdefault("SHC_API_KEY", "")
+        os.environ["TOLLGATE_VM_PROVIDER"] = "shc"
+
+    submit_cmd = getattr(args, "func", None)
+    func_name = getattr(submit_cmd, "__name__", "")
+
+    if cloud == "shc" and func_name in ("cmd_submit", "cmd_run_tests"):
+        print(
+            "ERROR: 'submit' is not yet supported on SHC.\n"
+            "Use 'up --cloud shc' to create a VM, then SSH in and run tests manually:\n"
+            "  python3 scripts/cloud-lab.py up --cloud shc --vm-name my-test\n"
+            "  ssh debian@<ip>\n"
+            "  # Inside VM: cd /opt/tollgate-test && pytest tests/api -m api\n"
+            "  python3 scripts/cloud-lab.py down --cloud shc --vm-name my-test\n",
+            file=sys.stderr,
+        )
+        return 1
+
     func = cast(Callable[[argparse.Namespace], int], args.func)
     return func(args)
 
