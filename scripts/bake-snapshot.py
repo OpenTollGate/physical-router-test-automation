@@ -235,8 +235,15 @@ def cmd_bake(args: argparse.Namespace) -> int:
             "python3 -m venv /opt/cashu-venv && "
             "/opt/cashu-venv/bin/pip install -q --upgrade pip && "
             "/opt/cashu-venv/bin/pip install -q cashu 'marshmallow<4' && "
-            "sed -i 's/    active: bool$/    active: bool = True/' "
-            "$(/opt/cashu-venv/bin/python3 -c 'import cashu.core.models; print(cashu.core.models.__file__)') && "
+            # Patch ALL known missing-field issues in nutshell models:
+            # 1. MintKeyset.active (NUT-02 field missing on some public mints)
+            # 2. KeysResponse validation (same root cause)
+            "MODELS=$(/opt/cashu-venv/bin/python3 -c 'import cashu.core.models; print(cashu.core.models.__file__)') && "
+            "sed -i 's/    active: bool$/    active: bool = True/' \"$MODELS\" && "
+            "sed -i 's/    active: Optional\\[bool\\] = None/    active: Optional[bool] = True/' \"$MODELS\" && "
+            # Also patch the KeysResponse keyset type if it uses a strict validator
+            "NUTS02=$(/opt/cashu-venv/bin/python3 -c 'import cashumint; print(cashumint.__path__[0])' 2>/dev/null)/nuts/nut02.py && "
+            "[ -f \"$NUTS02\" ] && sed -i 's/active: bool$/active: bool = True/' \"$NUTS02\" 2>/dev/null || true && "
             "test -x /opt/cashu-venv/bin/cashu && echo CASHU_OK"
         )
         r = _gcloud_ssh(vm_name, cashu_cmd, zone, project, timeout=300)
@@ -402,6 +409,13 @@ def cmd_bake(args: argparse.Namespace) -> int:
             "    \"uci set network.mgmt.netmask='255.255.255.0'\",\n"
             "    'uci commit network',\n"
             "    '/etc/init.d/network restart',\n"
+            # Remove any pre-installed Go TollGate binary and stale uci-defaults
+            # so our Rust .ipk deploys cleanly without conflicts
+            "    '/etc/init.d/tollgate-wrt stop 2>/dev/null; killall tollgate-wrt 2>/dev/null; killall tollgate 2>/dev/null; true',\n"
+            "    'opkg remove tollgate-wrt 2>/dev/null; rm -f /usr/bin/tollgate /usr/bin/tollgate-wrt; true',\n"
+            "    'rm -f /etc/uci-defaults/99-tollgate-setup /etc/uci-defaults/90-tollgate-captive-portal-symlink 2>/dev/null; true',\n"
+            # Install jq (needed by our Rust init script for config.json parsing)
+            "    'opkg update >/dev/null 2>&1; opkg install jq >/dev/null 2>&1; true',\n"
             "    'sync',\n"
             "]\n"
             "for cmd in commands:\n"
