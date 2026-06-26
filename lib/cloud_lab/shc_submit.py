@@ -242,9 +242,9 @@ sudo mkdir -p "$WORKDIR/images" "$WORKDIR/run" "$WORKDIR/overlays"
 cd "$WORKDIR/images"
 OPENWRT_VERSION=24.10.1
 sudo wget -q "https://downloads.openwrt.org/releases/${{OPENWRT_VERSION}}/targets/x86/64/openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz" || fail 10 "openwrt download"
-sudo gunzip -kf "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz"
-sudo qemu-img convert -f raw -O qcow2 "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img" openwrt-base.qcow2
-sudo qemu-img resize openwrt-base.qcow2 2G
+sudo gunzip -kf "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz" || true
+sudo qemu-img convert -f raw -O qcow2 "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img" openwrt-base.qcow2 || fail 10 "qemu-img convert"
+sudo qemu-img resize openwrt-base.qcow2 2G || fail 10 "qemu-img resize"
 sudo wget -q "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-nocloud-amd64.qcow2" || fail 10 "debian download"
 echo "[10/$N_STEPS] done"
 
