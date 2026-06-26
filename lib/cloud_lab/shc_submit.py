@@ -188,7 +188,8 @@ source /root/.cargo/env
 echo "[2/$N_STEPS] done"
 
 step 3 "Installing nak..."
-sudo wget -q -O /usr/local/bin/nak https://github.com/rust-nostr/nostr/releases/download/v0.39.0/nak-linux-x86_64 || fail 3 "nak download"
+NAK_VER=0.20.0
+sudo wget -q -O /usr/local/bin/nak "https://github.com/fiatjaf/nak/releases/download/v${{NAK_VER}}/nak-v${{NAK_VER}}-linux-amd64" || fail 3 "nak download"
 sudo chmod +x /usr/local/bin/nak
 echo "[3/$N_STEPS] done"
 
