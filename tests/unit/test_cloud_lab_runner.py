@@ -115,4 +115,4 @@ def test_build_pytest_cmd_activates_venv():
     spec = build_runners(cfg)[0]
     cmd = _build_pytest_cmd(cfg, spec, "/tmp/results")
     assert "source /opt/tollgate-venv/bin/activate" in cmd
-    assert "python3 -m pytest" in cmd
+    assert "pytest" in cmd

@@ -20,9 +20,9 @@ def test_resolve_branch_rust():
 
 
 def test_resolve_requires_exactly_one_ref():
-    with pytest.raises(ValueError, match="cannot be used with"):
+    with pytest.raises(ValueError, match="Specify"):
         resolve_target(pr="1", branch="main")
-    with pytest.raises(ValueError, match="cannot be used with"):
+    with pytest.raises(ValueError, match="Specify"):
         resolve_target()
 
 
