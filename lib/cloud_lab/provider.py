@@ -187,8 +187,39 @@ class SHCProvider(VMProvider):
         "8C/32GB": (83, 253),
     }
 
+    _CACHE_KEYS = [
+        "blossomfs-8784100",
+        "vwifi-host-server-072cdb8",
+        "vwifi-host-ctrl-072cdb8",
+        "vwifi-guest-client-072cdb8",
+    ]
+
     def __init__(self):
         self._client = None
+
+    def _choose_machine_type(self, requested: str) -> str:
+        """Downgrade to Standard if all cache keys are available on Blossom.
+
+        If every compilable binary is cached, we don't need extra CPU for
+        compilation — a 2C/8GB VM downloads just as fast as 4C/16GB.
+        Only upgrade to Professional when compilation is actually needed.
+        """
+        if requested and requested not in ("", "auto"):
+            return requested
+
+        try:
+            import sys as _sys
+            _sys.path.insert(0, os.path.dirname(__file__) + "/..")
+            from lib.build_cache import BuildCache
+            cache = BuildCache()
+            if cache.all_cached(self._CACHE_KEYS):
+                log.info("All cache keys available — ordering Standard (2C/8GB)")
+                return "2C/8GB"
+            log.info("Cache incomplete — ordering Professional (4C/16GB) for compilation")
+            return "4C/16GB"
+        except Exception as e:
+            log.debug("Cache check failed, defaulting to Standard: %s", e)
+            return "2C/8GB"
 
     @property
     def client(self):
@@ -203,7 +234,8 @@ class SHCProvider(VMProvider):
     def create_vm(self, name, machine_type="", disk_size_gb=0, startup_script=""):
         import uuid
 
-        pkg = self._PACKAGE_MAP.get(machine_type, self._PACKAGE_MAP["n1-standard-2"])
+        machine_type = self._choose_machine_type(machine_type)
+        pkg = self._PACKAGE_MAP.get(machine_type, self._PACKAGE_MAP["2C/8GB"])
         result = self.client.submit_order(
             hostname=name,
             package_id=pkg[0],

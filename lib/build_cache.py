@@ -47,6 +47,27 @@ class BuildCache:
                 continue
         return "nak"
 
+    def check_cache_available(self, cache_keys: list[str]) -> dict[str, bool]:
+        """Check which cache keys are available on Blossom without downloading.
+
+        Returns {cache_key: True/False} for each key.
+        Useful for deciding VM size before ordering: if all keys are cached,
+        a smaller (cheaper) VM suffices since no compilation is needed.
+        """
+        result = {}
+        for key in cache_keys:
+            url = self._lookup(key)
+            result[key] = url is not None
+            if url:
+                log.info("build_cache: %s available at %s", key, url[:50])
+            else:
+                log.info("build_cache: %s NOT cached (will need compilation)", key)
+        return result
+
+    def all_cached(self, cache_keys: list[str]) -> bool:
+        """True if every key is available in the cache."""
+        return all(self.check_cache_available(cache_keys).values())
+
     def fetch_or_build(
         self,
         cache_key: str,

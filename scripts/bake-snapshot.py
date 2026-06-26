@@ -470,29 +470,45 @@ def cmd_bake(args: argparse.Namespace) -> int:
         )
         _gcloud_ssh(vm_name, shutdown_cmd, zone, project, timeout=30)
 
-        # Step 8c: Build and install vwifi binaries for cross-VM WiFi relay
-        _step(10, total_steps, "Building vwifi binaries for cross-VM WiFi relay")
+        # Step 8c: Install vwifi binaries (from Blossom cache or compile)
+        _step(10, total_steps, "Installing vwifi binaries (cache or compile)")
         t0_vwifi = time.monotonic()
         vwifi_build_cmd = (
-            "apt-get update -qq && "
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
-            "cmake make g++ pkg-config libnl-3-dev libnl-genl-3-dev git >/dev/null 2>&1 || true && "
-            "rm -rf /tmp/vwifi-build && "
-            "git clone --depth 1 https://github.com/Raizo62/vwifi.git /tmp/vwifi-build && "
-            "mkdir -p /opt/vwifi/bin/host /opt/vwifi/bin/debian /opt/vwifi/bin/openwrt && "
-            "cd /tmp/vwifi-build && "
-            "mkdir -p build-host && cd build-host && "
-            "cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) && "
-            "cp vwifi-server vwifi-ctrl /opt/vwifi/bin/host/ && "
-            "cd /tmp/vwifi-build && "
-            "mkdir -p build-guest && cd build-guest && "
-            "cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS='-static' && "
-            "make -j$(nproc) && "
-            "cp vwifi-client vwifi-add-interfaces /opt/vwifi/bin/debian/ && "
-            "cp vwifi-client vwifi-add-interfaces /opt/vwifi/bin/openwrt/ && "
-            "ls -la /opt/vwifi/bin/host/ /opt/vwifi/bin/debian/ /opt/vwifi/bin/openwrt/ && "
-            "modprobe vhost_vsock 2>/dev/null || true && "
-            "echo VWIFI_BUILD_OK"
+            'mkdir -p /opt/vwifi/bin/host /opt/vwifi/bin/debian /opt/vwifi/bin/openwrt && '
+            # Try downloading each vwifi binary from Blossom cache
+            'fetch_cached() { '
+            '  local key=$1 dest=$2; '
+            '  local url=$(nak req -k 1063 -l 1 -t "filename=$key" '
+            '    wss://relay.cashu.email 2>/dev/null | python3 -c "'
+            "import sys,json;[print(next(t[1] for t in json.loads(l)['tags'] if t[0]=='url')) for l in [sys.stdin.readline().strip()] if l]\" 2>/dev/null); "
+            '  if [ -n "$url" ]; then curl -sfL -o "$dest" "$url" && chmod +x "$dest" && return 0; fi; '
+            '  return 1; '
+            '} && '
+            'if fetch_cached vwifi-host-server-072cdb8 /opt/vwifi/bin/host/vwifi-server '
+            '   && fetch_cached vwifi-host-ctrl-072cdb8 /opt/vwifi/bin/host/vwifi-ctrl '
+            '   && fetch_cached vwifi-guest-client-072cdb8 /opt/vwifi/bin/debian/vwifi-client; then '
+            '  cp /opt/vwifi/bin/debian/vwifi-client /opt/vwifi/bin/openwrt/vwifi-client && '
+            '  echo "vwifi downloaded from Blossom cache"; '
+            'else '
+            '  echo "vwifi not fully cached, compiling from source..."; '
+            '  apt-get update -qq && '
+            '  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq '
+            '  cmake make g++ pkg-config libnl-3-dev libnl-genl-3-dev git >/dev/null 2>&1 || true && '
+            '  rm -rf /tmp/vwifi-build && '
+            '  git clone --depth 1 https://github.com/Raizo62/vwifi.git /tmp/vwifi-build && '
+            '  cd /tmp/vwifi-build && '
+            '  mkdir -p build-host && cd build-host && '
+            '  cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) && '
+            '  cp vwifi-server vwifi-ctrl /opt/vwifi/bin/host/ && '
+            '  cd /tmp/vwifi-build && '
+            '  mkdir -p build-guest && cd build-guest && '
+            '  cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS="-static" && '
+            '  make -j$(nproc) && '
+            '  cp vwifi-client vwifi-add-interfaces /opt/vwifi/bin/debian/ && '
+            '  cp vwifi-client vwifi-add-interfaces /opt/vwifi/bin/openwrt/; '
+            'fi && '
+            'ls -la /opt/vwifi/bin/host/ /opt/vwifi/bin/debian/ /opt/vwifi/bin/openwrt/ && '
+            'echo VWIFI_BUILD_OK'
         )
         r = _gcloud_ssh(vm_name, vwifi_build_cmd, zone, project, timeout=600)
         if "VWIFI_BUILD_OK" in (r.stdout or ""):
@@ -643,20 +659,34 @@ def cmd_bake(args: argparse.Namespace) -> int:
             return 1
         print(f"  Base image replaced in {time.monotonic() - t0:.1f}s")
 
-        # Step 12: Pre-compile BlossomFS
-        _step(13, total_steps, "Pre-compiling BlossomFS (Rust + cargo)")
+        # Step 12: Install BlossomFS (from Blossom cache or compile)
+        _step(13, total_steps, "Installing BlossomFS (Blossom cache or compile)")
         t0 = time.monotonic()
+
+        # Try cache first, fall back to compile
         blossomfs_cmd = (
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
-            "fuse3 libfuse3-dev pkg-config build-essential libssl-dev openssl >/dev/null 2>&1 || true; "
-            "if command -v cargo >/dev/null 2>&1; then echo 'Rust already installed'; else "
-            "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; fi && "
-            ". \"$HOME/.cargo/env\" && "
-            "if [ -x /opt/blossomfs/target/release/blossomfs ]; then echo 'BlossomFS already built'; else "
-            "rm -rf /opt/blossomfs && "
-            "git clone --depth 1 https://github.com/Amperstrand/blossomfs /opt/blossomfs && "
-            "cd /opt/blossomfs && cargo build --release 2>&1; fi && "
-            "test -x /opt/blossomfs/target/release/blossomfs && echo BLOSSOMFS_OK"
+            'export HOME=/root && '
+            'BLOSSOMFS_SHA=$(nak req -k 1063 -l 1 -t "filename=blossomfs-8784100" '
+            'wss://relay.cashu.email 2>/dev/null | python3 -c "'
+            "import sys,json;[print(next(t[1] for t in json.loads(l)['tags'] if t[0]=='url')) for l in [sys.stdin.readline().strip()] if l]\" 2>/dev/null); "
+            'if [ -n "$BLOSSOMFS_SHA" ]; then '
+            '  echo "Downloading BlossomFS from Blossom cache: ${BLOSSOMFS_SHA:0:50}..."; '
+            '  mkdir -p /opt/blossomfs/target/release && '
+            '  curl -sfL -o /opt/blossomfs/target/release/blossomfs "$BLOSSOMFS_SHA" && '
+            '  chmod +x /opt/blossomfs/target/release/blossomfs && '
+            '  echo "BlossomFS downloaded from cache"; '
+            'else '
+            '  echo "BlossomFS not cached, compiling from source..."; '
+            '  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq '
+            '  fuse3 libfuse3-dev pkg-config build-essential libssl-dev openssl >/dev/null 2>&1 || true; '
+            '  if command -v cargo >/dev/null 2>&1; then echo "Rust already installed"; else '
+            '  curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; fi && '
+            '  . "$HOME/.cargo/env" && '
+            '  rm -rf /opt/blossomfs && '
+            '  git clone --depth 1 https://github.com/Amperstrand/blossomfs /opt/blossomfs && '
+            '  cd /opt/blossomfs && cargo build --release 2>&1; '
+            'fi && '
+            'test -x /opt/blossomfs/target/release/blossomfs && echo BLOSSOMFS_OK'
         )
         r = _gcloud_ssh(vm_name, blossomfs_cmd, zone, project, timeout=900)
         if r.returncode != 0 or "BLOSSOMFS_OK" not in (r.stdout or ""):
