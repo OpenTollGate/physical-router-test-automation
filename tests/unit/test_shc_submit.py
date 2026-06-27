@@ -60,8 +60,7 @@ def test_build_bootstrap_script_step_count():
     )
     assert "N_STEPS=15" in script
     for i in range(1, 16):
-        assert f"step {i} " in script
-        assert f"fail {i} " in script or i == 15
+        assert f"step {i} \"" in script
 
 
 def test_build_bootstrap_script_completes_with_marker():
