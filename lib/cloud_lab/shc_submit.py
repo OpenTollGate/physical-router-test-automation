@@ -338,8 +338,12 @@ step 15 "Running worker pipeline..."
 cd {test_dir}
 echo "PIPELINE_START" >> /tmp/tollgate-status
 unset BOT_NSEC_HEX GH_TOKEN
-sudo /opt/tollgate-venv/bin/python3 -m lib.cloud_lab.worker --from-env || fail 15 "worker pipeline"
-echo "PIPELINE_DONE" >> /tmp/tollgate-status
+sudo /opt/tollgate-venv/bin/python3 -m lib.cloud_lab.worker --from-env
+WORKER_EXIT=$?
+if [ $WORKER_EXIT -gt 5 ]; then
+    fail 15 "worker pipeline crashed (exit=$WORKER_EXIT)"
+fi
+echo "PIPELINE_DONE (exit=$WORKER_EXIT)" >> /tmp/tollgate-status
 echo "[15/$N_STEPS] done"
 
 echo "=== Pipeline complete ==="
