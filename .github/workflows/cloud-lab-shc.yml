@@ -1,26 +1,3 @@
-# =============================================================================
-# Cloud Lab CI — SHC (Sovereign Hybrid Compute) backend
-# =============================================================================
-# Same test pipeline as cloud-lab.yml but runs on SHC VMs instead of GCP.
-#
-# The SHC flow is simpler than GCP:
-#   1. No JIT runner config — direct SSH to the VM
-#   2. No snapshot boot — provision from Debian template
-#   3. No gcloud SDK — uses shc-toolkit Python API
-#
-# The worker pipeline (lib/cloud_lab/worker/) is identical — it runs inside
-# the VM and uses SSH/subprocess, not cloud APIs.
-#
-# Secrets required:
-#   SHC_API_KEY     — SHC API key (shc_live_...)
-#   CROSS_REPO_TOKEN — GitHub PAT for artifact download + PR comments
-#   BOT_NSEC_HEX    — Nostr bot nsec for Blossom publishing (hex)
-#
-# Usage:
-#   gh workflow run cloud-lab-shc.yml --field pr=42 --field smoke=true
-#   gh workflow run cloud-lab-shc.yml --field branch=main
-# =============================================================================
-
 name: Cloud Lab (SHC)
 
 on:
@@ -84,14 +61,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -q -r requirements.txt
-          pip install -q -e /dev/null 2>/dev/null || true
-          # Install shc-toolkit from GitHub
-          pip install -q git+https://github.com/Amperstrand/shc-toolkit.git || {
-          echo "pip install failed, cloning instead..."
           git clone --depth 1 https://github.com/Amperstrand/shc-toolkit.git /tmp/shc-toolkit
           echo "SHC_TOOLKIT_PATH=/tmp/shc-toolkit" >> $GITHUB_ENV
-          export SHC_TOOLKIT_PATH=/tmp/shc-toolkit
-        }
 
       - name: Configure SHC credentials
         env:
@@ -104,7 +75,6 @@ jobs:
           echo "SHC_API_KEY is set (${#SHC_API_KEY} chars)"
 
       - name: Write Nostr nsec
-        if: env.BOT_NSEC_HEX != ''
         env:
           BOT_NSEC_HEX: ${{ secrets.BOT_NSEC_HEX }}
         run: |
@@ -113,11 +83,11 @@ jobs:
           chmod 600 ~/.config/prta/nsec
 
       - name: Submit SHC cloud lab run
-        id: submit
         env:
           SHC_API_KEY: ${{ secrets.SHC_API_KEY }}
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || secrets.GH_TOKEN }}
           BOT_NSEC_HEX: ${{ secrets.BOT_NSEC_HEX }}
+          SHC_TOOLKIT_PATH: /tmp/shc-toolkit
         run: |
           ARGS=""
           [ -n "${{ inputs.pr }}" ] && ARGS="$ARGS --pr ${{ inputs.pr }}"
