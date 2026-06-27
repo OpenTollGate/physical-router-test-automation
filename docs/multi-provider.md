@@ -61,7 +61,7 @@ TOLLGATE_VM_PROVIDER=gcloud (default)     TOLLGATE_VM_PROVIDER=shc
 | `ssh` | ✅ Connects via gcloud compute ssh | ✅ Connects via standard SSH |
 | `cleanup-stale` | ✅ Deletes old VMs | ✅ Cancels old SHC VMs |
 | `cleanup-all` | ✅ Deletes all | ✅ Cancels all |
-| `submit` | ✅ Full CI (JIT runner) | ❌ Not yet (use up + manual SSH) |
+| `submit` | ✅ Full CI (JIT runner + snapshot) | ✅ Full CI (SSH bootstrap + cloud-init) |
 | `status-run` | ✅ Via run-id | ❌ N/A (no run-id system on SHC) |
 
 ## Files
@@ -78,10 +78,27 @@ lib/cloud_lab/
 ## SHC-Specific Notes
 
 - **Machine types:** SHC Dev VPS Standard (pkg 81) ≈ GCP n2-standard-2 (2C/8GB)
-- **Cost:** ~$0.49/day, prorata refund on cancel (60-second test costs $0.00)
-- **Provisioning:** 22-64 seconds (vs GCP snapshot boot ~10s)
+- **Cost:** ~$0.46/day, prorata refund on cancel (~$0.005 per 15-min test run)
+- **Provisioning:** 22-90 seconds (vs GCP snapshot boot ~10s)
 - **SSH user:** `debian` (not `root` — use `sudo -i` for root)
 - **Nested KVM:** ✅ Available on all Dev VPS plans
+- **SSH key propagation:** 2-5 min after `apply_ssh_key_live`. Password fallback via `get_vm_credentials()` if key auth not ready.
+- **Password rotation:** SHC rotates VM passwords every ~5 min. `wait_for_shc_run` fetches fresh credentials each poll cycle.
+- **Cloud-init:** SHC images support cloud-init. Inner Debian VM uses `genericcloud` image with cloud-init seed ISO for root SSH configuration.
+- **Kernel modules:** Fresh SHC Debian 13 needs `modprobe bridge tun kvm kvm_intel vhost_net` (GCP snapshot has these pre-loaded).
+- **QEMU images:** Bootstrap downloads OpenWrt 24.10.1 + Debian 12 genericcloud on first run (~60s). BlossomFS and vwifi binaries cached via Blossom/Nostr.
+
+## SHC Submit Hardening
+
+The `submit --cloud shc` pipeline includes these reliability features:
+
+1. **Idempotency key**: Each VM order gets `idempotency_key=f"tollgate-{run_id}"`. Retrying the same run won't create duplicate VMs.
+2. **Unique hostname**: `tollgate-{branch}-{timestamp}` prevents collisions on concurrent submits.
+3. **VM TTL self-cancel**: Bootstrap schedules `shutdown` via `at` command after `--lease` minutes. Prevents cost leaks if CI runner is killed.
+4. **API retry logic**: SHC API client retries 3x with exponential backoff on 5xx errors and network failures.
+5. **Secret cleanup**: `BOT_NSEC_HEX` and `GH_TOKEN` are `unset` after the worker pipeline starts.
+6. **15-step bootstrap with per-step error checking**: Each step calls `fail N "msg"` on failure, which writes `BOOTSTRAP_FAILED` to `/tmp/tollgate-status`.
+7. **Completion marker**: `touch /tmp/tollgate-done` at the end allows reliable completion detection.
 
 ## Adding a New Provider
 

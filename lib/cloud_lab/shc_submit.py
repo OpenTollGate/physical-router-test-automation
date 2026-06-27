@@ -372,7 +372,16 @@ def submit_run_shc(
 
     client = SHCClient()
 
-    # 1. Wait for CI artifact
+    balance = client.get_account_balance()
+    credit = float(balance.get("credit", [{}])[0].get("amount", 0))
+    if credit < 0.50:
+        raise RuntimeError(
+            f"Insufficient SHC balance: ${credit:.2f}. "
+            f"Need at least $0.50 for a Dev VPS Standard ($0.46/day). "
+            f"Add credit at https://blesta.sovereignhybridcompute.com"
+        )
+    print(f"SHC balance: ${credit:.2f}")
+
     print(f"Waiting for CI artifact ({target.repo}@{target.branch})...")
     artifact_run_id = ensure_artifact(
         branch=target.branch, arch="x86_64", repo=target.repo,
