@@ -13,7 +13,7 @@ def test_empty_token_rejected(router, cashu):
 
     # Should not crash — response should be empty or non-success
     assert not resp or '"success":true' not in resp, \
-        f"Empty token was accepted (unexpected success)"
+        "Empty token was accepted (unexpected success)"
 
 
 @pytest.mark.extended
@@ -23,7 +23,7 @@ def test_garbage_token_rejected(router, cashu):
 
     # Should not crash — response should not indicate success
     assert '"success":true' not in resp, \
-        f"Garbage token was ACCEPTED (expected rejection)"
+        "Garbage token was ACCEPTED (expected rejection)"
 
 
 @pytest.mark.extended
@@ -33,7 +33,7 @@ def test_malformed_cashu_prefix(router, cashu):
 
     # Should not crash — response should not indicate success
     assert '"success":true' not in resp, \
-        f"Malformed token was ACCEPTED (expected rejection)"
+        "Malformed token was ACCEPTED (expected rejection)"
 
 
 @pytest.mark.extended
@@ -59,4 +59,4 @@ def test_duplicate_token_immediate_reuse(router, cashu):
     # Second payment with same token should fail (double-spend protection)
     resp2 = router.pay_direct(token)
     assert not is_session_event(resp2), \
-        f"Duplicate token was ACCEPTED (expected double-spend rejection)"
+        "Duplicate token was ACCEPTED (expected double-spend rejection)"

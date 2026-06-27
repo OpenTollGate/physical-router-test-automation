@@ -114,7 +114,7 @@ class ReadinessReport:
                 time.sleep(2)
             elif check.name == "phone_deauthed":
                 if self.phone_mac:
-                    _ssh(self.router_ip, f"/etc/init.d/tollgate-wrt restart", self.password)
+                    _ssh(self.router_ip, "/etc/init.d/tollgate-wrt restart", self.password)
                     time.sleep(12)
                     _ssh(self.router_ip, f"ndsctl deauth {self.phone_mac}", self.password)
                     time.sleep(3)
@@ -215,7 +215,7 @@ def _check_ready(router_ip: str, password: str, phone_mac: str) -> ReadinessRepo
     checks.append(Check("mobile_data", out.strip() == "0", f"mobile_data: {out.strip()}"))
 
     # 11. Phone deauthenticated
-    out, _ = _ssh(router_ip, f"ndsctl clients 2>/dev/null | grep 'state=' | head -1", password)
+    out, _ = _ssh(router_ip, "ndsctl clients 2>/dev/null | grep 'state=' | head -1", password)
     checks.append(Check("phone_deauthed", "Preauthenticated" in out, f"NDS state: {out.strip()}"))
 
     return ReadinessReport(checks=checks, router_ip=router_ip, password=password, phone_mac=phone_mac)

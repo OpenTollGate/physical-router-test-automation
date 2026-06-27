@@ -17,7 +17,8 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, cast
+from typing import cast
+from collections.abc import Callable
 
 
 REQUIRED_COMMANDS = [
@@ -886,7 +887,7 @@ printf 'Started Debian client VM pid=%s\\n' "$(cat "$client_pidfile")"
     if rc != 0:
         print("Warning: DHCP lease setup failed (non-fatal).", file=sys.stderr)
 
-    print(f"\nPOC environment ready:")
+    print("\nPOC environment ready:")
     print(f"  OpenWrt VM: {POC_GATEWAY}")
     print(f"  Debian client VM: {DEBIAN_CLIENT_IP} (static, via {DEBIAN_TAP})")
     print(f"  Host bridge IP: {POC_HOST_BRIDGE_IP}")

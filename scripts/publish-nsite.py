@@ -149,7 +149,7 @@ def main():
     else:
         npub_hex = hashlib.sha256(bytes.fromhex(nsec_hex)).hexdigest()
 
-    print(f"Publishing to nsite...")
+    print("Publishing to nsite...")
     print(f"  npub: {npub_hex[:16]}...")
     print(f"  blossom: {args.blossom_server}")
     print(f"  relay: {args.relay}")

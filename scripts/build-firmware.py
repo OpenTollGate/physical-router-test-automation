@@ -291,7 +291,7 @@ def main():
 
     defaults = build_defaults_script(ssh_key, password)
 
-    print(f"Submitting build to ASU...")
+    print("Submitting build to ASU...")
     request_hash = submit_build(
         router["openwrtVersion"],
         router["openwrtTarget"],

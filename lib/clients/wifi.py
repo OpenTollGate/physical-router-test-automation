@@ -206,7 +206,7 @@ class WiFi:
                 return True
             time.sleep(3)
 
-        log.warning(f"SSID tapped but not connected after 5 checks")
+        log.warning("SSID tapped but not connected after 5 checks")
         return False
 
     def _connect_to_wifi_desktop(self) -> bool:

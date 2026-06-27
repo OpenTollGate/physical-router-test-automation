@@ -306,7 +306,7 @@ def test_missing_junit_falls_back_to_output_log(tmp_path):
     missing = str(tmp_path / "nonexistent.xml")
     assert not os.path.isfile(missing)
 
-    result = _run_collect(tmp_path, ["--pytest", f"api=nonexistent.xml", "--allow-failures"])
+    result = _run_collect(tmp_path, ["--pytest", "api=nonexistent.xml", "--allow-failures"])
     assert result.returncode == 0
 
     run_json = json.loads((tmp_path / "run.json").read_text())

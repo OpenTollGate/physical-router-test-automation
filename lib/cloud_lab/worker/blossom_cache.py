@@ -16,7 +16,7 @@ import os
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 from lib.cloud_lab.worker.shell import _redact, log
 from lib.constants import BLOSSOM_SERVERS, NOSTR_RELAYS

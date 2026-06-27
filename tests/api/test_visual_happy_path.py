@@ -163,7 +163,7 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
         video_path = artifacts.get("video")
         if video_path:
             _embed_video(video_path, request)
-            print(f"[visual] embedded video")
+            print("[visual] embedded video")
 
     # Step 8: standalone screenshot of the portal (in case recording failed)
     portal_shot = os.path.join(output_dir, "portal-standalone.png")

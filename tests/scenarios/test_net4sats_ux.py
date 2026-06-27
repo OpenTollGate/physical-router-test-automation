@@ -210,7 +210,8 @@ class TestLightningPayment:
     def test_lightning_payment_completes(self):
         """Lightning payment completes and grants internet access."""
         # Create invoice via API (simulates what the UI does)
-        import subprocess, json
+        import subprocess
+        import json
         r = subprocess.run(
             f"adb shell curl -s -X POST http://{ROUTER_IP}:2121/ln-invoice "
             f"-H 'Content-Type: application/json' "
@@ -249,7 +250,7 @@ class TestAdminPanel:
 
     def test_admin_login_page(self):
         """Admin login page renders at tollgate.lan."""
-        os.system(f"adb shell am start -a android.intent.action.VIEW -d http://tollgate.lan/")
+        os.system("adb shell am start -a android.intent.action.VIEW -d http://tollgate.lan/")
         _wait(6, "Admin panel loading")
         _screenshot("10_admin_login", "Admin login page at tollgate.lan")
 

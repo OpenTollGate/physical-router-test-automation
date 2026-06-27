@@ -310,6 +310,6 @@ def test_cold_boot_via_serial(router):
 
     # Not all routers log "Linux version" via serial, so only require login:
     if "login ready" in missing:
-        pytest.fail(f"Boot did not complete to login prompt within 180s")
+        pytest.fail("Boot did not complete to login prompt within 180s")
     elif missing:
         log.warning(f"Boot log missing expected patterns: {missing}")

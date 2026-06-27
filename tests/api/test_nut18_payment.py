@@ -8,8 +8,8 @@ pytestmark = [pytest.mark.api, pytest.mark.extended]
 def _v1_server_running(router):
     try:
         out = router.ssh(
-            f"curl -s -o /dev/null -w '%{{http_code}}' "
-            f"http://127.0.0.1:2121/ 2>/dev/null || echo 000"
+            "curl -s -o /dev/null -w '%{http_code}' "
+            "http://127.0.0.1:2121/ 2>/dev/null || echo 000"
         ).strip()
         return out not in ("000", "")
     except Exception:

@@ -109,7 +109,7 @@ class BuildCache:
             ]
             # Use relays, not the blossom server (which is HTTP, not WS)
             relay_args = [r for r in RELAYS.split(",") if r.startswith("ws")]
-            cmd = [self._nak, "req", "-k", "1063", "-l", "10", f"-t", f"filename={cache_key}", *relay_args]
+            cmd = [self._nak, "req", "-k", "1063", "-l", "10", "-t", f"filename={cache_key}", *relay_args]
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             for line in r.stdout.strip().split("\n"):
                 line = line.strip()

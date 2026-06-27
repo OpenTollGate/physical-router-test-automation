@@ -42,7 +42,7 @@ def test_info_has_price_per_step(discovery):
     tags = discovery.get("tags", [])
     price_tags = [t for t in tags if isinstance(t, list) and len(t) >= 2 and t[0] == "price_per_step"]
     if not price_tags:
-        pytest.skip(f"'price_per_step' tags not present in this build (feature not yet available)")
+        pytest.skip("'price_per_step' tags not present in this build (feature not yet available)")
         return  # for type checkers
     price = price_tags[0]
     price = price_tags[0]

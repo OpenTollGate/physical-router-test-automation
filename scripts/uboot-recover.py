@@ -167,16 +167,16 @@ class State(Enum):
 
 @dataclass
 class Timeline:
-    power_off: Optional[float] = None
-    link_up: Optional[float] = None
-    uboot_http_first: Optional[float] = None
-    upload_start: Optional[float] = None
-    upload_complete: Optional[float] = None
-    flash_triggered: Optional[float] = None
-    flash_complete: Optional[float] = None
-    first_openwrt_packet: Optional[float] = None
-    ssh_available: Optional[float] = None
-    recovery_start: Optional[float] = None
+    power_off: float | None = None
+    link_up: float | None = None
+    uboot_http_first: float | None = None
+    upload_start: float | None = None
+    upload_complete: float | None = None
+    flash_triggered: float | None = None
+    flash_complete: float | None = None
+    first_openwrt_packet: float | None = None
+    ssh_available: float | None = None
+    recovery_start: float | None = None
 
 
 @dataclass
@@ -332,7 +332,7 @@ def verify_router(ip: str = UBOOT_IP) -> list[tuple[str, str]]:
     return checks
 
 
-def probe_router_info(ip: str = UBOOT_IP) -> Optional[dict]:
+def probe_router_info(ip: str = UBOOT_IP) -> dict | None:
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "conwrt" / "scripts"))
         from router_probe import probe_router as _probe_router
@@ -367,14 +367,14 @@ class PcapMonitor:
         self._stop = threading.Event()
         self._last_packet_time: float = ts()
         self._silence_timeout = config.silence_timeout
-        self._writer_proc: Optional[subprocess.Popen] = None
-        self._reader_proc: Optional[subprocess.Popen] = None
+        self._writer_proc: subprocess.Popen | None = None
+        self._reader_proc: subprocess.Popen | None = None
         self._known_uboot_macs: set[str] = set()
 
     def stop(self) -> None:
         self._stop.set()
 
-    def _start_writer(self) -> Optional[subprocess.Popen]:
+    def _start_writer(self) -> subprocess.Popen | None:
         try:
             proc = subprocess.Popen(
                 ["sudo", "-n", "tcpdump", "-i", self.config.interface,
@@ -392,7 +392,7 @@ class PcapMonitor:
             log("tcpdump not found")
             return None
 
-    def _start_reader(self) -> Optional[subprocess.Popen]:
+    def _start_reader(self) -> subprocess.Popen | None:
         if not os.path.isfile(self.config.pcap_path):
             return None
         try:
@@ -537,7 +537,7 @@ class LinkMonitor:
         self.event_queue = event_queue
         self._stop = threading.Event()
         self._poll_interval = poll_interval
-        self._last_state: Optional[bool] = None
+        self._last_state: bool | None = None
 
     def stop(self) -> None:
         self._stop.set()
@@ -835,11 +835,11 @@ def _wait_for_event_or_timeout(
     eq: queue.Queue,
     timeout: int,
     target_events: set[Event],
-    success_state: Optional[State],
+    success_state: State | None,
     fail_message: str,
     fail_say: str,
     ctx: RecoveryContext,
-) -> Optional[Event]:
+) -> Event | None:
     """Wait for one of the target events or timeout.
 
     Returns the Event that was found, or None on timeout.
@@ -903,7 +903,7 @@ def _print_timeline(ctx: RecoveryContext) -> None:
     tl = ctx.timeline
     start = tl.recovery_start or tl.power_off or ts()
 
-    def elapsed(t: Optional[float]) -> str:
+    def elapsed(t: float | None) -> str:
         if t is None:
             return "N/A"
         return f"+{int(t - start)}s ({ts_str(t)})"
@@ -962,7 +962,7 @@ def _record_inventory(ctx: RecoveryContext) -> None:
         log(f"Failed to write inventory: {e}")
 
 
-def auto_detect_interface(subnet_prefix: str = "") -> Optional[str]:
+def auto_detect_interface(subnet_prefix: str = "") -> str | None:
     """Find the single active physical ethernet interface.
 
     Skips en0 (WiFi), Thunderbolt bridge members, and Thunderbolt bridge

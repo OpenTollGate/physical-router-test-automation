@@ -279,7 +279,7 @@ def is_blocked_file(file_path: str) -> bool:
     return False
 
 
-def scan_content(content: str) -> Tuple[str, list]:
+def scan_content(content: str) -> tuple[str, list]:
     """Scan content for secrets. Returns (sanitized_content, findings_list).
 
     findings is a list of dicts: {"type": str, "preview": str, "pos": int}
@@ -364,7 +364,7 @@ def scan_content(content: str) -> Tuple[str, list]:
     return sanitized, findings
 
 
-def scan_file(file_path: str) -> Tuple[str | None, list]:
+def scan_file(file_path: str) -> tuple[str | None, list]:
     """Scan a single file for secrets.
 
     Returns:
@@ -375,7 +375,7 @@ def scan_file(file_path: str) -> Tuple[str | None, list]:
         return None, [{"type": "blocked-file", "filename": os.path.basename(file_path)}]
 
     try:
-        with open(file_path, "r", errors="replace") as f:
+        with open(file_path, errors="replace") as f:
             content = f.read()
     except Exception as e:
         return None, [{"type": "read-error", "filename": file_path, "error": str(e)}]

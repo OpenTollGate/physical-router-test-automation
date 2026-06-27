@@ -68,7 +68,7 @@ def test_cli_json_config_schema(router):
             )
     else:
         pytest.skip(
-            f"Config schema is empty array. PR #124 may not be deployed or config may not have fields yet."
+            "Config schema is empty array. PR #124 may not be deployed or config may not have fields yet."
         )
 
     log.info(f"Config schema is valid JSON with {len(schema)} field definitions")

@@ -117,7 +117,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
     total_steps = 13
     vm_name = f"tollgate-bake-{int(time.time())}"
 
-    print(f"Bake configuration:")
+    print("Bake configuration:")
     print(f"  Base snapshot:  {base_snapshot}")
     print(f"  New snapshot:   {snapshot_name}")
     print(f"  Project:        {project}")
@@ -513,7 +513,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
         r = _gcloud_ssh(vm_name, vwifi_build_cmd, zone, project, timeout=600)
         if "VWIFI_BUILD_OK" in (r.stdout or ""):
             print("  vwifi binaries built and installed to /opt/vwifi/bin/")
-            print("  Done in {:.1f}s".format(time.monotonic() - t0_vwifi))
+            print(f"  Done in {time.monotonic() - t0_vwifi:.1f}s")
         else:
             print(f"  WARNING: vwifi build failed (non-fatal): {(r.stdout or '')[:200]}", file=sys.stderr)
             print(f"  stderr: {(r.stderr or '')[:300]}", file=sys.stderr)
@@ -632,7 +632,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
         r = _gcloud_ssh(vm_name, runner_install_cmd, zone, project, timeout=300)
         if "RUNNER_INSTALL_OK" in (r.stdout or ""):
             print(f"  GitHub Actions runner v{runner_version} installed to /home/runner/actions-runner/")
-            print("  Done in {:.1f}s".format(time.monotonic() - t0_runner))
+            print(f"  Done in {time.monotonic() - t0_runner:.1f}s")
         else:
             print(f"  WARNING: Runner install failed (non-fatal): {(r.stdout or '')[:200]}", file=sys.stderr)
             print(f"  stderr: {(r.stderr or '')[:300]}", file=sys.stderr)
@@ -726,10 +726,10 @@ def cmd_bake(args: argparse.Namespace) -> int:
         ], timeout=120)
 
     print(f"\n{'=' * 60}")
-    print(f"Bake complete!")
+    print("Bake complete!")
     print(f"  New snapshot: {snapshot_name}")
-    print(f"  To use: update SNAPSHOT_NAME in lib/cloud_lab/constants.py")
-    print(f"  Verify: ./scripts/cloud-lab.py up --vm-name test-bake-vm")
+    print("  To use: update SNAPSHOT_NAME in lib/cloud_lab/constants.py")
+    print("  Verify: ./scripts/cloud-lab.py up --vm-name test-bake-vm")
     return 0
 
 
@@ -750,7 +750,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    from typing import Callable
+    from collections.abc import Callable
     func = cast(Callable[[argparse.Namespace], int], args.func)
     return func(args)
 
