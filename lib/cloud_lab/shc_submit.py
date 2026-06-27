@@ -42,6 +42,9 @@ SHC_TOOLKIT_PATH = os.environ.get("SHC_TOOLKIT_PATH", str(Path(__file__).resolve
 if SHC_TOOLKIT_PATH not in sys.path:
     sys.path.insert(0, SHC_TOOLKIT_PATH)
 
+SHC_PACKAGE_ID_STANDARD = 81
+SHC_PRICING_ID_STANDARD = 245
+
 SUITE_REPO = "OpenTollGate/physical-router-test-automation"
 SUITE_REPO_URL = f"https://github.com/{SUITE_REPO}.git"
 TEST_DIR = "/opt/tollgate-test"
@@ -136,6 +139,7 @@ def _build_bootstrap_script(
     overlay_b64: str,
     test_dir: str,
     suite_repo_url: str,
+    lease_minutes: int = 90,
 ) -> str:
     """Build the bash bootstrap script that runs inside the VM.
 
@@ -172,6 +176,13 @@ fail() {{
 
 N_STEPS=15
 echo "BOOTSTRAP_START" >> /tmp/tollgate-status
+
+LEASE_MINUTES={lease_minutes}
+echo "Scheduling self-cancel in ${{LEASE_MINUTES}} minutes via at..."
+echo "shutdown -h now 'TollGate lease expired'" | at "now + ${{LEASE_MINUTES}} minutes" 2>/dev/null || \
+  ( echo "$(( $(date +%s) + LEASE_MINUTES * 60 ))" > /tmp/tollgate-lease-expires && \
+    ( while true; do sleep 60; [ "$(date +%s)" -ge "$(cat /tmp/tollgate-lease-expires)" ] && shutdown -h now; done & ) )
+echo "Lease kill switch armed"
 
 step 1 "Installing system packages..."
 export DEBIAN_FRONTEND=noninteractive
@@ -326,6 +337,7 @@ echo "[14/$N_STEPS] done"
 step 15 "Running worker pipeline..."
 cd {test_dir}
 echo "PIPELINE_START" >> /tmp/tollgate-status
+unset BOT_NSEC_HEX GH_TOKEN
 sudo /opt/tollgate-venv/bin/python3 -m lib.cloud_lab.worker --from-env || fail 15 "worker pipeline"
 echo "PIPELINE_DONE" >> /tmp/tollgate-status
 echo "[15/$N_STEPS] done"
@@ -372,7 +384,7 @@ def submit_run_shc(
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     short = (target.sut_commit or target.branch)[:7].replace("/", "-")
     run_id = f"{timestamp}-{short}"
-    hostname = f"tollgate-{short[:12]}"
+    hostname = f"tollgate-{short[:8]}-{timestamp[-6:]}"
 
     suite_ref = _suite_ref()
     token = _gh_token()
@@ -381,9 +393,13 @@ def submit_run_shc(
     if overlay_b64:
         print(f"Including local overlay ({len(overlay_b64)} bytes b64)")
 
-    # 2. Order Standard VM (2C/8GB is enough)
     print(f"Ordering SHC VM '{hostname}' (Standard 2C/8GB)...")
-    result = client.submit_order(hostname=hostname, package_id=81, pricing_id=245)
+    result = client.submit_order(
+        hostname=hostname,
+        package_id=SHC_PACKAGE_ID_STANDARD,
+        pricing_id=SHC_PRICING_ID_STANDARD,
+        idempotency_key=f"tollgate-{run_id}",
+    )
     sids = result.get("service_ids", [])
     if not sids:
         raise RuntimeError(f"SHC order failed: {result}")
@@ -489,6 +505,7 @@ def submit_run_shc(
         overlay_b64=overlay_b64,
         test_dir=TEST_DIR,
         suite_repo_url=SUITE_REPO_URL,
+        lease_minutes=lease_minutes,
     )
 
     # 7. Upload script
@@ -529,26 +546,22 @@ def wait_for_shc_run(
     *,
     timeout_s: int = 5400,
     keep_vm_on_failure: bool = False,
+    use_sshpass: bool = False,
+    vm_password: str = "",
 ) -> int:
-    """Monitor an SHC cloud lab run until completion.
-
-    Polls the VM every 15s:
-    - Checks /tmp/tollgate-done for completion
-    - Checks /tmp/tollgate-status for failure markers
-    - Tails the log for progress
-
-    Cancels the VM when done (unless keep_vm_on_failure and failed).
-    Returns 0 on success, 1 on failure.
-    """
     print(f"\nMonitoring SHC run (service #{service_id})...")
     print(f"  Log: ssh {ssh_target} 'tail -f /var/log/tollgate-run.log'")
     print()
 
     deadline = time.time() + timeout_s
+    start = time.time()
     last_status_line = ""
 
+    def build_ssh_cmd(remote_cmd: str) -> list[str]:
+        prefix = ["sshpass", "-p", vm_password] if use_sshpass else []
+        return [*prefix, *ssh_base, ssh_target, remote_cmd]
+
     while time.time() < deadline:
-        # Check VM still exists
         try:
             vm = client.get_vm(service_id)
             state = vm.get("provisioning_state", "unknown")
@@ -560,14 +573,24 @@ def wait_for_shc_run(
             print(f"\nVM state={state} — run complete (or VM was cancelled externally)")
             return 0
 
-        # Check bootstrap status via SSH
-        r = subprocess.run(
-            [*ssh_base, ssh_target,
-             "cat /tmp/tollgate-status 2>/dev/null | tail -1; "
-             "test -f /tmp/tollgate-done && echo MARKER_DONE"],
-            capture_output=True, text=True, timeout=15,
-        )
-        output = r.stdout.strip()
+        if use_sshpass:
+            try:
+                creds = client.get_vm_credentials(service_id)
+                vm_password = creds.get("password", vm_password)
+            except Exception:
+                pass
+
+        try:
+            r = subprocess.run(
+                build_ssh_cmd(
+                    "cat /tmp/tollgate-status 2>/dev/null | tail -1; "
+                    "test -f /tmp/tollgate-done && echo MARKER_DONE"
+                ),
+                capture_output=True, text=True, timeout=15,
+            )
+            output = r.stdout.strip()
+        except subprocess.TimeoutExpired:
+            output = ""
 
         if "MARKER_DONE" in output:
             print("\nPipeline complete!")
@@ -579,25 +602,30 @@ def wait_for_shc_run(
 
         if "BOOTSTRAP_FAILED" in output:
             print(f"\nBootstrap FAILED: {output}")
-            # Fetch last 30 lines of log for diagnostics
-            r = subprocess.run(
-                [*ssh_base, ssh_target, "tail -30 /var/log/tollgate-run.log 2>/dev/null"],
-                capture_output=True, text=True, timeout=15,
-            )
-            print(r.stdout)
+            try:
+                r = subprocess.run(
+                    build_ssh_cmd("tail -30 /var/log/tollgate-run.log 2>/dev/null"),
+                    capture_output=True, text=True, timeout=15,
+                )
+                print(r.stdout)
+            except Exception:
+                pass
             if not keep_vm_on_failure:
                 print(f"Cancelling VM #{service_id}...")
                 client.cancel_vm(service_id, immediate=True)
             return 1
 
-        # Show progress from log
-        r = subprocess.run(
-            [*ssh_base, ssh_target, "tail -1 /var/log/tollgate-run.log 2>/dev/null"],
-            capture_output=True, text=True, timeout=15,
-        )
-        line = r.stdout.strip()
+        try:
+            r = subprocess.run(
+                build_ssh_cmd("tail -1 /var/log/tollgate-run.log 2>/dev/null"),
+                capture_output=True, text=True, timeout=15,
+            )
+            line = r.stdout.strip()
+        except subprocess.TimeoutExpired:
+            line = ""
+
         if line and line != last_status_line:
-            elapsed = int(time.time() - (deadline - timeout_s))
+            elapsed = int(time.time() - start)
             print(f"  [{elapsed}s] {line}")
             last_status_line = line
 

@@ -259,55 +259,6 @@ def reset_openwrt_overlay_only() -> None:
             "qemu-img resize --shrink overlays/debian-client.qcow2 10G >/dev/null 2>&1 || true",
             timeout=60,
         )
-def _provision_debian_serial(name: str, timeout: int = 120) -> None:
-    serial_sock = _virt_lab_workdir() / "run" / f"{name}.serial.sock"
-    deadline = time.time() + timeout
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-        while True:
-            try:
-                conn.connect(str(serial_sock))
-                break
-            except (ConnectionRefusedError, FileNotFoundError):
-                if time.time() >= deadline:
-                    raise RuntimeError(f"{name} serial socket was not ready at {serial_sock}")
-                time.sleep(1)
-
-        log.info("Provisioning %s Debian via serial console", name)
-        booted = False
-        while time.time() < deadline:
-            conn.sendall(b"\n")
-            data = _recv_serial(conn, timeout=3.0)
-            if "root@" in data or data.rstrip().endswith("#") or data.rstrip().endswith("$"):
-                booted = True
-                break
-            if "login:" in data.lower():
-                conn.sendall(b"root\n")
-                time.sleep(3)
-                data = _recv_serial(conn)
-                if "password:" in data.lower():
-                    conn.sendall(b"\n")
-                    time.sleep(2)
-                if "root@" in _recv_serial(conn):
-                    booted = True
-                    break
-            time.sleep(3)
-
-        if not booted:
-            raise RuntimeError(f"{name} Debian did not reach serial prompt")
-
-        commands = [
-            f"echo 'root:{VIRT_LAB_PASSWORD}' | chpasswd",
-            "sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config",
-            "sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config",
-            "grep -q PermitRootLogin /etc/ssh/sshd_config || echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config",
-            "grep -q PasswordAuthentication /etc/ssh/sshd_config || echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config",
-            "systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || true",
-        ]
-        for command in commands:
-            _serial_send_wait(conn, command, wait=2)
-    time.sleep(5)
-
-
 def start_inner_vms(config: WorkerConfig) -> None:
     setup_bridge()
     reset_openwrt_overlay_only()

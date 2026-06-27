@@ -254,6 +254,12 @@ Submitted SHC run {info['run_id']}
         if cast(bool, getattr(args, "wait", False)):
             from lib.cloud_lab.shc_submit import wait_for_shc_run
             from shc_toolkit.client import SHCClient
+            shc_client = SHCClient()
+            try:
+                creds = shc_client.get_vm_credentials(int(info["service_id"]))
+                vm_pw = creds.get("password", "")
+            except Exception:
+                vm_pw = ""
             ssh_base = [
                 "ssh", "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null",
@@ -261,12 +267,14 @@ Submitted SHC run {info['run_id']}
                 "-o", "ConnectTimeout=10",
             ]
             return wait_for_shc_run(
-                SHCClient(),
+                shc_client,
                 int(info["service_id"]),
                 info["ssh_target"],
                 ssh_base,
                 timeout_s=5400,
                 keep_vm_on_failure=not getattr(args, "self_delete", False),
+                use_sshpass=bool(vm_pw),
+                vm_password=vm_pw,
             )
         return 0
 
