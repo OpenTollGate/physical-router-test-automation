@@ -649,10 +649,6 @@ def main():
                     test["markers"] = meta["markers"]
                 break
 
-    debug_json_path = os.path.join(run_dir, "debug-logs.json")
-    if os.path.isfile(debug_json_path):
-        summary_json["debug_logs"] = "debug-logs.json"
-
     failed_tests = [t for t in all_tests if t["outcome"] in ("failed", "error")]
     skipped_tests = [t for t in all_tests if t["outcome"] == "skipped"]
 
@@ -674,6 +670,10 @@ def main():
         "skipped_tests": skipped_tests,
         "skip_reason_summary": skip_reason_summary,
     }
+
+    debug_json_path = os.path.join(run_dir, "debug-logs.json")
+    if os.path.isfile(debug_json_path):
+        summary_json["debug_logs"] = "debug-logs.json"
 
     run_json_path = os.path.join(run_dir, "run.json")
     with open(run_json_path, "w") as f:
