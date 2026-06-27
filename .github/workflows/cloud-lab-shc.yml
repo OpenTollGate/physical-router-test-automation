@@ -62,6 +62,7 @@ jobs:
         run: |
           pip install -q -r requirements.txt
           git clone --depth 1 https://github.com/Amperstrand/shc-toolkit.git /tmp/shc-toolkit
+          pip install -q requests
           echo "SHC_TOOLKIT_PATH=/tmp/shc-toolkit" >> $GITHUB_ENV
 
       - name: Configure SHC credentials
