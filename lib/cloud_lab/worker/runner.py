@@ -113,6 +113,11 @@ def build_runners(config: WorkerConfig) -> list[RunnerSpec]:
         ),
         RunnerSpec(name="vl-scenarios", paths=VL_SCENARIO_PATHS, timeout=600),
         RunnerSpec(
+            name="nut18",
+            paths=("tests/api/test_nut18_payment.py",),
+            timeout=120,
+        ),
+        RunnerSpec(
             name="scenarios",
             paths=("tests/scenarios/test_reseller_mode.py",),
             timeout=300,
