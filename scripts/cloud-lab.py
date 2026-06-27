@@ -113,7 +113,7 @@ def cmd_up(args: argparse.Namespace) -> int:
         if os.path.exists(ssh_key_path):
             with open(ssh_key_path) as f:
                 provider.apply_ssh_key(vm, f.read().strip())
-            print(f"SSH key applied.")
+            print("SSH key applied.")
         print(f"VM ready: {vm.hostname} @ {vm.ip}")
         print(f"SSH: ssh debian@{vm.ip}")
         return 0

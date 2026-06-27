@@ -499,14 +499,14 @@ def submit_run_shc(
         f"TOLLGATE_MINT={shlex.quote(mint)}",
         f"TOLLGATE_PORTAL={shlex.quote(portal)}",
         f"TOLLGATE_KEEP_VM_ON_FAILURE={'true' if keep_vm_on_failure else 'false'}",
-        f"TOLLGATE_GCP_PROJECT=tollgate-test-lab",
-        f"TOLLGATE_GCP_ZONE=shc",
+        "TOLLGATE_GCP_PROJECT=tollgate-test-lab",
+        "TOLLGATE_GCP_ZONE=shc",
         f"TOLLGATE_VM_NAME={hostname}",
         f"GH_TOKEN={shlex.quote(token)}",
         f"BOT_NSEC_HEX={shlex.quote(nsec)}",
         f"VIRT_LAB_PASSWORD={VIRT_LAB_PASSWORD}",
-        f"NSEC_FILE=/root/nsec",
-        f"HOME=/root",
+        "NSEC_FILE=/root/nsec",
+        "HOME=/root",
     ])
 
     bootstrap_script = _build_bootstrap_script(
