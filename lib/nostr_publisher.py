@@ -86,7 +86,7 @@ def _publish_event(
     kind: int,
     content: str,
     tags: list,
-    relays: list = None,
+    relays: list | None = None,
 ) -> dict:
     """Sign and publish a Nostr event via nak CLI.
 
@@ -168,8 +168,8 @@ def publish_nip94_event(
     blossom_url: str,
     sha256: str,
     mime_type: str,
-    metadata_tags: dict = None,
-    relays: list = None,
+    metadata_tags: dict | None = None,
+    relays: list | None = None,
 ) -> dict:
     """Publish a NIP-94 file metadata event (kind 1063) for BlossomFS.
 
@@ -245,9 +245,9 @@ def publish_test_run_event(
     nsec_file: str,
     run_id: str,
     timestamp: int | None = None,
-    file_urls: list = None,
+    file_urls: list | None = None,
     summary: str = "",
-    relays: list = None,
+    relays: list | None = None,
 ) -> dict:
     """Publish a kind 30078 parameterized replaceable test-run index event.
 
