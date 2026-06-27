@@ -26,7 +26,7 @@ def compute_cache_key(*parts: str) -> str:
     return hashlib.sha256(":".join(parts).encode()).hexdigest()
 
 
-def _check_blossom_cache(cache_key: str, nsec_file: str, relay: str = None) -> str | None:
+def _check_blossom_cache(cache_key: str, nsec_file: str, relay: str | None = None) -> str | None:
     if relay is None:
         relay = NOSTR_RELAYS[0] if NOSTR_RELAYS else "wss://relay.cashu.email"
     r = subprocess.run(
@@ -92,8 +92,8 @@ def cached_build(
     build_fn: Callable[[], str],
     dest: str,
     nsec_file: str | None = None,
-    blossom_server: str = None,
-    relay: str = None,
+    blossom_server: str | None = None,
+    relay: str | None = None,
 ) -> str:
     """Build an artifact with Blossom content-addressable cache.
 

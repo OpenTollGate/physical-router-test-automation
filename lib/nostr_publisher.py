@@ -244,7 +244,7 @@ def publish_nip94_event(
 def publish_test_run_event(
     nsec_file: str,
     run_id: str,
-    timestamp: int = None,
+    timestamp: int | None = None,
     file_urls: list = None,
     summary: str = "",
     relays: list = None,

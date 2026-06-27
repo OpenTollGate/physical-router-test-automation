@@ -89,7 +89,7 @@ def _gh_token() -> str:
 
 
 def _nsec_hex() -> str:
-    for path in [os.environ.get("NSEC_FILE", ""), Path.home() / ".config/prta/nsec"]:
+    for path in [os.environ.get("NSEC_FILE", ""), str(Path.home() / ".config/prta/nsec")]:
         if path and Path(path).exists():
             return Path(path).read_text().strip()
     return ""
