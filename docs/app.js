@@ -51,10 +51,11 @@ let liveConnectedCount = 0;
 let displayIdCache = new Map();
 
 // ===========================================================================
-// WebSocket: Fetch NIP-90 DVM events (kind 5900/6900/7000) + 1063 from ALL pubkeys
+// WebSocket: Fetch kind 30078 (primary) + legacy DVM events (5900/6900/7000) + 1063
+// DVM kinds are deprecated per ADR-007 — kept for historical run visibility only.
 // ===========================================================================
 
-function fetchDvmEvents(kinds = [5900, 6900, 7000, 1063], limit = 200) {
+function fetchDvmEvents(kinds = [30078, 5900, 6900, 7000, 1063], limit = 200) {
   return new Promise((resolve) => {
     const events = new Map();
     let resolved = false;
