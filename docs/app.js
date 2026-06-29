@@ -1,14 +1,15 @@
-// TollGate Router Tests — Nostr reader for GitHub Pages
+// Amperstrand Unified Test Dashboard — Nostr reader for GitHub Pages
 // Fetches DVM-native events (kind 5900/6900/7000) + kind 1063 file metadata
-// from ALL pubkeys via NIP-90 DVM protocol, renders test run cards with
-// screenshots from Blossom URLs. Pure vanilla JS, no build step.
+// AND kind 30078 parameterized-replaceable run summaries from ALL pubkeys.
+// Renders per-project views (tollgate / fips / BLE / microfips / generic).
+// Pure vanilla JS, no build step.
 //
-// Event contract (emitted by nostr_publisher.py):
+// Event contracts:
 //
 //   kind 5900 (DVM job request):
 //     tags: ["param", key, value], ["e", request_id]
 //
-//   kind 6900 (DVM job result — primary run parser):
+//   kind 6900 (DVM job result — legacy tollgate run parser):
 //     tags: ["param", key, value], ["e", request_id], ["file", url]
 //     content: JSON with pass/fail counts, file URLs, metadata
 //
@@ -17,6 +18,10 @@
 //
 //   kind 1063 (NIP-94 file metadata, per file, BlossomFS):
 //     tags: ["url", ...], ["x", sha256], ["m", mime], ["filename", ...], ["size", ...]
+//
+//   kind 30078 (NIP-78 parameterized replaceable — unified run summary):
+//     tags: ["d", run_id], ["t", project_tag], ["file", blossom_url], ...
+//     content: JSON with project-specific summary (scenario, counts, metrics)
 
 // === CONFIGURATION ==========================================================
 const RELAYS = [
@@ -35,8 +40,8 @@ let activeImgLoads = 0;
 const MAX_CONCURRENT_IMG_LOADS = 3;
 const imgLoadQueue = [];
 
-const CACHE_KEY = "prta:runs:v5";
-const filterState = { search: "", status: "all", sort: "newest", runner: "" };
+const CACHE_KEY = "prta:runs:v6";
+const filterState = { search: "", status: "all", sort: "newest", runner: "", project: "all" };
 let detailLoadId = 0;
 let currentTestFilter = "all";
 let currentTestSearch = "";
@@ -122,6 +127,78 @@ function fetchDvmEvents(kinds = [5900, 6900, 7000, 1063], limit = 200) {
   });
 }
 
+function fetchKind30078Events(limit = 200) {
+  return new Promise((resolve) => {
+    const events = new Map();
+    let resolved = false;
+    let closedRelays = 0;
+    let connectedCount = 0;
+
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        resolve([...events.values()]);
+      }
+    }, FETCH_TIMEOUT_MS);
+
+    RELAYS.forEach((relayUrl) => {
+      let ws;
+      try {
+        ws = new WebSocket(relayUrl);
+      } catch (e) {
+        closedRelays++;
+        checkDone();
+        return;
+      }
+
+      const subId = "prta-k30078-" + Math.random().toString(36).slice(2, 8);
+
+      ws.onopen = () => {
+        connectedCount++;
+        ws.send(JSON.stringify([
+          "REQ", subId,
+          {
+            kinds: [30078],
+            limit,
+            since: Math.floor(Date.now() / 1000) - 86400 * FETCH_SINCE_DAYS,
+          },
+        ]));
+      };
+
+      ws.onmessage = (msg) => {
+        try {
+          const data = JSON.parse(msg.data);
+          if (data[0] === "EVENT" && data[1] === subId && data[2]) {
+            const evt = data[2];
+            events.set(evt.id, evt);
+          } else if (data[0] === "EOSE" && data[1] === subId) {
+            ws.send(JSON.stringify(["CLOSE", subId]));
+            ws.close();
+          }
+        } catch (e) { /* ignore */ }
+      };
+
+      ws.onerror = () => {
+        closedRelays++;
+        checkDone();
+      };
+
+      ws.onclose = () => {
+        closedRelays++;
+        checkDone();
+      };
+    });
+
+    function checkDone() {
+      if (closedRelays >= RELAYS.length && !resolved) {
+        clearTimeout(timeout);
+        resolved = true;
+        resolve([...events.values()]);
+      }
+    }
+  });
+}
+
 // ===========================================================================
 // Real-time WebSocket subscription for live DVM events
 // ===========================================================================
@@ -143,7 +220,7 @@ function subscribeToRealtimeUpdates() {
       liveConnectedCount++;
       updateLiveIndicator();
       ws.send(JSON.stringify(["REQ", "prta-live", {
-        kinds: [5900, 6900, 7000],
+        kinds: [5900, 6900, 7000, 30078],
         since: Math.floor(Date.now() / 1000),
       }]));
     };
@@ -192,7 +269,26 @@ function handleLiveEvent(event) {
   if (event.kind === 6900) {
     const run = parseRunFromKind6900(event, new Map());
     if (!run) return;
-    if (allRuns.find((r) => r.runId === run.runId)) return;
+    if (allRuns.find((r) => r.runId === run.runId && r.source === "dvm")) return;
+
+    allRuns.unshift(run);
+    displayIdCache.clear();
+    saveCachedRuns(allRuns);
+    populateRunnerFilter();
+    renderRunsList();
+    return;
+  }
+
+  if (event.kind === 30078) {
+    const run = parseRunFromKind30078(event, new Map());
+    if (!run) return;
+    const existing = allRuns.find((r) => r.runId === run.runId && r.source === "k30078");
+    if (existing) {
+      if (run.timestamp > existing.timestamp) {
+        Object.assign(existing, run);
+      }
+      return;
+    }
 
     allRuns.unshift(run);
     displayIdCache.clear();
@@ -235,6 +331,65 @@ function getTagNum(tags, name) {
   if (v == null || v === "") return null;
   const n = parseInt(v, 10);
   return Number.isNaN(n) ? null : n;
+}
+
+const PROJECT_TAG_MAP = {
+  "tollgate": "tollgate",
+  "boltcard": "boltcard",
+  "fips": "fips",
+  "fips-test": "fips",
+  "fips-interop": "fips",
+  "fips-rekey": "fips",
+  "fips-throughput": "fips",
+  "fips-dashboard": "fips",
+  "fips-ble": "ble",
+  "ble-experiment": "ble",
+  "microfips": "microfips",
+};
+
+function determineProjectTag(tTags) {
+  for (const t of tTags) {
+    if (PROJECT_TAG_MAP[t]) return PROJECT_TAG_MAP[t];
+  }
+  return null;
+}
+
+function getRunProject(run) {
+  if (run.projectTag) return run.projectTag;
+  if (run.source === "dvm") return "tollgate";
+  return "unknown";
+}
+
+const PROJECT_LABELS = {
+  tollgate: "Tollgate",
+  boltcard: "Boltcard",
+  fips: "FIPS",
+  ble: "BLE",
+  microfips: "Microfips",
+  unknown: "Other",
+};
+
+const PROJECT_COLORS = {
+  tollgate: "var(--accent)",
+  boltcard: "var(--purple)",
+  fips: "var(--blue)",
+  ble: "var(--green)",
+  microfips: "var(--yellow)",
+  unknown: "var(--text-dim)",
+};
+
+function guessMimeFromPath(path) {
+  if (!path) return "application/octet-stream";
+  const ext = path.split(".").pop()?.toLowerCase();
+  const map = {
+    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+    gif: "image/gif", svg: "image/svg+xml", webp: "image/webp",
+    html: "text/html", htm: "text/html",
+    json: "application/json", xml: "application/xml",
+    txt: "text/plain", log: "text/plain", csv: "text/csv",
+    mp4: "video/mp4", webm: "video/webm",
+  };
+  return map[ext] || "application/octet-stream";
 }
 
 // Build a URL -> metadata map from kind 1063 NIP-94 events.
@@ -439,6 +594,107 @@ function getParam(tags, name) {
   return t ? t[2] : null;
 }
 
+function parseRunFromKind30078(event, fileMeta) {
+  const tags = event.tags || [];
+  const dTag = getTag(tags, "d");
+  const tTags = getAllTags(tags, "t").map((t) => t[1]);
+  const fileUrls = getAllTags(tags, "file").map((t) => t[1]);
+
+  let payload = null;
+  try {
+    payload = JSON.parse(event.content || "{}");
+  } catch (e) { /* non-JSON content */ }
+
+  const projectTag = determineProjectTag(tTags);
+
+  let files = [];
+  if (payload && Array.isArray(payload.files)) {
+    files = payload.files.map((f) => {
+      if (typeof f === "string") f = { url: f };
+      const fm = fileMeta.get(f.url) || {};
+      return {
+        path: f.path || fm.filename || "",
+        url: f.url,
+        sha256: f.sha256 || fm.sha256 || "",
+        mime: f.mime || fm.mime || guessMimeFromPath(f.path || f.url),
+        size: f.size != null ? f.size : (fm.size != null ? fm.size : null),
+        redacted: !!f.redacted,
+      };
+    });
+  }
+  for (const url of fileUrls) {
+    if (!files.find((f) => f.url === url)) {
+      const fm = fileMeta.get(url) || {};
+      files.push({
+        path: fm.filename || url.slice(-40),
+        url,
+        sha256: fm.sha256 || "",
+        mime: fm.mime || guessMimeFromPath(url),
+        size: fm.size != null ? fm.size : null,
+        redacted: false,
+      });
+    }
+  }
+
+  const screenshots = files.filter((f) => (f.mime || "").startsWith("image/"));
+  const nonScreenshotFiles = files.filter(
+    (f) => !(f.mime || "").startsWith("image/")
+  );
+
+  const runId = dTag || (payload && payload.run_id) || event.id;
+
+  const passed = payload ? (payload.passed ?? payload.counts?.passed ?? null) : null;
+  const failed = payload ? (payload.failed ?? payload.counts?.failed ?? null) : null;
+  const skipped = payload ? (payload.skipped ?? payload.counts?.skipped ?? null) : null;
+  const total = payload && payload.total != null
+    ? payload.total
+    : payload && payload.counts?.total != null
+      ? payload.counts.total
+      : ((passed ?? 0) + (failed ?? 0) + (skipped ?? 0)) || null;
+
+  let status = "success";
+  if (failed != null && failed > 0) status = "error";
+  else if (passed != null && passed === 0 && total != null && total > 0) status = "error";
+
+  return {
+    id: event.id,
+    eventId: event.id,
+    runId,
+    projectTag,
+    subTags: tTags,
+    timestamp: event.created_at,
+    status,
+    passed,
+    failed,
+    skipped,
+    total,
+    scenario: payload?.scenario || payload?.mode || null,
+    fipsRef: payload?.fips_ref || payload?.["fips-ref"] || null,
+    nodes: payload?.nodes ?? null,
+    phase: payload?.phase || null,
+    noiseMode: payload?.noise_mode || null,
+    branch: payload?.branch || null,
+    pr: payload?.pr || null,
+    repo: payload?.repo || null,
+    commit: payload?.commit || null,
+    requestEventId: null,
+    router: payload?.router || null,
+    backend: payload?.backend || null,
+    clientType: payload?.client_type || null,
+    viewport: payload?.viewport || null,
+    blossomServer: payload?.blossom_server || null,
+    scanSummary: payload?.scan_summary || {},
+    files: nonScreenshotFiles,
+    screenshots,
+    content: event.content || "",
+    rawEvent: event,
+    source: "k30078",
+    summary: payload,
+    runnerNpub: event.pubkey,
+    feedbackStatus: null,
+  };
+}
+
 // Parse kind 7000 (DVM job feedback) -> status object.
 function parseFeedbackFromKind7000(event) {
   const tags = event.tags || [];
@@ -486,6 +742,25 @@ function dedupeDvmRuns(events, fileMeta, feedback) {
   }
 
   return [...byRunId.values()].sort((a, b) => b.timestamp - a.timestamp);
+}
+
+function dedupeKind30078Runs(events, fileMeta) {
+  const byDtag = new Map();
+
+  for (const evt of events) {
+    if (evt.kind !== 30078) continue;
+    try {
+      const run = parseRunFromKind30078(evt, fileMeta);
+      const existing = byDtag.get(run.runId);
+      if (!existing || run.timestamp > existing.timestamp) {
+        byDtag.set(run.runId, run);
+      }
+    } catch (e) {
+      console.warn("[PRTA] Failed to parse 30078", evt.id, e);
+    }
+  }
+
+  return [...byDtag.values()].sort((a, b) => b.timestamp - a.timestamp);
 }
 
 // ===========================================================================
@@ -629,6 +904,10 @@ function updateConnectionStatus(connected, total) {
 function getFilteredRuns() {
   let runs = allRuns.slice();
 
+  if (filterState.project && filterState.project !== "all") {
+    runs = runs.filter((r) => getRunProject(r) === filterState.project);
+  }
+
   if (filterState.runner) {
     runs = runs.filter((r) => r.runnerNpub === filterState.runner);
   }
@@ -710,6 +989,13 @@ function buildSidebar() {
   const aside = document.getElementById("runs-list");
   aside.innerHTML = `
     <div class="sidebar-controls">
+      <div class="project-tabs" id="project-tabs">
+        <button class="project-tab active" data-project="all" type="button">All</button>
+        <button class="project-tab" data-project="tollgate" type="button">Tollgate</button>
+        <button class="project-tab" data-project="fips" type="button">FIPS</button>
+        <button class="project-tab" data-project="ble" type="button">BLE</button>
+        <button class="project-tab" data-project="microfips" type="button">Microfips</button>
+      </div>
       <input type="text" id="search-input" class="search-input" placeholder="Search runs\u2026" autocomplete="off" />
       <div class="filter-toggles">
         <button class="filter-btn active" data-filter="all" type="button">All</button>
@@ -731,6 +1017,15 @@ function buildSidebar() {
 }
 
 function wireSidebarControls() {
+  document.querySelectorAll(".project-tab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".project-tab").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      filterState.project = btn.dataset.project;
+      renderRunsList();
+    });
+  });
+
   const searchInput = document.getElementById("search-input");
   if (searchInput) {
     let timer = null;
@@ -834,7 +1129,9 @@ function renderRunsList() {
       </div>
       ${passFailBar(run)}
       <div class="run-card-meta">
+        <span class="meta-chip meta-chip-project" style="--project-color: ${PROJECT_COLORS[getRunProject(run)] || "var(--text-dim)"}">${escapeHtml(PROJECT_LABELS[getRunProject(run)] || "?")}</span>
         ${run.router ? `<span class="meta-chip">${escapeHtml(run.router)}</span>` : ""}
+        ${run.scenario ? `<span class="meta-chip">${escapeHtml(run.scenario)}</span>` : ""}
         ${run.branch ? `<span class="meta-chip meta-chip-branch">${escapeHtml(run.branch)}</span>` : ""}
         ${run.pr ? `<span class="meta-chip meta-chip-pr">#${escapeHtml(run.pr)}</span>` : ""}
       </div>
@@ -1494,6 +1791,322 @@ function renderFlatBody(view, run) {
   lazyLoadScreenshots(view);
 }
 
+async function renderFipsRun(view, run, myLoadId) {
+  const body = view.querySelector(".detail-body");
+  if (!body) return;
+
+  const allFiles = [...(run.screenshots || []), ...(run.files || [])];
+  if (allFiles.length === 0) {
+    body.innerHTML = `<p class="section-empty">No artifacts in this run.</p>`;
+    return;
+  }
+
+  const sorted = [...allFiles].sort((a, b) => {
+    const pri = (p) => {
+      if (p.endsWith("report.html")) return 0;
+      if (p.endsWith(".gif")) return 1;
+      if (p.endsWith(".html") || p.endsWith(".htm")) return 2;
+      if (p.endsWith("analysis.txt") || p.endsWith(".txt")) return 3;
+      if (p.endsWith(".json")) return 4;
+      return 5;
+    };
+    return pri(a.path || "") - pri(b.path || "");
+  });
+
+  body.innerHTML = `
+    <div class="fips-run-info">
+      ${run.scenario ? `<span class="meta-chip meta-chip-branch">${escapeHtml(run.scenario)}</span>` : ""}
+      ${run.fipsRef ? `<span class="meta-chip">${escapeHtml(run.fipsRef)}</span>` : ""}
+      ${run.nodes != null ? `<span class="meta-chip">${run.nodes} nodes</span>` : ""}
+    </div>
+    <div class="file-nav-bar" id="fips-file-nav">
+      ${sorted.map((f, i) => {
+        const name = (f.path || "").split("/").pop() || f.url.slice(-20);
+        return `<button class="file-nav-tab${i === 0 ? " active" : ""}" data-idx="${i}">${escapeHtml(name)}</button>`;
+      }).join("")}
+    </div>
+    <div class="fips-viewer" id="fips-viewer">
+      <div class="test-tree-loading"><div class="spinner"></div><p>Loading\u2026</p></div>
+    </div>
+  `;
+
+  const viewer = body.querySelector("#fips-viewer");
+  const navBar = body.querySelector("#fips-file-nav");
+
+  navBar.querySelectorAll(".file-nav-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      navBar.querySelectorAll(".file-nav-tab").forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+      showFipsFile(sorted[parseInt(tab.dataset.idx, 10)], viewer, myLoadId);
+    });
+  });
+
+  showFipsFile(sorted[0], viewer, myLoadId);
+}
+
+async function showFipsFile(file, viewer, myLoadId) {
+  const name = (file.path || "").split("/").pop() || file.url;
+  const ext = (name.split(".").pop() || "").toLowerCase();
+
+  viewer.innerHTML = `<div class="test-tree-loading"><div class="spinner"></div><p>Loading ${escapeHtml(name)}\u2026</p></div>`;
+
+  try {
+    if (ext === "html" || ext === "htm") {
+      const resp = await fetch(file.url);
+      if (myLoadId !== detailLoadId) return;
+      const html = await resp.text();
+      viewer.innerHTML = `<iframe sandbox="allow-same-origin" class="fips-report-frame"></iframe>`;
+      viewer.querySelector("iframe").srcdoc = html;
+
+    } else if (ext === "json") {
+      const resp = await fetch(file.url);
+      if (myLoadId !== detailLoadId) return;
+      const data = await resp.json();
+      viewer.innerHTML = `<pre class="json-viewer-pre">${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+
+    } else if (["gif", "png", "jpg", "jpeg", "svg", "webp"].includes(ext)) {
+      viewer.innerHTML = `<div class="fips-image-viewer"><img src="${escapeHtml(file.url)}" alt="${escapeHtml(name)}"></div>`;
+
+    } else if (["log", "txt", "env", "yaml", "yml", "md", "csv"].includes(ext) || name === "DONE") {
+      const resp = await fetch(file.url);
+      if (myLoadId !== detailLoadId) return;
+      const text = await resp.text();
+      const truncated = text.length > 50000
+        ? text.slice(0, 50000) + "\n\n... truncated (" + text.length + " bytes total)"
+        : text;
+      viewer.innerHTML = `<pre class="json-viewer-pre">${escapeHtml(truncated)}</pre>`;
+
+    } else {
+      viewer.innerHTML = `<div class="fips-download-state"><p>${escapeHtml(name)}</p><a href="${escapeHtml(file.url)}" target="_blank" rel="noopener" class="detail-link">Download from Blossom \u2197</a></div>`;
+    }
+  } catch (e) {
+    if (myLoadId !== detailLoadId) return;
+    viewer.innerHTML = `<div class="fips-download-state"><p>Failed to load ${escapeHtml(name)}</p><a href="${escapeHtml(file.url)}" target="_blank" rel="noopener" class="detail-link">Open directly \u2197</a></div>`;
+  }
+}
+
+async function renderBleRun(view, run, myLoadId) {
+  const body = view.querySelector(".detail-body");
+  if (!body) return;
+
+  const summary = run.summary || {};
+  const allFiles = [...(run.screenshots || []), ...(run.files || [])];
+
+  const metricsHtml = renderBleMetrics(summary);
+  const filesHtml = await renderBleFiles(allFiles, body, myLoadId);
+
+  if (myLoadId !== detailLoadId) return;
+
+  body.innerHTML = `
+    ${metricsHtml}
+    ${filesHtml}
+  `;
+
+  wireGenericFileButtons(body);
+  lazyLoadScreenshots(body);
+}
+
+function renderBleMetrics(summary) {
+  const parts = [];
+
+  if (summary.best_mode || summary.metrics?.best_mode) {
+    const best = summary.best_mode || summary.metrics?.best_mode;
+    const bestRtt = summary.metrics?.best_rtt_p95 || summary.best_rtt_p95;
+    parts.push(`
+      <div class="metric metric-green">
+        <span class="metric-value">${escapeHtml(best)}</span>
+        <span class="metric-label">Best Mode</span>
+      </div>
+      ${bestRtt != null ? `<div class="metric"><span class="metric-value">${bestRtt}ms</span><span class="metric-label">RTT p95</span></div>` : ""}
+    `);
+  }
+
+  if (summary.platform_pair) {
+    parts.push(`<div class="metric"><span class="metric-value">${escapeHtml(summary.platform_pair)}</span><span class="metric-label">Platform Pair</span></div>`);
+  }
+  if (summary.mode) {
+    parts.push(`<div class="metric"><span class="metric-value">${escapeHtml(summary.mode)}</span><span class="metric-label">Mode</span></div>`);
+  }
+  if (summary.phase) {
+    parts.push(`<div class="metric"><span class="metric-value">${escapeHtml(summary.phase)}</span><span class="metric-label">Phase</span></div>`);
+  }
+  if (Array.isArray(summary.modes)) {
+    parts.push(`<div class="metric"><span class="metric-value">${summary.modes.length}</span><span class="metric-label">Modes Tested</span></div>`);
+  }
+  if (Array.isArray(summary.payload_sizes)) {
+    parts.push(`<div class="metric"><span class="metric-value">${summary.payload_sizes.join("/")}</span><span class="metric-label">Payload Sizes</span></div>`);
+  }
+
+  if (parts.length === 0) return "";
+
+  return `<div class="detail-metrics ble-metrics">${parts.join("")}</div>`;
+}
+
+async function renderBleFiles(files, body, myLoadId) {
+  if (files.length === 0) return "";
+
+  const images = files.filter((f) => (f.mime || "").startsWith("image/") || /\.(png|jpg|jpeg|gif|svg|webp)$/i.test(f.path || ""));
+  const jsonFiles = files.filter((f) => (f.mime || "").includes("json") || f.path?.endsWith(".json"));
+  const htmlFiles = files.filter((f) => (f.mime || "").includes("html") || /\.(html|htm)$/i.test(f.path || ""));
+  const others = files.filter((f) => !images.includes(f) && !jsonFiles.includes(f) && !htmlFiles.includes(f));
+
+  const parts = [];
+
+  if (images.length > 0) {
+    parts.push(`
+      <section class="general-section">
+        <h3 class="section-title">Charts <span class="section-count">${images.length}</span></h3>
+        ${renderScreenshots(images)}
+      </section>
+    `);
+  }
+
+  if (htmlFiles.length > 0) {
+    parts.push(`
+      <section class="general-section">
+        <h3 class="section-title">Reports <span class="section-count">${htmlFiles.length}</span></h3>
+        <div class="html-list">
+          ${htmlFiles.map((h) => `
+            <div class="html-inline-row">
+              <button class="html-view-btn" data-url="${escapeHtml(h.url)}" data-name="${escapeHtml(h.path)}">View Inline</button>
+              <a href="${escapeHtml(h.url)}" target="_blank" rel="noopener" class="html-open-link">${escapeHtml(h.path)} \u2197</a>
+            </div>
+          `).join("")}
+        </div>
+      </section>
+    `);
+  }
+
+  if (jsonFiles.length > 0 || others.length > 0) {
+    parts.push(`
+      <section class="general-section">
+        <h3 class="section-title">Data Files <span class="section-count">${jsonFiles.length + others.length}</span></h3>
+        ${renderFileList([...jsonFiles, ...others])}
+      </section>
+    `);
+  }
+
+  return parts.join("");
+}
+
+async function renderMicrofipsRun(view, run, myLoadId) {
+  const body = view.querySelector(".detail-body");
+  if (!body) return;
+
+  const summary = run.summary || {};
+  const allFiles = [...(run.screenshots || []), ...(run.files || [])];
+
+  const passed = summary.tests_passed ?? summary.passed ?? run.passed;
+  const failed = summary.tests_failed ?? summary.failed ?? run.failed;
+
+  const statusColor = failed != null && failed > 0 ? "var(--red)" : "var(--green)";
+  const statusText = failed != null && failed > 0 ? "FAILED" : "PASSED";
+
+  body.innerHTML = `
+    <div class="microfips-status-bar" style="border-color: ${statusColor};">
+      <span class="microfips-status-icon" style="color: ${statusColor};">${failed != null && failed > 0 ? "\u2717" : "\u2713"}</span>
+      <span class="microfips-status-text" style="color: ${statusColor};">${statusText}</span>
+      ${passed != null ? `<span class="microfips-status-count">${passed} passed</span>` : ""}
+      ${failed != null ? `<span class="microfips-status-count">${failed} failed</span>` : ""}
+    </div>
+    ${run.fipsRef ? `<div class="detail-meta-grid"><div class="meta-item"><span class="meta-label">FIPS Ref</span><span class="meta-value">${escapeHtml(run.fipsRef)}</span></div>${run.noiseMode ? `<div class="meta-item"><span class="meta-label">Noise Mode</span><span class="meta-value">${escapeHtml(run.noiseMode)}</span></div>` : ""}</div>` : ""}
+    ${allFiles.length > 0 ? `
+      <section class="general-section">
+        <h3 class="section-title">Artifacts <span class="section-count">${allFiles.length}</span></h3>
+        ${renderFileList(allFiles)}
+      </section>
+    ` : ""}
+    ${run.content ? `
+      <details class="advanced-section">
+        <summary class="advanced-header">Summary JSON</summary>
+        <div class="advanced-body">
+          <pre class="json-viewer-pre">${escapeHtml(JSON.stringify(summary, null, 2))}</pre>
+        </div>
+      </details>
+    ` : ""}
+  `;
+
+  wireGenericFileButtons(body);
+}
+
+async function renderGenericFileBrowser(view, run, myLoadId) {
+  const body = view.querySelector(".detail-body");
+  if (!body) return;
+
+  const allFiles = [...(run.screenshots || []), ...(run.files || [])];
+
+  const images = allFiles.filter((f) => (f.mime || "").startsWith("image/") || /\.(png|jpg|jpeg|gif|svg|webp)$/i.test(f.path || ""));
+  const htmlFiles = allFiles.filter((f) => (f.mime || "").includes("html") || /\.(html|htm)$/i.test(f.path || ""));
+  const others = allFiles.filter((f) => !images.includes(f) && !htmlFiles.includes(f));
+
+  const sections = [];
+
+  if (images.length > 0) {
+    sections.push(`
+      <section class="general-section">
+        <h3 class="section-title">Images <span class="section-count">${images.length}</span></h3>
+        ${renderScreenshots(images)}
+      </section>
+    `);
+  }
+
+  if (htmlFiles.length > 0) {
+    sections.push(`
+      <section class="general-section">
+        <h3 class="section-title">HTML <span class="section-count">${htmlFiles.length}</span></h3>
+        <div class="html-list">
+          ${htmlFiles.map((h) => `
+            <div class="html-inline-row">
+              <button class="html-view-btn" data-url="${escapeHtml(h.url)}" data-name="${escapeHtml(h.path)}">View Inline</button>
+              <a href="${escapeHtml(h.url)}" target="_blank" rel="noopener" class="html-open-link">${escapeHtml(h.path)} \u2197</a>
+            </div>
+          `).join("")}
+        </div>
+      </section>
+    `);
+  }
+
+  if (others.length > 0) {
+    sections.push(`
+      <section class="general-section">
+        <h3 class="section-title">Files <span class="section-count">${others.length}</span></h3>
+        ${renderFileList(others)}
+      </section>
+    `);
+  }
+
+  if (run.content) {
+    let prettyContent;
+    try { prettyContent = JSON.stringify(JSON.parse(run.content), null, 2); }
+    catch { prettyContent = run.content; }
+    sections.push(`
+      <details class="advanced-section">
+        <summary class="advanced-header">Event Content (JSON)</summary>
+        <div class="advanced-body">
+          <pre class="json-viewer-pre">${escapeHtml(prettyContent)}</pre>
+        </div>
+      </details>
+    `);
+  }
+
+  if (sections.length === 0) {
+    sections.push(`<p class="section-empty">No artifacts in this run.</p>`);
+  }
+
+  body.innerHTML = sections.join("");
+  wireGenericFileButtons(body);
+  lazyLoadScreenshots(body);
+}
+
+function wireGenericFileButtons(container) {
+  container.querySelectorAll(".html-view-btn").forEach((btn) => {
+    btn.addEventListener("click", () => openHtmlViewer(btn.dataset.url, btn.dataset.name));
+  });
+  container.querySelectorAll(".shot-thumb").forEach((img) => {
+    img.addEventListener("click", () => openLightbox(img.dataset.fullUrl, img.dataset.filename));
+  });
+}
+
 // ===========================================================================
 // HTML viewer modal
 // ===========================================================================
@@ -1683,6 +2296,25 @@ async function selectRun(run) {
   const body = view.querySelector(".detail-body");
   if (!body) return;
 
+  const project = getRunProject(run);
+
+  if (project === "fips") {
+    await renderFipsRun(view, run, myLoadId);
+    return;
+  }
+  if (project === "ble") {
+    await renderBleRun(view, run, myLoadId);
+    return;
+  }
+  if (project === "microfips") {
+    await renderMicrofipsRun(view, run, myLoadId);
+    return;
+  }
+  if (project === "unknown") {
+    await renderGenericFileBrowser(view, run, myLoadId);
+    return;
+  }
+
   if (summary && summary.tests) {
     const hierarchy = buildTestHierarchy(run, summary);
     if (hierarchy) {
@@ -1867,7 +2499,7 @@ function showGlobalError(message) {
 (async function init() {
   console.log("[PRTA] Initializing\u2026");
   console.log("[PRTA] Relays:", RELAYS);
-  console.log("[PRTA] Fetching kinds [5900, 6900, 7000, 1063] from all pubkeys");
+  console.log("[PRTA] Fetching [5900, 6900, 7000, 1063] DVM + [30078] run summaries from all pubkeys");
 
   const lb = document.getElementById("lightbox");
   lb.querySelector(".lightbox-backdrop").addEventListener("click", closeLightbox);
@@ -1927,14 +2559,19 @@ function showGlobalError(message) {
   }
 
   try {
-    const { events, connected } = await fetchDvmEvents([5900, 6900, 7000, 1063], 200);
+    const [dvmResult, k30078Events] = await Promise.all([
+      fetchDvmEvents([5900, 6900, 7000, 1063], 200),
+      fetchKind30078Events(200),
+    ]);
+    const { events, connected } = dvmResult;
 
     const n5900 = events.filter((e) => e.kind === 5900).length;
     const n6900 = events.filter((e) => e.kind === 6900).length;
     const n7000 = events.filter((e) => e.kind === 7000).length;
     const n1063 = events.filter((e) => e.kind === 1063).length;
     console.log("[PRTA] Connected to " + connected + "/" + RELAYS.length + " relays");
-    console.log("[PRTA] " + events.length + " events (5900: " + n5900 + ", 6900: " + n6900 + ", 7000: " + n7000 + ", 1063: " + n1063 + ")");
+    console.log("[PRTA] DVM events: " + events.length + " (5900: " + n5900 + ", 6900: " + n6900 + ", 7000: " + n7000 + ", 1063: " + n1063 + ")");
+    console.log("[PRTA] Kind 30078 events: " + k30078Events.length);
 
     const fileMeta = buildFileMeta(events);
     console.log("[PRTA] File metadata map: " + fileMeta.size + " entries");
@@ -1943,10 +2580,12 @@ function showGlobalError(message) {
       .filter((e) => e.kind === 7000)
       .map(parseFeedbackFromKind7000);
 
-    const freshRuns = dedupeDvmRuns(events, fileMeta, feedback);
-    console.log("[PRTA] " + freshRuns.length + " test runs");
+    const dvmRuns = dedupeDvmRuns(events, fileMeta, feedback);
+    const k30078Runs = dedupeKind30078Runs(k30078Events, fileMeta);
+    const freshRuns = [...dvmRuns, ...k30078Runs].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    console.log("[PRTA] " + freshRuns.length + " total runs (" + dvmRuns.length + " DVM, " + k30078Runs.length + " kind 30078)");
 
-    if (connected === 0 && events.length === 0) {
+    if (connected === 0 && events.length === 0 && k30078Events.length === 0) {
       if (!cached || cached.length === 0) {
         showGlobalError("Could not connect to any relay.");
       }
@@ -1954,8 +2593,8 @@ function showGlobalError(message) {
     }
 
     if (freshRuns.length > 0 || (!cached || cached.length === 0)) {
-      const freshIds = new Set(freshRuns.map((r) => r.runId));
-      const keptCached = (cached || []).filter((r) => !freshIds.has(r.runId));
+      const freshKeys = new Set(freshRuns.map((r) => r.runId + ":" + r.source));
+      const keptCached = (cached || []).filter((r) => !freshKeys.has(r.runId + ":" + (r.source || "dvm")));
       allRuns = [...freshRuns, ...keptCached];
       displayIdCache.clear();
       saveCachedRuns(allRuns);
