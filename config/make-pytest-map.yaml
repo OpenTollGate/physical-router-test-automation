@@ -310,3 +310,11 @@ arch-test-full:
   delegate: esp32 arch-test-full
   lock: hardware
   notes: Delegates to esp32 Makefile (Node tests)
+
+fips-exit-smoke:
+  pytest: tests/api/test_fips_exit_node.py
+  status: migrated
+  lock: none
+  markers: extended
+  timeout: 300
+  notes: FIPS exit-node VPS smoke (WireGuard + nft MASQUERADE + nostr advert); no router/hardware lock, SSHes to an external VPS via FIPS_EXIT_* env
