@@ -147,28 +147,34 @@ def run_target(target: str, args: argparse.Namespace) -> int:
 
     _banner(entry)
 
-    load_router_into_environ(args.router, env_subdir=entry.router_env)
-    if entry.requires and "secondary_router" in entry.requires:
-        secondary = resolve_secondary_for_two_router(args.router, entry.router_env)
-        if secondary:
-            load_router_into_environ(
-                args.router,
-                env_subdir=entry.router_env,
-                secondary_label=secondary,
-            )
+    # Router connection settings + hardware lock only apply to router/hardware
+    # targets. Targets with ``lock: none`` (e.g. fips-exit-smoke, which SSHes
+    # to an external FIPS exit-node VPS) must neither require a routers.env
+    # entry nor acquire a hardware lock.
+    if entry.lock == "hardware":
+        load_router_into_environ(args.router, env_subdir=entry.router_env)
+        if entry.requires and "secondary_router" in entry.requires:
+            secondary = resolve_secondary_for_two_router(args.router, entry.router_env)
+            if secondary:
+                load_router_into_environ(
+                    args.router,
+                    env_subdir=entry.router_env,
+                    secondary_label=secondary,
+                )
 
     apply_cli_overrides(ssid=args.ssid, password=args.password, mint=args.mint)
     _check_requires(entry, args)
 
     lock_held = False
     if entry.lock == "hardware":
+        # Surface the lock requirement to the pytest subprocess so its
+        # pytest_sessionstart enforces hardware.lock as well.
+        os.environ["TOLLGATE_USE_HARDWARE_LOCK"] = "1"
         if args.lock_phase:
             acquire_hardware_lock(args.lock_phase)
             lock_held = True
         else:
             require_hardware_lock()
-
-    os.environ["TOLLGATE_USE_HARDWARE_LOCK"] = "1"
 
     try:
         if entry.runner == "playwright":
