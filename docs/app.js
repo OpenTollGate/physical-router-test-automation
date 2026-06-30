@@ -1142,6 +1142,7 @@ function renderRunsList() {
       ${passFailBar(run)}
       <div class="run-card-meta">
         <span class="meta-chip meta-chip-project" style="--project-color: ${PROJECT_COLORS[getRunProject(run)] || "var(--text-dim)"}">${escapeHtml(PROJECT_LABELS[getRunProject(run)] || "?")}</span>
+        ${run.source === "dvm" ? `<span class="meta-chip meta-chip-legacy" title="Legacy NIP-90 DVM event">DVM</span>` : ""}
         ${run.router ? `<span class="meta-chip">${escapeHtml(run.router)}</span>` : ""}
         ${run.scenario ? `<span class="meta-chip">${escapeHtml(run.scenario)}</span>` : ""}
         ${run.branch ? `<span class="meta-chip meta-chip-branch">${escapeHtml(run.branch)}</span>` : ""}

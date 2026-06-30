@@ -2015,6 +2015,15 @@ footer a:hover { color: var(--accent); }
   font-weight: 600;
   text-transform: capitalize;
 }
+.meta-chip-legacy {
+  color: var(--text-dim);
+  background: var(--bg-elevated);
+  border-color: var(--border-light);
+  font-size: 9px;
+  opacity: 0.6;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
 
 /* ============================================================
    FIPS renderer: file nav + report viewer
