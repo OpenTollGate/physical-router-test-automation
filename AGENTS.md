@@ -13,8 +13,33 @@ This is a **multi-tier test framework** for [tollgate-module-basic-go](https://g
 
 **Where tests run:**
 - **Physical lab** — real routers on LAN, real phones, real WiFi.
-- **Cloud lab** — GCP nested-KVM (OpenWrt + Debian QEMU). API tests only, fire-and-forget.
+- **Cloud lab** — SHC or GCP nested-KVM (OpenWrt + Debian QEMU). API tests only, fire-and-forget.
 - **Virtual lab** — local QEMU + network namespaces. For development.
+
+### VM Provider Abstraction
+
+Tests run on any of four providers via `TOLLGATE_VM_PROVIDER` env var (default: `shc`):
+
+| Provider | Cost | Publishes results? | Use case |
+|----------|------|-------------------|----------|
+| `shc` | $0.01/run | ✅ Yes | Default cloud testing — cheapest, nested KVM |
+| `gcloud` | ~$0.10/run | ✅ Yes | GCP nested-KVM with baked snapshot |
+| `local` | Free | ❌ Never | Local QEMU development — privacy: local results only |
+| `physical` | Free | ❌ Never | Physical router — privacy: never publish real SSIDs/MACs/IPs |
+
+**Privacy control**: `can_publish` flag on `VMProvider`. Cloud providers (SHC, GCP) use ephemeral VMs with no real user data — safe to publish to tests.tollgate.me. Local/physical providers may contain real SSIDs, MACs, IPs, SSH keys — results stored in gitignored `results/` directory only. The privacy check is in `test-pr.sh` (line ~323) and gates `publish-report.sh`.
+
+```bash
+# Check if current provider allows publishing
+python3 scripts/provider.py can-publish -p shc    # exit 0 = yes
+python3 scripts/provider.py can-publish -p local   # exit 1 = no
+
+# Create/destroy VMs
+python3 scripts/provider.py create -p shc --name my-test
+python3 scripts/provider.py destroy -p shc --service-id 690
+```
+
+Provider implementations: `lib/cloud_lab/provider.py` (SHCProvider, GCPProvider, LocalProvider, PhysicalProvider).
 
 ## Architecture Overview
 

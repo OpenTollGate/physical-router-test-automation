@@ -321,11 +321,19 @@ python3 "$SCRIPT_DIR/collect-results.py" \
 echo "==> Rendering HTML report..."
 python3 "$SCRIPT_DIR/render-report.py" --run-dir "$RESULTS_DIR" || true
 
-# ── Publish report (if requested) ────────────────────────────────────────
+# ── Publish report (if requested and allowed by provider) ────────────────
 if [[ "$PUBLISH" == "true" ]]; then
-  echo ""
-  echo "==> Publishing report..."
-  "$SCRIPT_DIR/publish-report.sh" "$RESULTS_DIR" || true
+  # Privacy check: local/physical providers must not publish
+  # Results may contain real SSIDs, MACs, IPs, and SSH keys
+  if [[ "${TOLLGATE_VM_PROVIDER:-shc}" == "local" || "${TOLLGATE_VM_PROVIDER:-shc}" == "physical" ]]; then
+    echo ""
+    echo "==> Skipping publish: provider=${TOLLGATE_VM_PROVIDER} — privacy: results stored locally only"
+    echo "    Results in: $RESULTS_DIR (gitignored)"
+  else
+    echo ""
+    echo "==> Publishing report..."
+    "$SCRIPT_DIR/publish-report.sh" "$RESULTS_DIR" || true
+  fi
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────

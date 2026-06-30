@@ -34,9 +34,17 @@ class VMInfo:
 
 
 class VMProvider:
-    """Abstract interface for cloud lab VM lifecycle."""
+    """Abstract interface for cloud lab VM lifecycle.
+
+    Privacy: the ``can_publish`` property controls whether test results
+    may be published to Nostr/tests.tollgate.me. Cloud providers (SHC,
+    gcloud) use ephemeral VMs with no real user data — safe to publish.
+    Local and physical providers may contain real SSIDs, MACs, IPs, and
+    SSH keys — results must stay local (gitignored ``results/`` dir).
+    """
 
     provider_name: str = "base"
+    can_publish: bool = False
 
     def create_vm(
         self,
@@ -70,9 +78,9 @@ class VMProvider:
 
 
 class GCPProvider(VMProvider):
-    """GCP provider — wraps lib.cloud_lab.gcp functions."""
 
     provider_name = "gcloud"
+    can_publish = True
 
     def create_vm(self, name, machine_type="", disk_size_gb=0, startup_script=""):
         from lib.cloud_lab.gcp import vm_up, get_project
@@ -177,6 +185,7 @@ class SHCProvider(VMProvider):
     """SHC provider — uses the shc-toolkit for VM lifecycle."""
 
     provider_name = "shc"
+    can_publish = True
 
     _PACKAGE_MAP = {
         "n1-standard-2": (81, 245),
@@ -304,15 +313,186 @@ _PROVIDERS: dict[str, type[VMProvider]] = {
     "gcloud": GCPProvider,
     "gcp": GCPProvider,
     "shc": SHCProvider,
+    "local": None,  # populated below
+    "physical": None,  # populated below
 }
+
+
+class LocalProvider(VMProvider):
+    """Local KVM/QEMU provider — uses a VM already running on this machine.
+
+    Does NOT create or destroy VMs. The caller is responsible for starting
+    the QEMU VM (e.g., via scripts/virtual-lab.py) before tests run.
+
+    Privacy: can_publish=False — local VMs may contain real network
+    configs, SSIDs, and device MACs from the operator's environment.
+    Results are stored in the gitignored ``results/`` directory only.
+    """
+
+    provider_name = "local"
+    can_publish = False
+
+    def __init__(self):
+        self._host = os.environ.get("TOLLGATE_SSH_HOST", "192.168.1.1")
+        self._port = int(os.environ.get("TOLLGATE_SSH_PORT", "22"))
+        self._user = os.environ.get("TOLLGATE_SSH_USER", "root")
+
+    def create_vm(self, name="", **kwargs):
+        return VMInfo(
+            name=name or "local-vm",
+            service_id="local",
+            ip=self._host,
+            provider="local",
+        )
+
+    def wait_for_ready(self, vm, timeout=30):
+        import subprocess
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            r = subprocess.run(
+                ["ssh", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no",
+                 f"{self._user}@{vm.ip}", "echo READY"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0:
+                return vm
+            time.sleep(2)
+        raise TimeoutError(f"Local VM at {vm.ip} not reachable after {timeout}s")
+
+    def apply_ssh_key(self, vm, public_key):
+        pass  # Local VMs use pre-configured SSH keys
+
+    def ssh(self, vm, command, timeout=300):
+        import subprocess
+        cmd = ["ssh", "-o", "StrictHostKeyChecking=no",
+               f"{self._user}@{vm.ip}", command]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if r.returncode != 0:
+            raise RuntimeError(f"SSH failed: {r.stderr}")
+        return r.stdout
+
+    def scp_upload(self, vm, local_path, remote_path):
+        import subprocess
+        subprocess.run(
+            ["scp", "-O", "-o", "StrictHostKeyChecking=no",
+             local_path, f"{self._user}@{vm.ip}:{remote_path}"],
+            check=True, timeout=120,
+        )
+
+    def destroy_vm(self, vm, immediate=True):
+        pass  # Caller manages local VM lifecycle
+
+    def list_vms(self):
+        return [VMInfo(name="local-vm", service_id="local", ip=self._host, provider="local")]
+
+    def cleanup_stale(self, max_age_hours=2):
+        return 0  # No cloud cleanup needed
+
+
+class PhysicalProvider(VMProvider):
+    """Physical router provider — connects to an existing physical router.
+
+    No VM lifecycle at all. Tests run directly against a physical OpenWrt
+    device via SSH. The router must be powered on and reachable.
+
+    Privacy: can_publish=False — physical routers contain the operator's
+    real network configuration, SSIDs, MAC addresses, and potentially
+    SSH keys or passwords. Results NEVER leave the local machine.
+    """
+
+    provider_name = "physical"
+    can_publish = False
+
+    def __init__(self):
+        self._host = os.environ.get("TOLLGATE_SSH_HOST") or os.environ.get("ROUTER_IP", "192.168.1.1")
+        self._user = os.environ.get("TOLLGATE_SSH_USER", "root")
+        self._port = int(os.environ.get("TOLLGATE_SSH_PORT", "22"))
+        self._key = os.environ.get("TOLLGATE_SSH_KEY")
+        self._jump = os.environ.get("TOLLGATE_JUMP_HOST")
+
+    def create_vm(self, name="", **kwargs):
+        return VMInfo(
+            name=name or "physical-router",
+            service_id="physical",
+            ip=self._host,
+            provider="physical",
+        )
+
+    def wait_for_ready(self, vm, timeout=30):
+        import subprocess
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            ssh_cmd = ["ssh", "-o", f"ConnectTimeout=3", "-o", "StrictHostKeyChecking=no"]
+            if self._key:
+                ssh_cmd.extend(["-i", self._key])
+            if self._port != 22:
+                ssh_cmd.extend(["-p", str(self._port)])
+            if self._jump:
+                ssh_cmd.extend(["-J", self._jump])
+            ssh_cmd.extend([f"{self._user}@{vm.ip}", "echo READY"])
+            r = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=5)
+            if r.returncode == 0:
+                return vm
+            time.sleep(2)
+        raise TimeoutError(f"Physical router at {vm.ip} not reachable after {timeout}s")
+
+    def apply_ssh_key(self, vm, public_key):
+        pass  # Physical routers use pre-installed keys
+
+    def ssh(self, vm, command, timeout=300):
+        import subprocess
+        cmd = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if self._key:
+            cmd.extend(["-i", self._key])
+        if self._port != 22:
+            cmd.extend(["-p", str(self._port)])
+        if self._jump:
+            cmd.extend(["-J", self._jump])
+        cmd.extend([f"{self._user}@{vm.ip}", command])
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if r.returncode != 0:
+            raise RuntimeError(f"SSH failed: {r.stderr}")
+        return r.stdout
+
+    def scp_upload(self, vm, local_path, remote_path):
+        import subprocess
+        cmd = ["scp", "-O", "-o", "StrictHostKeyChecking=no"]
+        if self._key:
+            cmd.extend(["-i", self._key])
+        if self._port != 22:
+            cmd.extend(["-P", str(self._port)])
+        if self._jump:
+            cmd.extend(["-J", self._jump])
+        cmd.extend([local_path, f"{self._user}@{vm.ip}:{remote_path}"])
+        subprocess.run(cmd, check=True, timeout=120)
+
+    def destroy_vm(self, vm, immediate=True):
+        pass  # Never power off a physical router
+
+    def list_vms(self):
+        return [VMInfo(name="physical-router", service_id="physical", ip=self._host, provider="physical")]
+
+    def cleanup_stale(self, max_age_hours=2):
+        return 0  # No cleanup for physical routers
+
+
+_PROVIDERS["local"] = LocalProvider
+_PROVIDERS["physical"] = PhysicalProvider
 
 
 def get_provider(provider_name: str | None = None) -> VMProvider:
     """Get the configured VM provider.
 
-    Reads TOLLGATE_VM_PROVIDER env var (default: gcloud).
+    Reads TOLLGATE_VM_PROVIDER env var. Supported providers:
+
+    - ``shc`` — Sovereign Hybrid Compute (ephemeral cloud VM, can_publish=True)
+    - ``gcloud`` — Google Cloud Platform (ephemeral cloud VM, can_publish=True)
+    - ``local`` — Local QEMU/KVM VM (privacy: results local only)
+    - ``physical`` — Physical router via SSH (privacy: results local only)
+
+    Default: ``shc`` (cheapest, proven in testing).
     """
-    name = (provider_name or os.environ.get("TOLLGATE_VM_PROVIDER", "gcloud")).lower()
+    name = (provider_name or os.environ.get("TOLLGATE_VM_PROVIDER", "shc")).lower()
     cls = _PROVIDERS.get(name)
     if cls is None:
         raise ValueError(
