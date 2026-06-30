@@ -1198,20 +1198,30 @@ function processImageQueue() {
   while (activeImgLoads < MAX_CONCURRENT_IMG_LOADS && imgLoadQueue.length > 0) {
     const img = imgLoadQueue.shift();
     activeImgLoads++;
+    const url = img.dataset.src;
 
-    img.addEventListener("load", () => {
-      img.classList.add("loaded");
-      activeImgLoads--;
-      processImageQueue();
-    }, { once: true });
+    fetch(url)
+      .then((r) => { if (!r.ok) throw new Error(r.status); return r.blob(); })
+      .then((blob) => {
+        const objUrl = URL.createObjectURL(blob);
+        img.addEventListener("load", () => {
+          img.classList.add("loaded");
+          activeImgLoads--;
+          processImageQueue();
+        }, { once: true });
+        img.addEventListener("error", () => {
+          img.parentElement.classList.add("shot-error");
+          activeImgLoads--;
+          processImageQueue();
+        }, { once: true });
+        img.src = objUrl;
+      })
+      .catch(() => {
+        img.parentElement.classList.add("shot-error");
+        activeImgLoads--;
+        processImageQueue();
+      });
 
-    img.addEventListener("error", () => {
-      img.parentElement.classList.add("shot-error");
-      activeImgLoads--;
-      processImageQueue();
-    }, { once: true });
-
-    img.src = img.dataset.src;
     img.removeAttribute("data-src");
   }
 }
@@ -1878,7 +1888,10 @@ async function showFipsFile(file, viewer, myLoadId) {
       viewer.innerHTML = `<pre class="json-viewer-pre">${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
 
     } else if (["gif", "png", "jpg", "jpeg", "svg", "webp"].includes(ext)) {
-      viewer.innerHTML = `<div class="fips-image-viewer"><img src="${escapeHtml(file.url)}" alt="${escapeHtml(name)}"></div>`;
+      viewer.innerHTML = `<div class="fips-image-viewer"><img alt="${escapeHtml(name)}"></div>`;
+      fetch(file.url).then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); })
+        .then(blob => { const u = URL.createObjectURL(blob); viewer.querySelector("img").src = u; })
+        .catch(() => { viewer.querySelector("img").alt = "Failed to load"; });
 
     } else if (["log", "txt", "env", "yaml", "yml", "md", "csv"].includes(ext) || name === "DONE") {
       const resp = await fetch(file.url);
