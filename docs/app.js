@@ -28,6 +28,9 @@ const RELAYS = [
   "wss://relay.cashu.email",
   "wss://relay.damus.io",
   "wss://nos.lol",
+  "wss://relay.contextvm.org",
+  "wss://relay2.contextvm.org",
+  "wss://cvm.otherstuff.ai",
 ];
 const FETCH_TIMEOUT_MS = 12000;
 const FETCH_SINCE_DAYS = 90;
@@ -41,7 +44,7 @@ const MAX_CONCURRENT_IMG_LOADS = 3;
 const imgLoadQueue = [];
 
 const CACHE_KEY = "prta:runs:v6";
-const filterState = { search: "", status: "all", sort: "newest", runner: "", project: "all" };
+const filterState = { search: "", status: "all", sort: "newest", runner: "", project: "ours" };
 let detailLoadId = 0;
 let currentTestFilter = "all";
 let currentTestSearch = "";
@@ -906,7 +909,14 @@ function getFilteredRuns() {
   let runs = allRuns.slice();
 
   if (filterState.project && filterState.project !== "all") {
-    runs = runs.filter((r) => getRunProject(r) === filterState.project);
+    if (filterState.project === "ours") {
+      runs = runs.filter((r) => {
+        const p = getRunProject(r);
+        return p === "tollgate" || p === "fips" || p === "ble" || p === "microfips";
+      });
+    } else {
+      runs = runs.filter((r) => getRunProject(r) === filterState.project);
+    }
   }
 
   if (filterState.runner) {
@@ -991,11 +1001,12 @@ function buildSidebar() {
   aside.innerHTML = `
     <div class="sidebar-controls">
       <div class="project-tabs" id="project-tabs">
-        <button class="project-tab active" data-project="all" type="button">All</button>
+        <button class="project-tab active" data-project="ours" type="button">Our Projects</button>
         <button class="project-tab" data-project="tollgate" type="button">Tollgate</button>
         <button class="project-tab" data-project="fips" type="button">FIPS</button>
         <button class="project-tab" data-project="ble" type="button">BLE</button>
         <button class="project-tab" data-project="microfips" type="button">Microfips</button>
+        <button class="project-tab project-tab-secondary" data-project="all" type="button">All Nostr</button>
       </div>
       <input type="text" id="search-input" class="search-input" placeholder="Search runs\u2026" autocomplete="off" />
       <div class="filter-toggles">
@@ -2494,6 +2505,732 @@ function showGlobalError(message) {
 }
 
 // ===========================================================================
+// View switching: Test Runs / CVM Jobs / CVM Services
+// ===========================================================================
+
+const BACK_ARROW_SVG = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>`;
+
+let currentView = "runs";
+
+const CVM_JOBS_CACHE_KEY = "prta:cvm-jobs:v1";
+const CVM_JOBS_MAX = 200;
+let cvmJobs = [];
+let cvmJobsById = new Map();
+let cvmJobsSockets = [];
+let cvmJobsConnected = 0;
+let cvmJobsSubStarted = false;
+let cvmJobsRenderTimer = null;
+let selectedJobId = null;
+const cvmJobsFilter = { search: "", dir: "all" };
+
+let cvmServices = new Map();
+let cvmServicesFetched = false;
+let selectedServicePubkey = null;
+
+function switchView(view) {
+  if (view === currentView) return;
+  currentView = view;
+
+  document.querySelectorAll(".view-toggle-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.view === view);
+  });
+
+  const main = document.querySelector("main");
+  const aside = document.getElementById("runs-list");
+  document.getElementById("app").classList.remove("mobile-view-detail");
+
+  if (view === "runs") {
+    main.classList.remove("view-services");
+    aside.style.display = "";
+    buildSidebar();
+    renderRunsList();
+    const sel = allRuns.find((r) => r.runId === selectedRunId);
+    if (sel) selectRun(sel);
+    else selectRunFromHash();
+  } else if (view === "jobs") {
+    main.classList.remove("view-services");
+    aside.style.display = "";
+    buildCvmJobsSidebar();
+    startCvmJobsSubscription();
+    renderCvmJobsList();
+    showCvmJobsPlaceholder();
+  } else if (view === "services") {
+    main.classList.add("view-services");
+    aside.style.display = "none";
+    fetchCvmServices();
+  }
+}
+
+// ===========================================================================
+// JSON viewer (renderJson) — shared by CVM Jobs + Services
+// ===========================================================================
+
+const jvDataStore = new Map();
+
+function renderJson(obj) {
+  const id = "jv-" + Math.random().toString(36).slice(2, 10);
+  let pretty;
+  try { pretty = JSON.stringify(obj, null, 2); } catch (e) { pretty = String(obj); }
+  jvDataStore.set(id, pretty);
+  return `<div class="json-viewer"><button class="jv-copy" type="button" data-jv="${id}">Copy</button><div class="jv-root">${jsonValueHtml(obj, 0)}</div></div>`;
+}
+
+function jsonValueHtml(val, depth) {
+  if (val === null) return `<span class="jv-null">null</span>`;
+  if (typeof val === "boolean") return `<span class="jv-bool">${val}</span>`;
+  if (typeof val === "number") return `<span class="jv-num">${val}</span>`;
+  if (typeof val === "string") return jvStr(val);
+  if (Array.isArray(val)) {
+    if (val.length === 0) return `<span class="jv-bracket">[]</span>`;
+    return jsonArrayHtml(val, depth);
+  }
+  if (typeof val === "object") {
+    const keys = Object.keys(val);
+    if (keys.length === 0) return `<span class="jv-bracket">{}</span>`;
+    return jsonObjectHtml(val, keys, depth);
+  }
+  return escapeHtml(String(val));
+}
+
+function jvStr(s) {
+  const max = 280;
+  let d = s;
+  if (s.length > max) d = s.slice(0, max) + "\u2026 [" + s.length + " chars]";
+  return `<span class="jv-str">"${escapeHtml(d)}"</span>`;
+}
+
+function jsonObjectHtml(obj, keys, depth) {
+  const items = keys.map((k, i) => {
+    const comma = i < keys.length - 1 ? `<span class="jv-colon">,</span>` : "";
+    return `<div class="jv-line"><span class="jv-key">"${escapeHtml(k)}"</span><span class="jv-colon">: </span>${jsonValueHtml(obj[k], depth + 1)}${comma}</div>`;
+  }).join("");
+  const openAttr = depth < 2 ? " open" : "";
+  return `<details class="jv-block"${openAttr}><summary class="jv-summary">{<span class="jv-bracket"> ${keys.length} key${keys.length !== 1 ? "s" : ""}</span>}</summary><div class="jv-content">${items}<div class="jv-line"><span class="jv-bracket">}</span></div></div></details>`;
+}
+
+function jsonArrayHtml(arr, depth) {
+  const items = arr.map((v, i) => {
+    const comma = i < arr.length - 1 ? `<span class="jv-colon">,</span>` : "";
+    return `<div class="jv-line"><span class="jv-colon">${i}: </span>${jsonValueHtml(v, depth + 1)}${comma}</div>`;
+  }).join("");
+  const openAttr = depth < 2 ? " open" : "";
+  return `<details class="jv-block"${openAttr}><summary class="jv-summary">[<span class="jv-bracket"> ${arr.length} </span>]</summary><div class="jv-content">${items}<div class="jv-line"><span class="jv-bracket">]</span></div></div></details>`;
+}
+
+// ===========================================================================
+// CVM Jobs — kind 25910 (ephemeral MCP JSON-RPC) live feed
+// ===========================================================================
+
+function dirArrow(d) {
+  return d === "request" ? "\u2192" : d === "response" ? "\u2190" : "\u2022";
+}
+
+function parseCvmJob(event) {
+  const tags = event.tags || [];
+  let payload = null;
+  try { payload = JSON.parse(event.content || "{}"); } catch (e) { /* non-JSON */ }
+  const serverPubkey = getTag(tags, "p");
+  const correlationId = getTag(tags, "e");
+  let direction = "unknown";
+  let method = null;
+  if (payload) {
+    if (payload.method) {
+      direction = "request";
+      method = payload.method;
+    } else if ("result" in payload || "error" in payload) {
+      direction = "response";
+    }
+  }
+  let toolName = null;
+  if (payload && payload.params) {
+    if (typeof payload.params.name === "string") toolName = payload.params.name;
+    else if (typeof payload.params === "string") toolName = payload.params;
+  }
+  return {
+    requestId: event.id,
+    timestamp: event.created_at,
+    direction,
+    method,
+    toolName,
+    serverPubkey,
+    correlationId,
+    payload,
+    raw: event,
+  };
+}
+
+function startCvmJobsSubscription() {
+  if (cvmJobsSubStarted) return;
+  cvmJobsSubStarted = true;
+
+  try {
+    const cached = JSON.parse(localStorage.getItem(CVM_JOBS_CACHE_KEY) || "[]");
+    if (Array.isArray(cached)) {
+      cvmJobs = cached.slice(0, CVM_JOBS_MAX);
+      cvmJobsById = new Map(cvmJobs.map((j) => [j.requestId, j]));
+    }
+  } catch (e) { /* ignore */ }
+
+  cvmJobsSockets = [];
+  cvmJobsConnected = 0;
+
+  RELAYS.forEach((relayUrl) => {
+    let ws;
+    try { ws = new WebSocket(relayUrl); } catch (e) { return; }
+    const subId = "cvm-jobs-" + Math.random().toString(36).slice(2, 8);
+
+    ws.onopen = () => {
+      cvmJobsSockets.push(ws);
+      cvmJobsConnected++;
+      updateCvmJobsLive();
+      ws.send(JSON.stringify(["REQ", subId, { kinds: [25910], limit: 100 }]));
+    };
+
+    ws.onmessage = (msg) => {
+      try {
+        const data = JSON.parse(msg.data);
+        if (data[0] === "EVENT" && data[2] && data[2].kind === 25910) {
+          handleCvmJobEvent(data[2]);
+        }
+      } catch (e) { /* ignore */ }
+    };
+
+    ws.onerror = () => { try { ws.close(); } catch (e) {} };
+    ws.onclose = () => {
+      const i = cvmJobsSockets.indexOf(ws);
+      if (i >= 0) cvmJobsSockets.splice(i, 1);
+      cvmJobsConnected = Math.max(0, cvmJobsConnected - 1);
+      updateCvmJobsLive();
+    };
+  });
+}
+
+function handleCvmJobEvent(event) {
+  if (cvmJobsById.has(event.id)) return;
+  const job = parseCvmJob(event);
+  cvmJobs.unshift(job);
+  cvmJobsById.set(event.id, job);
+  while (cvmJobs.length > CVM_JOBS_MAX) {
+    const removed = cvmJobs.pop();
+    cvmJobsById.delete(removed.requestId);
+  }
+  saveCvmJobsCache();
+  scheduleCvmJobsRender();
+}
+
+function scheduleCvmJobsRender() {
+  if (cvmJobsRenderTimer) return;
+  cvmJobsRenderTimer = setTimeout(() => {
+    cvmJobsRenderTimer = null;
+    if (currentView === "jobs") renderCvmJobsList();
+  }, 250);
+}
+
+function saveCvmJobsCache() {
+  try {
+    localStorage.setItem(CVM_JOBS_CACHE_KEY, JSON.stringify(cvmJobs.slice(0, CVM_JOBS_MAX)));
+  } catch (e) { /* quota */ }
+}
+
+function updateCvmJobsLive() {
+  const el = document.getElementById("cvm-jobs-live");
+  if (!el) return;
+  const txt = el.querySelector(".live-text");
+  if (cvmJobsConnected > 0) {
+    el.className = "live-indicator live";
+    el.title = "Live \u2014 " + cvmJobsConnected + "/" + RELAYS.length + " relays";
+    if (txt) txt.textContent = "Live";
+  } else {
+    el.className = "live-indicator idle";
+    el.title = "Connecting\u2026";
+    if (txt) txt.textContent = "Connecting\u2026";
+  }
+}
+
+function buildCvmJobsSidebar() {
+  const aside = document.getElementById("runs-list");
+  aside.innerHTML = `
+    <div class="sidebar-controls">
+      <div class="cvm-live-bar">
+        <span id="cvm-jobs-live" class="live-indicator idle"><span class="live-dot"></span><span class="live-text">Connecting\u2026</span></span>
+        <span id="cvm-jobs-count" class="cvm-count">0 events</span>
+      </div>
+      <input type="text" id="cvm-jobs-search" class="search-input" placeholder="Filter by method or server\u2026" autocomplete="off" />
+      <div class="filter-toggles">
+        <button class="filter-btn active" data-jfilter="all" type="button">All</button>
+        <button class="filter-btn" data-jfilter="request" type="button">Requests \u2192</button>
+        <button class="filter-btn" data-jfilter="response" type="button">Responses \u2190</button>
+      </div>
+    </div>
+    <div class="runs-scroll" id="cvm-jobs-scroll"></div>
+  `;
+
+  const search = document.getElementById("cvm-jobs-search");
+  if (search) {
+    let t = null;
+    search.addEventListener("input", (e) => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        cvmJobsFilter.search = e.target.value.toLowerCase().trim();
+        renderCvmJobsList();
+      }, 200);
+    });
+  }
+
+  aside.querySelectorAll(".filter-btn[data-jfilter]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      aside.querySelectorAll(".filter-btn[data-jfilter]").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      cvmJobsFilter.dir = btn.dataset.jfilter;
+      renderCvmJobsList();
+    });
+  });
+
+  updateCvmJobsLive();
+}
+
+function renderCvmJobsList() {
+  const container = document.getElementById("cvm-jobs-scroll");
+  if (!container) return;
+  const countEl = document.getElementById("cvm-jobs-count");
+
+  let jobs = cvmJobs.slice();
+  if (cvmJobsFilter.dir !== "all") jobs = jobs.filter((j) => j.direction === cvmJobsFilter.dir);
+  if (cvmJobsFilter.search) {
+    const q = cvmJobsFilter.search;
+    jobs = jobs.filter((j) => {
+      const hay = [
+        j.method, j.toolName, j.serverPubkey,
+        j.serverPubkey ? shortNpub(j.serverPubkey) : "",
+      ].filter(Boolean).join(" ").toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
+  if (countEl) countEl.textContent = jobs.length + " event" + (jobs.length !== 1 ? "s" : "");
+  container.innerHTML = "";
+
+  if (jobs.length === 0) {
+    const live = cvmJobs.length > 0;
+    container.innerHTML = `<div class="no-match">${live ? "No events match your filters." : "Waiting for events\u2026"}<span class="hint">Live kind 25910 MCP JSON-RPC feed.<br>Events accumulate in memory as they arrive.</span></div>`;
+    return;
+  }
+
+  jobs.forEach((job, i) => {
+    const card = document.createElement("div");
+    card.className = "cvm-job-item";
+    card.dataset.jobId = job.requestId;
+    if (job.requestId === selectedJobId) card.classList.add("active");
+    if (i < 10) card.style.animationDelay = (i * 25) + "ms";
+    else { card.style.animationDelay = "0ms"; card.style.animationDuration = "0s"; }
+
+    const label = job.method
+      ? (job.toolName ? `${job.method}: ${job.toolName}` : job.method)
+      : (job.direction === "response" ? "response" : "event");
+
+    card.innerHTML = `
+      <div class="cvm-job-top">
+        <span class="cvm-dir cvm-dir-${job.direction}" title="${escapeHtml(job.direction)}">${dirArrow(job.direction)}</span>
+        <span class="cvm-method" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+      </div>
+      <div class="cvm-job-meta">
+        <span class="cvm-job-pubkey" title="${escapeHtml(job.serverPubkey || "")}">${job.serverPubkey ? escapeHtml(shortNpub(job.serverPubkey)) : "\u2014"}</span>
+        <span class="cvm-job-time">${escapeHtml(formatRelative(job.timestamp))}</span>
+      </div>
+    `;
+
+    card.addEventListener("click", () => selectCvmJob(job.requestId));
+    container.appendChild(card);
+  });
+}
+
+function showCvmJobsPlaceholder() {
+  const view = document.getElementById("run-view");
+  view.innerHTML = `
+    <div class="empty-state">
+      <div class="empty-icon empty-icon-arrow">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 12h16M14 6l6 6-6 6"/>
+        </svg>
+      </div>
+      <p class="empty-title">Select a CVM job</p>
+      <p class="hint">Live kind 25910 MCP JSON-RPC feed.<br>Click an event to inspect its payload, params and correlated response.</p>
+    </div>
+  `;
+}
+
+function renderCvmJobResultMedia(payload) {
+  if (!payload) return "";
+  const result = payload.result;
+  if (!result) return "";
+  const content = Array.isArray(result.content)
+    ? result.content
+    : (Array.isArray(result) ? result : null);
+  if (!content) return "";
+
+  const parts = [];
+  for (const item of content) {
+    if (!item || typeof item !== "object") continue;
+    if (item.type === "image" && item.data) {
+      const mime = item.mimeType || item.mime || "image/png";
+      parts.push(`<div class="cvm-result-media"><img alt="result image" src="data:${escapeHtml(mime)};base64,${escapeHtml(item.data)}"></div>`);
+    } else if (item.type === "text" && item.text != null) {
+      parts.push(`<div class="cvm-result-text">${escapeHtml(item.text)}</div>`);
+    } else if (item.type === "resource" && item.resource && item.resource.text != null) {
+      parts.push(`<div class="cvm-result-text">${escapeHtml(item.resource.text)}</div>`);
+    }
+  }
+  return parts.join("");
+}
+
+function selectCvmJob(jobId) {
+  selectedJobId = jobId;
+  const job = cvmJobsById.get(jobId);
+  document.querySelectorAll(".cvm-job-item").forEach((el) => el.classList.toggle("active", el.dataset.jobId === jobId));
+
+  const view = document.getElementById("run-view");
+  view.scrollTop = 0;
+
+  if (window.innerWidth <= 768) document.getElementById("app").classList.add("mobile-view-detail");
+
+  if (!job) {
+    view.innerHTML = `<div class="empty-state"><p class="empty-title">Job not found</p></div>`;
+    return;
+  }
+
+  const payload = job.payload || {};
+
+  let correlated = null;
+  if (job.direction === "response") {
+    if (job.correlationId) correlated = cvmJobsById.get(job.correlationId) || null;
+    if (!correlated && payload && payload.id != null) {
+      correlated = cvmJobs.find((j) => j.direction === "request" && j.payload && j.payload.id === payload.id) || null;
+    }
+  } else if (job.direction === "request") {
+    if (job.correlationId) correlated = cvmJobsById.get(job.correlationId) || null;
+    if (!correlated) correlated = cvmJobs.find((j) => j.correlationId === job.requestId) || null;
+  }
+
+  const metaItems = [];
+  metaItems.push(metaItem("Direction", escapeHtml(job.direction)));
+  if (job.method) metaItems.push(metaItem("Method", escapeHtml(job.method)));
+  if (job.toolName) metaItems.push(metaItem("Tool", escapeHtml(job.toolName)));
+  if (job.serverPubkey) metaItems.push(metaItem("Server", `<code class="runner-code">${escapeHtml(shortNpub(job.serverPubkey))}</code>`));
+  if (job.correlationId) metaItems.push(metaItem("Correlation", `<code>${escapeHtml(job.correlationId.slice(0, 16))}\u2026</code>`));
+  metaItems.push(metaItem("Time", escapeHtml(formatTimestamp(job.timestamp))));
+
+  const titleText = job.method
+    ? (job.toolName ? `${job.method}: ${job.toolName}` : job.method)
+    : (job.direction === "response" ? "Response" : "Event");
+
+  view.innerHTML = `
+    <div class="cvm-detail-header">
+      <button id="cvm-back" class="back-to-list" type="button" aria-label="Back to jobs">${BACK_ARROW_SVG}<span>Jobs</span></button>
+      <div class="detail-titles">
+        <div class="detail-run">
+          <span class="cvm-dir cvm-dir-${job.direction}">${dirArrow(job.direction)}</span>
+          <span class="run-id-lg">${escapeHtml(titleText)}</span>
+        </div>
+      </div>
+      <div class="detail-meta-grid">${metaItems.join("")}</div>
+      <div class="detail-links">
+        <a href="https://njump.me/${escapeHtml(job.requestId)}" target="_blank" class="detail-link" rel="noopener">Nostr event \u2197</a>
+      </div>
+    </div>
+    <div class="cvm-detail">
+      ${renderCvmJobResultMedia(payload)}
+      ${correlated ? `<div class="section-title">Correlated ${escapeHtml(correlated.direction)} <span class="section-count">${escapeHtml(correlated.method || "")}</span></div>${renderJson(correlated.payload || {})}` : ""}
+      <div class="section-title">JSON-RPC Payload</div>
+      ${renderJson(payload)}
+      <div class="section-title" style="margin-top:24px">Raw Event</div>
+      ${renderJson(job.raw)}
+    </div>
+  `;
+
+  const back = view.querySelector("#cvm-back");
+  if (back) {
+    back.addEventListener("click", () => {
+      document.getElementById("app").classList.remove("mobile-view-detail");
+      selectedJobId = null;
+      document.querySelectorAll(".cvm-job-item").forEach((el) => el.classList.remove("active"));
+    });
+  }
+}
+
+// ===========================================================================
+// CVM Services — kind 11316 (server directory)
+// ===========================================================================
+
+function parseCvmService(event) {
+  let info = {};
+  try { info = JSON.parse(event.content || "{}"); } catch (e) { /* non-JSON */ }
+  const name = info.name || info.server_name || info.serverName || shortNpub(event.pubkey);
+  const description = info.description || info.about || info.summary || "";
+  return {
+    pubkey: event.pubkey,
+    name,
+    description,
+    info,
+    timestamp: event.created_at,
+    raw: event,
+  };
+}
+
+function fetchCvmServices() {
+  renderCvmServicesLoading();
+  if (cvmServicesFetched) { renderCvmServicesGrid(); return; }
+
+  const events = new Map();
+  let closed = 0;
+  let resolved = false;
+
+  const finish = () => {
+    if (resolved) return;
+    resolved = true;
+    for (const evt of events.values()) {
+      cvmServices.set(evt.pubkey, parseCvmService(evt));
+    }
+    cvmServicesFetched = true;
+    if (currentView === "services") renderCvmServicesGrid();
+  };
+
+  const timeout = setTimeout(finish, FETCH_TIMEOUT_MS);
+
+  RELAYS.forEach((relayUrl) => {
+    let ws;
+    try { ws = new WebSocket(relayUrl); } catch (e) { closed++; checkDone(); return; }
+    const subId = "cvm-svc-" + Math.random().toString(36).slice(2, 8);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify(["REQ", subId, { kinds: [11316] }]));
+    };
+
+    ws.onmessage = (msg) => {
+      try {
+        const data = JSON.parse(msg.data);
+        if (data[0] === "EVENT" && data[2] && data[2].kind === 11316) {
+          const evt = data[2];
+          const ex = events.get(evt.pubkey);
+          if (!ex || evt.created_at > ex.created_at) events.set(evt.pubkey, evt);
+        } else if (data[0] === "EOSE" && data[1] === subId) {
+          ws.send(JSON.stringify(["CLOSE", subId]));
+          ws.close();
+        }
+      } catch (e) { /* ignore */ }
+    };
+
+    ws.onerror = () => { try { ws.close(); } catch (e) {} };
+    ws.onclose = () => { closed++; checkDone(); };
+  });
+
+  function checkDone() {
+    if (closed >= RELAYS.length && !resolved) {
+      clearTimeout(timeout);
+      finish();
+    }
+  }
+}
+
+function renderCvmServicesLoading() {
+  const view = document.getElementById("run-view");
+  view.innerHTML = `
+    <div class="empty-state">
+      <div class="connecting">
+        <div class="spinner"></div>
+        <p>Discovering CVM services\u2026</p>
+      </div>
+    </div>
+  `;
+}
+
+function renderCvmServicesGrid() {
+  const view = document.getElementById("run-view");
+  view.scrollTop = 0;
+  const services = [...cvmServices.values()].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+  if (services.length === 0) {
+    view.innerHTML = `
+      <div class="empty-state">
+        <p class="empty-title">No CVM services found</p>
+        <p class="hint">Waiting for kind 11316 server announcements from relays.</p>
+      </div>
+    `;
+    return;
+  }
+
+  view.innerHTML = `
+    <div class="cvm-services-wrap">
+      <div class="cvm-services-header">
+        <h2>ContextVM Services</h2>
+        <p>${services.length} server${services.length !== 1 ? "s" : ""} discovered \u00b7 kind 11316</p>
+      </div>
+      <div class="cvm-services-grid">
+        ${services.map((s) => `
+          <div class="cvm-service-card" data-pubkey="${escapeHtml(s.pubkey)}">
+            <div class="cvm-service-name">${escapeHtml(s.name)}</div>
+            ${s.description ? `<div class="cvm-service-desc">${escapeHtml(s.description)}</div>` : ""}
+            <div class="cvm-service-foot">
+              <span class="cvm-service-pubkey" title="${escapeHtml(s.pubkey)}">${escapeHtml(shortNpub(s.pubkey))}</span>
+              <span class="cvm-service-pubkey">${escapeHtml(formatRelative(s.timestamp))}</span>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+
+  view.querySelectorAll(".cvm-service-card").forEach((card) => {
+    card.addEventListener("click", () => selectCvmService(card.dataset.pubkey));
+  });
+}
+
+function selectCvmService(pubkey) {
+  selectedServicePubkey = pubkey;
+  const svc = cvmServices.get(pubkey);
+  if (!svc) return;
+
+  const view = document.getElementById("run-view");
+  view.scrollTop = 0;
+  if (window.innerWidth <= 768) document.getElementById("app").classList.add("mobile-view-detail");
+
+  const metaItems = [];
+  metaItems.push(metaItem("Pubkey", `<code class="runner-code">${escapeHtml(shortNpub(pubkey))}</code>`));
+  if (svc.description) metaItems.push(metaItem("Description", escapeHtml(svc.description)));
+  metaItems.push(metaItem("Last seen", escapeHtml(formatRelative(svc.timestamp))));
+  metaItems.push(metaItem("Announced", escapeHtml(formatTimestamp(svc.timestamp))));
+
+  view.innerHTML = `
+    <div class="cvm-detail-header">
+      <button id="cvm-svc-back" class="back-to-list" type="button" aria-label="Back to services">${BACK_ARROW_SVG}<span>Services</span></button>
+      <div class="detail-titles">
+        <div class="detail-run">
+          <span class="run-id-lg">${escapeHtml(svc.name)}</span>
+        </div>
+      </div>
+      <div class="detail-meta-grid">${metaItems.join("")}</div>
+    </div>
+    <div class="cvm-detail">
+      <div id="cvm-svc-extra" class="section-empty">Loading tools, resources and relays\u2026</div>
+      <div class="section-title" style="margin-top:24px">Server Info</div>
+      ${renderJson(svc.info)}
+      <div class="section-title" style="margin-top:24px">Raw Event</div>
+      ${renderJson(svc.raw)}
+    </div>
+  `;
+
+  const back = view.querySelector("#cvm-svc-back");
+  if (back) {
+    back.addEventListener("click", () => {
+      document.getElementById("app").classList.remove("mobile-view-detail");
+      selectedServicePubkey = null;
+      renderCvmServicesGrid();
+    });
+  }
+
+  fetchCvmServiceExtra(pubkey);
+}
+
+function fetchCvmServiceExtra(pubkey) {
+  const got = { tools: null, resources: null, relays: null };
+  let closed = 0;
+  let done = false;
+
+  const finish = () => {
+    if (done) return;
+    done = true;
+    renderCvmServiceExtra(got);
+  };
+  const timeout = setTimeout(finish, 9000);
+
+  RELAYS.forEach((relayUrl) => {
+    let ws;
+    try { ws = new WebSocket(relayUrl); } catch (e) { closed++; checkDone(); return; }
+    const subId = "cvm-extra-" + Math.random().toString(36).slice(2, 8);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify(["REQ", subId, { kinds: [11317, 11318, 10002], authors: [pubkey] }]));
+    };
+
+    ws.onmessage = (msg) => {
+      try {
+        const data = JSON.parse(msg.data);
+        if (data[0] === "EVENT" && data[2]) {
+          const e = data[2];
+          if (e.kind === 11317 && (!got.tools || e.created_at > got.tools.created_at)) got.tools = e;
+          else if (e.kind === 11318 && (!got.resources || e.created_at > got.resources.created_at)) got.resources = e;
+          else if (e.kind === 10002 && (!got.relays || e.created_at > got.relays.created_at)) got.relays = e;
+        } else if (data[0] === "EOSE" && data[1] === subId) {
+          ws.send(JSON.stringify(["CLOSE", subId]));
+          ws.close();
+        }
+      } catch (e) { /* ignore */ }
+    };
+
+    ws.onerror = () => { try { ws.close(); } catch (e) {} };
+    ws.onclose = () => { closed++; checkDone(); };
+  });
+
+  function checkDone() {
+    if (closed >= RELAYS.length && !done) {
+      clearTimeout(timeout);
+      finish();
+    }
+  }
+}
+
+function renderCvmServiceExtra(got) {
+  const el = document.getElementById("cvm-svc-extra");
+  if (!el) return;
+  const parts = [];
+
+  let tools = [];
+  if (got.tools) {
+    try {
+      const c = JSON.parse(got.tools.content || "[]");
+      tools = Array.isArray(c) ? c : (c.tools || []);
+    } catch (e) { /* ignore */ }
+  }
+  if (tools.length) {
+    parts.push(`<div class="section-title">Tools <span class="section-count">${tools.length}</span></div>`);
+    parts.push(`<div class="cvm-tools-list">${tools.map((t) => `
+      <div class="cvm-tool">
+        <span class="cvm-tool-name">${escapeHtml(t.name || "?")}</span>
+        ${t.description ? `<span class="cvm-tool-desc">${escapeHtml(t.description)}</span>` : ""}
+      </div>
+    `).join("")}</div>`);
+  }
+
+  let resources = [];
+  if (got.resources) {
+    try {
+      const c = JSON.parse(got.resources.content || "[]");
+      resources = Array.isArray(c) ? c : (c.resources || []);
+    } catch (e) { /* ignore */ }
+  }
+  if (resources.length) {
+    parts.push(`<div class="section-title">Resources <span class="section-count">${resources.length}</span></div>`);
+    parts.push(renderJson(resources));
+  }
+
+  let relays = [];
+  if (got.relays) {
+    relays = (got.relays.tags || []).filter((tg) => tg[0] === "r").map((tg) => tg[1]);
+  }
+  if (relays.length) {
+    parts.push(`<div class="section-title">Relays <span class="section-count">${relays.length}</span></div>`);
+    parts.push(`<div class="relay-list">${relays.map((r) => `<span class="relay-chip">${escapeHtml(r)}</span>`).join("")}</div>`);
+  }
+
+  if (!parts.length) {
+    el.className = "section-empty";
+    el.textContent = "No tools, resources or relay metadata found for this server.";
+    return;
+  }
+  el.className = "";
+  el.innerHTML = parts.join("");
+}
+
+// ===========================================================================
 // Init
 // ===========================================================================
 
@@ -2501,6 +3238,32 @@ function showGlobalError(message) {
   console.log("[PRTA] Initializing\u2026");
   console.log("[PRTA] Relays:", RELAYS);
   console.log("[PRTA] Fetching [5900, 6900, 7000, 1063] DVM + [30078] run summaries from all pubkeys");
+
+  document.querySelectorAll(".view-toggle-btn").forEach((btn) => {
+    btn.addEventListener("click", () => switchView(btn.dataset.view));
+  });
+
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest(".jv-copy");
+    if (!btn) return;
+    const text = jvDataStore.get(btn.dataset.jv);
+    if (text == null) return;
+    const markDone = () => {
+      btn.textContent = "Copied!";
+      btn.classList.add("copied");
+      setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 1200);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(markDone).catch(() => {});
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); markDone(); } catch (err) {}
+      document.body.removeChild(ta);
+    }
+  });
 
   const lb = document.getElementById("lightbox");
   lb.querySelector(".lightbox-backdrop").addEventListener("click", closeLightbox);

@@ -1950,6 +1950,215 @@ footer a:hover { color: var(--accent); }
 }
 
 /* ============================================================
+   Project Filter Tabs (sidebar top)
+   ============================================================ */
+
+.project-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+.project-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.project-tab {
+  flex: 1;
+  min-width: max-content;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition);
+  text-align: center;
+  white-space: nowrap;
+}
+.project-tab:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+.project-tab.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.project-tab-secondary {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 10px;
+  opacity: 0.7;
+}
+.project-tab-secondary:hover {
+  opacity: 1;
+  color: var(--text-muted);
+}
+.project-tab-secondary.active {
+  color: var(--text-muted);
+  border-color: var(--text-dim);
+  background: var(--bg-elevated);
+}
+
+/* Project chip in run card */
+.meta-chip-project {
+  color: var(--project-color, var(--text-dim));
+  border-color: var(--project-color, var(--border-light));
+  background: color-mix(in srgb, var(--project-color, var(--bg)) 8%, transparent);
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+/* ============================================================
+   FIPS renderer: file nav + report viewer
+   ============================================================ */
+
+.fips-run-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.file-nav-bar {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.file-nav-tab {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 6px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: var(--transition);
+}
+.file-nav-tab:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+.file-nav-tab.active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.fips-viewer {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  min-height: 400px;
+  position: relative;
+}
+
+.fips-report-frame {
+  width: 100%;
+  height: 75vh;
+  border: none;
+  background: #fff;
+  display: block;
+}
+
+.fips-image-viewer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  overflow: auto;
+}
+.fips-image-viewer img {
+  max-width: 100%;
+  max-height: 70vh;
+  border-radius: var(--radius-sm);
+}
+
+.json-viewer-pre {
+  padding: 16px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-x: auto;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.fips-download-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 60px 20px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.fips-download-state p {
+  font-size: 14px;
+}
+
+/* ============================================================
+   BLE renderer: metrics
+   ============================================================ */
+
+.ble-metrics {
+  margin-top: 0;
+  margin-bottom: 24px;
+}
+
+/* ============================================================
+   Microfips renderer: status bar
+   ============================================================ */
+
+.microfips-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border: 2px solid;
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  margin-bottom: 20px;
+}
+.microfips-status-icon {
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1;
+}
+.microfips-status-text {
+  font-size: 18px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: 1;
+}
+.microfips-status-count {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* ============================================================
    Responsive — Mobile (≤768px)
    ============================================================ */
 
@@ -2149,3 +2358,268 @@ footer a:hover { color: var(--accent); }
 .nostr-event-feedback .feedback-error{color:var(--red-text);font-weight:600}
 .nostr-event-result{border-left:3px solid var(--green)}
 .nostr-event-request{border-left:3px solid var(--blue)}
+
+/* ============================================================
+   View Toggle Bar
+   ============================================================ */
+.view-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  z-index: 90;
+}
+.view-toggle-btn {
+  padding: 7px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition);
+  white-space: nowrap;
+}
+.view-toggle-btn:hover { color: var(--text); border-color: var(--text-dim); }
+.view-toggle-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* Services view: full-width (sidebar hidden) */
+main.view-services aside#runs-list { display: none; }
+
+/* ============================================================
+   CVM Jobs sidebar
+   ============================================================ */
+.cvm-live-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cvm-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.cvm-job-item {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: var(--transition);
+  border: 1px solid transparent;
+  margin-bottom: 4px;
+  animation: fadeInUp 0.3s ease forwards;
+  opacity: 0;
+  position: relative;
+}
+.cvm-job-item:hover { background: var(--bg-hover); border-color: var(--border-light); }
+.cvm-job-item.active { background: var(--bg-active); border-color: var(--accent); }
+.cvm-job-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 60%;
+  background: var(--accent);
+  border-radius: 0 3px 3px 0;
+}
+.cvm-job-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.cvm-dir {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 700;
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.cvm-dir-request { color: var(--blue); }
+.cvm-dir-response { color: var(--green); }
+.cvm-dir-unknown { color: var(--text-dim); }
+.cvm-method {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cvm-job-meta { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.cvm-job-pubkey { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); }
+.cvm-job-time { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); }
+.no-match .hint { display: block; margin-top: 6px; color: var(--text-dim); font-size: 11px; }
+
+/* ============================================================
+   CVM Services grid
+   ============================================================ */
+.cvm-services-wrap {
+  padding: 24px 32px 60px;
+  max-width: 1200px;
+  margin: 0 auto;
+  animation: fadeIn 0.25s ease;
+}
+.cvm-services-header { margin-bottom: 20px; }
+.cvm-services-header h2 { font-size: 18px; font-weight: 700; color: var(--text); letter-spacing: -0.01em; }
+.cvm-services-header p { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+.cvm-services-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+.cvm-service-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.cvm-service-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+  transform: translateY(-2px);
+}
+.cvm-service-name { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+.cvm-service-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 12px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cvm-service-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.cvm-service-pubkey { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); }
+
+/* Tools list (service detail) */
+.cvm-tools-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 20px; }
+.cvm-tool {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+}
+.cvm-tool-name { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--accent); }
+.cvm-tool-desc { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; line-height: 1.4; }
+
+/* ============================================================
+   CVM detail view
+   ============================================================ */
+.cvm-detail-header {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  padding: 20px 32px;
+  animation: fadeIn 0.25s ease;
+}
+.cvm-detail {
+  padding: 24px 32px 60px;
+  max-width: 1100px;
+  margin: 0 auto;
+  animation: fadeIn 0.25s ease;
+}
+.cvm-result-media { margin: 14px 0; }
+.cvm-result-media img {
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  display: block;
+}
+.cvm-result-text {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  max-height: 420px;
+  overflow: auto;
+  margin: 10px 0;
+}
+
+/* ============================================================
+   JSON Viewer (renderJson)
+   ============================================================ */
+.json-viewer {
+  position: relative;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-height: 60vh;
+  overflow: auto;
+}
+.jv-copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.jv-copy:hover { color: var(--accent); border-color: var(--accent); }
+.jv-copy.copied { color: var(--green); border-color: var(--green); }
+.jv-root { padding: 14px 18px; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; }
+details.jv-block { margin-left: 18px; }
+details.jv-block > .jv-content { margin-left: 2px; }
+.jv-summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  user-select: none;
+  list-style: none;
+  padding: 1px 0;
+}
+.jv-summary::-webkit-details-marker { display: none; }
+.jv-summary::before {
+  content: '\25BE';
+  display: inline-block;
+  width: 14px;
+  color: var(--text-dim);
+  transition: transform 150ms ease;
+  font-size: 10px;
+}
+details.jv-block:not([open]) > .jv-summary::before { transform: rotate(-90deg); }
+.jv-line { padding: 1px 0; }
+.jv-key { color: var(--blue); }
+.jv-colon { color: var(--text-dim); }
+.jv-str { color: var(--green); word-break: break-all; }
+.jv-num { color: var(--accent); }
+.jv-bool { color: var(--yellow); }
+.jv-null { color: var(--text-dim); font-style: italic; }
+.jv-bracket { color: var(--text-muted); }
+
+/* ============================================================
+   Responsive — CVM views on mobile
+   ============================================================ */
+@media (max-width: 768px) {
+  .view-toggle { padding: 6px 10px; overflow-x: auto; scrollbar-width: none; }
+  .view-toggle::-webkit-scrollbar { display: none; }
+  main.view-services section#run-view { position: static; transform: none; }
+  main.view-services aside#runs-list { display: none; }
+  .cvm-services-wrap { padding: 16px; }
+  .cvm-services-grid { grid-template-columns: 1fr; }
+  .cvm-detail,
+  .cvm-detail-header { padding-left: 16px; padding-right: 16px; }
+}
