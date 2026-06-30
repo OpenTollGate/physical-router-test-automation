@@ -415,7 +415,6 @@ def run_worker(config: WorkerConfig) -> int:
         if config.publish and run_json.exists():
             try:
                 log.info("Publishing results to Blossom + Nostr (total_tests=%d)...", total_run)
-                os.environ["SKIP_30078_SUMMARY"] = "true"
                 manifest = publish_to_nostr(config, results_dir, counts)
                 manifest_files = manifest.get("files", []) if manifest else []
                 dvm_job_result(config, counts, manifest_files)
