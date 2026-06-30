@@ -1007,6 +1007,20 @@ section#run-view {
   font-size: 12px;
   height: 160px;
 }
+.shot-expired {
+  opacity: 0.5;
+}
+.shot-expired-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 160px;
+  color: var(--text-dim);
+  font-size: 11px;
+  background: var(--bg-elevated);
+  border: 1px dashed var(--border-light);
+  border-radius: var(--radius-sm);
+}
 
 .shot-thumb {
   display: block;

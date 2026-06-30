@@ -1210,20 +1210,26 @@ function processImageQueue() {
           processImageQueue();
         }, { once: true });
         img.addEventListener("error", () => {
-          img.parentElement.classList.add("shot-error");
+          showExpiredPlaceholder(img);
           activeImgLoads--;
           processImageQueue();
         }, { once: true });
         img.src = objUrl;
       })
       .catch(() => {
-        img.parentElement.classList.add("shot-error");
+        showExpiredPlaceholder(img);
         activeImgLoads--;
         processImageQueue();
       });
 
     img.removeAttribute("data-src");
   }
+}
+
+function showExpiredPlaceholder(img) {
+  const card = img.parentElement;
+  card.classList.add("shot-expired");
+  card.innerHTML = '<div class="shot-expired-icon"> expired</div><div class="shot-name" title="' + (img.dataset.filename || '') + '">' + (img.dataset.filename || 'screenshot') + '</div>';
 }
 
 function observeNewThumbnails(container) {
