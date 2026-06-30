@@ -2347,6 +2347,11 @@ async function selectRun(run) {
     return;
   }
 
+  if (project === "tollgate" && run.source === "k30078" && (!summary || !summary.tests)) {
+    await renderFipsRun(view, run, myLoadId);
+    return;
+  }
+
   if (summary && summary.tests) {
     const hierarchy = buildTestHierarchy(run, summary);
     if (hierarchy) {
