@@ -446,6 +446,8 @@ def _resolve_blossom_binary(commit: str | None, arch: str) -> dict | None:
     """Query coordination relays for latest tollgate-build event matching arch.
 
     Returns dict with url, filename, sha256 from the event content, or None.
+    If commit is specified, tries exact match first, then falls back to newest
+    matching arch (any commit) so PR merges and branch builds work.
     """
     nak = shutil.which("nak")
     if not nak:
@@ -458,8 +460,11 @@ def _resolve_blossom_binary(commit: str | None, arch: str) -> dict | None:
     except Exception:
         return None
 
-    best = None
-    best_ts = 0
+    best_commit_match = None
+    best_commit_ts = 0
+    best_any = None
+    best_any_ts = 0
+
     for line in (r.stdout or "").strip().splitlines():
         line = line.strip()
         if not line.startswith("{"):
@@ -471,20 +476,32 @@ def _resolve_blossom_binary(commit: str | None, arch: str) -> dict | None:
                 continue
             if content.get("compression", "none") != "none":
                 continue
+
+            ts = e.get("created_at", 0)
+
             if commit:
                 build_id = ""
                 for tag in e.get("tags", []):
                     if tag[0] == "r" and len(tag) > 1:
                         build_id = tag[1]
-                if not build_id.startswith(commit[:7]):
+                if build_id.startswith(commit[:7]):
+                    if ts > best_commit_ts:
+                        best_commit_ts = ts
+                        best_commit_match = content
                     continue
-            ts = e.get("created_at", 0)
-            if ts > best_ts:
-                best_ts = ts
-                best = content
+
+            if ts > best_any_ts:
+                best_any_ts = ts
+                best_any = content
         except (json.JSONDecodeError, KeyError):
             continue
-    return best
+
+    if best_commit_match:
+        return best_commit_match
+    if best_any:
+        log.info("No exact commit match on Blossom — using newest %s build", arch)
+        return best_any
+    return None
 
 
 def _download_blossom_binary(url: str, build_dir: Path) -> Path | None:
