@@ -90,7 +90,7 @@ on:
         default: 1800
 
 permissions:
-  contents: write   # needed for gh-pages push from runner
+  pull-requests: write   # needed for gh pr comment on cross-repo PRs
   actions: read     # needed for artifact download + runner management
 
 jobs:
