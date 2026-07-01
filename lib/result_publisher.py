@@ -69,7 +69,7 @@ DEFAULT_MAX_FILE_SIZE = 10_000_000
 
 #: Default Blossom server if neither CLI nor env provides one.
 DEFAULT_BLOSSOM_SERVER = os.environ.get(
-    "BLOSSOM_SERVER", "https://blossom.psbt.me"
+    "BLOSSOM_SERVER", "https://blossom.primal.net"
 )
 
 #: Default relays if neither CLI nor env provides them.

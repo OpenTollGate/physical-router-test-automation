@@ -123,7 +123,7 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
         log.warning("Nostr publish skipped: nak CLI not installed")
         return {}
 
-    blossom = os.environ.get("BLOSSOM_SERVER", "https://blossom.psbt.me")
+    blossom = os.environ.get("BLOSSOM_SERVER", "https://blossom.primal.net")
     relays = os.environ.get("NOSTR_RELAYS", "wss://relay.cashu.email")
 
     passed = counts.get("passed", 0)
