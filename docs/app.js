@@ -349,6 +349,9 @@ const PROJECT_TAG_MAP = {
   "fips-ble": "ble",
   "ble-experiment": "ble",
   "microfips": "microfips",
+  "conwrt": "conwrt",
+  "conwrt-sqm": "conwrt",
+  "conwrt-bufferbloat": "conwrt",
 };
 
 function determineProjectTag(tTags) {
@@ -370,6 +373,7 @@ const PROJECT_LABELS = {
   fips: "FIPS",
   ble: "BLE",
   microfips: "Microfips",
+  conwrt: "conwrt",
   unknown: "Other",
 };
 
@@ -379,6 +383,7 @@ const PROJECT_COLORS = {
   fips: "var(--blue)",
   ble: "var(--green)",
   microfips: "var(--yellow)",
+  conwrt: "var(--cyan, #22d3ee)",
   unknown: "var(--text-dim)",
 };
 
@@ -912,7 +917,7 @@ function getFilteredRuns() {
     if (filterState.project === "ours") {
       runs = runs.filter((r) => {
         const p = getRunProject(r);
-        return p === "tollgate" || p === "fips" || p === "ble" || p === "microfips";
+        return p === "tollgate" || p === "fips" || p === "ble" || p === "microfips" || p === "conwrt";
       });
     } else {
       runs = runs.filter((r) => getRunProject(r) === filterState.project);
@@ -1006,6 +1011,7 @@ function buildSidebar() {
         <button class="project-tab" data-project="fips" type="button">FIPS</button>
         <button class="project-tab" data-project="ble" type="button">BLE</button>
         <button class="project-tab" data-project="microfips" type="button">Microfips</button>
+        <button class="project-tab" data-project="conwrt" type="button">conwrt</button>
         <button class="project-tab project-tab-secondary" data-project="all" type="button">All Nostr</button>
       </div>
       <input type="text" id="search-input" class="search-input" placeholder="Search runs\u2026" autocomplete="off" />
