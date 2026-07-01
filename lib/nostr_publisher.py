@@ -248,6 +248,7 @@ def publish_test_run_event(
     file_urls: list | None = None,
     summary: str = "",
     relays: list | None = None,
+    project_tag: str = "tollgate",
 ) -> dict:
     """Publish a kind 30078 parameterized replaceable test-run index event.
 
@@ -259,12 +260,13 @@ def publish_test_run_event(
     them. The summary goes into the event content.
 
     Args:
-        nsec_file: Path to file containing hex Nostr private key.
+        nsec_file: Path to file containing hex private key.
         run_id: Unique run identifier (becomes the d-tag).
         timestamp: Unix timestamp (default: now).
         file_urls: List of file URLs published in this run.
         summary: Human-readable run summary (goes into content).
         relays: Relay list override.
+        project_tag: Project identifier for dashboard filtering (e.g. "tollgate", "fips", "ble-experiment").
 
     Returns:
         Result dict from _publish_event.
@@ -276,6 +278,7 @@ def publish_test_run_event(
 
     tags = [
         ["d", run_id],
+        ["t", project_tag],
         ["t", "test-run"],
         ["timestamp", str(timestamp)],
     ]

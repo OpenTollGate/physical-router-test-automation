@@ -171,12 +171,12 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
 
 
 def verify_nostr_publish(config: WorkerConfig) -> dict[str, Any]:
-    """Verify that the kind 6900 DVM result event and Blossom blobs are retrievable.
+    """Verify that the kind 30078 test-run event and Blossom blobs are retrievable.
 
     Called after :func:`publish_to_nostr`. Uses ``nak req`` to query the
-    relay for kind 6900 events, finds the one matching ``config.run_id``
-    in the content JSON, then fetches one Blossom URL to confirm the
-    blob is live.
+    relay for kind 30078 events from our pubkey, finds the one matching
+    ``config.run_id`` in the d-tag, then fetches one Blossom URL to confirm
+    the blob is live.
 
     Returns a dict with ``event_found``, ``event_id``, ``blob_url_checked``,
     ``blob_retrievable`` keys. Non-fatal — logs warnings on failure.
@@ -197,10 +197,29 @@ def verify_nostr_publish(config: WorkerConfig) -> dict[str, Any]:
     relays_env = os.environ.get("NOSTR_RELAYS", "wss://relay.cashu.email")
     relay = relays_env.split(",")[0].strip()
 
+    # Read our pubkey from the nsec file for targeted querying
+    npub = ""
+    nsec_file = os.environ.get("NSEC_FILE", "")
+    if not nsec_file or not Path(nsec_file).exists():
+        for candidate in [os.path.expanduser("~/nsec"), "/root/nsec"]:
+            if Path(candidate).exists():
+                nsec_file = candidate
+                break
+    if nsec_file and Path(nsec_file).exists():
+        try:
+            r = _run(f"nak nk {shlex.quote(nsec_file)} 2>/dev/null || true", timeout=5, check=False)
+            hex_pub = (r.stdout or "").strip()
+            if hex_pub:
+                npub = f"-a {hex_pub}"
+        except Exception:
+            pass
+
     time.sleep(2)
 
     nak_cmd = (
-        f"nak req -k 6900 -l 5 {shlex.quote(relay)}"
+        f"nak req -k 30078 {npub} -l 5 {shlex.quote(relay)}"
+        if npub else
+        f"nak req -k 30078 -l 5 {shlex.quote(relay)}"
     )
     try:
         r = _run(nak_cmd, timeout=30, check=False)
@@ -211,7 +230,7 @@ def verify_nostr_publish(config: WorkerConfig) -> dict[str, Any]:
     stdout = (r.stdout or "").strip()
     if r.returncode != 0 or not stdout:
         log.warning(
-            "verify_nostr_publish: kind 6900 events not found on %s (rc=%d) — "
+            "verify_nostr_publish: kind 30078 events not found on %s (rc=%d) — "
             "relay propagation may be slow",
             relay, r.returncode,
         )
@@ -223,20 +242,25 @@ def verify_nostr_publish(config: WorkerConfig) -> dict[str, Any]:
         if line.startswith("{"):
             try:
                 candidate = json.loads(line)
-                content = json.loads(candidate.get("content", "{}"))
-                if content.get("run_id") == config.run_id:
+                # Match by d-tag (run_id) or content run_id
+                d_tag = next((t[1] for t in candidate.get("tags", []) if t[0] == "d"), "")
+                try:
+                    content = json.loads(candidate.get("content", "{}"))
+                except (json.JSONDecodeError, TypeError):
+                    content = {}
+                if d_tag == config.run_id or content.get("run_id") == config.run_id:
                     event = candidate
                     break
             except (json.JSONDecodeError, KeyError):
                 continue
 
     if not event:
-        log.warning("verify_nostr_publish: kind 6900 event for run_id=%s not found", config.run_id[:20])
+        log.warning("verify_nostr_publish: kind 30078 event for run_id=%s not found", config.run_id[:20])
         return result
 
     result["event_found"] = True
     result["event_id"] = event.get("id", "")
-    log.info("verify_nostr_publish: ✓ kind 6900 event found (id=%s)", result["event_id"][:16])
+    log.info("verify_nostr_publish: ✓ kind 30078 event found (id=%s)", result["event_id"][:16])
 
     file_urls: list[str] = []
     for tag in event.get("tags", []):
