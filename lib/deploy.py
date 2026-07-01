@@ -19,6 +19,15 @@ COORDINATION_RELAYS = [
     "wss://relay2.orangesync.tech",
 ]
 
+#: Blossom servers tried in order when the primary URL from a NIP-94 event
+#: returns 404. CI publishes to all of these (BLOSSOM_MIN_SUCCESS=2), but
+#: free-tier files on blossom.psbt.me expire after a TTL, so the same
+#: content-addressed blob (SHA256) is retried on the mirrors.
+BLOSSOM_MIRROR_SERVERS = [
+    "https://blossom.primal.net",
+    "https://blossom.psbt.me",
+]
+
 # Packages required by the test framework on the router.
 # Factory reset wipes all opkg packages; these must be reinstalled.
 TEST_DEPS = ["curl", "socat", "nodogsplash", "jq", "luci", "px5g-mbedtls"]
@@ -504,20 +513,35 @@ def _resolve_blossom_binary(commit: str | None, arch: str) -> dict | None:
     return None
 
 
-def _download_blossom_binary(url: str, build_dir: Path) -> Path | None:
-    """Download .ipk from Blossom URL. Returns path or None."""
+def _download_blossom_binary(url: str, build_dir: Path, sha256: str = "") -> Path | None:
+    """Download .ipk from Blossom. Tries primary URL, then falls back to
+    mirror servers using the content-addressed SHA256 when the primary 404s."""
     filename = url.rsplit("/", 1)[-1]
     dest = build_dir / filename
-    try:
-        subprocess.run(
-            ["curl", "-sL", "-o", str(dest), url],
-            timeout=120, check=True, capture_output=True,
-        )
-        if dest.exists() and dest.stat().st_size > 1000:
-            log.info("Downloaded from Blossom: %s (%d bytes)", filename, dest.stat().st_size)
-            return dest
-    except Exception as exc:
-        log.warning("Blossom download failed: %s", exc)
+
+    urls_to_try = [url]
+    if sha256 and len(sha256) == 64:
+        ext = Path(filename).suffix
+        for server in BLOSSOM_MIRROR_SERVERS:
+            alt = f"{server}/{sha256}{ext}"
+            if alt not in urls_to_try:
+                urls_to_try.append(alt)
+
+    for try_url in urls_to_try:
+        try:
+            subprocess.run(
+                ["curl", "-sL", "-o", str(dest), try_url],
+                timeout=120, check=True, capture_output=True,
+            )
+            if dest.exists() and dest.stat().st_size > 1000:
+                log.info("Downloaded from Blossom: %s (%d bytes) via %s",
+                         filename, dest.stat().st_size, try_url)
+                return dest
+        except Exception:
+            continue
+
+    log.warning("Blossom download failed from all %d server(s): %s",
+                len(urls_to_try), ", ".join(urls_to_try))
     return None
 
 
@@ -534,7 +558,10 @@ def download_artifact(branch: str, arch: str, run_id: str | None = None,
     blossom_binary = _resolve_blossom_binary(target_commit or None, arch)
     if blossom_binary:
         log.info("Found Blossom binary: %s", blossom_binary.get("filename", "?"))
-        blossom_path = _download_blossom_binary(blossom_binary["url"], BUILD_DIR)
+        blossom_path = _download_blossom_binary(
+            blossom_binary["url"], BUILD_DIR,
+            sha256=blossom_binary.get("sha256", ""),
+        )
         if blossom_path:
             return blossom_path
         log.warning("Blossom download failed, falling back to GitHub Actions")
