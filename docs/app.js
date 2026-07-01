@@ -1879,6 +1879,28 @@ async function renderFipsRun(view, run, myLoadId) {
   showFipsFile(sorted[0], viewer, myLoadId);
 }
 
+function renderMarkdown(md) {
+  let html = escapeHtml(md);
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  html = html.replace(/`(.+?)`/g, '<code>$1</code>');
+  html = html.replace(/^\| (.+)$/gm, (match) => {
+    const cells = match.split('|').filter(c => c.trim());
+    if (cells.every(c => /^[\s-:]+$/.test(c))) return '';
+    const tds = cells.map(c => `<td>${c.trim()}</td>`).join('');
+    return `<tr>${tds}</tr>`;
+  });
+  html = html.replace(/(<tr>[\s\S]*?<\/tr>)(?!\s*<tr>)/g, '<table border="1" cellpadding="4" style="border-collapse:collapse">$1</table>');
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>[\s\S]*?<\/li>)/g, '<ul>$1</ul>');
+  html = html.replace(/^(?!<[hutol])(.+)$/gm, '<p>$1</p>');
+  html = html.replace(/<\/p>\s*<p>/g, '</p><p>');
+  return html;
+}
+
 async function showFipsFile(file, viewer, myLoadId) {
   const name = (file.path || "").split("/").pop() || file.url;
   const ext = (name.split(".").pop() || "").toLowerCase();
@@ -1905,7 +1927,16 @@ async function showFipsFile(file, viewer, myLoadId) {
         .then(blob => { const u = URL.createObjectURL(blob); viewer.querySelector("img").src = u; })
         .catch(() => { viewer.querySelector("img").alt = "Failed to load"; });
 
-    } else if (["log", "txt", "env", "yaml", "yml", "md", "csv"].includes(ext) || name === "DONE") {
+    } else if (ext === "md") {
+      const resp = await fetch(file.url);
+      if (myLoadId !== detailLoadId) return;
+      const text = await resp.text();
+      const truncated = text.length > 100000
+        ? text.slice(0, 100000) + "\n\n... truncated (" + text.length + " bytes total)"
+        : text;
+      viewer.innerHTML = `<div class="md-viewer">${renderMarkdown(truncated)}</div>`;
+
+    } else if (["log", "txt", "env", "yaml", "yml", "csv"].includes(ext) || name === "DONE") {
       const resp = await fetch(file.url);
       if (myLoadId !== detailLoadId) return;
       const text = await resp.text();
@@ -2346,6 +2377,10 @@ async function selectRun(run) {
   }
   if (project === "microfips") {
     await renderMicrofipsRun(view, run, myLoadId);
+    return;
+  }
+  if (project === "conwrt") {
+    await renderFipsRun(view, run, myLoadId);
     return;
   }
   if (project === "unknown") {
