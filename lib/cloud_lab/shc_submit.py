@@ -344,7 +344,8 @@ step 15 "Running worker pipeline..."
 cd {test_dir}
 echo "PIPELINE_START" >> /tmp/tollgate-status
 unset BOT_NSEC_HEX GH_TOKEN
-sudo /opt/tollgate-venv/bin/python3 -m lib.cloud_lab.worker --from-env
+echo "  Worker env: TOLLGATE_RUN_ID=$TOLLGATE_RUN_ID SUT_BRANCH=$TOLLGATE_SUT_BRANCH BACKEND=$TOLLGATE_BACKEND PUBLISH=$TOLLGATE_PUBLISH"
+/opt/tollgate-venv/bin/python3 -m lib.cloud_lab.worker --from-env
 WORKER_EXIT=$?
 if [ $WORKER_EXIT -gt 5 ]; then
     fail 15 "worker pipeline crashed (exit=$WORKER_EXIT)"
@@ -636,7 +637,7 @@ def wait_for_shc_run(
 
         try:
             r = subprocess.run(
-                build_ssh_cmd("tail -1 /var/log/tollgate-run.log 2>/dev/null"),
+                build_ssh_cmd("tail -5 /var/log/tollgate-run.log 2>/dev/null"),
                 capture_output=True, text=True, timeout=15,
             )
             line = r.stdout.strip()
@@ -645,7 +646,9 @@ def wait_for_shc_run(
 
         if line and line != last_status_line:
             elapsed = int(time.time() - start)
-            print(f"  [{elapsed}s] {line}")
+            new_lines = [l for l in line.splitlines() if l.strip()]
+            for nl in new_lines[-3:]:
+                print(f"  [{elapsed}s] {nl}")
             last_status_line = line
 
         time.sleep(15)
