@@ -83,7 +83,12 @@ DEFAULT_RELAYS = [
 
 #: Defense-in-depth: files never uploaded even if the scanner marks them clean.
 #: Adds coverage (sqlite/db/log) the scanner's own suffix list lacks.
-HARD_BLOCKED_NAMES = {".env", "credentials", "routers.env", "routers.json", "report.html"}
+#:
+#: ``report.html`` is intentionally NOT blocked: pytest-html embeds the
+#: visual runner's screenshots/videos as base64, and docs/app.js depends on
+#: it. The secret_scanner handles genuine secrets in HTML; blanket-blocking
+#: caused dashboard 404s and silent loss of all visuals.
+HARD_BLOCKED_NAMES = {".env", "credentials", "routers.env", "routers.json"}
 
 
 def _is_artifact_for_skipped_test(file_path: Path) -> bool:
