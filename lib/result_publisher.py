@@ -484,7 +484,7 @@ def publish_results(
                 file_urls=file_urls,
                 summary=summary_content,
                 relays=relays,
-                project_tag="tollgate",
+                project_tag=os.environ.get("PROJECT_TAG", "tollgate"),
             )
             if result.get("success"):
                 summary_event_id = result.get("event_id") or None
