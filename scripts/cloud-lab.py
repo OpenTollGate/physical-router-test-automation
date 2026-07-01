@@ -458,6 +458,131 @@ def cmd_run_tests(args: argparse.Namespace) -> int:
     return cmd_submit(args)
 
 
+def cmd_submit_conwrt(args: argparse.Namespace) -> int:
+    """Order SHC VM, run conwrt test suite, publish results, self-delete."""
+    import json as _json
+    import uuid as _uuid
+    import shlex as _shlex
+
+    SHC_PACKAGE_ID = 81
+    SHC_PRICING_ID = 245
+    BOOTSTRAP = _REPO_ROOT / "scripts" / "conwrt-shc-bootstrap.sh"
+    NSEC_FILE = Path(os.environ.get("NSEC_FILE", str(Path.home() / ".config" / "prta" / "nsec")))
+
+    sys.path.insert(0, os.environ.get("SHC_TOOLKIT_PATH", str(Path.home() / "src" / "shc-toolkit")))
+    try:
+        from shc_toolkit.client import SHCClient, SHCError
+    except ImportError:
+        print("ERROR: shc_toolkit not found. Set SHC_TOOLKIT_PATH or clone shc-toolkit.", file=sys.stderr)
+        return 1
+
+    client = SHCClient()
+
+    ssh_key_path = Path.home() / ".ssh" / "id_ed25519.pub"
+    if not ssh_key_path.exists():
+        ssh_key_path = Path.home() / ".ssh" / "id_rsa.pub"
+    ssh_pubkey = ssh_key_path.read_text().strip() if ssh_key_path.exists() else ""
+
+    hostname = f"conwrt-{args.branch}-{int(time.time()) % 100000}"
+    print(f"Ordering SHC VM: {hostname}")
+
+    result = client.order_vm(
+        hostname=hostname,
+        package_id=SHC_PACKAGE_ID,
+        pricing_id=SHC_PRICING_ID,
+        ssh_key=ssh_pubkey or None,
+    )
+    service_id = result["virtual_machines"][0]["id"]
+    invoice_id = result["invoice"]["invoice_id"]
+    print(f"  VM service {service_id}, invoice {invoice_id}")
+
+    idem = str(_uuid.uuid4())
+    try:
+        client.pay_invoice(invoice_id, idem)
+    except SHCError as e:
+        r = client.session.post(
+            client.base_url + f"/payment/{invoice_id}/checkout",
+            json={"gateway": "btcpay_server", "idempotency_key": idem},
+            headers={"X-User-Api-Confirm": e.confirmation_id},
+        )
+        if r.status_code != 200:
+            print(f"ERROR: Payment failed: {r.text}", file=sys.stderr)
+            return 1
+    print("  Invoice paid")
+
+    print("Waiting for provisioning...", flush=True)
+    vm_ip = None
+    for i in range(60):
+        vms = client.list_vms()
+        vm = next((v for v in vms if v["id"] == service_id), None)
+        if vm and vm.get("provisioning_state") == "ready" and vm.get("ips"):
+            vm_ip = vm["ips"][0]["ip"]
+            break
+        time.sleep(5)
+    if not vm_ip:
+        print("ERROR: VM provisioning timed out", file=sys.stderr)
+        client.cancel_vm(service_id)
+        return 1
+    print(f"  VM ready: {vm_ip}")
+
+    creds = client.get_vm_credentials(service_id)
+    vm_pw = creds.get("password", "")
+    vm_user = creds.get("user", "debian")
+
+    ssh_base = ["sshpass", "-p", vm_pw, "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "ConnectTimeout=15",
+                f"{vm_user}@{vm_ip}"]
+    scp_base = ["sshpass", "-p", vm_pw, "scp",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null"]
+
+    print("Uploading bootstrap + nsec...")
+    subprocess.run(scp_base + [str(BOOTSTRAP), f"{vm_user}@{vm_ip}:/tmp/conwrt-shc-bootstrap.sh"],
+                   capture_output=True, timeout=30)
+    if NSEC_FILE.exists():
+        subprocess.run(scp_base + [str(NSEC_FILE), f"{vm_user}@{vm_ip}:/tmp/nsec_hex"],
+                       capture_output=True, timeout=30)
+
+    branch = getattr(args, "branch", "master")
+    env_str = f"CONWRT_BRANCH={branch} NSEC_FILE=/tmp/nsec_hex"
+    subprocess.run(ssh_base + [
+        f"mkdir -p ~/.config/prta && cp /tmp/nsec_hex ~/.config/prta/nsec 2>/dev/null; "
+        f"export {env_str}; "
+        f"nohup bash /tmp/conwrt-shc-bootstrap.sh > /tmp/conwrt-shc-stdout.log 2>&1 &"
+    ], capture_output=True, timeout=20)
+    print("Bootstrap launched")
+
+    if not getattr(args, "no_wait", False):
+        print("Monitoring bootstrap...", flush=True)
+        for i in range(60):
+            time.sleep(30)
+            r = subprocess.run(
+                ssh_base + ["cat /tmp/bootstrap.status 2>/dev/null || echo PENDING"],
+                capture_output=True, text=True, timeout=15,
+            )
+            status = r.stdout.strip()
+            print(f"  [{i*30}s] {status}")
+            if "BOOTSTRAP_DONE" in status:
+                print("Bootstrap complete!")
+                r = subprocess.run(
+                    ssh_base + ["tail -20 /tmp/conwrt-shc.log"],
+                    capture_output=True, text=True, timeout=15,
+                )
+                print(r.stdout)
+                break
+        else:
+            print("WARNING: Bootstrap did not complete in 30 minutes")
+
+    if not getattr(args, "keep_vm", False):
+        print("Cancelling VM...")
+        client.cancel_vm(service_id)
+        print("VM cancelled")
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -603,6 +728,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Radio-plane mode. Default tap keeps existing VM/TAP cloud lab; hwsim-netns runs optional shared-kernel Wi-Fi POC.")
     target_flags(run)
     run.set_defaults(func=cmd_run_tests)
+
+    conwrt = sub.add_parser("submit-conwrt", help="Order SHC VM, run conwrt tests, publish, self-delete")
+    conwrt.add_argument("--branch", default="master", help="conwrt branch to test")
+    conwrt.add_argument("--no-wait", action="store_true", help="Don't wait for completion")
+    conwrt.add_argument("--keep-vm", action="store_true", help="Don't auto-delete VM after tests")
+    conwrt.set_defaults(func=cmd_submit_conwrt)
 
     return parser
 
