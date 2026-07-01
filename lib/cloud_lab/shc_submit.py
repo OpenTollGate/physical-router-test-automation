@@ -276,8 +276,13 @@ echo "[10/$N_STEPS] done"
 step 11 "Installing BlossomFS (from cache)..."
 fetch_cached() {{
   local key=$1 dest=$2
+  # Try hardcoded Blossom URL first (fastest, most reliable)
+  case "$key" in
+    blossomfs-*) sudo curl -sfL -o "$dest" "https://blossom.psbt.me/e05017b95e55a709fd30bf2c687e29b03227fa245e89664447d34a4932501c28" && sudo chmod +x "$dest" && return 0 ;;
+  esac
+  # Fall back
   local url
-  url=$(nak req -k 1063 -l 1 -t "filename=$key" wss://relay.cashu.email 2>/dev/null | python3 -c "import sys,json;[print(next(t[1] for t in json.loads(l)['tags'] if t[0]=='url')) for l in [sys.stdin.readline().strip()] if l]" 2>/dev/null)
+  url=$(nak req -k 1063 -l 1 -t "filename=$key" wss://relay.cashu.email < /dev/null 2>/dev/null | python3 -c "import sys,json;[print(next(t[1] for t in json.loads(l)['tags'] if t[0]=='url')) for l in [sys.stdin.readline().strip()] if l]" 2>/dev/null)
   if [ -n "$url" ]; then sudo curl -sfL -o "$dest" "$url" && sudo chmod +x "$dest" && return 0; fi
   return 1
 }}
