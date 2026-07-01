@@ -120,13 +120,16 @@ def _wait_for_ssh(ssh_base: list[str], ssh_target: str, timeout: int = 300) -> N
     print("Waiting for SSH daemon...", end="", flush=True)
     deadline = time.time() + timeout
     while time.time() < deadline:
-        r = subprocess.run(
-            [*ssh_base, ssh_target, "echo OK"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if r.returncode == 0 and "OK" in r.stdout:
-            print(" ready!")
-            return
+        try:
+            r = subprocess.run(
+                [*ssh_base, ssh_target, "echo OK"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode == 0 and "OK" in r.stdout:
+                print(" ready!")
+                return
+        except subprocess.TimeoutExpired:
+            pass
         print(".", end="", flush=True)
         time.sleep(5)
     print(" TIMEOUT")
