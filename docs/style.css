@@ -2715,6 +2715,7 @@ details.jv-block:not([open]) > .jv-summary::before { transform: rotate(-90deg); 
   font-size: 13px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
+.error-banner[hidden] { display: none; }
 .error-banner-icon { flex-shrink: 0; font-size: 16px; }
 .error-banner-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .error-banner-copy,
