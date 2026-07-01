@@ -21,7 +21,15 @@ def collect_and_render(config: WorkerConfig, results_dir: str, started_at: str, 
     pr_arg = f"--sut-pr {config.sut_pr} " if config.sut_pr else ""
     scope = runner_scope(config)
     pytest_runners = pytest_collect_args(config)
-    _run(
+
+    diag = _run(
+        f"find {results_dir}/raw -type f -name '*.xml' -o -name '*.log' -o -name '*.html' 2>/dev/null | head -30; "
+        f"echo '---'; ls -la {results_dir}/raw/*/ 2>/dev/null | head -40",
+        timeout=10, check=False,
+    )
+    log.info("collect_and_render diagnostics:\n%s", diag.stdout[-500:] if diag.stdout else "(empty)")
+
+    r = _run(
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && set -a && source .env && set +a && "
         f"python3 scripts/collect-results.py --run-dir {results_dir} "
         f"{pytest_runners}"
@@ -34,8 +42,10 @@ def collect_and_render(config: WorkerConfig, results_dir: str, started_at: str, 
         f"--viewport desktop --test-plan cloud-api --query-router {OPENWRT_IP} --virtual-lab "
         f"--lab-type gcloud --tier api --scope {scope} --profile gcloud-api "
         f"--started-at {started_at} --finished-at {finished_at} --allow-failures",
-        timeout=60,
+        timeout=120, check=False,
     )
+    if r.returncode != 0:
+        log.warning("collect-results.py exit=%d stderr: %s", r.returncode, (r.stderr or "")[-300:])
     _run(
         f"cd {TEST_DIR} && source /opt/tollgate-venv/bin/activate && "
         f"python3 scripts/render-report.py --run-dir {results_dir}",
