@@ -25,7 +25,7 @@ sys.path.insert(0, str(SUITE_ROOT))
 
 os.environ.setdefault("PROJECT_TAG", "conwrt")
 
-from lib.result_publisher import publish_results
+from lib.result_publisher import publish_directory
 
 
 def main():
@@ -36,10 +36,6 @@ def main():
     parser.add_argument("--blossom-server", default=os.environ.get("BLOSSOM_SERVER", "https://blossom.psbt.me"))
     parser.add_argument("--relays", default=os.environ.get("NOSTR_RELAYS", "wss://relay.cashu.email"))
     parser.add_argument("--summary", default="", help="Human-readable summary for the event")
-    parser.add_argument("--passed", type=int, default=None, help="Number of passed tests")
-    parser.add_argument("--failed", type=int, default=None, help="Number of failed tests")
-    parser.add_argument("--skipped", type=int, default=None, help="Number of skipped tests")
-    parser.add_argument("--errors", type=int, default=None, help="Number of errored tests")
     args = parser.parse_args()
 
     results_dir = Path(args.results_dir).expanduser()
@@ -57,20 +53,6 @@ def main():
     if not args.summary and summary_file.exists():
         args.summary = summary_file.read_text()[:500]
 
-    metadata = {
-        "project": "conwrt",
-        "summary": args.summary,
-        "runner": "github-actions-qemu",
-    }
-    if args.passed is not None:
-        metadata["passed"] = args.passed
-    if args.failed is not None:
-        metadata["failed"] = args.failed
-    if args.skipped is not None:
-        metadata["skipped"] = args.skipped
-    if args.errors is not None:
-        metadata["errors"] = args.errors
-
     print(f"Publishing conwrt test results: {results_dir}")
     print(f"  Run ID: {args.run_id}")
     print(f"  Project tag: conwrt")
@@ -78,22 +60,18 @@ def main():
     print(f"  Relays: {args.relays}")
     print()
 
-    manifest = publish_results(
+    publish_directory(
         results_dir=str(results_dir),
         nsec_file=str(nsec),
-        run_id=args.run_id,
         blossom_server=args.blossom_server,
         relays=[r.strip() for r in args.relays.split(",")],
-        metadata={
-            "project": "conwrt",
-            "summary": args.summary,
-            "runner": "github-actions-qemu",
-        },
+        run_id=args.run_id,
+        summary=args.summary,
     )
 
     print(f"\nResults published!")
-    print(f"  Summary event: {manifest.get('summary_event_id', '?')}")
     print(f"  View at: https://tests.tollgate.me/ (filter: conwrt)")
+    print(f"  Relay: {args.relays}")
 
 
 if __name__ == "__main__":
