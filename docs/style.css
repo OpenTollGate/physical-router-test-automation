@@ -842,6 +842,24 @@ section#run-view {
 .metric-red .metric-value { color: var(--red); }
 .metric-yellow .metric-value { color: var(--yellow); }
 
+.metric-wide {
+  flex: 1;
+  min-width: 200px;
+  max-width: 100%;
+  overflow: hidden;
+}
+.metric-value-text {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
 .metric-label {
   font-size: 10px;
   text-transform: uppercase;

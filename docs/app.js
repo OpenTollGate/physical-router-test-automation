@@ -1831,7 +1831,19 @@ async function renderFipsRun(view, run, myLoadId) {
   if (!body) return;
 
   const allFiles = [...(run.screenshots || []), ...(run.files || [])];
-  if (allFiles.length === 0) {
+
+  const metricsBar = (() => {
+    const parts = [];
+    if (run.passed != null) parts.push(`<div class="metric metric-green"><span class="metric-value">${run.passed}</span><span class="metric-label">Passed</span></div>`);
+    if (run.failed != null) parts.push(`<div class="metric${run.failed > 0 ? " metric-red" : ""}"><span class="metric-value">${run.failed}</span><span class="metric-label">Failed</span></div>`);
+    if (run.skipped != null) parts.push(`<div class="metric"><span class="metric-value">${run.skipped}</span><span class="metric-label">Skipped</span></div>`);
+    if (run.total != null) parts.push(`<div class="metric"><span class="metric-value">${run.total}</span><span class="metric-label">Total</span></div>`);
+    const summaryText = run.summary?.metadata?.summary || run.summary?.summary || "";
+    if (summaryText) parts.push(`<div class="metric metric-wide"><span class="metric-value-text">${escapeHtml(summaryText.substring(0, 200))}</span></div>`);
+    return parts.length ? `<div class="detail-metrics">${parts.join("")}</div>` : "";
+  })();
+
+  if (allFiles.length === 0 && !metricsBar) {
     body.innerHTML = `<p class="section-empty">No artifacts in this run.</p>`;
     return;
   }
@@ -1848,16 +1860,28 @@ async function renderFipsRun(view, run, myLoadId) {
     return pri(a.path || "") - pri(b.path || "");
   });
 
+  const summaryContent = (() => {
+    const md = run.summary?.metadata?.summary || "";
+    const payload = run.summary || {};
+    let html = "";
+    if (md) html += `<div class="md-viewer">${renderMarkdown(md)}</div>`;
+    const prettyJson = JSON.stringify(payload, null, 2);
+    html += `<details class="advanced-section"><summary class="advanced-header">Raw Event Content (JSON)</summary><pre class="json-viewer-pre">${escapeHtml(prettyJson)}</pre></details>`;
+    return html;
+  })();
+
   body.innerHTML = `
+    ${metricsBar}
     <div class="fips-run-info">
       ${run.scenario ? `<span class="meta-chip meta-chip-branch">${escapeHtml(run.scenario)}</span>` : ""}
       ${run.fipsRef ? `<span class="meta-chip">${escapeHtml(run.fipsRef)}</span>` : ""}
       ${run.nodes != null ? `<span class="meta-chip">${run.nodes} nodes</span>` : ""}
     </div>
     <div class="file-nav-bar" id="fips-file-nav">
+      <button class="file-nav-tab active" data-idx="-1">Summary</button>
       ${sorted.map((f, i) => {
         const name = (f.path || "").split("/").pop() || f.url.slice(-20);
-        return `<button class="file-nav-tab${i === 0 ? " active" : ""}" data-idx="${i}">${escapeHtml(name)}</button>`;
+        return `<button class="file-nav-tab" data-idx="${i}">${escapeHtml(name)}</button>`;
       }).join("")}
     </div>
     <div class="fips-viewer" id="fips-viewer">
@@ -1872,11 +1896,16 @@ async function renderFipsRun(view, run, myLoadId) {
     tab.addEventListener("click", () => {
       navBar.querySelectorAll(".file-nav-tab").forEach((t) => t.classList.remove("active"));
       tab.classList.add("active");
-      showFipsFile(sorted[parseInt(tab.dataset.idx, 10)], viewer, myLoadId);
+      const idx = parseInt(tab.dataset.idx, 10);
+      if (idx === -1) {
+        viewer.innerHTML = summaryContent;
+      } else {
+        showFipsFile(sorted[idx], viewer, myLoadId, run);
+      }
     });
   });
 
-  showFipsFile(sorted[0], viewer, myLoadId);
+  viewer.innerHTML = summaryContent;
 }
 
 function renderMarkdown(md) {
@@ -1901,48 +1930,51 @@ function renderMarkdown(md) {
   return html;
 }
 
-async function showFipsFile(file, viewer, myLoadId) {
+async function showFipsFile(file, viewer, myLoadId, run) {
   const name = (file.path || "").split("/").pop() || file.url;
   const ext = (name.split(".").pop() || "").toLowerCase();
 
   viewer.innerHTML = `<div class="test-tree-loading"><div class="spinner"></div><p>Loading ${escapeHtml(name)}\u2026</p></div>`;
 
   try {
+    const resp = await fetch(file.url);
+    if (myLoadId !== detailLoadId) return;
+    const text = await resp.text();
+
+    if (text.includes('"error"') && text.includes('Not found in storage')) {
+      const fallback = run?.summary?.metadata?.summary || "";
+      viewer.innerHTML = `<div class="fips-download-state">
+        <p>File expired from Blossom storage</p>
+        ${fallback ? `<div class="md-viewer" style="text-align:left;margin-top:16px">${renderMarkdown(fallback)}</div>` : ""}
+        <a href="${escapeHtml(file.url)}" target="_blank" rel="noopener" class="detail-link">Try direct link \u2197</a>
+      </div>`;
+      return;
+    }
+
     if (ext === "html" || ext === "htm") {
-      const resp = await fetch(file.url);
-      if (myLoadId !== detailLoadId) return;
-      const html = await resp.text();
       viewer.innerHTML = `<iframe sandbox="allow-same-origin" class="fips-report-frame"></iframe>`;
-      viewer.querySelector("iframe").srcdoc = html;
+      viewer.querySelector("iframe").srcdoc = text;
 
     } else if (ext === "json") {
-      const resp = await fetch(file.url);
-      if (myLoadId !== detailLoadId) return;
-      const data = await resp.json();
-      viewer.innerHTML = `<pre class="json-viewer-pre">${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+      try {
+        const data = JSON.parse(text);
+        viewer.innerHTML = `<pre class="json-viewer-pre">${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+      } catch {
+        viewer.innerHTML = `<pre class="json-viewer-pre">${escapeHtml(text)}</pre>`;
+      }
 
     } else if (["gif", "png", "jpg", "jpeg", "svg", "webp"].includes(ext)) {
       viewer.innerHTML = `<div class="fips-image-viewer"><img alt="${escapeHtml(name)}"></div>`;
-      fetch(file.url).then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); })
-        .then(blob => { const u = URL.createObjectURL(blob); viewer.querySelector("img").src = u; })
-        .catch(() => { viewer.querySelector("img").alt = "Failed to load"; });
+      const blob = await resp.blob();
+      if (myLoadId !== detailLoadId) return;
+      viewer.querySelector("img").src = URL.createObjectURL(blob);
 
     } else if (ext === "md") {
-      const resp = await fetch(file.url);
-      if (myLoadId !== detailLoadId) return;
-      const text = await resp.text();
-      const truncated = text.length > 100000
-        ? text.slice(0, 100000) + "\n\n... truncated (" + text.length + " bytes total)"
-        : text;
+      const truncated = text.length > 100000 ? text.slice(0, 100000) + "\n\n... truncated" : text;
       viewer.innerHTML = `<div class="md-viewer">${renderMarkdown(truncated)}</div>`;
 
     } else if (["log", "txt", "env", "yaml", "yml", "csv"].includes(ext) || name === "DONE") {
-      const resp = await fetch(file.url);
-      if (myLoadId !== detailLoadId) return;
-      const text = await resp.text();
-      const truncated = text.length > 50000
-        ? text.slice(0, 50000) + "\n\n... truncated (" + text.length + " bytes total)"
-        : text;
+      const truncated = text.length > 50000 ? text.slice(0, 50000) + "\n\n... truncated" : text;
       viewer.innerHTML = `<pre class="json-viewer-pre">${escapeHtml(truncated)}</pre>`;
 
     } else {
@@ -1950,7 +1982,12 @@ async function showFipsFile(file, viewer, myLoadId) {
     }
   } catch (e) {
     if (myLoadId !== detailLoadId) return;
-    viewer.innerHTML = `<div class="fips-download-state"><p>Failed to load ${escapeHtml(name)}</p><a href="${escapeHtml(file.url)}" target="_blank" rel="noopener" class="detail-link">Open directly \u2197</a></div>`;
+    const fallback = run?.summary?.metadata?.summary || "";
+    viewer.innerHTML = `<div class="fips-download-state">
+      <p>Failed to load ${escapeHtml(name)}</p>
+      ${fallback ? `<div class="md-viewer" style="text-align:left;margin-top:16px">${renderMarkdown(fallback)}</div>` : ""}
+      <a href="${escapeHtml(file.url)}" target="_blank" rel="noopener" class="detail-link">Open directly \u2197</a>
+    </div>`;
   }
 }
 
