@@ -3,8 +3,45 @@
 // AND kind 30078 parameterized-replaceable run summaries from ALL pubkeys.
 // Renders per-project views (tollgate / fips / BLE / microfips / generic).
 // Pure vanilla JS, no build step.
-//
-// Event contracts:
+
+// === CLIENT-SIDE ERROR CAPTURE ================================================
+// Must run before any other code to catch initialization errors.
+// Queues errors in localStorage so they survive page reloads.
+(function () {
+  var KEY = "tollgate_dashboard_errors";
+  var MAX = 10;
+  function queue(err) {
+    try {
+      var q = JSON.parse(localStorage.getItem(KEY) || "[]");
+      q.push(Object.assign({ ts: Date.now() }, err));
+      if (q.length > MAX) q.shift();
+      localStorage.setItem(KEY, JSON.stringify(q));
+    } catch (e) {}
+  }
+  window.addEventListener("error", function (e) {
+    queue({
+      type: "error",
+      msg: e.message || "(unknown error)",
+      src: (e.filename || "?") + ":" + (e.lineno || 0) + ":" + (e.colno || 0),
+      stack:
+        e.error && e.error.stack
+          ? e.error.stack.split("\n").slice(0, 5).join("\n")
+          : "",
+    });
+  });
+  window.addEventListener("unhandledrejection", function (e) {
+    queue({
+      type: "promise",
+      msg: e.reason && e.reason.message ? e.reason.message : String(e.reason),
+      stack:
+        e.reason && e.reason.stack
+          ? e.reason.stack.split("\n").slice(0, 5).join("\n")
+          : "",
+    });
+  });
+})();
+
+// === EVENT CONTRACTS =========================================================
 //
 //   kind 5900 (DVM job request):
 //     tags: ["param", key, value], ["e", request_id]
@@ -3503,4 +3540,39 @@ function renderCvmServiceExtra(got) {
   }
 
   subscribeToRealtimeUpdates();
+
+  (function showErrorBanner() {
+    var KEY = "tollgate_dashboard_errors";
+    var q;
+    try { q = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { return; }
+    if (!q.length) return;
+    var banner = document.getElementById("error-banner");
+    if (!banner) return;
+    var recent = q[q.length - 1];
+    var count = q.length;
+    var text = banner.querySelector(".error-banner-text");
+    var age = Math.round((Date.now() - recent.ts) / 1000);
+    var ageStr = age < 60 ? age + "s ago" : age < 3600 ? Math.round(age / 60) + "m ago" : Math.round(age / 3600) + "h ago";
+    text.textContent = count === 1
+      ? "JS error (" + ageStr + "): " + recent.msg
+      : count + " JS errors (latest " + ageStr + "): " + recent.msg;
+    banner.querySelector(".error-banner-copy").addEventListener("click", function () {
+      var dump = q.map(function (e) {
+        return "[" + new Date(e.ts).toISOString() + "] " + e.type + ": " + e.msg +
+          (e.src ? "\n  at " + e.src : "") +
+          (e.stack ? "\n" + e.stack : "");
+      }).join("\n\n");
+      navigator.clipboard.writeText(dump).then(function () {
+        banner.querySelector(".error-banner-copy").textContent = "Copied!";
+        setTimeout(function () {
+          banner.querySelector(".error-banner-copy").textContent = "Copy";
+        }, 2000);
+      });
+    });
+    banner.querySelector(".error-banner-dismiss").addEventListener("click", function () {
+      localStorage.removeItem(KEY);
+      banner.hidden = true;
+    });
+    banner.hidden = false;
+  })();
 })();
