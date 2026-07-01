@@ -44,7 +44,7 @@ const MAX_CONCURRENT_IMG_LOADS = 3;
 const imgLoadQueue = [];
 
 const CACHE_KEY = "prta:runs:v6";
-const filterState = { search: "", status: "all", sort: "newest", runner: "", project: "ours" };
+const filterState = { search: "", status: "all", sort: "newest", runner: "", project: "ours", maxAge: 604800 };
 let detailLoadId = 0;
 let currentTestFilter = "all";
 let currentTestSearch = "";
@@ -913,6 +913,11 @@ function updateConnectionStatus(connected, total) {
 function getFilteredRuns() {
   let runs = allRuns.slice();
 
+  if (filterState.maxAge && filterState.maxAge > 0) {
+    const cutoff = Math.floor(Date.now() / 1000) - filterState.maxAge;
+    runs = runs.filter((r) => (r.timestamp || 0) >= cutoff);
+  }
+
   if (filterState.project && filterState.project !== "all") {
     if (filterState.project === "ours") {
       runs = runs.filter((r) => {
@@ -980,10 +985,13 @@ function populateRunnerFilter() {
   const runners = [...new Set(
     allRuns.map((r) => r.runnerNpub).filter(Boolean)
   )].sort((a, b) => {
+    const aCount = allRuns.filter((r) => r.runnerNpub === a).length;
+    const bCount = allRuns.filter((r) => r.runnerNpub === b).length;
+    if (bCount !== aCount) return bCount - aCount;
     const aNewest = allRuns.filter((r) => r.runnerNpub === a).reduce((mx, r) => Math.max(mx, r.timestamp || 0), 0);
     const bNewest = allRuns.filter((r) => r.runnerNpub === b).reduce((mx, r) => Math.max(mx, r.timestamp || 0), 0);
     return bNewest - aNewest;
-  });
+  }).slice(0, 20);
 
   const currentValue = filterState.runner;
   select.innerHTML = `<option value="">All runners</option>` +
@@ -1028,6 +1036,12 @@ function buildSidebar() {
         <option value="oldest">Oldest</option>
         <option value="most">Most tests</option>
       </select>
+      <select id="age-filter" class="age-filter">
+        <option value="86400">Last 24h</option>
+        <option value="604800" selected>Last 7 days</option>
+        <option value="2592000">Last 30 days</option>
+        <option value="0">All time</option>
+      </select>
     </div>
     <div class="runs-scroll" id="runs-scroll"></div>
   `;
@@ -1069,6 +1083,14 @@ function wireSidebarControls() {
   if (sortSelect) {
     sortSelect.addEventListener("change", (e) => {
       filterState.sort = e.target.value;
+      renderRunsList();
+    });
+  }
+
+  const ageFilter = document.getElementById("age-filter");
+  if (ageFilter) {
+    ageFilter.addEventListener("change", (e) => {
+      filterState.maxAge = parseInt(e.target.value, 10);
       renderRunsList();
     });
   }

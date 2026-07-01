@@ -374,6 +374,27 @@ aside#runs-list {
   border-color: var(--accent);
 }
 
+.age-filter {
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  outline: none;
+  transition: var(--transition);
+}
+.age-filter:hover {
+  border-color: var(--text-dim);
+  color: var(--text);
+}
+.age-filter:focus {
+  border-color: var(--accent);
+}
+
 /* Runs scroll container */
 .runs-scroll {
   flex: 1;
