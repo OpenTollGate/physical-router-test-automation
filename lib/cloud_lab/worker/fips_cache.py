@@ -73,6 +73,7 @@ def get_fips_binary(
 
     def build():
         log.info("Building fips from %s@%s...", ref, commit[:12])
+        ensure_rust()
         _run(f"git clone --depth 1 --branch {shlex.quote(ref)} {FIPS_REPO} /tmp/fips-build", timeout=60)
         _run("cd /tmp/fips-build && cargo build --release", timeout=600)
         result = "/tmp/fips-build/target/release"
@@ -82,7 +83,6 @@ def get_fips_binary(
             if os.path.exists(src):
                 _run(f"cp {src} {dest_dir}/{binary}")
                 _run(f"chmod +x {dest_dir}/{binary}")
-        # Create a tarball for caching
         _run(f"tar czf /tmp/fips-binaries.tar.gz -C {result} fips fipsctl fipstop 2>/dev/null || true")
         return "/tmp/fips-binaries.tar.gz"
 
@@ -91,6 +91,7 @@ def get_fips_binary(
             return dest
         tarball = "/tmp/fips-binaries.tar.gz"
         if os.path.exists(tarball):
+            _run(f"mkdir -p {dest_dir}")
             _run(f"tar xzf {tarball} -C {dest_dir}/")
             _run(f"chmod +x {dest_dir}/fips {dest_dir}/fipsctl {dest_dir}/fipstop 2>/dev/null || true")
         return dest

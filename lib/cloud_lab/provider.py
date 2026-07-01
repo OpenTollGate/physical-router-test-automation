@@ -258,13 +258,22 @@ class SHCProvider(VMProvider):
     def ssh(self, vm, command, timeout=300):
         import subprocess
         user = os.environ.get("SHC_SSH_USER", "debian")
+        ssh_key = os.environ.get("SHC_SSH_KEY") or os.environ.get("TOLLGATE_GCP_SSH_KEY")
+        if not ssh_key:
+            for candidate in ["~/.ssh/id_ed25519", "~/.ssh/google_compute_engine"]:
+                expanded = os.path.expanduser(candidate)
+                if os.path.exists(expanded):
+                    ssh_key = expanded
+                    break
         cmd = [
             "ssh", "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "LogLevel=ERROR",
             "-o", f"ConnectTimeout={min(timeout, 30)}",
-            f"{user}@{vm.ip}", command,
         ]
+        if ssh_key and os.path.exists(os.path.expanduser(ssh_key)):
+            cmd.extend(["-i", os.path.expanduser(ssh_key)])
+        cmd.extend([f"{user}@{vm.ip}", command])
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if r.returncode != 0:
             raise RuntimeError(f"SSH failed: {r.stderr}")
@@ -273,11 +282,20 @@ class SHCProvider(VMProvider):
     def scp_upload(self, vm, local_path, remote_path):
         import subprocess
         user = os.environ.get("SHC_SSH_USER", "debian")
+        ssh_key = os.environ.get("SHC_SSH_KEY") or os.environ.get("TOLLGATE_GCP_SSH_KEY")
+        if not ssh_key:
+            for candidate in ["~/.ssh/id_ed25519", "~/.ssh/google_compute_engine"]:
+                expanded = os.path.expanduser(candidate)
+                if os.path.exists(expanded):
+                    ssh_key = expanded
+                    break
         cmd = [
             "scp", "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
-            local_path, f"{user}@{vm.ip}:{remote_path}",
         ]
+        if ssh_key and os.path.exists(os.path.expanduser(ssh_key)):
+            cmd.extend(["-i", os.path.expanduser(ssh_key)])
+        cmd.extend([local_path, f"{user}@{vm.ip}:{remote_path}"])
         subprocess.run(cmd, check=True, timeout=120)
 
     def destroy_vm(self, vm, immediate=True):
@@ -295,7 +313,6 @@ class SHCProvider(VMProvider):
                 raw=v,
             )
             for v in vms
-            if "tollgate" in v.get("hostname", "").lower() or "test" in v.get("hostname", "").lower()
         ]
 
     def cleanup_stale(self, max_age_hours=2):
