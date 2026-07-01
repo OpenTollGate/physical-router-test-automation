@@ -286,6 +286,7 @@ if fetch_cached blossomfs-8784100 /opt/blossomfs/target/release/blossomfs; then
   echo "  BlossomFS from cache"
 else
   echo "  Compiling BlossomFS from source..."
+  sudo rm -rf /opt/blossomfs
   sudo git clone --depth 1 https://github.com/Amperstrand/blossomfs /opt/blossomfs || fail 11 "blossomfs clone"
   cd /opt/blossomfs && sudo /root/.cargo/bin/cargo build --release || fail 11 "blossomfs build"
 fi
