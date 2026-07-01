@@ -297,6 +297,15 @@ else
   sudo rm -rf /opt/blossomfs
   sudo git clone --depth 1 https://github.com/Amperstrand/blossomfs /opt/blossomfs || fail 11 "blossomfs clone"
   cd /opt/blossomfs && sudo /root/.cargo/bin/cargo build --release || fail 11 "blossomfs build"
+  echo "  Uploading BlossomFS binary to Blossom for caching..."
+  BF_SHA=$(sha256sum /opt/blossomfs/target/release/blossomfs | cut -d' ' -f1)
+  BF_AUTH=$(nak event --kind 24242 --tag "t=upload" --tag "x=$BF_SHA" --tag "expiration=$(( $(date +%s) + 600 ))" --sign "$(cat /root/nsec)" 2>/dev/null | base64 -w0) 2>/dev/null
+  if [ -n "$BF_AUTH" ]; then
+    curl -sf -X PUT "https://blossom.psbt.me/upload" \
+      -H "Authorization: Nostr $BF_AUTH" \
+      -H "Content-Type: application/octet-stream" \
+      --data-binary @/opt/blossomfs/target/release/blossomfs 2>/dev/null && echo "  BlossomFS cached (sha256=$BF_SHA)" || echo "  Upload failed (non-fatal)"
+  fi
 fi
 echo "[11/$N_STEPS] done"
 
