@@ -413,6 +413,25 @@ def start_inner_vms(config: WorkerConfig) -> None:
 def stop_inner_vms() -> None:
     _run("killall -9 qemu-system-x86_64 2>/dev/null || true", timeout=15, check=False)
 def delete_self(config: WorkerConfig) -> None:
+    if config.cloud == "shc":
+        import sys
+        sys.path.insert(0, "/opt/tollgate-test")
+        from lib.cloud_lab.shc import SHCClient
+        client = SHCClient()
+        sid = int(config.service_id) if config.service_id else 0
+        if sid:
+            log.info("Cancelling SHC VM service_id=%d", sid)
+            try:
+                client.cancel_vm(sid, immediate=True)
+                log.info("SHC VM cancelled successfully")
+            except Exception as exc:
+                log.warning("SHC cancel failed: %s — falling back to shutdown", exc)
+                _run("shutdown -h now", timeout=10, check=False)
+        else:
+            log.warning("No SHC service_id — shutting down instead of cancelling")
+            _run("shutdown -h now", timeout=10, check=False)
+        return
+
     _run(
         f"gcloud compute instances delete {shlex.quote(config.vm_name)} "
         f"--project={shlex.quote(config.project)} --zone={shlex.quote(config.zone)} "
