@@ -652,9 +652,9 @@ function parseRunFromKind30078(event, fileMeta) {
 
   const runId = dTag || (payload && payload.run_id) || event.id;
 
-  const passed = payload ? (payload.passed ?? payload.counts?.passed ?? null) : null;
-  const failed = payload ? (payload.failed ?? payload.counts?.failed ?? null) : null;
-  const skipped = payload ? (payload.skipped ?? payload.counts?.skipped ?? null) : null;
+  const passed = payload ? (payload.passed ?? payload.counts?.passed ?? payload.metadata?.passed ?? null) : null;
+  const failed = payload ? (payload.failed ?? payload.counts?.failed ?? payload.metadata?.failed ?? null) : null;
+  const skipped = payload ? (payload.skipped ?? payload.counts?.skipped ?? payload.metadata?.skipped ?? null) : null;
   const total = payload && payload.total != null
     ? payload.total
     : payload && payload.counts?.total != null
