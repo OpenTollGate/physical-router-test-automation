@@ -176,7 +176,7 @@ def run_worker(config: WorkerConfig) -> int:
             log.info("=== Pipeline start ===")
 
             # In runner mode, GH_TOKEN is set by the workflow (cross_repo_token
-            # for artifact download). Don't overwrite it — publish-report.sh
+            # for artifact download). Don't overwrite it — result_publisher
             # detects GITHUB_ACTIONS=true and uses gh auth setup-git instead.
             # Export backend type so child code (select_test_mint, Router
             # instances in subprocess scripts) reads the correct value from

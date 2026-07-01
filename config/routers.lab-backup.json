@@ -1,0 +1,29 @@
+{
+  "default": "lab-router-b",
+  "routers": {
+    "lab-router-a": {
+      "model": "dlink_covr-x1860-a1",
+      "sshHost": "192.168.1.1",
+      "sshUser": "root",
+      "jumpHost": "218",
+      "arch": "mipsel_24kc",
+      "wifiInterface": "wlan0",
+      "tollgateSsidPrefix": "TollGate-",
+      "openwrtVersion": "24.10.1",
+      "openwrtTarget": "ramips/mt7621",
+      "openwrtProfile": "dlink_covr-x1860-a1"
+    },
+    "lab-router-b": {
+      "model": "dlink_covr-x1860-a1",
+      "luciUrl": "http://192.168.13.231:80",
+      "sshHost": "192.168.13.231",
+      "sshUser": "root",
+      "arch": "mipsel_24kc",
+      "wifiInterface": "wlan0",
+      "tollgateSsidPrefix": "TollGate-",
+      "openwrtVersion": "24.10.1",
+      "openwrtTarget": "ramips/mt7621",
+      "openwrtProfile": "dlink_covr-x1860-a1"
+    }
+  }
+}

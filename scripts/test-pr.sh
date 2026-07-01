@@ -332,7 +332,10 @@ if [[ "$PUBLISH" == "true" ]]; then
   else
     echo ""
     echo "==> Publishing report..."
-    "$SCRIPT_DIR/publish-report.sh" "$RESULTS_DIR" || true
+    python3 -m lib.result_publisher "$RESULTS_DIR" \
+      --nsec-file "${NSEC_FILE:-/root/nsec}" \
+      --run-id "${TOLLGATE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}" \
+      2>/dev/null || echo "    (publish skipped — set NSEC_FILE to enable)"
   fi
 fi
 
