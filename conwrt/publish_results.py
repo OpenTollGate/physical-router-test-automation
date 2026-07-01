@@ -84,11 +84,7 @@ def main():
         run_id=args.run_id,
         blossom_server=args.blossom_server,
         relays=[r.strip() for r in args.relays.split(",")],
-        metadata={
-            "project": "conwrt",
-            "summary": args.summary,
-            "runner": "github-actions-qemu",
-        },
+        metadata=metadata,
     )
 
     print(f"\nResults published!")

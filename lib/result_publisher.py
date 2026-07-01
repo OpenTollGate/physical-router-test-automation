@@ -475,6 +475,9 @@ def publish_results(
         ],
         "metadata": metadata,
     }
+    for key in ("passed", "failed", "skipped", "total"):
+        if key in metadata:
+            summary_payload[key] = metadata[key]
     summary_content = json.dumps(summary_payload, separators=(",", ":"))
 
     summary_event_id: str | None = None
