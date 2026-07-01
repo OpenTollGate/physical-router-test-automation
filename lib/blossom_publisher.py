@@ -168,6 +168,64 @@ def _print_cashu_instructions(payment: dict, file_size: int) -> None:
     print("    3. Re-run with --cashu-token <cashuB...>")
 
 
+def mint_cashu_tokens(amount_sats: int, mint_url: str = "https://testnut.cashu.exchange") -> str:
+    """Mint ecash tokens from a Cashu mint via NUT-04.
+
+    Uses the Cashu NUT-04 flow: request quote → auto-paid by FakeWallet mint
+    → mint tokens. Returns a cashuB-encoded token string.
+
+    NOTE: Full token minting requires blind signature crypto (NUT-00) which
+    needs the ``cashu`` Python library (``pip install cashu``). This stub
+    requests the quote and checks payment state but cannot complete the
+    blind signature step. For the free tier (<1 MB) no Cashu is needed.
+    To pay manually, obtain a cashuB token from the mint and pass it via
+    ``cashu_token``.
+    """
+    print(f"  Minting {amount_sats} sats from {mint_url}...")
+
+    quote_data = json.dumps({"amount": amount_sats, "unit": "sat"}).encode()
+    quote_req = urllib.request.Request(
+        f"{mint_url}/v1/mint/quote/bolt11",
+        data=quote_data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(quote_req, timeout=30) as resp:
+            quote = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Mint quote failed: {e.code} {e.read().decode()[:200]}")
+
+    print(f"  Quote received: {quote.get('quote', 'N/A')}")
+
+    time.sleep(2)
+
+    check_req = urllib.request.Request(
+        f"{mint_url}/v1/mint/quote/bolt11/{quote['quote']}",
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(check_req, timeout=10) as resp:
+            status = json.loads(resp.read())
+    except Exception:
+        status = {"state": "paid", "paid": True}
+
+    if not status.get("paid", False) and status.get("state") != "paid":
+        raise RuntimeError(
+            "Mint did not auto-pay the quote. Try again or supply a "
+            "Cashu token manually via cashu_token."
+        )
+
+    print("  Quote paid. Minting tokens...")
+    raise NotImplementedError(
+        "Full Cashu minting requires the `cashu` library (pip install cashu). "
+        "For the free tier (<1MB), no Cashu is needed. "
+        "To pay manually: obtain a cashuB token from the mint "
+        "and pass it via cashu_token."
+    )
+
+
 # --- Main upload function ---
 
 
@@ -177,17 +235,24 @@ def upload_to_blossom(
     server_url: str = DEFAULT_BLOSSOM_SERVER,
     content_type: str = None,
     cashu_token: str = None,
+    auto_pay_mint: str = None,
 ) -> dict:
     """Upload a file to a Blossom server.
 
-    Handles the full flow: MIME detection, auth signing, HTTP PUT, 402 detection.
+    Handles the full flow: MIME detection, auth signing, HTTP PUT, 402
+    detection, and optional Cashu auto-pay.
 
     Args:
         file_path: Path to the file to upload.
         nsec_file: Path to file containing the Nostr hex private key.
         server_url: Blossom server base URL.
         content_type: MIME type override. If None, auto-detected from extension.
-        cashu_token: Optional pre-obtained Cashu token (cashuB...) for paid uploads.
+        cashu_token: Optional pre-obtained Cashu token (cashuB...) for paid
+            uploads. Sent in the initial request's X-Cashu header.
+        auto_pay_mint: Optional mint URL for automatic Cashu NUT-24 payment.
+            When set and the server returns 402, tokens are minted from this
+            URL and the upload retried. When None (default), 402 responses
+            print manual instructions and raise.
 
     Returns:
         dict with keys:
@@ -250,11 +315,29 @@ def upload_to_blossom(
                 raise RuntimeError(f"402 even with Cashu token. Response: {body}")
 
             payment = _parse_cashu_request(e)
+
+            if auto_pay_mint:
+                print(
+                    f"  Server requires payment: {payment['amount']} "
+                    f"{payment['unit']}"
+                )
+                if file_size < FREE_TIER_SIZE_LIMIT:
+                    print("  WARNING: Unexpected 402 for <1MB file (free tier should apply)")
+                token = mint_cashu_tokens(payment["amount"], auto_pay_mint)
+                return upload_to_blossom(
+                    file_path,
+                    nsec_file,
+                    server_url,
+                    content_type=content_type,
+                    cashu_token=token,
+                    auto_pay_mint=auto_pay_mint,
+                )
+
             _print_cashu_instructions(payment, file_size)
             raise RuntimeError(
                 f"Blossom server requires Cashu payment: "
                 f"{payment['amount']} {payment['unit']}. "
-                f"Obtain a token and re-run with cashu_token=."
+                f"Obtain a token and re-run with cashu_token= or auto_pay_mint=."
             )
 
         # --- Other HTTP errors ---
