@@ -91,7 +91,7 @@ def format_duration(ms):
     return f"{minutes}m{secs}s"
 
 
-def generate_comment(results_dir, gh_pages_url):
+def generate_comment(results_dir, dashboard_url):
     results_dir = Path(results_dir)
 
     run_json_path = results_dir / 'run.json'
@@ -105,12 +105,12 @@ def generate_comment(results_dir, gh_pages_url):
 
     schema_version = run_data.get('schema_version', 0)
     if schema_version >= 1:
-        return _generate_comment_canonical(run_data, results_dir, summary_json_path, gh_pages_url)
+        return _generate_comment_canonical(run_data, results_dir, summary_json_path, dashboard_url)
     else:
-        return _generate_comment_legacy(run_data, results_dir, gh_pages_url)
+        return _generate_comment_legacy(run_data, results_dir, dashboard_url)
 
 
-def _generate_comment_canonical(run_data, results_dir, summary_json_path, gh_pages_url):
+def _generate_comment_canonical(run_data, results_dir, summary_json_path, dashboard_url):
     sut = run_data.get('sut', {})
     lab = run_data.get('lab', {})
     counts = run_data.get('counts', {})
@@ -212,8 +212,8 @@ def _generate_comment_canonical(run_data, results_dir, summary_json_path, gh_pag
         lines.append('')
 
     run_id = run_data.get('run_id', results_dir.name)
-    report_url = f'{gh_pages_url}/reports/{run_id}/'
-    lines.append(f'📊 **Full report**: [View on gh-pages]({report_url})')
+    report_url = dashboard_url
+    lines.append(f'📊 **Full report**: [View on dashboard]({report_url}) — select run `{run_id}`')
     lines.append('')
     lines.append('---')
     lines.append('*Tests ran on physical hardware by [physical-router-test-automation](https://github.com/OpenTollGate/physical-router-test-automation).*')
@@ -228,7 +228,7 @@ def _generate_comment_canonical(run_data, results_dir, summary_json_path, gh_pag
     return markdown
 
 
-def _generate_comment_legacy(run_data, results_dir, gh_pages_url):
+def _generate_comment_legacy(run_data, results_dir, dashboard_url):
     results_json_path = results_dir / 'report' / 'results.json'
 
     if not results_json_path.exists():
@@ -313,7 +313,7 @@ def _generate_comment_legacy(run_data, results_dir, gh_pages_url):
         lines.append('All tests were run. PR-specific grouping could not be determined.')
 
     lines.append('')
-    lines.append(f'📊 **Full report**: [View on gh-pages]({gh_pages_url}/reports/{results_dir.name}/)')
+    lines.append(f'📊 **Full report**: [View on dashboard]({dashboard_url}) — select run `{results_dir.name}`')
 
     lines.append('')
     lines.append('---')
@@ -332,11 +332,12 @@ def _generate_comment_legacy(run_data, results_dir, gh_pages_url):
 def main():
     parser = argparse.ArgumentParser(description='Generate PR comment from test results')
     parser.add_argument('--results-dir', required=True, help='Path to canonical run directory containing run.json')
-    parser.add_argument('--gh-pages-url', default='https://OpenTollGate.github.io/physical-router-test-automation', help='Base URL for gh-pages')
+    parser.add_argument('--dashboard-url', dest='dashboard_url', default='https://tests.tollgate.me', help='Dashboard URL for report links')
+    parser.add_argument('--gh-pages-url', dest='dashboard_url', help=argparse.SUPPRESS)
 
     args = parser.parse_args()
 
-    generate_comment(args.results_dir, args.gh_pages_url)
+    generate_comment(args.results_dir, args.dashboard_url)
 
 
 if __name__ == '__main__':

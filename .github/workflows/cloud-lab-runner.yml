@@ -56,7 +56,7 @@ on:
       publish:
         type: boolean
         default: true
-        description: "Publish report to tests.tollgate.me (gh-pages)"
+        description: "Publish report to Blossom + Nostr"
       smoke:
         type: boolean
         default: false
