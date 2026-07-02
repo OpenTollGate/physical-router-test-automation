@@ -533,14 +533,9 @@ def get_provider(provider_name: str | None = None) -> VMProvider:
     """
     name = (provider_name or os.environ.get("TOLLGATE_VM_PROVIDER", "shc")).lower()
     # shc-pulumi is registered lazily to avoid a circular import (pulumi_runner
-    # imports from this module) and so the module loads without pulumi installed.
+    # imports SHCProvider from this module). Pulumi is a required dependency.
     if name == "shc-pulumi":
-        try:
-            from .pulumi_runner import PulumiSHCProvider
-        except ImportError as exc:
-            raise ValueError(
-                f"Provider 'shc-pulumi' requires the pulumi + shc-pulumi packages: {exc}"
-            ) from exc
+        from .pulumi_runner import PulumiSHCProvider
         _PROVIDERS["shc-pulumi"] = PulumiSHCProvider
     cls = _PROVIDERS.get(name)
     if cls is None:

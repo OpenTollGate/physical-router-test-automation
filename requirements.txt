@@ -7,3 +7,11 @@ pyserial>=3.5
 PyYAML>=6.0
 requests
 nostr-publish>=0.1.0
+
+# SHC cloud lab + Pulumi VM lifecycle (sibling repos, editable installs).
+# Both repos must be checked out as siblings of this repo:
+#   ../shc-toolkit     — SHC API client
+#   ../shc-pulumi      — Pulumi dynamic provider for SHC VPS
+-e ../shc-toolkit
+-e ../shc-pulumi
+pulumi>=3.0
