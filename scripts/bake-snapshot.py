@@ -218,6 +218,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
             "rm -rf /opt/tollgate-venv && "
             "python3 -m venv /opt/tollgate-venv && "
             "/opt/tollgate-venv/bin/pip install -q -r /opt/tollgate-test/requirements.txt && "
+            "/opt/tollgate-venv/bin/pip install -q git+https://github.com/Amperstrand/nostr-publish-file-metadata-action.git && "
             "/opt/tollgate-venv/bin/python3 -c 'import pytest; print(\"VENV_OK\")'"
         )
         r = _gcloud_ssh(vm_name, venv_cmd, zone, project, timeout=300)
