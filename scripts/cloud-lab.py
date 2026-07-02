@@ -46,10 +46,10 @@ from lib.cloud_lab.provider import get_provider, VMProvider
 
 def _get_provider(args: argparse.Namespace) -> VMProvider | None:
     cloud = getattr(args, "cloud", "gcp")
-    if cloud == "shc":
+    if cloud in ("shc", "shc-pulumi"):
         os.environ.setdefault("SHC_API_KEY", "")
-        os.environ["TOLLGATE_VM_PROVIDER"] = "shc"
-        return get_provider("shc")
+        os.environ["TOLLGATE_VM_PROVIDER"] = cloud
+        return get_provider(cloud)
     return None
 
 
@@ -590,8 +590,8 @@ def build_parser() -> argparse.ArgumentParser:
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument("--zone", default=DEFAULT_ZONE)
         p.add_argument("--vm-name", default=VM_NAME)
-        p.add_argument("--cloud", default="gcp", choices=["gcp", "shc"],
-                       help="Cloud provider: gcp (Google Cloud) or shc (Sovereign Hybrid Compute)")
+        p.add_argument("--cloud", default="gcp", choices=["gcp", "shc", "shc-pulumi"],
+                       help="Cloud provider: gcp, shc (imperative), or shc-pulumi (Pulumi Automation API)")
 
     def target_flags(p: argparse.ArgumentParser) -> None:
         g = p.add_mutually_exclusive_group(required=True)
@@ -622,8 +622,8 @@ def build_parser() -> argparse.ArgumentParser:
     ssh.set_defaults(func=cmd_ssh)
 
     submit = sub.add_parser("submit", help="Fire-and-forget: wait for CI artifact, spawn autonomous test VM")
-    submit.add_argument("--cloud", default="gcp", choices=["gcp", "shc"],
-                        help="Cloud provider: gcp (Google Cloud) or shc (Sovereign Hybrid Compute)")
+    submit.add_argument("--cloud", default="gcp", choices=["gcp", "shc", "shc-pulumi"],
+                        help="Cloud provider: gcp, shc (imperative), or shc-pulumi (Pulumi Automation API)")
     submit.add_argument("--zone", default=DEFAULT_ZONE)
     submit.add_argument("--machine-type", default=DEFAULT_MACHINE_TYPE)
     submit.add_argument("--disk-size", type=int, default=DEFAULT_DISK_SIZE_GB)
@@ -705,8 +705,8 @@ def build_parser() -> argparse.ArgumentParser:
     reaper.set_defaults(func=cmd_install_reaper)
 
     run = sub.add_parser("run-tests", help="Submit cloud run and wait (alias for submit --wait --publish)")
-    run.add_argument("--cloud", default="gcp", choices=["gcp", "shc"],
-                     help="Cloud provider: gcp or shc")
+    run.add_argument("--cloud", default="gcp", choices=["gcp", "shc", "shc-pulumi"],
+                     help="Cloud provider: gcp, shc (imperative), or shc-pulumi (Pulumi Automation API)")
     run.add_argument("--zone", default=DEFAULT_ZONE)
     run.add_argument("--machine-type", default=DEFAULT_MACHINE_TYPE)
     run.add_argument("--disk-size", type=int, default=DEFAULT_DISK_SIZE_GB)
