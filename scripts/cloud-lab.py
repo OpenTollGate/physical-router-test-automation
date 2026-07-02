@@ -231,6 +231,8 @@ def cmd_submit(args: argparse.Namespace) -> int:
     cloud = getattr(args, "cloud", "gcp")
     if cloud in ("shc", "shc-pulumi"):
         from lib.cloud_lab.shc_submit import submit_run_shc
+        _prov = _get_provider(args)
+        _pulumi_prov = _prov if _prov and _prov.provider_name == "shc-pulumi" else None
         info = submit_run_shc(
             target,
             publish=cast(bool, args.publish),
@@ -241,6 +243,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
             portal=cast(str, args.portal),
             keep_vm_on_failure=not getattr(args, "self_delete", False),
             lease_minutes=cast(int, getattr(args, "lease", 90)),
+            provider=_pulumi_prov,
         )
         print(f"""
 Submitted SHC run {info['run_id']}

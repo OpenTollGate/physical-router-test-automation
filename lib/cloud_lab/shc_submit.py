@@ -254,7 +254,7 @@ step 10 "Downloading QEMU images..."
 WORKDIR=/root/tollgate-virtual-lab
 sudo mkdir -p "$WORKDIR/images" "$WORKDIR/run" "$WORKDIR/overlays"
 cd "$WORKDIR/images"
-OPENWRT_VERSION=24.10.1
+OPENWRT_VERSION=${{OPENWRT_VERSION:-24.10.1}}
 sudo wget -q "https://downloads.openwrt.org/releases/${{OPENWRT_VERSION}}/targets/x86/64/openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz" || fail 10 "openwrt download"
 sudo gunzip -kf "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz" || true
 sudo qemu-img convert -f raw -O qcow2 "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img" openwrt-base.qcow2 || fail 10 "qemu-img convert"
@@ -376,6 +376,7 @@ def submit_run_shc(
     portal: str = "builtin",
     keep_vm_on_failure: bool = False,
     lease_minutes: int = 90,
+    provider=None,
 ) -> dict[str, str]:
     """Order an SHC VM, bootstrap it, and run the test worker pipeline.
 
@@ -418,45 +419,55 @@ def submit_run_shc(
     if overlay_b64:
         print(f"Including local overlay ({len(overlay_b64)} bytes b64)")
 
-    print(f"Ordering SHC VM '{hostname}' (Standard 2C/8GB)...")
-    result = client.submit_order(
-        hostname=hostname,
-        package_id=SHC_PACKAGE_ID_STANDARD,
-        pricing_id=SHC_PRICING_ID_STANDARD,
-        idempotency_key=f"tollgate-{run_id}",
-    )
-    sids = result.get("service_ids", [])
-    if not sids:
-        raise RuntimeError(f"SHC order failed: {result}")
-    service_id = int(sids[0])
-    print(f"  Ordered service #{service_id}")
-
-    # 3. Wait for provisioning + IP
-    print("Waiting for provisioning...")
-    deadline = time.time() + 600
-    vm_ip = ""
-    while time.time() < deadline:
-        vm = client.get_vm(service_id)
-        state = vm.get("provisioning_state", "unknown")
-        ips = vm.get("ips", [])
-        vm_ip = ips[0]["ip"] if ips else ""
-        print(f"  state={state} ip={vm_ip or 'pending'}")
-        if state == "ready" and vm_ip:
-            break
-        if state in ("failed", "error", "cancelled"):
-            raise RuntimeError(f"SHC provisioning failed: {state}")
-        time.sleep(10)
-    else:
-        raise TimeoutError(f"SHC VM {service_id} not ready after 600s")
-
-    print(f"VM ready: {hostname} @ {vm_ip}")
-
-    # 4. Inject SSH key
     ssh_key_path = os.environ.get("SHC_SSH_KEY", str(Path.home() / ".ssh/id_rsa.pub"))
-    if Path(ssh_key_path).exists():
-        print("Injecting SSH key...")
-        pubkey = Path(ssh_key_path).read_text().strip()
-        client.apply_ssh_key_live(service_id, pubkey)
+    pubkey = Path(ssh_key_path).read_text().strip() if Path(ssh_key_path).exists() else ""
+
+    if provider is not None:
+        print(f"Creating SHC VM '{hostname}' via Pulumi (Standard 2C/8GB)...")
+        vm_info = provider.create_vm(hostname, machine_type="2C/8GB")
+        service_id = int(vm_info.service_id)
+        vm_ip = vm_info.ip
+        print(f"  VM ready: service #{service_id} @ {vm_ip}")
+        if pubkey:
+            provider.apply_ssh_key(vm_info, pubkey)
+    else:
+        print(f"Ordering SHC VM '{hostname}' (Standard 2C/8GB)...")
+        result = client.submit_order(
+            hostname=hostname,
+            package_id=SHC_PACKAGE_ID_STANDARD,
+            pricing_id=SHC_PRICING_ID_STANDARD,
+            idempotency_key=f"tollgate-{run_id}",
+        )
+        sids = result.get("service_ids", [])
+        if not sids:
+            raise RuntimeError(f"SHC order failed: {result}")
+        service_id = int(sids[0])
+        print(f"  Ordered service #{service_id}")
+
+        # 3. Wait for provisioning + IP
+        print("Waiting for provisioning...")
+        deadline = time.time() + 600
+        vm_ip = ""
+        while time.time() < deadline:
+            vm = client.get_vm(service_id)
+            state = vm.get("provisioning_state", "unknown")
+            ips = vm.get("ips", [])
+            vm_ip = ips[0]["ip"] if ips else ""
+            print(f"  state={state} ip={vm_ip or 'pending'}")
+            if state == "ready" and vm_ip:
+                break
+            if state in ("failed", "error", "cancelled"):
+                raise RuntimeError(f"SHC provisioning failed: {state}")
+            time.sleep(10)
+        else:
+            raise TimeoutError(f"SHC VM {service_id} not ready after 600s")
+
+        print(f"VM ready: {hostname} @ {vm_ip}")
+
+        # 4. Inject SSH key
+        if pubkey:
+            print("Injecting SSH key...")
+            client.apply_ssh_key_live(service_id, pubkey)
 
     ssh_user = os.environ.get("SHC_SSH_USER", "debian")
     ssh_target = f"{ssh_user}@{vm_ip}"
@@ -507,6 +518,7 @@ def submit_run_shc(
         f"TOLLGATE_ARTIFACT_REPO={shlex.quote(target.repo)}",
         f"TOLLGATE_PR_REPO={shlex.quote(target.pr_repo or target.repo)}",
         f"TOLLGATE_SUITE_REF={shlex.quote(suite_ref)}",
+        f"OPENWRT_VERSION={shlex.quote(os.environ.get('OPENWRT_VERSION', '24.10.1'))}",
         f"TOLLGATE_BACKEND={shlex.quote(target.backend)}",
         f"TOLLGATE_PUBLISH={'true' if publish else 'false'}",
         f"TOLLGATE_QUICK={'true' if quick else 'false'}",
