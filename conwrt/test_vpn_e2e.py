@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
 """E2E test: Cashu pay -> JWT -> WG peer -> tunnel.
 
-Tests the full payment-gated VPN flow:
-1. Mint a test Cashu token from testnut.cashu.exchange
-2. Pay at tollgate-auth (nodns.shop) with server_id
-3. Receive JWT + endpoint config
-4. POST JWT to VPN server's wg-jwt-peer
-5. Verify WG peer was added
-6. Connect WireGuard and ping through tunnel
-7. Publish results to Nostr/Blossom
+Mints testnuts on nodns.shop (where cashu Python works), then runs the
+full payment-gated VPN flow locally via curl.
 
 Usage:
     python3 conwrt/test_vpn_e2e.py
@@ -22,11 +16,9 @@ import sys
 import time
 from pathlib import Path
 
-TOLLGATE_AUTH = "https://nodns.shop"
-VPN_SERVER_ID = "vpn-shc-860"
-VPN_SERVER_IP = "66.92.204.236"
-VPN_PEER_API = f"http://{VPN_SERVER_IP}:8082"
-TESTNUT_MINT = "https://testnut.cashu.exchange"
+TOLLGATE_AUTH = os.environ.get("TOLLGATE_AUTH", "https://nodns.shop")
+VPN_SERVER_ID = os.environ.get("VPN_SERVER_ID", "vpn-shc-860")
+VPN_PEER_API = os.environ.get("VPN_PEER_API", "http://66.92.204.239:8082")
 NSEC_FILE = os.environ.get("NSEC_FILE", str(Path.home() / ".config" / "prta" / "nsec"))
 
 SUITE_ROOT = Path(__file__).resolve().parents[1]
@@ -38,7 +30,8 @@ def run(cmd: list[str], timeout: int = 30) -> tuple[int, str, str]:
     return r.returncode, r.stdout.strip(), r.stderr.strip()
 
 
-def curl(url: str, method: str = "GET", data: dict | None = None, headers: dict | None = None, timeout: int = 30) -> tuple[int, dict | str]:
+def curl_json(url: str, method: str = "GET", data: dict | None = None,
+              headers: dict | None = None, timeout: int = 60) -> tuple[int, dict | str]:
     cmd = ["curl", "-sf", "-X", method, "--connect-timeout", "10", "--max-time", str(timeout)]
     if headers:
         for k, v in headers.items():
@@ -55,95 +48,112 @@ def curl(url: str, method: str = "GET", data: dict | None = None, headers: dict 
         return 0, out
 
 
-def mint_testnuts(amount_sats: int = 10) -> str | None:
-    """Mint test Cashu tokens from testnut.cashu.exchange."""
+def mint_testnuts_via_nodns(amount: int = 10) -> str | None:
+    """Mint testnuts using the cashu library on nodns.shop via SSH."""
     rc, out, err = run([
-        "curl", "-sf", "-X", "POST",
-        f"{TESTNUT_MINT}/v1/mint/quote/bolt11",
-        "-H", "Content-Type: application/json",
-        "-d", json.dumps({"unit": "sat", "amount": amount_sats}),
-    ])
+        "ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=10",
+        "root@nodns.shop",
+        "cat > /tmp/mint_token.py << 'PYEOF'\n"
+        "import asyncio\n"
+        "async def m():\n"
+        "    from cashu.wallet.wallet import Wallet\n"
+        f"    w = await Wallet.with_db('https://testnut.cashu.exchange', '/tmp/e2e-mint-{int(time.time())}', 'sat')\n"
+        "    await w.load_mint()\n"
+        f"    q = await w.request_mint({amount})\n"
+        "    import time; time.sleep(3)\n"
+        f"    p = await w.mint({amount}, quote_id=q.quote)\n"
+        "    t = await w.serialize_proofs(p)\n"
+        "    with open('/tmp/cashu-token-out.txt', 'w') as f: f.write(t)\n"
+        "asyncio.run(m())\n"
+        "PYEOF\n"
+        "/root/.local/share/pipx/venvs/cashu/bin/python3 /tmp/mint_token.py > /dev/null 2>&1\n"
+        "cat /tmp/cashu-token-out.txt"
+    ], timeout=30)
     if rc != 0:
-        print(f"  mint quote failed: {err}")
+        print(f"  mint via nodns failed: {err[:200]}")
         return None
-    quote = json.loads(out)
-    invoice = quote.get("request", "")
-    quote_id = quote.get("quote", "")
-    if not invoice or not quote_id:
-        print(f"  no invoice in quote: {out}")
-        return None
-
-    # FakeWallet auto-pays the invoice
-    print(f"  invoice: {invoice[:50]}...")
-    time.sleep(3)
-
-    # Mint tokens
-    rc, out, err = run([
-        "curl", "-sf", "-X", "POST",
-        f"{TESTNUT_MINT}/v1/mint/bolt11",
-        "-H", "Content-Type: application/json",
-        "-d", json.dumps({"quote": quote_id, "outputs": []}),
-    ])
-    if rc != 0:
-        print(f"  mint failed: {err}")
-        return None
-    signatures = json.loads(out).get("signatures", [])
-    if not signatures:
-        print(f"  no signatures: {out}")
-        return None
-
-    token_obj = {
-        "token": [{"mint": TESTNUT_MINT, "proofs": [{"amount": s["amount"], "id": s["id"], "secret": s["secret"], "C": s["C"]} for s in signatures]}],
-        "unit": "sat",
-        "memo": "VPN E2E test",
-    }
-    token_json = json.dumps(token_obj)
-    import base64
-    return "cashuA" + base64.urlsafe_b64encode(token_json.encode()).decode().rstrip("=")
+    for line in out.splitlines():
+        if line.startswith("cashu"):
+            return line
+    return None
 
 
 def test_vpn_e2e() -> dict:
     results = {"tests": {}, "passed": 0, "failed": 0}
 
-    # 1. Mint testnuts
-    print("1. Minting testnuts...")
-    token = mint_testnuts(10)
+    print("1. Minting testnuts via nodns.shop...")
+    token = mint_testnuts_via_nodns(10)
     if not token:
         results["tests"]["mint"] = False
         results["failed"] += 1
         return results
-    print(f"   token: {token[:40]}...")
+    print(f"   token: {token[:50]}...")
     results["tests"]["mint"] = True
     results["passed"] += 1
 
-    # 2. Generate client WG keypair
     print("2. Generating client WG keypair...")
-    rc, priv, err = run(["wg", "genkey"])
-    if rc != 0:
-        print(f"   wg genkey failed: {err}")
-        results["tests"]["wg_keygen"] = False
-        results["failed"] += 1
-        return results
-    rc, pub, err = run(["bash", "-c", f"echo '{priv}' | wg pubkey"])
-    if rc != 0:
-        print(f"   wg pubkey failed: {err}")
-        results["tests"]["wg_keygen"] = False
-        results["failed"] += 1
-        return results
-    print(f"   client pubkey: {pub}")
+    wg_bin = None
+    for p in ["/usr/local/bin/wg", "/opt/homebrew/bin/wg", "/usr/bin/wg"]:
+        if os.path.isfile(p):
+            wg_bin = p
+            break
+    if not wg_bin:
+        rc, out, _ = run(["which", "wg"])
+        if rc == 0:
+            wg_bin = out.strip()
+    if not wg_bin:
+        print("   wg not found locally, generating via SSH on nodns.shop...")
+        rc, out, err = run([
+            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ConnectTimeout=10",
+            "root@nodns.shop",
+            "wg genkey | tee /tmp/wg-priv | wg pubkey > /tmp/wg-pub; cat /tmp/wg-priv /tmp/wg-pub"
+        ], timeout=15)
+        if rc != 0:
+            print(f"   wg genkey via SSH failed: {err}")
+            results["tests"]["wg_keygen"] = False
+            results["failed"] += 1
+            return results
+        lines = out.strip().splitlines()
+        priv = lines[0].strip()
+        pub = lines[1].strip()
+    else:
+        rc, priv, _ = run([wg_bin, "genkey"])
+        if rc != 0:
+            print(f"   wg genkey failed")
+            results["tests"]["wg_keygen"] = False
+            results["failed"] += 1
+            return results
+        rc, pub, _ = run(["bash", "-c", f"echo '{priv}' | {wg_bin} pubkey"])
+    print(f"   pubkey: {pub}")
     results["tests"]["wg_keygen"] = True
     results["passed"] += 1
 
-    # 3. Pay at tollgate-auth
-    print("3. Paying at tollgate-auth (nodns.shop)...")
-    rc, resp = curl(
-        f"{TOLLGATE_AUTH}/v1/wg/connect",
-        method="POST",
-        data={"token": token, "pubkey": pub, "server_id": VPN_SERVER_ID},
-        timeout=60,
-    )
-    if rc != 0 or not isinstance(resp, dict) or "jwt" not in resp:
-        print(f"   payment failed: rc={rc} resp={resp}")
+    print("3. Paying at tollgate-auth (via nodns.shop localhost)...")
+    rc, pay_out, pay_err = run([
+        "ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=10",
+        "root@nodns.shop",
+        f"curl -sf -X POST http://localhost:8091/v1/wg/connect "
+        f"-H 'Content-Type: application/json' "
+        f"-d '{json.dumps({"token": token, "pubkey": pub, "server_id": VPN_SERVER_ID})}' "
+        f"--max-time 60"
+    ], timeout=70)
+    if rc != 0:
+        print(f"   payment SSH failed: {pay_err[:200]}")
+        results["tests"]["payment"] = False
+        results["failed"] += 1
+        return results
+    try:
+        resp = json.loads(pay_out)
+    except json.JSONDecodeError:
+        print(f"   payment response not JSON: {pay_out[:200]}")
+        results["tests"]["payment"] = False
+        results["failed"] += 1
+        return results
+    if "jwt" not in resp:
+        print(f"   no JWT in response: {resp}")
         results["tests"]["payment"] = False
         results["failed"] += 1
         return results
@@ -152,15 +162,13 @@ def test_vpn_e2e() -> dict:
     server_pubkey = resp.get("server_pubkey", "")
     client_ip = resp.get("client_ip", "")
     expires_at = resp.get("expires_at", 0)
-    print(f"   JWT received: {jwt_token[:40]}...")
-    print(f"   endpoint: {endpoint}")
-    print(f"   client_ip: {client_ip}")
+    print(f"   JWT: {jwt_token[:40]}...")
+    print(f"   endpoint: {endpoint}, client_ip: {client_ip}")
     results["tests"]["payment"] = True
     results["passed"] += 1
 
-    # 4. POST JWT to VPN server
-    print("4. Submitting JWT to VPN server (wg-jwt-peer)...")
-    rc, resp2 = curl(
+    print("4. Submitting JWT to wg-jwt-peer...")
+    rc, resp2 = curl_json(
         f"{VPN_PEER_API}/peer",
         method="POST",
         data={"jwt": jwt_token},
@@ -175,9 +183,8 @@ def test_vpn_e2e() -> dict:
     results["tests"]["jwt_peer"] = True
     results["passed"] += 1
 
-    # 5. Verify peer on VPN server
     print("5. Verifying WG peer...")
-    rc, resp3 = curl(f"{VPN_PEER_API}/peers", headers={"Authorization": "Bearer e2e-test-secret"})
+    rc, resp3 = curl_json(f"{VPN_PEER_API}/peers", headers={"Authorization": "Bearer e2e-test-secret"})
     peer_found = False
     if isinstance(resp3, dict):
         for p in resp3.get("peers", []):
@@ -185,14 +192,13 @@ def test_vpn_e2e() -> dict:
                 peer_found = True
                 print(f"   peer confirmed: ip={p['allowed_ip']}")
     if not peer_found:
-        print("   peer NOT found in peer list")
+        print("   peer NOT found")
         results["tests"]["peer_verify"] = False
         results["failed"] += 1
     else:
         results["tests"]["peer_verify"] = True
         results["passed"] += 1
 
-    # 6. Connect WireGuard and ping
     print("6. Connecting WireGuard tunnel...")
     wg_host = endpoint.split(":")[0] if ":" in endpoint else endpoint
     wg_port = endpoint.split(":")[1] if ":" in endpoint else "51820"
@@ -200,12 +206,16 @@ def test_vpn_e2e() -> dict:
     run(["sudo", "ip", "link", "add", "dev", "wgtest", "type", "wireguard"], timeout=5)
     run(["sudo", "ip", "addr", "add", f"{client_ip}/32", "dev", "wgtest"], timeout=5)
     run(["sudo", "ip", "route", "add", "10.66.42.0/24", "dev", "wgtest"], timeout=5)
-    run(["bash", "-c", f"echo '{priv}' | sudo wg set wgtest peer '{server_pubkey}' endpoint {wg_host}:{wg_port} allowed-ips 10.66.42.0/24 persistent-keepalive 1 private-key /dev/stdin"], timeout=5)
+    run(["bash", "-c", f"echo '{priv}' | sudo wg set wgtest private-key /dev/stdin peer '{server_pubkey}' endpoint {wg_host}:{wg_port} allowed-ips 10.66.42.0/24 persistent-keepalive 1"], timeout=5)
     run(["sudo", "ip", "link", "set", "wgtest", "up"], timeout=5)
     time.sleep(3)
-
     rc, ping_out, _ = run(["ping", "-c", "3", "-W", "2", "10.66.42.1"], timeout=10)
-    if "0% packet loss" in ping_out or "3 received" in ping_out:
+    run(["sudo", "ip", "link", "del", "wgtest"], timeout=5)
+    if "0% packet loss" in ping_out and "0 packets received" not in ping_out:
+        print(f"   tunnel works! {ping_out.splitlines()[-1]}")
+        results["tests"]["tunnel"] = True
+        results["passed"] += 1
+    elif "3 received" in ping_out:
         print(f"   tunnel works! {ping_out.splitlines()[-1]}")
         results["tests"]["tunnel"] = True
         results["passed"] += 1
@@ -214,15 +224,15 @@ def test_vpn_e2e() -> dict:
         results["tests"]["tunnel"] = False
         results["failed"] += 1
 
-    # Cleanup
-    run(["sudo", "ip", "link", "del", "wgtest"], timeout=5)
-
     return results
 
 
 def main():
     print("=" * 60)
     print("VPN Payment E2E Test")
+    print(f"  tollgate-auth: {TOLLGATE_AUTH}")
+    print(f"  vpn server:    {VPN_SERVER_ID}")
+    print(f"  peer api:      {VPN_PEER_API}")
     print("=" * 60)
     print()
 
@@ -233,28 +243,26 @@ def main():
     total = results["passed"] + results["failed"]
     print(f"Results: {results['passed']}/{total} passed, {results['failed']} failed")
     for name, passed in results["tests"].items():
-        status = "PASS" if passed else "FAIL"
-        print(f"  {name}: {status}")
+        print(f"  {name}: {'PASS' if passed else 'FAIL'}")
     print("=" * 60)
 
-    # Write results for publishing
     results_dir = Path("/tmp/vpn-e2e-results")
     results_dir.mkdir(exist_ok=True)
     (results_dir / "summary.md").write_text(
         f"# VPN Payment E2E Test\n\n"
-        f"**Date:** {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n\n"
+        f"**Date:** {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n"
+        f"**tollgate-auth:** {TOLLGATE_AUTH}\n"
+        f"**VPN server:** {VPN_SERVER_ID}\n\n"
         f"## Results: {results['passed']}/{total} passed\n\n"
         f"| Test | Status |\n|------|--------|\n"
         + "\n".join(f"| {n} | {'PASS' if p else 'FAIL'} |" for n, p in results["tests"].items())
     )
     (results_dir / "comparison.json").write_text(json.dumps(results, indent=2))
 
-    # Publish to Nostr if nsec available
     nsec_path = Path(NSEC_FILE)
     if nsec_path.exists():
         print("\nPublishing to Nostr...")
         os.environ["PROJECT_TAG"] = "conwrt"
-        sys.path.insert(0, str(SUITE_ROOT))
         try:
             from lib.result_publisher import publish_results
             publish_results(
