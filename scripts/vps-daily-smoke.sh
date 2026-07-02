@@ -91,6 +91,12 @@ echo "[1] checking OpenWrt VM..."
 vm_running() {
   [[ -f "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
 }
+# SSH-based reachability check — more reliable than ICMP (nodogsplash/firewall
+# may drop ping after test reconfiguration, but SSH always works).
+# Uses TCP port probe (no auth needed, avoids chicken-and-egg with pw reset).
+vm_reachable() {
+  timeout 3 bash -c "echo >/dev/tcp/$VM_IP/22" 2>/dev/null
+}
 start_vm() {
   echo "    VM not running — booting from existing overlay..."
   # Bring up the private bridge + tap if absent (mirrors virtual-lab.py start_poc).
@@ -117,20 +123,21 @@ start_vm() {
     -device "virtio-net-pci,netdev=lan,mac=$VM_MAC" \
     >"$WORKDIR/run/qemu.stdout" 2>"$WORKDIR/run/qemu.stderr" &
   echo $! > "$PIDFILE"
-  echo "    VM booting (pid=$(cat "$PIDFILE")); waiting for 10.99.100.1..."
-  for i in $(seq 1 60); do
-    ping -c1 -W1 "$VM_IP" >/dev/null 2>&1 && { echo "    VM reachable after ${i}s"; break; }
+  echo "    VM booting (pid=$(cat "$PIDFILE")); waiting for $VM_IP..."
+  # Wait for SSH (more reliable than ICMP — OpenWrt may drop ping after test runs).
+  for i in $(seq 1 90); do
+    vm_reachable && { echo "    VM reachable after ${i}s"; break; }
     sleep 1
   done
 }
 
 if ! vm_running; then start_vm; fi
-# wait for ICMP regardless
+# wait for SSH reachability regardless
 for i in $(seq 1 30); do
-  ping -c1 -W1 "$VM_IP" >/dev/null 2>&1 && break
+  vm_reachable && break
   sleep 1
 done
-ping -c1 -W2 "$VM_IP" >/dev/null 2>&1 || { FAIL_REASON="vm-not-reachable"; emit_status 1 0 "$FAIL_REASON"; exit 1; }
+vm_reachable || { FAIL_REASON="vm-not-reachable"; emit_status 1 0 "$FAIL_REASON"; exit 1; }
 
 # ---- stage 2: normalize VM root password via serial console -----------------
 echo "[2] resetting VM root password via serial console..."
