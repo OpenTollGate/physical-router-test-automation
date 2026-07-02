@@ -45,11 +45,18 @@ from lib.cloud_lab.provider import get_provider, VMProvider
 
 
 def _get_provider(args: argparse.Namespace) -> VMProvider | None:
-    cloud = getattr(args, "cloud", "gcp")
+    cloud = getattr(args, "cloud", "shc-pulumi")
     if cloud in ("shc", "shc-pulumi"):
+        if cloud == "shc":
+            import warnings
+            warnings.warn(
+                "--cloud shc is deprecated; shc and shc-pulumi now both use the "
+                "Pulumi provider. Use --cloud shc-pulumi explicitly.",
+                DeprecationWarning, stacklevel=2,
+            )
         os.environ.setdefault("SHC_API_KEY", "")
-        os.environ["TOLLGATE_VM_PROVIDER"] = cloud
-        return get_provider(cloud)
+        os.environ["TOLLGATE_VM_PROVIDER"] = "shc-pulumi"
+        return get_provider("shc-pulumi")
     return None
 
 
