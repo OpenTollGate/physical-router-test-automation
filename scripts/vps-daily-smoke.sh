@@ -74,7 +74,8 @@ echo "[0] ensuring host dependencies..."
 export DEBIAN_FRONTEND=noninteractive
 command -v sshpass >/dev/null || apt-get update -qq && apt-get install -y -qq sshpass >/dev/null 2>&1 || true
 command -v qemu-system-x86_64 >/dev/null || apt-get install -y -qq qemu-system-x86 >/dev/null 2>&1 || true
-python3 -m pip install -q paramiko pytest requests >/dev/null 2>&1 || \
+python3 -m pip install -q --break-system-packages paramiko pytest pytest-timeout requests >/dev/null 2>&1 || \
+  python3 -m pip install -q paramiko pytest pytest-timeout requests >/dev/null 2>&1 || \
   apt-get install -y -qq python3-paramiko python3-pytest python3-requests >/dev/null 2>&1 || true
 
 # ---- stage 0b: test repo ----------------------------------------------------
