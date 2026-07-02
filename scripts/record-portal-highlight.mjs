@@ -20,8 +20,26 @@ const HTTP_PORT = 9876;
 mkdirSync(VIDEO_DIR, { recursive: true });
 
 // === Mock API data (simulates TollGate backend on :2121) ===
+// The '/' response mirrors the NIP-01 advertisement event emitted by
+// merchant.go:CreateAdvertisement(): kind=10021 with metric / step_size /
+// price_per_step tags. A flat {success,price,unit} object here previously
+// caused TG003 (portal could not find pricing tags). Schema is locked by
+// tests/api/test_mock_api_advertisement_format.py.
 const MOCK_API = {
-  '/': JSON.stringify({ success: true, version: '1.6.0', backend: 'go', price: 100, unit: 'sats/MB', description: 'TollGate Internet Access', mints: ['testnut.cashu.exchange'] }),
+  '/': JSON.stringify({
+    id: '0000000000000000000000000000000000000000000000000000000000000000',
+    pubkey: '0000000000000000000000000000000000000000000000000000000000000000',
+    created_at: 1700000000,
+    kind: 10021,
+    tags: [
+      ['metric', 'bytes'],
+      ['step_size', '1048576'],
+      ['tips', '1', '2', '3', '4'],
+      ['price_per_step', 'cashu', '100', 'sats', 'https://testnut.cashu.exchange', '1'],
+    ],
+    content: '',
+    sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',
+  }),
   '/usage': '5242880/104857600',
   '/balance': JSON.stringify({ success: true, session_active: true, usage: 5242880, allotment: 104857600, remaining: 99614720 }),
   '/whoami': 'mac=00:11:22:33:44:55',
