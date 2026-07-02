@@ -390,6 +390,7 @@ const PROJECT_TAG_MAP = {
   "conwrt-sqm": "conwrt",
   "conwrt-bufferbloat": "conwrt",
   "silent-energy": "silent-energy",
+  "fips-benchmark": "fips-benchmark",
 };
 
 function determineProjectTag(tTags) {
@@ -2198,6 +2199,164 @@ async function renderMicrofipsRun(view, run, myLoadId) {
   wireGenericFileButtons(body);
 }
 
+async function renderBenchmarkRun(view, run, myLoadId) {
+  const body = view.querySelector(".detail-body");
+  if (!body) return;
+
+  body.innerHTML = `<div class="test-tree-loading"><div class="spinner"></div><p>Loading benchmark\u2026</p></div>`;
+
+  const files = run.files || [];
+  const benchFile =
+    files.find((f) => /benchmark-results\.json$/i.test(f.path || "")) ||
+    files.find((f) => /benchmark/i.test((f.path || "") + " " + (f.url || "")));
+
+  if (!benchFile) {
+    body.innerHTML = `<p class="section-empty">No benchmark results file found in this run.</p>`;
+    return;
+  }
+
+  let data;
+  try {
+    const resp = await fetch(benchFile.url);
+    if (myLoadId !== detailLoadId) return;
+    data = JSON.parse(await resp.text());
+  } catch (e) {
+    if (myLoadId !== detailLoadId) return;
+    body.innerHTML = `<p class="section-empty">Failed to load benchmark results: ${escapeHtml(String(e))}</p>`;
+    return;
+  }
+  if (myLoadId !== detailLoadId) return;
+
+  const results = Array.isArray(data.results) ? data.results : [];
+  const echoResults = results.filter((r) => r.test === "echo");
+  const tputResults = results.filter((r) => r.test === "throughput");
+  const pairs = [...new Set(results.map((r) => r.pair).filter(Boolean))].sort();
+
+  const summaryCards = [
+    `<div class="metric"><span class="metric-value">${results.length}</span><span class="metric-label">Total Tests</span></div>`,
+    `<div class="metric"><span class="metric-value">${echoResults.length}</span><span class="metric-label">Echo Runs</span></div>`,
+    `<div class="metric"><span class="metric-value">${tputResults.length}</span><span class="metric-label">Throughput Runs</span></div>`,
+    `<div class="metric"><span class="metric-value">${pairs.length}</span><span class="metric-label">Device Pairs</span></div>`,
+  ].join("");
+
+  const echoMax = echoResults.reduce((m, r) => Math.max(m, r.median_us || 0), 0) || 1;
+  const tputMax = tputResults.reduce((m, r) => Math.max(m, r.achieved_bps || 0), 0) || 1;
+
+  const groupBars = (rows, max, accessor, formatVal, color) => {
+    if (!rows.length) return "";
+    const byPair = {};
+    for (const r of rows) {
+      const p = r.pair || "?";
+      (byPair[p] = byPair[p] || []).push(r);
+    }
+    return Object.keys(byPair).sort().map((pair) => {
+      const items = byPair[pair].slice().sort((a, b) => (accessor.sortKey(a) ?? 0) - (accessor.sortKey(b) ?? 0));
+      const bars = items.map((r) => {
+        const val = accessor.value(r) || 0;
+        const pct = Math.max(2, (val / max) * 100);
+        return `<div class="bench-bar-row">
+          <span class="bench-bar-label">${escapeHtml(accessor.label(r))}</span>
+          <div class="bench-bar-track"><div class="bench-bar-fill" style="width:${pct.toFixed(1)}%;background:${color};"></div></div>
+          <span class="bench-bar-value">${escapeHtml(formatVal(r))}</span>
+        </div>`;
+      }).join("");
+      return `<div class="bench-chart-group">
+        <div class="bench-chart-group-label">${escapeHtml(pair)}</div>
+        <div class="bench-chart-bars">${bars}</div>
+      </div>`;
+    }).join("");
+  };
+
+  const fmtUs = (r) => `${(r.median_us || 0).toLocaleString()}\u00b5s`;
+  const fmtKbps = (r) => `${Math.round((r.achieved_bps || 0) / 1000).toLocaleString()} kbps`;
+
+  const echoChart = groupBars(
+    echoResults, echoMax,
+    {
+      sortKey: (r) => r.payload_size,
+      label: (r) => (r.payload_size != null ? r.payload_size + "B" : "?"),
+      value: (r) => r.median_us,
+    },
+    fmtUs, "var(--blue)"
+  );
+
+  const tputChart = groupBars(
+    tputResults, tputMax,
+    {
+      sortKey: (r) => r.frame_size,
+      label: (r) => (r.frame_size != null ? r.frame_size + "B" : "?"),
+      value: (r) => r.achieved_bps,
+    },
+    fmtKbps, "var(--green)"
+  );
+
+  const echoSection = echoResults.length
+    ? `<section class="general-section">
+        <h3 class="section-title">Echo RTT <span class="section-count">${echoResults.length}</span></h3>
+        <div class="bench-chart">${echoChart}</div>
+      </section>`
+    : `<p class="section-empty">No echo results.</p>`;
+
+  const tputSection = tputResults.length
+    ? `<section class="general-section">
+        <h3 class="section-title">Throughput <span class="section-count">${tputResults.length}</span></h3>
+        <div class="bench-chart">${tputChart}</div>
+      </section>`
+    : `<p class="section-empty">No throughput results.</p>`;
+
+  const tableRows = results.map((r) => {
+    const isEcho = r.test === "echo";
+    const size = isEcho ? (r.payload_size ?? "?") : (r.frame_size ?? "?");
+    const value = isEcho ? fmtUs(r) : fmtKbps(r);
+    const loss = isEcho
+      ? (r.loss_count != null ? `${r.loss_count}/${r.count ?? "?"}` : "?")
+      : (r.frame_loss_rate != null ? `${(r.frame_loss_rate * 100).toFixed(3)}%` : "?");
+    return `<tr>
+      <td>${escapeHtml(r.test || "?")}</td>
+      <td>${escapeHtml(r.pair || "?")}</td>
+      <td>${escapeHtml(String(size))}</td>
+      <td>${escapeHtml(value)}</td>
+      <td>${escapeHtml(loss)}</td>
+    </tr>`;
+  }).join("");
+
+  const rawTable = results.length
+    ? `<details class="advanced-section">
+        <summary class="advanced-header">Raw Data <span class="section-count">${results.length}</span></summary>
+        <div class="bench-table-wrap">
+          <table class="bench-table">
+            <thead><tr><th>Test</th><th>Pair</th><th>Size</th><th>Value</th><th>Loss/Rate</th></tr></thead>
+            <tbody>${tableRows}</tbody>
+          </table>
+        </div>
+      </details>`
+    : "";
+
+  body.innerHTML = `
+    <style>
+      .bench-chart { display:flex; flex-direction:column; gap:18px; }
+      .bench-chart-group { display:flex; flex-direction:column; gap:6px; }
+      .bench-chart-group-label { font-size:12px; color:var(--text-muted); font-weight:600; letter-spacing:.02em; text-transform:uppercase; }
+      .bench-chart-bars { display:flex; flex-direction:column; gap:5px; }
+      .bench-bar-row { display:grid; grid-template-columns:48px 1fr 120px; align-items:center; gap:10px; }
+      .bench-bar-label { font-size:12px; color:var(--text-muted); font-variant-numeric:tabular-nums; text-align:right; }
+      .bench-bar-track { height:14px; background:var(--bg-elevated); border-radius:7px; overflow:hidden; border:1px solid var(--border-light); }
+      .bench-bar-fill { height:100%; border-radius:7px; transition:width .4s ease; }
+      .bench-bar-value { font-size:12px; color:var(--text); font-variant-numeric:tabular-nums; }
+      .bench-table-wrap { overflow-x:auto; }
+      .bench-table { width:100%; border-collapse:collapse; font-size:13px; }
+      .bench-table th, .bench-table td { padding:7px 10px; text-align:left; border-bottom:1px solid var(--border-light); }
+      .bench-table th { color:var(--text-muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.02em; }
+      .bench-table td { color:var(--text); font-variant-numeric:tabular-nums; }
+    </style>
+    <div class="detail-metrics">${summaryCards}</div>
+    ${data.scenario ? `<div class="fips-run-info"><span class="meta-chip meta-chip-branch">${escapeHtml(data.scenario)}</span>${data.timestamp ? `<span class="meta-chip">${escapeHtml(data.timestamp)}</span>` : ""}</div>` : ""}
+    ${echoSection}
+    ${tputSection}
+    ${rawTable}
+  `;
+}
+
 async function renderGenericFileBrowser(view, run, myLoadId) {
   const body = view.querySelector(".detail-body");
   if (!body) return;
@@ -2477,6 +2636,10 @@ async function selectRun(run) {
   }
   if (project === "microfips") {
     await renderMicrofipsRun(view, run, myLoadId);
+    return;
+  }
+  if (project === "fips-benchmark") {
+    await renderBenchmarkRun(view, run, myLoadId);
     return;
   }
   if (project === "conwrt") {
