@@ -6,3 +6,4 @@ coincurve>=18.0
 pyserial>=3.5
 PyYAML>=6.0
 requests
+nostr-publish>=0.1.0

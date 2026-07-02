@@ -193,7 +193,7 @@ sudo apt-get update -qq || fail 1 "apt-get update"
 sudo apt-get install -y -qq qemu-system-x86 qemu-utils sshpass git curl wget \
   python3-venv python3-pip net-tools iproute2 socat nftables \
   build-essential libssl-dev pkg-config fuse3 libfuse3-dev \
-  cmake g++ libnl-3-dev libnl-genl-3-dev jq genisoimage || fail 1 "apt-get install"
+  cmake g++ libnl-3-dev libnl-genl-3-dev jq genisoimage ffmpeg || fail 1 "apt-get install"
 echo "[1/$N_STEPS] done"
 
 step 2 "Installing Rust..."
