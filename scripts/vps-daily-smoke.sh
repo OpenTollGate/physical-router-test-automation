@@ -181,7 +181,7 @@ if [[ $TEST -eq 1 ]]; then
   ( cd "$REPO_DIR" && \
       TOLLGATE_SSH_HOST="$VM_IP" TOLLGATE_SSH_PASSWORD="$FIXED_PW" \
       TOLLGATE_VIRTUAL_LAB=1 TOLLGATE_BACKEND=go \
-      python3 -m pytest -m api -q --tb=short --no-header 2>&1 ) | tee -a "$LOG"
+      python3 -m pytest -m api -q --tb=short --no-header --timeout=300 2>&1 ) | tee -a "$LOG"
   rc=${PIPESTATUS[0]}
   set -e
   if [[ $rc -eq 0 ]]; then
