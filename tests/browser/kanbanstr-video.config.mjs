@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
     testDir: '.',
-    testMatch: 'kanbanstr-smoke.spec.mjs',
+    testMatch: 'kanbanstr-{smoke,interact}.spec.mjs',
     timeout: 60000,
     workers: 1,
     reporter: [['list']],
