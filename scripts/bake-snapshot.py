@@ -469,7 +469,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
             f"-o ConnectTimeout=3 root@{OPENWRT_IP} 'sync; poweroff' 2>/dev/null || true; "
             "sleep 8"
         )
-        _gcloud_ssh(vm_name, shutdown_cmd, zone, project, timeout=30)
+        _gcloud_ssh(vm_name, shutdown_cmd, zone, project, timeout=60)
 
         # Step 8c: Install vwifi binaries (from Blossom cache or compile)
         _step(10, total_steps, "Installing vwifi binaries (cache or compile)")
