@@ -315,14 +315,35 @@ class SHCProvider(VMProvider):
             for v in vms
         ]
 
+    _REAPABLE_PREFIXES = (
+        "tollgate-",
+        "ci-pulumi-",
+        "ci-",
+        "fips-cloud-",
+        "fips-test-",
+    )
+
     def cleanup_stale(self, max_age_hours=2):
+        import datetime
         count = 0
+        now = datetime.datetime.now(datetime.timezone.utc)
         for vm in self.list_vms():
+            hostname = vm.hostname
+            if not any(hostname.startswith(p) for p in self._REAPABLE_PREFIXES):
+                continue
             try:
-                self.destroy_vm(vm, immediate=True)
-                count += 1
-            except Exception:
-                pass
+                created_str = vm.raw.get("date_created", "")
+                created = datetime.datetime.strptime(
+                    created_str, "%Y-%m-%d %H:%M:%S"
+                ).replace(tzinfo=datetime.timezone.utc)
+            except (ValueError, AttributeError):
+                continue
+            age_hours = (now - created).total_seconds() / 3600
+            if age_hours < max_age_hours:
+                continue
+            print(f"  Cancelling stale SHC VM: {hostname} ({age_hours:.1f}h old)")
+            self.destroy_vm(vm, immediate=True)
+            count += 1
         return count
 
 

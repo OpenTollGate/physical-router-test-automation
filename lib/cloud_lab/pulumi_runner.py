@@ -167,6 +167,28 @@ class PulumiSHCProvider(SHCProvider):
         )
         super().destroy_vm(vm, immediate=immediate)
 
+    def cleanup_stale(self, max_age_hours=2):
+        """Cancel old VMs (inherited) + remove orphaned Pulumi stack state files."""
+        count = super().cleanup_stale(max_age_hours=max_age_hours)
+
+        workdir = os.environ.get("PULUMI_WORKDIR", os.path.expanduser("~/.tollgate-pulumi"))
+        stacks_dir = os.path.join(workdir, ".pulumi", "stacks", _PROJECT)
+        if os.path.isdir(stacks_dir):
+            import time as _time
+            cutoff = _time.time() - (max_age_hours * 3600)
+            for fname in os.listdir(stacks_dir):
+                if not fname.endswith(".json"):
+                    continue
+                fpath = os.path.join(stacks_dir, fname)
+                try:
+                    if os.path.getmtime(fpath) < cutoff:
+                        os.remove(fpath)
+                        log.info("removed stale Pulumi stack state: %s", fname)
+                except OSError as exc:
+                    log.debug("remove stack state %s failed: %s", fpath, exc)
+
+        return count
+
     # -- helpers -----------------------------------------------------------
 
     @staticmethod

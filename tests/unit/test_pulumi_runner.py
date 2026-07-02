@@ -8,6 +8,7 @@ run-destroy.sh against the live API.
 """
 from __future__ import annotations
 
+import os
 import sys
 import types
 from unittest.mock import MagicMock, patch
@@ -34,6 +35,7 @@ from lib.cloud_lab.pulumi_runner import (  # noqa: E402
     _sanitize_stack_name,
     _DEFAULT_SIZE,
 )
+from lib.cloud_lab.provider import SHCProvider  # noqa: E402
 
 
 # -- pure helpers ---------------------------------------------------------
@@ -158,6 +160,35 @@ class TestDestroyVm:
         vm = VMInfo(name="x", service_id=42)
         provider.destroy_vm(vm)
         provider._client.cancel_vm.assert_called_once_with(42, immediate=True)
+
+
+class TestCleanupStale:
+    def test_calls_super_then_cleans_old_stack_files(self, tmp_path):
+        import json, os, time as _time
+        provider = PulumiSHCProvider()
+        with patch.object(SHCProvider, "cleanup_stale", return_value=2):
+            with patch.dict(os.environ, {"PULUMI_WORKDIR": str(tmp_path)}):
+                stacks_dir = tmp_path / ".pulumi" / "stacks" / "tollgate-cloud-lab"
+                stacks_dir.mkdir(parents=True)
+                old_file = stacks_dir / "old-stack.json"
+                new_file = stacks_dir / "new-stack.json"
+                old_file.write_text(json.dumps({"old": True}))
+                new_file.write_text(json.dumps({"new": True}))
+                old_time = _time.time() - (5 * 3600)
+                os.utime(old_file, (old_time, old_time))
+
+                count = provider.cleanup_stale(max_age_hours=2)
+
+                assert count == 2
+                assert not old_file.exists()
+                assert new_file.exists()
+
+    def test_no_workdir_is_safe(self):
+        provider = PulumiSHCProvider()
+        with patch.object(SHCProvider, "cleanup_stale", return_value=0):
+            with patch.dict(os.environ, {"PULUMI_WORKDIR": "/nonexistent-path-xyz"}):
+                count = provider.cleanup_stale(max_age_hours=1)
+                assert count == 0
 
 
 # -- provider registration -----------------------------------------------
