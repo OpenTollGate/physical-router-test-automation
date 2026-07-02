@@ -1181,6 +1181,17 @@ full-pr120: ## Full PR #120 test suite (includes recovery lifecycle ~10 min)
 pr120-recovery: ## Recovery lifecycle tests only
 	pytest tests/api/test_recovery_lifecycle.py -v --timeout=600
 
+# --- Portal demo recording (no hardware required — local mock server) ---
+# Records desktop + mobile portal walkthrough videos with a glowing cursor
+# overlay so demos are easy to follow. Requires `npm install` first.
+# Override the portal source with PORTAL_DIR= and output with VIDEO_DIR=.
+
+.PHONY: record-portal
+
+record-portal: ## Record portal demo videos WITH cursor highlight (desktop+mobile)
+	@if [ ! -d node_modules ]; then echo "$(YELLOW)Run npm install first$(RESET)"; exit 1; fi
+	@node scripts/record-portal-highlight.mjs
+
 # --- Clean ---
 
 clean:

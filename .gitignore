@@ -25,6 +25,9 @@ credentials/
 .tmp/
 findings/
 
+# Shallow bash-client checkout cloned by tests/api/test_bash_client.py
+tests/.bash-client/
+
 # Agent orchestration artifacts
 .sisyphus/
 .omo/
@@ -57,11 +60,11 @@ __pycache__/
 test-videos*/
 
 # Pulumi SHC spike (infra/pulumi-shc-spike/) — local-only artifacts
-# Stack config can hold secrets if `pulumi config set --secret` is used;
-# the spike deliberately reads SHC_API_KEY from env instead. State and
-# logs are local-only regardless.
 infra/pulumi-shc-spike/.venv/
 infra/pulumi-shc-spike/.state/
 infra/pulumi-shc-spike/Pulumi.*.yaml
 infra/pulumi-shc-spike/last-*.txt
 infra/pulumi-shc-spike/__pycache__/
+
+# auto-generated opencode session handover (do not commit)
+HANDOVER.md
