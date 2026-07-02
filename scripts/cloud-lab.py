@@ -692,11 +692,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     clean = sub.add_parser("cleanup-stale", help="Delete tollgate run VMs older than max age")
     clean.add_argument("--zone", default=DEFAULT_ZONE)
+    clean.add_argument("--cloud", default="gcp", choices=["gcp", "shc", "shc-pulumi"],
+                       help="Cloud provider to clean up (shc/shc-pulumi reaps SHC VMs; shc-pulumi also removes Pulumi stack state)")
     clean.add_argument("--max-age-hours", type=int, default=1)
     clean.set_defaults(func=cmd_cleanup_stale)
 
     nuke = sub.add_parser("cleanup-all", help="Delete ALL tollgate VMs regardless of age")
     nuke.add_argument("--zone", default=DEFAULT_ZONE)
+    nuke.add_argument("--cloud", default="gcp", choices=["gcp", "shc", "shc-pulumi"],
+                      help="Cloud provider to clean up")
     nuke.set_defaults(func=cmd_cleanup_all)
 
     reaper = sub.add_parser("install-reaper", help="Install cron job to auto-delete VMs older than 1 hour")
