@@ -30,6 +30,7 @@ from lib.backend import BackendConfig
 backend = BackendConfig('${BACKEND}')
 r = Router(host='${ROUTER_IP}', phone_ip='', phone_mac='', domain='',
            identity_file=os.environ.get('TOLLGATE_SSH_KEY') or None,
+           jump_host=os.environ.get('TOLLGATE_SSH_JUMP_HOST') or None,
            backend=backend)
 result = deploy_branch(r, '${BRANCH}', arch='${ARCH}', run_id='${RUN_ID}' or None,
                        reboot=$( [ \"${REBOOT:-}\" = \"1\" ] && echo True || echo False ),

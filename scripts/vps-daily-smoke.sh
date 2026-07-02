@@ -3,7 +3,7 @@
 # vps-daily-smoke.sh — Headless daily smoke test of the TollGate Go backend
 #                       against an OpenWrt QEMU VM running on this VPS.
 #
-# Runs on: VPS1 (root@23.182.128.51). The OpenWrt VM (10.99.99.1) is reachable
+# Runs on: VPS1 (root@23.182.128.51). The OpenWrt VM (10.99.100.1) is reachable
 # only from this host (private bridge tg-poc-br).
 #
 # What it does (idempotent, self-bootstrapping):
@@ -22,7 +22,7 @@ set -euo pipefail
 
 # ---- config -----------------------------------------------------------------
 WORKDIR="/root/tollgate-virtual-lab"
-VM_IP="10.99.99.1"
+VM_IP="10.99.100.1"
 VM_MAC="52:54:00:12:34:56"
 FIXED_PW="tollgate-smoke-2026"          # deterministic; reset via serial each run
 REPO_URL="https://github.com/OpenTollGate/physical-router-test-automation.git"
@@ -96,7 +96,7 @@ start_vm() {
   ip link show tg-poc-br >/dev/null 2>&1 || {
     ip link add name tg-poc-br type bridge
     ip link set tg-poc-br up
-    ip addr add 10.99.99.2/24 dev tg-poc-br 2>/dev/null || true
+    ip addr add 10.99.100.2/24 dev tg-poc-br 2>/dev/null || true
   }
   ip link show tg-poc-tap >/dev/null 2>&1 || {
     ip tuntap add dev tg-poc-tap mode tap user root
@@ -105,8 +105,8 @@ start_vm() {
   }
   iptables -C FORWARD -i tg-poc-br -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i tg-poc-br -j ACCEPT
   iptables -C FORWARD -o tg-poc-br -j ACCEPT 2>/dev/null || iptables -I FORWARD 2 -o tg-poc-br -j ACCEPT
-  iptables -t nat -C POSTROUTING -s 10.99.99.0/24 ! -o tg-poc-br -j MASQUERADE 2>/dev/null || \
-    iptables -t nat -A POSTROUTING -s 10.99.99.0/24 ! -o tg-poc-br -j MASQUERADE
+  iptables -t nat -C POSTROUTING -s 10.99.100.0/24 ! -o tg-poc-br -j MASQUERADE 2>/dev/null || \
+    iptables -t nat -A POSTROUTING -s 10.99.100.0/24 ! -o tg-poc-br -j MASQUERADE
   # Boot OpenWrt from the existing overlay (idempotent base already prepared).
   setsid qemu-system-x86_64 -enable-kvm -m 256 -smp 1 -nographic \
     -serial "unix:$SERIAL_SOCK,server,nowait" \
@@ -116,7 +116,7 @@ start_vm() {
     -device "virtio-net-pci,netdev=lan,mac=$VM_MAC" \
     >"$WORKDIR/run/qemu.stdout" 2>"$WORKDIR/run/qemu.stderr" &
   echo $! > "$PIDFILE"
-  echo "    VM booting (pid=$(cat "$PIDFILE")); waiting for 10.99.99.1..."
+  echo "    VM booting (pid=$(cat "$PIDFILE")); waiting for 10.99.100.1..."
   for i in $(seq 1 60); do
     ping -c1 -W1 "$VM_IP" >/dev/null 2>&1 && { echo "    VM reachable after ${i}s"; break; }
     sleep 1
