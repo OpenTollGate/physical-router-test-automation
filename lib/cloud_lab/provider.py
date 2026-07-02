@@ -182,19 +182,16 @@ class GCPProvider(VMProvider):
 
 
 class SHCProvider(VMProvider):
-    """SHC provider — uses the shc-toolkit for VM lifecycle."""
+    """Base SHC provider — shared infrastructure for PulumiSHCProvider.
+
+    The imperative create_vm/wait_for_ready were removed when Pulumi became
+    the default. This class now provides only the shared methods that
+    PulumiSHCProvider inherits: client (SHCClient), apply_ssh_key, ssh,
+    destroy_vm (fallback), cleanup_stale, list_vms.
+    """
 
     provider_name = "shc"
     can_publish = True
-
-    _PACKAGE_MAP = {
-        "n1-standard-2": (81, 245),
-        "n1-standard-4": (82, 249),
-        "n1-standard-8": (83, 253),
-        "2C/8GB": (81, 245),
-        "4C/16GB": (82, 249),
-        "8C/32GB": (83, 253),
-    }
 
     _CACHE_KEYS = [
         "blossomfs-8784100",
@@ -215,42 +212,6 @@ class SHCProvider(VMProvider):
             from shc_toolkit.client import SHCClient
             self._client = SHCClient()
         return self._client
-
-    def create_vm(self, name, machine_type="", disk_size_gb=0, startup_script=""):
-        import uuid
-
-        pkg = self._PACKAGE_MAP.get(machine_type, self._PACKAGE_MAP["2C/8GB"])
-        result = self.client.submit_order(
-            hostname=name,
-            package_id=pkg[0],
-            pricing_id=pkg[1],
-        )
-        sids = result.get("service_ids", [])
-        if not sids:
-            raise RuntimeError(f"SHC order failed: {result}")
-        sid = int(sids[0])
-        return VMInfo(name=name, service_id=sid, provider="shc", raw=result)
-
-    def wait_for_ready(self, vm, timeout=300):
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                info = self.client.get_vm(int(vm.service_id))
-                state = info.get("provisioning_state", "unknown")
-                if state == "ready":
-                    ips = info.get("ips", [])
-                    vm.ip = ips[0]["ip"] if ips else ""
-                    vm.hostname = info.get("hostname", vm.name)
-                    return vm
-                if state in ("failed", "error"):
-                    raise RuntimeError(f"SHC VM {vm.service_id} provisioning failed: {state}")
-            except Exception as e:
-                if "not_found" in str(e):
-                    pass
-                else:
-                    log.debug(f"Polling SHC VM {vm.service_id}: {e}")
-            time.sleep(5)
-        raise TimeoutError(f"SHC VM {vm.service_id} not ready after {timeout}s")
 
     def apply_ssh_key(self, vm, public_key):
         self.client.apply_ssh_key_live(int(vm.service_id), public_key)
