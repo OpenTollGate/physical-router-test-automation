@@ -218,7 +218,7 @@ def cmd_ssh(args: argparse.Namespace) -> int:
 
 def cmd_submit(args: argparse.Namespace) -> int:
     cloud = getattr(args, "cloud", "gcp")
-    if cloud != "shc":
+    if cloud not in ("shc", "shc-pulumi"):
         _warn_running_vms()
     target = resolve_target(
         pr=cast(str | None, args.pr),
@@ -229,7 +229,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
     )
 
     cloud = getattr(args, "cloud", "gcp")
-    if cloud == "shc":
+    if cloud in ("shc", "shc-pulumi"):
         from lib.cloud_lab.shc_submit import submit_run_shc
         info = submit_run_shc(
             target,
