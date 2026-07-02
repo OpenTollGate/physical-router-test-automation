@@ -593,7 +593,7 @@ def build_parser() -> argparse.ArgumentParser:
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument("--zone", default=DEFAULT_ZONE)
         p.add_argument("--vm-name", default=VM_NAME)
-        p.add_argument("--cloud", default="gcp", choices=["gcp", "shc", "shc-pulumi"],
+        p.add_argument("--cloud", default="shc-pulumi", choices=["gcp", "shc", "shc-pulumi"],
                        help="Cloud provider: gcp, shc (imperative), or shc-pulumi (Pulumi Automation API)")
 
     def target_flags(p: argparse.ArgumentParser) -> None:
@@ -625,7 +625,7 @@ def build_parser() -> argparse.ArgumentParser:
     ssh.set_defaults(func=cmd_ssh)
 
     submit = sub.add_parser("submit", help="Fire-and-forget: wait for CI artifact, spawn autonomous test VM")
-    submit.add_argument("--cloud", default="gcp", choices=["gcp", "shc", "shc-pulumi"],
+    submit.add_argument("--cloud", default="shc-pulumi", choices=["gcp", "shc", "shc-pulumi"],
                         help="Cloud provider: gcp, shc (imperative), or shc-pulumi (Pulumi Automation API)")
     submit.add_argument("--zone", default=DEFAULT_ZONE)
     submit.add_argument("--machine-type", default=DEFAULT_MACHINE_TYPE)
@@ -695,14 +695,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     clean = sub.add_parser("cleanup-stale", help="Delete tollgate run VMs older than max age")
     clean.add_argument("--zone", default=DEFAULT_ZONE)
-    clean.add_argument("--cloud", default="gcp", choices=["gcp", "shc", "shc-pulumi"],
+    clean.add_argument("--cloud", default="shc-pulumi", choices=["gcp", "shc", "shc-pulumi"],
                        help="Cloud provider to clean up (shc/shc-pulumi reaps SHC VMs; shc-pulumi also removes Pulumi stack state)")
     clean.add_argument("--max-age-hours", type=int, default=1)
     clean.set_defaults(func=cmd_cleanup_stale)
 
     nuke = sub.add_parser("cleanup-all", help="Delete ALL tollgate VMs regardless of age")
     nuke.add_argument("--zone", default=DEFAULT_ZONE)
-    nuke.add_argument("--cloud", default="gcp", choices=["gcp", "shc", "shc-pulumi"],
+    nuke.add_argument("--cloud", default="shc-pulumi", choices=["gcp", "shc", "shc-pulumi"],
                       help="Cloud provider to clean up")
     nuke.set_defaults(func=cmd_cleanup_all)
 
@@ -712,7 +712,7 @@ def build_parser() -> argparse.ArgumentParser:
     reaper.set_defaults(func=cmd_install_reaper)
 
     run = sub.add_parser("run-tests", help="Submit cloud run and wait (alias for submit --wait --publish)")
-    run.add_argument("--cloud", default="gcp", choices=["gcp", "shc", "shc-pulumi"],
+    run.add_argument("--cloud", default="shc-pulumi", choices=["gcp", "shc", "shc-pulumi"],
                      help="Cloud provider: gcp, shc (imperative), or shc-pulumi (Pulumi Automation API)")
     run.add_argument("--zone", default=DEFAULT_ZONE)
     run.add_argument("--machine-type", default=DEFAULT_MACHINE_TYPE)
