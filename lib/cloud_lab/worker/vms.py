@@ -414,22 +414,74 @@ def stop_inner_vms() -> None:
     _run("killall -9 qemu-system-x86_64 2>/dev/null || true", timeout=15, check=False)
 def delete_self(config: WorkerConfig) -> None:
     if config.cloud == "shc":
-        import sys
-        sys.path.insert(0, "/opt/tollgate-test")
-        from lib.cloud_lab.shc import SHCClient
-        client = SHCClient()
+        import json
+        import urllib.request
+        import urllib.error
+
         sid = int(config.service_id) if config.service_id else 0
-        if sid:
-            log.info("Cancelling SHC VM service_id=%d", sid)
-            try:
-                client.cancel_vm(sid, immediate=True)
-                log.info("SHC VM cancelled successfully")
-            except Exception as exc:
-                log.warning("SHC cancel failed: %s — falling back to shutdown", exc)
-                _run("shutdown -h now", timeout=10, check=False)
-        else:
+        if not sid:
             log.warning("No SHC service_id — shutting down instead of cancelling")
             _run("shutdown -h now", timeout=10, check=False)
+            return
+
+        api_key = os.environ.get("SHC_API_KEY", "")
+        if not api_key:
+            log.warning("No SHC_API_KEY — shutting down instead of cancelling")
+            _run("shutdown -h now", timeout=10, check=False)
+            return
+
+        base = "https://blesta.sovereignhybridcompute.com/user-api/v2"
+        cancel_url = f"{base}/vm/{sid}/cancel"
+        body = json.dumps({"immediate": True}).encode()
+        log.info("Cancelling SHC VM service_id=%d", sid)
+
+        try:
+            req = urllib.request.Request(
+                cancel_url, data=body,
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=30)
+            log.info("SHC VM cancelled successfully")
+        except urllib.error.HTTPError as e:
+            resp_body = e.read().decode()
+            idx = resp_body.find("{")
+            if idx >= 0:
+                resp_body = resp_body[idx:]
+            try:
+                data = json.loads(resp_body)
+            except json.JSONDecodeError:
+                data = {}
+
+            conf_id = (
+                data.get("confirmation", {})
+                .get("structuredContent", {})
+                .get("confirmation_id")
+            )
+            if conf_id:
+                log.info("Confirming SHC cancel (confirmation_id=%s)", conf_id)
+                req2 = urllib.request.Request(
+                    cancel_url, data=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {api_key}",
+                        "X-User-Api-Confirm": conf_id,
+                    },
+                    method="POST",
+                )
+                try:
+                    urllib.request.urlopen(req2, timeout=30)
+                    log.info("SHC VM cancelled successfully (confirmed)")
+                    return
+                except Exception as exc2:
+                    log.warning("SHC cancel confirmation failed: %s", exc2)
+            else:
+                log.warning("SHC cancel failed: HTTP %d — %s", e.code, resp_body[:200])
+        except Exception as exc:
+            log.warning("SHC cancel request failed: %s", exc)
+
+        log.warning("Falling back to shutdown")
+        _run("shutdown -h now", timeout=10, check=False)
         return
 
     _run(
