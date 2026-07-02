@@ -2074,6 +2074,7 @@ async function renderBleRun(view, run, myLoadId) {
 
   wireGenericFileButtons(body);
   lazyLoadScreenshots(body);
+  checkBlobAvailability(body);
 }
 
 function renderBleMetrics(summary) {
@@ -2769,18 +2770,47 @@ function renderFileList(files) {
   if (files.length === 0) {
     return `<p class="section-empty">No additional files in this run.</p>`;
   }
-  const rows = files.map((f) => {
+  const rows = files.map((f, i) => {
     const name = (f.path || "").split("/").pop() || f.url;
     const icon = fileIcon(f.mime);
-    return `<a class="file-row" href="${escapeHtml(f.url)}" target="_blank" rel="noopener">
+    return `<div class="file-row" data-blossom-url="${escapeHtml(f.url)}" data-file-idx="${i}">
       <span class="file-icon">${icon}</span>
       <span class="file-name" title="${escapeHtml(f.path)}">${escapeHtml(name)}</span>
       <span class="file-path">${escapeHtml(f.path)}</span>
       <span class="file-size">${escapeHtml(formatBytes(f.size))}</span>
       <span class="file-ext">${escapeHtml(extOf(f.path || name))}</span>
-    </a>`;
+      <span class="file-status file-status-checking" title="Checking availability...">...</span>
+      <a class="file-download" href="${escapeHtml(f.url)}" target="_blank" rel="noopener" title="Open">open</a>
+    </div>`;
   }).join("");
-  return `<div class="file-list">${rows}</div>`;
+  return `<div class="file-list" data-file-list>${rows}</div>`;
+}
+
+function checkBlobAvailability(container) {
+  if (!container) return;
+  const rows = container.querySelectorAll(".file-row[data-blossom-url]");
+  rows.forEach((row) => {
+    const url = row.dataset.blossomUrl;
+    const status = row.querySelector(".file-status");
+    if (!url || !status) return;
+    fetch(url, { method: "HEAD", signal: AbortSignal.timeout(8000) })
+      .then((resp) => {
+        if (resp.ok) {
+          status.className = "file-status file-status-ok";
+          status.textContent = "ok";
+          status.title = "Available";
+        } else {
+          status.className = "file-status file-status-gone";
+          status.textContent = "gone";
+          status.title = `HTTP ${resp.status}`;
+        }
+      })
+      .catch(() => {
+        status.className = "file-status file-status-gone";
+        status.textContent = "gone";
+        status.title = "Request failed";
+      });
+  });
 }
 
 function fileIcon(mime) {

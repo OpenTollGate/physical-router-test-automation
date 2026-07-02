@@ -1111,6 +1111,25 @@ section#run-view {
   background: var(--bg-hover);
   border-color: var(--border-light);
 }
+.file-status {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  min-width: 36px;
+  text-align: center;
+}
+.file-status-checking { color: var(--text-dim); background: var(--bg); }
+.file-status-ok { color: var(--green); background: var(--green-dim); }
+.file-status-gone { color: var(--red); background: var(--red-dim); }
+.file-download {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.file-download:hover { color: var(--accent); }
 
 .file-icon {
   font-family: var(--font-mono);
