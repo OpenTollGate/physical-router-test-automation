@@ -83,7 +83,6 @@ class PulumiSHCProvider(SHCProvider):
                 hostname=hostname,
                 size=size,
                 api_key=api_key,
-                auto_cancel=True,
             )
             pulumi.export("service_id", vm.service_id)
             pulumi.export("ip", vm.ip)
