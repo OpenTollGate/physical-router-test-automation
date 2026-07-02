@@ -26,6 +26,11 @@ from lib.clients.container import ContainerClient
 from lib.constants import DEFAULT_STEP_SIZE_MS, NDS_PORTAL_PORT
 from lib.backend import BackendConfig
 
+# Register the auto-minting Cashu fixture module so its `minted_token` fixture
+# (lib/cashu_fixture.py, Part A of WD6) is discoverable by any test by name.
+# Fixtures defined in a non-conftest module are otherwise invisible to pytest.
+pytest_plugins = ["lib.cashu_fixture"]
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(message)s",
