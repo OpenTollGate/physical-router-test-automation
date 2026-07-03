@@ -256,8 +256,12 @@ sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils \
 echo "[1/$N_STEPS] done"
 
 step 2 "Installing Rust..."
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sudo sh -s -- -y || fail 2 "rustup"
-source /root/.cargo/env
+if [ -z "$SKIP_BLOSSOMFS" ]; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sudo sh -s -- -y || fail 2 "rustup"
+  source /root/.cargo/env
+else
+  echo "  SKIP_BLOSSOMFS set — Rust not needed"
+fi
 echo "[2/$N_STEPS] done"
 
 step 3 "Installing nak..."
