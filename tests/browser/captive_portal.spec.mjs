@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 
-const SPLASH_PATH = '/';
+const ROUTER_IP = process.env.ROUTER_IP || '192.168.1.1';
+const SPLASH_PATH = `http://${ROUTER_IP}/`;
 const HYDRATE_TIMEOUT = 10000;
 
 test.describe('captive portal splash page', () => {
