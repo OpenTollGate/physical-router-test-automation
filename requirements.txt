@@ -6,8 +6,4 @@ coincurve>=18.0
 pyserial>=3.5
 PyYAML>=6.0
 requests
-nostr-publish>=0.1.0
-
-shc-toolkit>=0.1.0
-shc-pulumi>=0.1.0
-pulumi>=3.0
+nostr-publish @ git+https://github.com/Amperstrand/nostr-publish-file-metadata-action.git@main

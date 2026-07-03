@@ -33,15 +33,29 @@ BLOSSOM_MIRROR_SERVERS = [
 TEST_DEPS = ["curl", "socat", "nodogsplash", "jq", "luci", "px5g-mbedtls"]
 
 
+def detect_package_manager(router) -> str:
+    """Detect whether the router uses opkg (24.x) or apk (25.x).
+
+    OpenWRT 25.x ships apk-tools and does NOT have opkg.
+    24.x and earlier ship opkg and do NOT have apk.
+    """
+    try:
+        out = router.ssh("command -v apk >/dev/null 2>&1 && echo apk || echo opkg", timeout=10)
+        pm = out.strip()
+        if pm in ("apk", "opkg"):
+            return pm
+    except Exception:
+        pass
+    return "opkg"
+
+
 def detect_arch(router) -> str:
     """Detect the package architecture from a running OpenWrt router via SSH.
 
-    Uses ``opkg print-architecture`` which lists all supported arches with
-    priority numbers.  The *highest-priority* (largest number) non-trivial
-    arch (i.e. not ``all`` / ``noarch``) is the native one.
-
-    Falls back to parsing ``/etc/openwrt_release`` DISTRIB_ARCH.
+    Tries ``opkg print-architecture`` first (24.x), then ``/etc/apk/arch``
+    (25.x), then falls back to ``/etc/openwrt_release`` DISTRIB_ARCH.
     """
+    # opkg path (24.x)
     try:
         out = router.ssh("opkg print-architecture 2>/dev/null", timeout=10)
     except Exception:
@@ -60,6 +74,16 @@ def detect_arch(router) -> str:
         if best_name:
             log.info("Detected router arch via opkg: %s", best_name)
             return best_name
+
+    # apk path (25.x)
+    try:
+        out = router.ssh("cat /etc/apk/arch 2>/dev/null", timeout=10)
+        arch = out.strip()
+        if arch:
+            log.info("Detected router arch via apk: %s", arch)
+            return arch
+    except Exception:
+        pass
 
     # Fallback: /etc/openwrt_release
     try:
@@ -256,8 +280,13 @@ def _wait_for_reboot(router, timeout=180):
 
 def install_test_deps(router):
     log.info("Installing test dependencies: %s", ", ".join(TEST_DEPS))
-    router.ssh("opkg update", timeout=60)
-    router.ssh(f"opkg install {' '.join(TEST_DEPS)}", timeout=120)
+    pm = detect_package_manager(router)
+    if pm == "apk":
+        router.ssh("apk update", timeout=60)
+        router.ssh(f"apk add {' '.join(TEST_DEPS)}", timeout=120)
+    else:
+        router.ssh("opkg update", timeout=60)
+        router.ssh(f"opkg install {' '.join(TEST_DEPS)}", timeout=120)
     log.info("Test dependencies installed")
 
 
@@ -712,17 +741,33 @@ def deploy(router, ipk_path: Path, reboot: bool = False, backend=None) -> dict[s
     _scp_to_router(router, ipk_path, "/tmp/tollgate-wrt.ipk")
 
     log.info("Installing tollgate-wrt")
-    router.ssh(
-        "/etc/init.d/tollgate-wrt stop 2>/dev/null;"
-        "killall tollgate-wrt 2>/dev/null;"
-        "sleep 1;"
-        "opkg install /tmp/tollgate-wrt.ipk"
-        " && /etc/init.d/tollgate-wrt restart"
-        " && /etc/init.d/tollgate-basic restart 2>/dev/null"
-        "; /etc/init.d/uhttpd restart 2>/dev/null"
-        "; rm -f /tmp/tollgate-wrt.ipk",
-        timeout=120,
-    )
+    pm = detect_package_manager(router)
+    if pm == "apk":
+        router.ssh(
+            "/etc/init.d/tollgate-wrt stop 2>/dev/null;"
+            "killall tollgate-wrt 2>/dev/null;"
+            "sleep 1;"
+            "apk add --allow-untrusted /tmp/tollgate-wrt.ipk"
+            " && /etc/init.d/tollgate-wrt restart"
+            " && /etc/init.d/tollgate-basic restart 2>/dev/null"
+            "; /etc/init.d/uhttpd restart 2>/dev/null"
+            "; rm -f /tmp/tollgate-wrt.ipk",
+            timeout=120,
+        )
+        version_out = router.ssh("apk info -e tollgate-wrt 2>/dev/null || opkg list-installed | grep tollgate-wrt", timeout=10)
+    else:
+        router.ssh(
+            "/etc/init.d/tollgate-wrt stop 2>/dev/null;"
+            "killall tollgate-wrt 2>/dev/null;"
+            "sleep 1;"
+            "opkg install /tmp/tollgate-wrt.ipk"
+            " && /etc/init.d/tollgate-wrt restart"
+            " && /etc/init.d/tollgate-basic restart 2>/dev/null"
+            "; /etc/init.d/uhttpd restart 2>/dev/null"
+            "; rm -f /tmp/tollgate-wrt.ipk",
+            timeout=120,
+        )
+        version_out = router.ssh("opkg list-installed | grep tollgate-wrt", timeout=10)
 
     if reboot:
         return reboot_router(router)
@@ -736,7 +781,6 @@ def deploy(router, ipk_path: Path, reboot: bool = False, backend=None) -> dict[s
     health_timeout = 120 if backend and backend.is_rust else 60
     log.info("Waiting for backend health on port 2121 (timeout=%ds)", health_timeout)
     healthy = _wait_for_health(router, timeout=health_timeout)
-    version_out = router.ssh("opkg list-installed | grep tollgate-wrt", timeout=10)
     installed_version = _parse_version(version_out)
     health_code = 200 if healthy else router.api_status("/")
 

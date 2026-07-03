@@ -43,6 +43,7 @@ class WorkerConfig:
     runner_mode: bool = False  # True when running inside GitHub Actions self-hosted runner
     cloud: str = "gcp"  # "gcp" or "shc" — determines self-delete mechanism
     service_id: str = ""  # SHC service ID (only set for SHC VMs)
+    deploy_mode: str = "framework"  # "framework" (default) or "conwrt"
 def _metadata_get(key: str) -> str:
     req = urllib.request.Request(
         f"{METADATA_URL}/{key}",
@@ -145,6 +146,7 @@ def load_config_from_env() -> WorkerConfig:
         lease_minutes=int(_env("TOLLGATE_LEASE_MINUTES", "60")),
         cloud=_env("TOLLGATE_CLOUD", "gcp"),
         service_id=_env("TOLLGATE_SERVICE_ID", ""),
+        deploy_mode=_env("TOLLGATE_DEPLOY_MODE", "framework"),
     )
     log.info(
         "Config (runner mode): run=%s branch=%s repo=%s backend=%s pr=%s publish=%s mint=%s hwsim=%s vwifi=%s",
