@@ -584,7 +584,10 @@ def download_artifact(branch: str, arch: str, run_id: str | None = None,
     artifact_repo = repo or REPO
     artifact_workflow = workflow or WORKFLOW
     if BUILD_DIR.exists():
-        shutil.rmtree(BUILD_DIR)
+        try:
+            shutil.rmtree(BUILD_DIR)
+        except (PermissionError, OSError):
+            subprocess.run(["sudo", "rm", "-rf", str(BUILD_DIR)], timeout=15, capture_output=True)
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
 
     target_commit = os.environ.get("TOLLGATE_SUT_COMMIT", "")
