@@ -546,10 +546,10 @@ def _resolve_blossom_binary(commit: str | None, arch: str, fmt: str = "") -> dic
     return None
 
 
-def _download_blossom_binary(url: str, build_dir: Path, sha256: str = "") -> Path | None:
+def _download_blossom_binary(url: str, build_dir: Path, sha256: str = "", save_as: str = "") -> Path | None:
     """Download .ipk from Blossom. Tries primary URL, then falls back to
     mirror servers using the content-addressed SHA256 when the primary 404s."""
-    filename = url.rsplit("/", 1)[-1]
+    filename = save_as or url.rsplit("/", 1)[-1]
     dest = build_dir / filename
 
     urls_to_try = [url]
@@ -594,10 +594,17 @@ def download_artifact(branch: str, arch: str, run_id: str | None = None,
     blossom_binary = _resolve_blossom_binary(target_commit or None, arch, fmt=fmt)
     if blossom_binary:
         log.info("Found Blossom binary: %s", blossom_binary.get("filename", "?"))
-        blossom_path = _download_blossom_binary(
-            blossom_binary["url"], BUILD_DIR,
-            sha256=blossom_binary.get("sha256", ""),
-        )
+        _sha = blossom_binary.get("sha256", "")
+        _url = blossom_binary.get("url")
+        if not _url and _sha and len(_sha) == 64:
+            _url = f"{BLOSSOM_MIRROR_SERVERS[0]}/{_sha}"
+            log.info("No url in event — constructed from sha256: %s", _url)
+        if _url:
+            blossom_path = _download_blossom_binary(
+                _url, BUILD_DIR,
+                sha256=_sha,
+                save_as=blossom_binary.get("filename", ""),
+            )
         if blossom_path:
             return blossom_path
         log.warning("Blossom download failed, falling back to GitHub Actions")
