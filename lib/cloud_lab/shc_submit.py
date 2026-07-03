@@ -231,10 +231,11 @@ echo "Lease kill switch armed (cancels SHC service + shuts down)"
 step 1 "Installing system packages..."
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -qq || fail 1 "apt-get update"
-sudo apt-get install -y -qq qemu-system-x86 qemu-utils sshpass git curl wget \
-  python3-venv python3-pip net-tools iproute2 socat nftables \
-  build-essential libssl-dev pkg-config fuse3 libfuse3-dev ca-certificates \
-  cmake g++ libnl-3-dev libnl-genl-3-dev jq genisoimage ffmpeg || fail 1 "apt-get install"
+sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils \
+  sshpass git curl wget python3-venv python3-pip python3-setuptools python3-wheel \
+  net-tools iproute2 socat nftables build-essential libssl-dev pkg-config \
+  fuse3 libfuse3-dev ca-certificates cmake g++ libnl-3-dev libnl-genl-3-dev \
+  jq genisoimage ffmpeg seabios ipxe-qemu || fail 1 "apt-get install"
 echo "[1/$N_STEPS] done"
 
 step 2 "Installing Rust..."
