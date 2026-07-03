@@ -177,8 +177,8 @@ step() {{
 step_done() {{
     local n=$1
     local elapsed=$(( $(date +%s) - ${{STEP_TIMES[$n]:-0}} ))
-    echo "[$n/$N_STEPS] done (${elapsed}s)"
-    echo "[$n/$N_STEPS] done (${elapsed}s)" >> /tmp/tollgate-status
+    echo "[$n/$N_STEPS] done (${{elapsed}}s)"
+    echo "[$n/$N_STEPS] done (${{elapsed}}s)" >> /tmp/tollgate-status
 }}
 
 declare -A STEP_TIMES
