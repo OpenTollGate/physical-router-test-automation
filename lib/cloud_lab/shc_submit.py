@@ -124,17 +124,19 @@ def _working_tree_overlay_b64() -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def _wait_for_ssh(ssh_base: list[str], ssh_target: str, timeout: int = 300) -> None:
+def _wait_for_ssh(ssh_base: list[str], ssh_target: str, timeout: int = 300, sshpass_password: str = "") -> None:
     """Retry SSH until the VM accepts connections.
 
     Key propagation can take 2-5 minutes after apply_ssh_key_live returns.
+    On 1C VMs (Starter tier), cloud-init takes 20+ min — password auth is faster.
     """
+    prefix = ["sshpass", "-p", sshpass_password] if sshpass_password else []
     print("Waiting for SSH daemon...", end="", flush=True)
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             r = subprocess.run(
-                [*ssh_base, ssh_target, "echo OK"],
+                [*prefix, *ssh_base, ssh_target, "echo OK"],
                 capture_output=True, text=True, timeout=10,
             )
             if r.returncode == 0 and "OK" in r.stdout:
@@ -237,6 +239,11 @@ echo "self_cancel; shutdown -h now 'TollGate lease expired'" | at "now + ${{LEAS
     ( while true; do sleep 60; [ "$(date +%s)" -ge "$(cat /tmp/tollgate-lease-expires)" ] && self_cancel && shutdown -h now; done & ) )
 echo "Lease kill switch armed (cancels SHC service + shuts down)"
 
+TOTAL_RAM=$(free -m | awk '/^Mem:/{{print $2}}')
+if [ "$TOTAL_RAM" -le 4096 ] && [ "$(swapon --show 2>/dev/null | wc -l)" -eq 0 ]; then
+  sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && echo "Swap enabled (2G)"
+fi
+
 step 1 "Installing system packages..."
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -qq || fail 1 "apt-get update"
@@ -337,7 +344,7 @@ else
     local key=$1 dest=$2
     # Try hardcoded Blossom URL first (fastest, most reliable)
     case "$key" in
-      blossomfs-*) sudo curl -sfL -o "$dest" "https://blossom.psbt.me/e05017b95e55a709fd30bf2c687e29b03227fa245e89664447d34a4932501c28" && sudo chmod +x "$dest" && return 0 ;;
+      blossomfs-*) sudo curl -sfL -o "$dest" "https://blossom.psbt.me/22c53f31f1b428d907f2276a44c9cfde8bb1a6f9ac831422ffead8f53fccabf4" && sudo chmod +x "$dest" && return 0 ;;
     esac
     # Fall back
     local url
@@ -566,23 +573,37 @@ def submit_run_shc(
     if priv_key != ssh_key_path and Path(priv_key).exists():
         ssh_base.extend(["-i", priv_key])
 
-    # 5. Wait for SSH daemon (key propagation can take 2-5 min on Standard, 10+ on Starter)
-    ssh_wait_timeout = 600 if tier == "starter" else 300
+    # 5. Wait for SSH daemon
+    # On Starter (1C), cloud-init key propagation takes 20+ min — password auth works in ~5 min
     use_sshpass = False
     vm_password = ""
-    try:
-        _wait_for_ssh(ssh_base, ssh_target, timeout=ssh_wait_timeout)
-    except TimeoutError:
-        print(" key auth not ready, retrying key injection...")
+    if tier == "starter":
         try:
-            if pubkey:
-                client.apply_ssh_key_live(service_id, pubkey)
+            creds = client.get_vm_credentials(service_id)
+            vm_password = creds.get("password", "") or creds.get("root_password", "")
         except Exception:
             pass
-        try:
-            _wait_for_ssh(ssh_base, ssh_target, timeout=180)
-        except TimeoutError:
-            print(" key auth still not ready, trying password fallback...")
+        if vm_password:
+            use_sshpass = True
+            ssh_wait_pw = vm_password
+            ssh_wait_timeout = 900
+        else:
+            ssh_wait_pw = ""
+            ssh_wait_timeout = 600
+    else:
+        ssh_wait_pw = ""
+        ssh_wait_timeout = 300
+
+    try:
+        _wait_for_ssh(ssh_base, ssh_target, timeout=ssh_wait_timeout, sshpass_password=ssh_wait_pw)
+    except TimeoutError:
+        if not ssh_wait_pw:
+            print(" key auth not ready, retrying key injection...")
+            try:
+                if pubkey:
+                    client.apply_ssh_key_live(service_id, pubkey)
+            except Exception:
+                pass
             try:
                 creds = client.get_vm_credentials(service_id)
                 vm_password = creds.get("password", "") or creds.get("root_password", "")

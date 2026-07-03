@@ -24,7 +24,6 @@ COORDINATION_RELAYS = [
 #: free-tier files on blossom.psbt.me expire after a TTL, so the same
 #: content-addressed blob (SHA256) is retried on the mirrors.
 BLOSSOM_MIRROR_SERVERS = [
-    "https://blossom.primal.net",
     "https://blossom.psbt.me",
 ]
 
