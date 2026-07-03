@@ -593,7 +593,7 @@ def submit_run_shc(
         f"TOLLGATE_SUITE_REF={shlex.quote(suite_ref)}",
         f"OPENWRT_VERSION={shlex.quote(os.environ.get('OPENWRT_VERSION', '24.10.1'))}",
         f"TOLLGATE_DEPLOY_MODE={shlex.quote(os.environ.get('TOLLGATE_DEPLOY_MODE', 'framework'))}",
-        f"BLOSSOM_SERVER={shlex.quote(os.environ.get('BLOSSOM_SERVER', 'https://blossom.primal.net'))}",
+        f"BLOSSOM_SERVER={shlex.quote(os.environ.get('BLOSSOM_SERVER', 'https://blossom.psbt.me'))}",
         f"NOSTR_RELAYS={shlex.quote(os.environ.get('NOSTR_RELAYS', 'wss://relay.damus.io,wss://nos.lol,wss://relay.cashu.email,wss://relay.tollgate.me'))}",
         f"TOLLGATE_BACKEND={shlex.quote(target.backend)}",
         f"TOLLGATE_PUBLISH={'true' if publish else 'false'}",
