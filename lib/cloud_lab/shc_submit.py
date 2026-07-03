@@ -330,48 +330,56 @@ genisoimage -quiet -output "$WORKDIR/images/debian-seed.iso" -volid cidata -joli
 echo "[10/$N_STEPS] done"
 
 step 11 "Installing BlossomFS (from cache)..."
-fetch_cached() {{
-  local key=$1 dest=$2
-  # Try hardcoded Blossom URL first (fastest, most reliable)
-  case "$key" in
-    blossomfs-*) sudo curl -sfL -o "$dest" "https://blossom.psbt.me/e05017b95e55a709fd30bf2c687e29b03227fa245e89664447d34a4932501c28" && sudo chmod +x "$dest" && return 0 ;;
-  esac
-  # Fall back
-  local url
-  url=$(nak req -k 1063 -l 1 -t "filename=$key" wss://relay.cashu.email < /dev/null 2>/dev/null | python3 -c "import sys,json;[print(next(t[1] for t in json.loads(l)['tags'] if t[0]=='url')) for l in [sys.stdin.readline().strip()] if l]" 2>/dev/null)
-  if [ -n "$url" ]; then sudo curl -sfL -o "$dest" "$url" && sudo chmod +x "$dest" && return 0; fi
-  return 1
-}}
-sudo mkdir -p /opt/blossomfs/target/release
-if fetch_cached blossomfs-8784100 /opt/blossomfs/target/release/blossomfs; then
-  echo "  BlossomFS from cache"
+if [ -n "$SKIP_BLOSSOMFS" ]; then
+  echo "  SKIP_BLOSSOMFS set — skipping (smoke/quick mode)"
 else
-  echo "  Compiling BlossomFS from source..."
-  sudo rm -rf /opt/blossomfs
-  sudo git clone --depth 1 https://github.com/Amperstrand/blossomfs /opt/blossomfs || fail 11 "blossomfs clone"
-  cd /opt/blossomfs && sudo /root/.cargo/bin/cargo build --release || fail 11 "blossomfs build"
-  echo "  Uploading BlossomFS binary to Blossom for caching..."
-  nak blossom upload --server blossom.psbt.me --sec "$(cat /root/nsec)" /opt/blossomfs/target/release/blossomfs 2>/dev/null && echo "  BlossomFS cached" || echo "  Upload failed (non-fatal)"
+  fetch_cached() {{
+    local key=$1 dest=$2
+    # Try hardcoded Blossom URL first (fastest, most reliable)
+    case "$key" in
+      blossomfs-*) sudo curl -sfL -o "$dest" "https://blossom.psbt.me/e05017b95e55a709fd30bf2c687e29b03227fa245e89664447d34a4932501c28" && sudo chmod +x "$dest" && return 0 ;;
+    esac
+    # Fall back
+    local url
+    url=$(nak req -k 1063 -l 1 -t "filename=$key" wss://relay.cashu.email < /dev/null 2>/dev/null | python3 -c "import sys,json;[print(next(t[1] for t in json.loads(l)['tags'] if t[0]=='url')) for l in [sys.stdin.readline().strip()] if l]" 2>/dev/null)
+    if [ -n "$url" ]; then sudo curl -sfL -o "$dest" "$url" && sudo chmod +x "$dest" && return 0; fi
+    return 1
+  }}
+  sudo mkdir -p /opt/blossomfs/target/release
+  if fetch_cached blossomfs-8784100 /opt/blossomfs/target/release/blossomfs; then
+    echo "  BlossomFS from cache"
+  else
+    echo "  Compiling BlossomFS from source..."
+    sudo rm -rf /opt/blossomfs
+    sudo git clone --depth 1 https://github.com/Amperstrand/blossomfs /opt/blossomfs || fail 11 "blossomfs clone"
+    cd /opt/blossomfs && sudo /root/.cargo/bin/cargo build --release || fail 11 "blossomfs build"
+    echo "  Uploading BlossomFS binary to Blossom for caching..."
+    nak blossom upload --server blossom.psbt.me --sec "$(cat /root/nsec)" /opt/blossomfs/target/release/blossomfs 2>/dev/null && echo "  BlossomFS cached" || echo "  Upload failed (non-fatal)"
+  fi
 fi
 echo "[11/$N_STEPS] done"
 
 step 12 "Installing vwifi (from cache)..."
-sudo mkdir -p /opt/vwifi/bin/host /opt/vwifi/bin/debian /opt/vwifi/bin/openwrt
-if fetch_cached vwifi-host-server-072cdb8 /opt/vwifi/bin/host/vwifi-server \
-   && fetch_cached vwifi-host-ctrl-072cdb8 /opt/vwifi/bin/host/vwifi-ctrl \
-   && fetch_cached vwifi-guest-client-072cdb8 /opt/vwifi/bin/debian/vwifi-client; then
-  sudo cp /opt/vwifi/bin/debian/vwifi-client /opt/vwifi/bin/openwrt/vwifi-client
-  echo "  vwifi from cache"
+if [ -n "$SKIP_VWIFI" ]; then
+  echo "  SKIP_VWIFI set — skipping (smoke/quick mode)"
 else
-  echo "  Compiling vwifi from source..."
-  sudo git clone --depth 1 https://github.com/Raizo62/vwifi.git /tmp/vwifi-build || fail 12 "vwifi clone"
-  cd /tmp/vwifi-build && mkdir -p build-host && cd build-host
-  sudo cmake .. -DCMAKE_BUILD_TYPE=Release && sudo make -j$(nproc) || fail 12 "vwifi build host"
-  sudo cp vwifi-server vwifi-ctrl /opt/vwifi/bin/host/
-  cd /tmp/vwifi-build && mkdir -p build-guest && cd build-guest
-  sudo cmake .. -DCMAKE_BUILD_TYPE=Release && sudo make -j$(nproc) || fail 12 "vwifi build guest"
-  sudo cp vwifi-client vwifi-add-interfaces /opt/vwifi/bin/debian/
-  sudo cp vwifi-client vwifi-add-interfaces /opt/vwifi/bin/openwrt/
+  sudo mkdir -p /opt/vwifi/bin/host /opt/vwifi/bin/debian /opt/vwifi/bin/openwrt
+  if fetch_cached vwifi-host-server-072cdb8 /opt/vwifi/bin/host/vwifi-server \
+     && fetch_cached vwifi-host-ctrl-072cdb8 /opt/vwifi/bin/host/vwifi-ctrl \
+     && fetch_cached vwifi-guest-client-072cdb8 /opt/vwifi/bin/debian/vwifi-client; then
+    sudo cp /opt/vwifi/bin/debian/vwifi-client /opt/vwifi/bin/openwrt/vwifi-client
+    echo "  vwifi from cache"
+  else
+    echo "  Compiling vwifi from source..."
+    sudo git clone --depth 1 https://github.com/Raizo62/vwifi.git /tmp/vwifi-build || fail 12 "vwifi clone"
+    cd /tmp/vwifi-build && mkdir -p build-host && cd build-host
+    sudo cmake .. -DCMAKE_BUILD_TYPE=Release && sudo make -j$(nproc) || fail 12 "vwifi build host"
+    sudo cp vwifi-server vwifi-ctrl /opt/vwifi/bin/host/
+    cd /tmp/vwifi-build && mkdir -p build-guest && cd build-guest
+    sudo cmake .. -DCMAKE_BUILD_TYPE=Release && sudo make -j$(nproc) || fail 12 "vwifi build guest"
+    sudo cp vwifi-client vwifi-add-interfaces /opt/vwifi/bin/debian/
+    sudo cp vwifi-client vwifi-add-interfaces /opt/vwifi/bin/openwrt/
+  fi
 fi
 echo "[12/$N_STEPS] done"
 
@@ -618,6 +626,8 @@ def submit_run_shc(
         f"TOLLGATE_PUBLISH={'true' if publish else 'false'}",
         f"TOLLGATE_QUICK={'true' if quick else 'false'}",
         f"TOLLGATE_SMOKE={'true' if smoke else 'false'}",
+        f"SKIP_BLOSSOMFS={'1' if (smoke or quick) else ''}",
+        f"SKIP_VWIFI={'1' if (smoke or quick) else ''}",
         f"TOLLGATE_COMPLETE={'true' if complete else 'false'}",
         f"TOLLGATE_MINT={shlex.quote(mint)}",
         f"TOLLGATE_PORTAL={shlex.quote(portal)}",
