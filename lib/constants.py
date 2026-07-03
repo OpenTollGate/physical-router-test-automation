@@ -8,7 +8,7 @@ NOSTR_RELAYS = [
     r.strip() for r in os.environ.get("NOSTR_RELAYS", "wss://relay.cashu.email").split(",") if r.strip()
 ]
 BLOSSOM_SERVERS = [
-    s.strip() for s in os.environ.get("BLOSSOM_SERVERS", "https://blossom.primal.net").split(",") if s.strip()
+    s.strip() for s in os.environ.get("BLOSSOM_SERVERS", "https://blossom.psbt.me").split(",") if s.strip()
 ]
 
 TEST_MINT_URL = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
