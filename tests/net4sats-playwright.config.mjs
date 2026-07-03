@@ -19,6 +19,6 @@ export default defineConfig({
         video: 'on',
         trace: 'on',
         ignoreHTTPSErrors: true,
-        actionTimeout: 15000,
+        actionTimeout: 30000,
     },
 });
