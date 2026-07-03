@@ -71,7 +71,7 @@ _STEPS = [
 
 
 def _suite_ref() -> str:
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[2]
     r = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         capture_output=True, text=True, cwd=repo_root, timeout=10,
@@ -96,11 +96,14 @@ def _nsec_hex() -> str:
 
 
 def _working_tree_overlay_b64() -> str:
-    repo_root = Path(__file__).resolve().parents[3]
-    changes = subprocess.run(
+    repo_root = Path(__file__).resolve().parents[2]
+    tracked = subprocess.run(
         ["git", "diff", "--name-only"], capture_output=True, text=True, cwd=repo_root,
     ).stdout.strip().split("\n")
-    changes = [c for c in changes if c and not c.startswith(".omo/") and not c.startswith(".playwright-mcp/")]
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"], capture_output=True, text=True, cwd=repo_root,
+    ).stdout.strip().split("\n")
+    changes = [c for c in tracked + untracked if c and not c.startswith(".omo/") and not c.startswith(".playwright-mcp/")]
     if not changes:
         return ""
     buf = BytesIO()
@@ -167,8 +170,18 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/
 
 step() {{
     local n=$1 msg=$2
-    echo "[$n/$N_STEPS] $msg"
+    STEP_TIMES[$n]=$(date +%s)
+    echo "[$n/$N_STEPS] $msg ($(date -u +%H:%M:%S))..."
 }}
+
+step_done() {{
+    local n=$1
+    local elapsed=$(( $(date +%s) - ${{STEP_TIMES[$n]:-0}} ))
+    echo "[$n/$N_STEPS] done (${elapsed}s)"
+    echo "[$n/$N_STEPS] done (${elapsed}s)" >> /tmp/tollgate-status
+}}
+
+declare -A STEP_TIMES
 
 fail() {{
     local n=$1 msg=$2
@@ -181,18 +194,46 @@ N_STEPS=15
 echo "BOOTSTRAP_START" >> /tmp/tollgate-status
 
 LEASE_MINUTES={lease_minutes}
+
+self_cancel() {{
+    local sid="${{TOLLGATE_SERVICE_ID}}"
+    local key="${{SHC_API_KEY}}"
+    [ -z "$sid" ] || [ -z "$key" ] && return 1
+    local api="https://blesta.sovereignhybridcompute.com/user-api/v2"
+    local resp code body cid
+    resp=$(curl -s -X POST "$api/vm/$sid/cancel" \
+        -H "Authorization: Bearer $key" \
+        -H "Content-Type: application/json" \
+        -d '{{"immediate": true}}' -w '\n%{{http_code}}' 2>/dev/null)
+    code=$(echo "$resp" | tail -1)
+    body=$(echo "$resp" | grep -o '{{.*}}' | head -1)
+    if [ "$code" = "409" ]; then
+        cid=$(echo "$body" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('confirmation',{{}}).get('confirmation_id',''))" 2>/dev/null)
+        if [ -n "$cid" ]; then
+            curl -s -X POST "$api/vm/$sid/cancel" \
+                -H "Authorization: Bearer $key" \
+                -H "Content-Type: application/json" \
+                -H "X-User-Api-Confirm: $cid" \
+                -d '{{"immediate": true}}' >/dev/null 2>&1
+            echo "VM cancelled via SHC API (service #$sid)"
+        fi
+    elif [ "$code" = "200" ] || [ "$code" = "201" ]; then
+        echo "VM cancelled via SHC API (service #$sid)"
+    fi
+}}
+
 echo "Scheduling self-cancel in ${{LEASE_MINUTES}} minutes via at..."
-echo "shutdown -h now 'TollGate lease expired'" | at "now + ${{LEASE_MINUTES}} minutes" 2>/dev/null || \
+echo "self_cancel; shutdown -h now 'TollGate lease expired'" | at "now + ${{LEASE_MINUTES}} minutes" 2>/dev/null || \
   ( echo "$(( $(date +%s) + LEASE_MINUTES * 60 ))" > /tmp/tollgate-lease-expires && \
-    ( while true; do sleep 60; [ "$(date +%s)" -ge "$(cat /tmp/tollgate-lease-expires)" ] && shutdown -h now; done & ) )
-echo "Lease kill switch armed"
+    ( while true; do sleep 60; [ "$(date +%s)" -ge "$(cat /tmp/tollgate-lease-expires)" ] && self_cancel && shutdown -h now; done & ) )
+echo "Lease kill switch armed (cancels SHC service + shuts down)"
 
 step 1 "Installing system packages..."
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -qq || fail 1 "apt-get update"
 sudo apt-get install -y -qq qemu-system-x86 qemu-utils sshpass git curl wget \
   python3-venv python3-pip net-tools iproute2 socat nftables \
-  build-essential libssl-dev pkg-config fuse3 libfuse3-dev \
+  build-essential libssl-dev pkg-config fuse3 libfuse3-dev ca-certificates \
   cmake g++ libnl-3-dev libnl-genl-3-dev jq genisoimage ffmpeg || fail 1 "apt-get install"
 echo "[1/$N_STEPS] done"
 
@@ -345,6 +386,18 @@ else
   echo "  WARNING: /dev/kvm not found — QEMU will use slow TCG emulation"
 fi
 echo "[14/$N_STEPS] done"
+
+echo "=== Pre-flight: Blossom + Nostr verification ==="
+echo "preflight-$(date +%s)" > /tmp/blossom-preflight.txt
+if /usr/local/bin/nak blossom upload --server "$BLOSSOM_SERVER" --sec "$(cat /root/nsec)" /tmp/blossom-preflight.txt < /dev/null 2>&1; then
+    echo "  Blossom upload: OK ($BLOSSOM_SERVER)"
+    rm -f /tmp/blossom-preflight.txt
+else
+    echo "  WARNING: Blossom pre-flight FAILED — results may not publish"
+fi
+echo "  BLOSSOM_SERVER: $BLOSSOM_SERVER"
+echo "  NOSTR_RELAYS: $NOSTR_RELAYS"
+echo "=== Pre-flight complete ==="
 
 step 15 "Running worker pipeline..."
 cd {test_dir}
@@ -520,6 +573,9 @@ def submit_run_shc(
         f"TOLLGATE_PR_REPO={shlex.quote(target.pr_repo or target.repo)}",
         f"TOLLGATE_SUITE_REF={shlex.quote(suite_ref)}",
         f"OPENWRT_VERSION={shlex.quote(os.environ.get('OPENWRT_VERSION', '24.10.1'))}",
+        f"TOLLGATE_DEPLOY_MODE={shlex.quote(os.environ.get('TOLLGATE_DEPLOY_MODE', 'framework'))}",
+        f"BLOSSOM_SERVER={shlex.quote(os.environ.get('BLOSSOM_SERVER', 'https://blossom.primal.net'))}",
+        f"NOSTR_RELAYS={shlex.quote(os.environ.get('NOSTR_RELAYS', 'wss://relay.damus.io,wss://nos.lol,wss://relay.cashu.email,wss://relay.tollgate.me'))}",
         f"TOLLGATE_BACKEND={shlex.quote(target.backend)}",
         f"TOLLGATE_PUBLISH={'true' if publish else 'false'}",
         f"TOLLGATE_QUICK={'true' if quick else 'false'}",
