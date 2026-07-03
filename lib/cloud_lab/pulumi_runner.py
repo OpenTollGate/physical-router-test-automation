@@ -1,7 +1,7 @@
 """SHC VM provider backed by Pulumi Automation API.
 
 Drop-in alternative to :class:`lib.cloud_lab.provider.SHCProvider`. Selected
-when ``TOLLGATE_VM_PROVIDER=shc-pulumi`` (or via the ``--pulumi`` flag on
+when ``TOLLGATE_VM_PROVIDER=pulumi`` (or via the ``--pulumi`` flag on
 ``scripts/cloud-lab.py``). Only the VM create/destroy path is swapped to
 Pulumi Automation API; everything else (SSH key injection via
 ``apply_ssh_key_live``, SSH command execution, raw ``SHCClient`` access) is
@@ -56,7 +56,7 @@ class PulumiSHCProvider(SHCProvider):
     ``destroy_vm`` are overridden to route through a Pulumi stack.
     """
 
-    provider_name = "shc-pulumi"
+    provider_name = "pulumi"
     can_publish = True
 
     def __init__(self) -> None:
@@ -192,7 +192,7 @@ class PulumiSHCProvider(SHCProvider):
 
     @staticmethod
     def _size_for_machine_type(machine_type: str) -> str:
-        """Map the imperative ``machine_type`` vocab to shc-pulumi ``size`` names."""
+        """Map the imperative ``machine_type`` vocab to pulumi ``size`` names."""
         mapping = {
             "": _DEFAULT_SIZE,
             "2C/8GB": "dev-2c-8gb",

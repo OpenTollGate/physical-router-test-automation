@@ -103,7 +103,7 @@ class TestCreateVm:
         assert vm.service_id == 777
         assert vm.ip == "66.92.1.1"
         assert vm.hostname == "h"
-        assert vm.provider == "shc-pulumi"
+        assert vm.provider == "pulumi"
         assert vm.raw["service_id"] == 777
         assert provider._stack is mock_stack
 
@@ -197,11 +197,11 @@ class TestCleanupStale:
 class TestProviderRegistry:
     def test_shc_pulumi_key_present_for_discoverability(self):
         from lib.cloud_lab.provider import _PROVIDERS
-        assert "shc-pulumi" in _PROVIDERS
+        assert "pulumi" in _PROVIDERS
 
     def test_get_provider_populates_and_returns_pulumi_instance(self):
         from lib.cloud_lab.provider import get_provider, _PROVIDERS
-        p = get_provider("shc-pulumi")
+        p = get_provider("pulumi")
         assert isinstance(p, PulumiSHCProvider)
-        assert p.provider_name == "shc-pulumi"
-        assert _PROVIDERS["shc-pulumi"] is PulumiSHCProvider
+        assert p.provider_name == "pulumi"
+        assert _PROVIDERS["pulumi"] is PulumiSHCProvider

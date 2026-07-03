@@ -312,7 +312,7 @@ _PROVIDERS: dict[str, type[VMProvider]] = {
     "gcloud": GCPProvider,
     "gcp": GCPProvider,
     "shc": SHCProvider,
-    "shc-pulumi": None,  # populated below (lazy import to avoid circular dependency)
+    "pulumi": None,  # populated below (lazy import to avoid circular dependency)
     "local": None,  # populated below
     "physical": None,  # populated below
 }
@@ -493,11 +493,11 @@ def get_provider(provider_name: str | None = None) -> VMProvider:
     Default: ``shc`` (cheapest, proven in testing).
     """
     name = (provider_name or os.environ.get("TOLLGATE_VM_PROVIDER", "shc")).lower()
-    # shc-pulumi is registered lazily to avoid a circular import (pulumi_runner
+    # pulumi is registered lazily to avoid a circular import (pulumi_runner
     # imports SHCProvider from this module). Pulumi is a required dependency.
-    if name == "shc-pulumi":
+    if name == "pulumi":
         from .pulumi_runner import PulumiSHCProvider
-        _PROVIDERS["shc-pulumi"] = PulumiSHCProvider
+        _PROVIDERS["pulumi"] = PulumiSHCProvider
     cls = _PROVIDERS.get(name)
     if cls is None:
         raise ValueError(
