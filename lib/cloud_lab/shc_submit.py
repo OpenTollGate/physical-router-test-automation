@@ -45,6 +45,15 @@ if SHC_TOOLKIT_PATH not in sys.path:
 SHC_PACKAGE_ID_STANDARD = 81
 SHC_PRICING_ID_STANDARD = 245
 
+# Starter tier: 1C/4GB/8GB at $0.24/day (48% cheaper than Standard $0.46/day)
+SHC_PACKAGE_ID_STARTER = 80
+SHC_PRICING_ID_STARTER = 241
+
+SHC_TIER_PACKAGE_PRICING = {
+    "starter": (SHC_PACKAGE_ID_STARTER, SHC_PRICING_ID_STARTER),
+    "standard": (SHC_PACKAGE_ID_STANDARD, SHC_PRICING_ID_STANDARD),
+}
+
 SUITE_REPO = "OpenTollGate/physical-router-test-automation"
 SUITE_REPO_URL = f"https://github.com/{SUITE_REPO}.git"
 TEST_DIR = "/opt/tollgate-test"
@@ -433,6 +442,7 @@ def submit_run_shc(
     keep_vm_on_failure: bool = False,
     lease_minutes: int = 90,
     provider=None,
+    tier: str = "standard",
 ) -> dict[str, str]:
     """Order an SHC VM, bootstrap it, and run the test worker pipeline.
 
@@ -443,17 +453,23 @@ def submit_run_shc(
 
     from shc_toolkit.client import SHCClient
 
+    if tier not in SHC_TIER_PACKAGE_PRICING:
+        raise ValueError(f"Unknown tier '{tier}'. Use: {list(SHC_TIER_PACKAGE_PRICING)}")
+    package_id, pricing_id = SHC_TIER_PACKAGE_PRICING[tier]
+    tier_label = tier.capitalize()
+    tier_min_balance = 0.25 if tier == "starter" else 0.50
+
     client = SHCClient()
 
     balance = client.get_account_balance()
     credit = float(balance.get("credit", [{}])[0].get("amount", 0))
-    if credit < 0.50:
+    if credit < tier_min_balance:
         raise RuntimeError(
             f"Insufficient SHC balance: ${credit:.2f}. "
-            f"Need at least $0.50 for a Dev VPS Standard ($0.46/day). "
+            f"Need at least ${tier_min_balance:.2f} for a Dev VPS {tier_label}. "
             f"Add credit at https://blesta.sovereignhybridcompute.com"
         )
-    print(f"SHC balance: ${credit:.2f}")
+    print(f"SHC balance: ${credit:.2f} (tier: {tier_label})")
 
     print(f"Waiting for CI artifact ({target.repo}@{target.branch})...")
     artifact_run_id = ensure_artifact(
@@ -479,19 +495,21 @@ def submit_run_shc(
     pubkey = Path(ssh_key_path).read_text().strip() if Path(ssh_key_path).exists() else ""
 
     if provider is not None:
-        print(f"Creating SHC VM '{hostname}' via Pulumi (Standard 2C/8GB)...")
-        vm_info = provider.create_vm(hostname, machine_type="2C/8GB")
+        print(f"Creating SHC VM '{hostname}' via Pulumi ({tier_label})...")
+        machine_type = "1C/4GB" if tier == "starter" else "2C/8GB"
+        vm_info = provider.create_vm(hostname, machine_type=machine_type)
         service_id = int(vm_info.service_id)
         vm_ip = vm_info.ip
         print(f"  VM ready: service #{service_id} @ {vm_ip}")
         if pubkey:
             provider.apply_ssh_key(vm_info, pubkey)
     else:
-        print(f"Ordering SHC VM '{hostname}' (Standard 2C/8GB)...")
+        tier_specs = {"starter": "1C/4GB/8GB", "standard": "2C/8GB/16GB"}
+        print(f"Ordering SHC VM '{hostname}' ({tier_label} {tier_specs[tier]})...")
         result = client.submit_order(
             hostname=hostname,
-            package_id=SHC_PACKAGE_ID_STANDARD,
-            pricing_id=SHC_PRICING_ID_STANDARD,
+            package_id=package_id,
+            pricing_id=pricing_id,
             idempotency_key=f"tollgate-{run_id}",
         )
         sids = result.get("service_ids", [])
@@ -534,11 +552,12 @@ def submit_run_shc(
         "-o", "ConnectTimeout=10",
     ]
 
-    # 5. Wait for SSH daemon (key propagation can take 2-5 min)
+    # 5. Wait for SSH daemon (key propagation can take 2-5 min on Standard, 10+ on Starter)
+    ssh_wait_timeout = 600 if tier == "starter" else 300
     use_sshpass = False
     vm_password = ""
     try:
-        _wait_for_ssh(ssh_base, ssh_target, timeout=300)
+        _wait_for_ssh(ssh_base, ssh_target, timeout=ssh_wait_timeout)
     except TimeoutError:
         print(" key auth not ready, retrying key injection...")
         try:

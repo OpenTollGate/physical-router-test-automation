@@ -197,6 +197,7 @@ class PulumiSHCProvider(SHCProvider):
             "": _DEFAULT_SIZE,
             "2C/8GB": "dev-2c-8gb",
             "n1-standard-2": "dev-2c-8gb",
+            "1C/4GB": "dev-1c-4gb",
             "4C/16GB": "dev-4c-16gb",
             "n1-standard-4": "dev-4c-16gb",
             "8C/32GB": "dev-8c-32gb",

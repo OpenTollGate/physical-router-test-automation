@@ -244,6 +244,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
             keep_vm_on_failure=not getattr(args, "self_delete", False),
             lease_minutes=cast(int, getattr(args, "lease", 90)),
             provider=_pulumi_prov,
+            tier=cast(str, getattr(args, "tier", "standard")),
         )
         print(f"""
 Submitted SHC run {info['run_id']}
@@ -654,6 +655,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force a specific mint type instead of auto-detection. Use 'submit-all-mints' for parallel runs.")
     submit.add_argument("--portal", default="builtin", choices=["builtin", "net4sats"],
         help="Captive portal to deploy (default: builtin). 'net4sats' deploys the configurationwizzard SPA.")
+    submit.add_argument("--tier", default="standard", choices=["starter", "standard"],
+        help="SHC VPS tier: starter (1C/4GB, $0.24/day) or standard (2C/8GB, $0.46/day)")
     target_flags(submit)
     submit.set_defaults(func=cmd_submit)
 
@@ -733,6 +736,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable vwifi cross-VM WiFi frame relay (experimental)")
     run.add_argument("--wifi-plane", default="tap", choices=["tap", "hwsim-netns"],
         help="Radio-plane mode. Default tap keeps existing VM/TAP cloud lab; hwsim-netns runs optional shared-kernel Wi-Fi POC.")
+    run.add_argument("--tier", default="standard", choices=["starter", "standard"],
+        help="SHC VPS tier: starter (1C/4GB, $0.24/day) or standard (2C/8GB, $0.46/day)")
     target_flags(run)
     run.set_defaults(func=cmd_run_tests)
 
