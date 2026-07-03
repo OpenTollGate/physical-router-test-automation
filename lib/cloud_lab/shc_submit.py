@@ -539,19 +539,36 @@ def submit_run_shc(
     try:
         _wait_for_ssh(ssh_base, ssh_target, timeout=300)
     except TimeoutError:
-        print(" key auth not ready, trying password fallback...")
-        creds = client.get_vm_credentials(service_id)
-        vm_password = creds.get("password", "")
-        if not vm_password:
-            raise
-        sshpass_check = subprocess.run(
-            ["sshpass", "-p", vm_password, *ssh_base, ssh_target, "echo OK"],
-            capture_output=True, text=True, timeout=15,
-        )
-        if sshpass_check.returncode != 0:
-            raise TimeoutError(f"Neither key nor password auth worked on {ssh_target}")
-        print("  Password auth works — using sshpass for bootstrap")
-        use_sshpass = True
+        print(" key auth not ready, retrying key injection...")
+        try:
+            if pubkey:
+                client.apply_ssh_key_live(service_id, pubkey)
+        except Exception:
+            pass
+        try:
+            _wait_for_ssh(ssh_base, ssh_target, timeout=180)
+        except TimeoutError:
+            print(" key auth still not ready, trying password fallback...")
+            try:
+                creds = client.get_vm_credentials(service_id)
+                vm_password = creds.get("password", "") or creds.get("root_password", "")
+                print(f"  Credentials returned: {list(creds.keys())}")
+            except Exception as cred_err:
+                print(f"  get_vm_credentials failed: {cred_err}")
+                vm_password = ""
+            if not vm_password:
+                raise TimeoutError(
+                    f"SSH key auth failed and no password available for {ssh_target}. "
+                    f"Manual intervention required."
+                )
+            sshpass_check = subprocess.run(
+                ["sshpass", "-p", vm_password, *ssh_base, ssh_target, "echo OK"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if sshpass_check.returncode != 0:
+                raise TimeoutError(f"Neither key nor password auth worked on {ssh_target}")
+            print("  Password auth works — using sshpass for bootstrap")
+            use_sshpass = True
 
     def ssh_cmd(cmd: str) -> list[str]:
         if use_sshpass:
