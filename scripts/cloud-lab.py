@@ -229,10 +229,8 @@ def cmd_submit(args: argparse.Namespace) -> int:
     )
 
     cloud = getattr(args, "cloud", "gcp")
-    if cloud == "pulumi":
+    if cloud in ("pulumi", "shc"):
         from lib.cloud_lab.shc_submit import submit_run_shc
-        _prov = _get_provider(args)
-        _pulumi_prov = _prov if _prov and _prov.provider_name == "pulumi" else None
         info = submit_run_shc(
             target,
             publish=cast(bool, args.publish),
@@ -243,7 +241,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
             portal=cast(str, args.portal),
             keep_vm_on_failure=not getattr(args, "self_delete", False),
             lease_minutes=cast(int, getattr(args, "lease", 90)),
-            provider=_pulumi_prov,
+            provider=None,
             tier=cast(str, getattr(args, "tier", "standard")),
         )
         print(f"""
@@ -626,8 +624,8 @@ def build_parser() -> argparse.ArgumentParser:
     ssh.set_defaults(func=cmd_ssh)
 
     submit = sub.add_parser("submit", help="Fire-and-forget: wait for CI artifact, spawn autonomous test VM")
-    submit.add_argument("--cloud", default="pulumi", choices=["gcp", "pulumi"],
-                        help="Cloud provider: pulumi (default, SHC via Pulumi) or gcp (legacy imperative)")
+    submit.add_argument("--cloud", default="pulumi", choices=["gcp", "pulumi", "shc"],
+                        help="Cloud provider: pulumi/shc (SHC via imperative API) or gcp (legacy)")
     submit.add_argument("--zone", default=DEFAULT_ZONE)
     submit.add_argument("--machine-type", default=DEFAULT_MACHINE_TYPE)
     submit.add_argument("--disk-size", type=int, default=DEFAULT_DISK_SIZE_GB)
@@ -753,7 +751,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     cloud = getattr(args, "cloud", "gcp")
-    if cloud == "shc":
+    if cloud in ("shc", "pulumi"):
         os.environ.setdefault("SHC_API_KEY", "")
         os.environ["TOLLGATE_VM_PROVIDER"] = "shc"
 
