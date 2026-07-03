@@ -55,3 +55,4 @@ lib/cloud_lab/shc.py
 *.pyc
 __pycache__/
 test-videos*/
+.ci-logs/

@@ -654,7 +654,7 @@ def wait_for_shc_run(
 
         if line and line != last_status_line:
             elapsed = int(time.time() - start)
-            new_lines = [l for l in line.splitlines() if l.strip()]
+            new_lines = [ln for ln in line.splitlines() if ln.strip()]
             for nl in new_lines[-3:]:
                 print(f"  [{elapsed}s] {nl}")
             last_status_line = line
