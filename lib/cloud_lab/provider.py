@@ -182,19 +182,16 @@ class GCPProvider(VMProvider):
 
 
 class SHCProvider(VMProvider):
-    """SHC provider — uses the shc-toolkit for VM lifecycle."""
+    """Base SHC provider — shared infrastructure for PulumiSHCProvider.
+
+    The imperative create_vm/wait_for_ready were removed when Pulumi became
+    the default. This class now provides only the shared methods that
+    PulumiSHCProvider inherits: client (SHCClient), apply_ssh_key, ssh,
+    destroy_vm (fallback), cleanup_stale, list_vms.
+    """
 
     provider_name = "shc"
     can_publish = True
-
-    _PACKAGE_MAP = {
-        "n1-standard-2": (81, 245),
-        "n1-standard-4": (82, 249),
-        "n1-standard-8": (83, 253),
-        "2C/8GB": (81, 245),
-        "4C/16GB": (82, 249),
-        "8C/32GB": (83, 253),
-    }
 
     _CACHE_KEYS = [
         "blossomfs-8784100",
@@ -215,42 +212,6 @@ class SHCProvider(VMProvider):
             from shc_toolkit.client import SHCClient
             self._client = SHCClient()
         return self._client
-
-    def create_vm(self, name, machine_type="", disk_size_gb=0, startup_script=""):
-        import uuid
-
-        pkg = self._PACKAGE_MAP.get(machine_type, self._PACKAGE_MAP["2C/8GB"])
-        result = self.client.submit_order(
-            hostname=name,
-            package_id=pkg[0],
-            pricing_id=pkg[1],
-        )
-        sids = result.get("service_ids", [])
-        if not sids:
-            raise RuntimeError(f"SHC order failed: {result}")
-        sid = int(sids[0])
-        return VMInfo(name=name, service_id=sid, provider="shc", raw=result)
-
-    def wait_for_ready(self, vm, timeout=300):
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                info = self.client.get_vm(int(vm.service_id))
-                state = info.get("provisioning_state", "unknown")
-                if state == "ready":
-                    ips = info.get("ips", [])
-                    vm.ip = ips[0]["ip"] if ips else ""
-                    vm.hostname = info.get("hostname", vm.name)
-                    return vm
-                if state in ("failed", "error"):
-                    raise RuntimeError(f"SHC VM {vm.service_id} provisioning failed: {state}")
-            except Exception as e:
-                if "not_found" in str(e):
-                    pass
-                else:
-                    log.debug(f"Polling SHC VM {vm.service_id}: {e}")
-            time.sleep(5)
-        raise TimeoutError(f"SHC VM {vm.service_id} not ready after {timeout}s")
 
     def apply_ssh_key(self, vm, public_key):
         self.client.apply_ssh_key_live(int(vm.service_id), public_key)
@@ -315,14 +276,35 @@ class SHCProvider(VMProvider):
             for v in vms
         ]
 
+    _REAPABLE_PREFIXES = (
+        "tollgate-",
+        "ci-pulumi-",
+        "ci-",
+        "fips-cloud-",
+        "fips-test-",
+    )
+
     def cleanup_stale(self, max_age_hours=2):
+        import datetime
         count = 0
+        now = datetime.datetime.now(datetime.timezone.utc)
         for vm in self.list_vms():
+            hostname = vm.hostname
+            if not any(hostname.startswith(p) for p in self._REAPABLE_PREFIXES):
+                continue
             try:
-                self.destroy_vm(vm, immediate=True)
-                count += 1
-            except Exception:
-                pass
+                created_str = vm.raw.get("date_created", "")
+                created = datetime.datetime.strptime(
+                    created_str, "%Y-%m-%d %H:%M:%S"
+                ).replace(tzinfo=datetime.timezone.utc)
+            except (ValueError, AttributeError):
+                continue
+            age_hours = (now - created).total_seconds() / 3600
+            if age_hours < max_age_hours:
+                continue
+            print(f"  Cancelling stale SHC VM: {hostname} ({age_hours:.1f}h old)")
+            self.destroy_vm(vm, immediate=True)
+            count += 1
         return count
 
 
@@ -330,7 +312,7 @@ _PROVIDERS: dict[str, type[VMProvider]] = {
     "gcloud": GCPProvider,
     "gcp": GCPProvider,
     "shc": SHCProvider,
-    "shc-pulumi": None,  # populated below (lazy import to avoid circular dependency)
+    "pulumi": None,  # populated below (lazy import to avoid circular dependency)
     "local": None,  # populated below
     "physical": None,  # populated below
 }
@@ -511,16 +493,11 @@ def get_provider(provider_name: str | None = None) -> VMProvider:
     Default: ``shc`` (cheapest, proven in testing).
     """
     name = (provider_name or os.environ.get("TOLLGATE_VM_PROVIDER", "shc")).lower()
-    # shc-pulumi is registered lazily to avoid a circular import (pulumi_runner
-    # imports from this module) and so the module loads without pulumi installed.
-    if name == "shc-pulumi":
-        try:
-            from .pulumi_runner import PulumiSHCProvider
-        except ImportError as exc:
-            raise ValueError(
-                f"Provider 'shc-pulumi' requires the pulumi + shc-pulumi packages: {exc}"
-            ) from exc
-        _PROVIDERS["shc-pulumi"] = PulumiSHCProvider
+    # pulumi is registered lazily to avoid a circular import (pulumi_runner
+    # imports SHCProvider from this module). Pulumi is a required dependency.
+    if name == "pulumi":
+        from .pulumi_runner import PulumiSHCProvider
+        _PROVIDERS["pulumi"] = PulumiSHCProvider
     cls = _PROVIDERS.get(name)
     if cls is None:
         raise ValueError(

@@ -71,7 +71,7 @@ _STEPS = [
 
 
 def _suite_ref() -> str:
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[2]
     r = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         capture_output=True, text=True, cwd=repo_root, timeout=10,
@@ -96,11 +96,14 @@ def _nsec_hex() -> str:
 
 
 def _working_tree_overlay_b64() -> str:
-    repo_root = Path(__file__).resolve().parents[3]
-    changes = subprocess.run(
+    repo_root = Path(__file__).resolve().parents[2]
+    tracked = subprocess.run(
         ["git", "diff", "--name-only"], capture_output=True, text=True, cwd=repo_root,
     ).stdout.strip().split("\n")
-    changes = [c for c in changes if c and not c.startswith(".omo/") and not c.startswith(".playwright-mcp/")]
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"], capture_output=True, text=True, cwd=repo_root,
+    ).stdout.strip().split("\n")
+    changes = [c for c in tracked + untracked if c and not c.startswith(".omo/") and not c.startswith(".playwright-mcp/")]
     if not changes:
         return ""
     buf = BytesIO()
@@ -167,8 +170,18 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/
 
 step() {{
     local n=$1 msg=$2
-    echo "[$n/$N_STEPS] $msg"
+    STEP_TIMES[$n]=$(date +%s)
+    echo "[$n/$N_STEPS] $msg ($(date -u +%H:%M:%S))..."
 }}
+
+step_done() {{
+    local n=$1
+    local elapsed=$(( $(date +%s) - ${{STEP_TIMES[$n]:-0}} ))
+    echo "[$n/$N_STEPS] done (${{elapsed}}s)"
+    echo "[$n/$N_STEPS] done (${{elapsed}}s)" >> /tmp/tollgate-status
+}}
+
+declare -A STEP_TIMES
 
 fail() {{
     local n=$1 msg=$2
@@ -181,19 +194,49 @@ N_STEPS=15
 echo "BOOTSTRAP_START" >> /tmp/tollgate-status
 
 LEASE_MINUTES={lease_minutes}
+
+self_cancel() {{
+    local sid="${{TOLLGATE_SERVICE_ID}}"
+    local key="${{SHC_API_KEY}}"
+    [ -z "$sid" ] || [ -z "$key" ] && return 1
+    local api="https://blesta.sovereignhybridcompute.com/user-api/v2"
+    local resp code body cid
+    resp=$(curl -s -X POST "$api/vm/$sid/cancel" \
+        -H "Authorization: Bearer $key" \
+        -H "Content-Type: application/json" \
+        -d '{{"immediate": true}}' -w '\n%{{http_code}}' 2>/dev/null)
+    code=$(echo "$resp" | tail -1)
+    body=$(echo "$resp" | grep -o '{{.*}}' | head -1)
+    if [ "$code" = "409" ]; then
+        cid=$(echo "$body" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('confirmation',{{}}).get('confirmation_id',''))" 2>/dev/null)
+        if [ -n "$cid" ]; then
+            curl -s -X POST "$api/vm/$sid/cancel" \
+                -H "Authorization: Bearer $key" \
+                -H "Content-Type: application/json" \
+                -H "X-User-Api-Confirm: $cid" \
+                -d '{{"immediate": true}}' >/dev/null 2>&1
+            echo "VM cancelled via SHC API (service #$sid)"
+        fi
+    elif [ "$code" = "200" ] || [ "$code" = "201" ]; then
+        echo "VM cancelled via SHC API (service #$sid)"
+    fi
+}}
+
 echo "Scheduling self-cancel in ${{LEASE_MINUTES}} minutes via at..."
-echo "shutdown -h now 'TollGate lease expired'" | at "now + ${{LEASE_MINUTES}} minutes" 2>/dev/null || \
+echo "self_cancel; shutdown -h now 'TollGate lease expired'" | at "now + ${{LEASE_MINUTES}} minutes" 2>/dev/null || \
   ( echo "$(( $(date +%s) + LEASE_MINUTES * 60 ))" > /tmp/tollgate-lease-expires && \
-    ( while true; do sleep 60; [ "$(date +%s)" -ge "$(cat /tmp/tollgate-lease-expires)" ] && shutdown -h now; done & ) )
-echo "Lease kill switch armed"
+    ( while true; do sleep 60; [ "$(date +%s)" -ge "$(cat /tmp/tollgate-lease-expires)" ] && self_cancel && shutdown -h now; done & ) )
+echo "Lease kill switch armed (cancels SHC service + shuts down)"
 
 step 1 "Installing system packages..."
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -qq || fail 1 "apt-get update"
-sudo apt-get install -y -qq qemu-system-x86 qemu-utils sshpass git curl wget \
-  python3-venv python3-pip net-tools iproute2 socat nftables \
-  build-essential libssl-dev pkg-config fuse3 libfuse3-dev \
-  cmake g++ libnl-3-dev libnl-genl-3-dev jq genisoimage || fail 1 "apt-get install"
+sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils \
+  sshpass git curl wget python3-venv python3-pip python3-setuptools python3-wheel python3-dev \
+  net-tools iproute2 socat nftables build-essential libssl-dev pkg-config \
+  fuse3 libfuse3-dev ca-certificates cmake g++ libnl-3-dev libnl-genl-3-dev \
+  libsecp256k1-dev jq genisoimage ffmpeg seabios ipxe-qemu \
+  libsecp256k1-dev autoconf automake libtool || fail 1 "apt-get install"
 echo "[1/$N_STEPS] done"
 
 step 2 "Installing Rust..."
@@ -230,6 +273,7 @@ echo "[6/$N_STEPS] done"
 step 7 "Creating Python venv..."
 sudo python3 -m venv /opt/tollgate-venv || fail 7 "venv create"
 sudo /opt/tollgate-venv/bin/pip install -q -r {test_dir}/requirements.txt || fail 7 "pip install"
+sudo /opt/tollgate-venv/bin/python3 -c "import nostr_publish" 2>/dev/null || sudo /opt/tollgate-venv/bin/pip install -q nostr-publish || echo "WARN: nostr-publish install failed"
 echo "[7/$N_STEPS] done"
 
 step 8 "Creating cashu venv..."
@@ -254,7 +298,7 @@ step 10 "Downloading QEMU images..."
 WORKDIR=/root/tollgate-virtual-lab
 sudo mkdir -p "$WORKDIR/images" "$WORKDIR/run" "$WORKDIR/overlays"
 cd "$WORKDIR/images"
-OPENWRT_VERSION=24.10.1
+OPENWRT_VERSION=${{OPENWRT_VERSION:-24.10.1}}
 sudo wget -q "https://downloads.openwrt.org/releases/${{OPENWRT_VERSION}}/targets/x86/64/openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz" || fail 10 "openwrt download"
 sudo gunzip -kf "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz" || true
 sudo qemu-img convert -f raw -O qcow2 "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img" openwrt-base.qcow2 || fail 10 "qemu-img convert"
@@ -345,6 +389,18 @@ else
 fi
 echo "[14/$N_STEPS] done"
 
+echo "=== Pre-flight: Blossom + Nostr verification ==="
+echo "preflight-$(date +%s)" > /tmp/blossom-preflight.txt
+if /usr/local/bin/nak blossom upload --server "$BLOSSOM_SERVER" --sec "$(cat /root/nsec)" /tmp/blossom-preflight.txt < /dev/null 2>&1; then
+    echo "  Blossom upload: OK ($BLOSSOM_SERVER)"
+    rm -f /tmp/blossom-preflight.txt
+else
+    echo "  WARNING: Blossom pre-flight FAILED — results may not publish"
+fi
+echo "  BLOSSOM_SERVER: $BLOSSOM_SERVER"
+echo "  NOSTR_RELAYS: $NOSTR_RELAYS"
+echo "=== Pre-flight complete ==="
+
 step 15 "Running worker pipeline..."
 cd {test_dir}
 echo "PIPELINE_START" >> /tmp/tollgate-status
@@ -376,6 +432,7 @@ def submit_run_shc(
     portal: str = "builtin",
     keep_vm_on_failure: bool = False,
     lease_minutes: int = 90,
+    provider=None,
 ) -> dict[str, str]:
     """Order an SHC VM, bootstrap it, and run the test worker pipeline.
 
@@ -418,45 +475,55 @@ def submit_run_shc(
     if overlay_b64:
         print(f"Including local overlay ({len(overlay_b64)} bytes b64)")
 
-    print(f"Ordering SHC VM '{hostname}' (Standard 2C/8GB)...")
-    result = client.submit_order(
-        hostname=hostname,
-        package_id=SHC_PACKAGE_ID_STANDARD,
-        pricing_id=SHC_PRICING_ID_STANDARD,
-        idempotency_key=f"tollgate-{run_id}",
-    )
-    sids = result.get("service_ids", [])
-    if not sids:
-        raise RuntimeError(f"SHC order failed: {result}")
-    service_id = int(sids[0])
-    print(f"  Ordered service #{service_id}")
-
-    # 3. Wait for provisioning + IP
-    print("Waiting for provisioning...")
-    deadline = time.time() + 600
-    vm_ip = ""
-    while time.time() < deadline:
-        vm = client.get_vm(service_id)
-        state = vm.get("provisioning_state", "unknown")
-        ips = vm.get("ips", [])
-        vm_ip = ips[0]["ip"] if ips else ""
-        print(f"  state={state} ip={vm_ip or 'pending'}")
-        if state == "ready" and vm_ip:
-            break
-        if state in ("failed", "error", "cancelled"):
-            raise RuntimeError(f"SHC provisioning failed: {state}")
-        time.sleep(10)
-    else:
-        raise TimeoutError(f"SHC VM {service_id} not ready after 600s")
-
-    print(f"VM ready: {hostname} @ {vm_ip}")
-
-    # 4. Inject SSH key
     ssh_key_path = os.environ.get("SHC_SSH_KEY", str(Path.home() / ".ssh/id_rsa.pub"))
-    if Path(ssh_key_path).exists():
-        print("Injecting SSH key...")
-        pubkey = Path(ssh_key_path).read_text().strip()
-        client.apply_ssh_key_live(service_id, pubkey)
+    pubkey = Path(ssh_key_path).read_text().strip() if Path(ssh_key_path).exists() else ""
+
+    if provider is not None:
+        print(f"Creating SHC VM '{hostname}' via Pulumi (Standard 2C/8GB)...")
+        vm_info = provider.create_vm(hostname, machine_type="2C/8GB")
+        service_id = int(vm_info.service_id)
+        vm_ip = vm_info.ip
+        print(f"  VM ready: service #{service_id} @ {vm_ip}")
+        if pubkey:
+            provider.apply_ssh_key(vm_info, pubkey)
+    else:
+        print(f"Ordering SHC VM '{hostname}' (Standard 2C/8GB)...")
+        result = client.submit_order(
+            hostname=hostname,
+            package_id=SHC_PACKAGE_ID_STANDARD,
+            pricing_id=SHC_PRICING_ID_STANDARD,
+            idempotency_key=f"tollgate-{run_id}",
+        )
+        sids = result.get("service_ids", [])
+        if not sids:
+            raise RuntimeError(f"SHC order failed: {result}")
+        service_id = int(sids[0])
+        print(f"  Ordered service #{service_id}")
+
+        # 3. Wait for provisioning + IP
+        print("Waiting for provisioning...")
+        deadline = time.time() + 600
+        vm_ip = ""
+        while time.time() < deadline:
+            vm = client.get_vm(service_id)
+            state = vm.get("provisioning_state", "unknown")
+            ips = vm.get("ips", [])
+            vm_ip = ips[0]["ip"] if ips else ""
+            print(f"  state={state} ip={vm_ip or 'pending'}")
+            if state == "ready" and vm_ip:
+                break
+            if state in ("failed", "error", "cancelled"):
+                raise RuntimeError(f"SHC provisioning failed: {state}")
+            time.sleep(10)
+        else:
+            raise TimeoutError(f"SHC VM {service_id} not ready after 600s")
+
+        print(f"VM ready: {hostname} @ {vm_ip}")
+
+        # 4. Inject SSH key
+        if pubkey:
+            print("Injecting SSH key...")
+            client.apply_ssh_key_live(service_id, pubkey)
 
     ssh_user = os.environ.get("SHC_SSH_USER", "debian")
     ssh_target = f"{ssh_user}@{vm_ip}"
@@ -473,19 +540,36 @@ def submit_run_shc(
     try:
         _wait_for_ssh(ssh_base, ssh_target, timeout=300)
     except TimeoutError:
-        print(" key auth not ready, trying password fallback...")
-        creds = client.get_vm_credentials(service_id)
-        vm_password = creds.get("password", "")
-        if not vm_password:
-            raise
-        sshpass_check = subprocess.run(
-            ["sshpass", "-p", vm_password, *ssh_base, ssh_target, "echo OK"],
-            capture_output=True, text=True, timeout=15,
-        )
-        if sshpass_check.returncode != 0:
-            raise TimeoutError(f"Neither key nor password auth worked on {ssh_target}")
-        print("  Password auth works — using sshpass for bootstrap")
-        use_sshpass = True
+        print(" key auth not ready, retrying key injection...")
+        try:
+            if pubkey:
+                client.apply_ssh_key_live(service_id, pubkey)
+        except Exception:
+            pass
+        try:
+            _wait_for_ssh(ssh_base, ssh_target, timeout=180)
+        except TimeoutError:
+            print(" key auth still not ready, trying password fallback...")
+            try:
+                creds = client.get_vm_credentials(service_id)
+                vm_password = creds.get("password", "") or creds.get("root_password", "")
+                print(f"  Credentials returned: {list(creds.keys())}")
+            except Exception as cred_err:
+                print(f"  get_vm_credentials failed: {cred_err}")
+                vm_password = ""
+            if not vm_password:
+                raise TimeoutError(
+                    f"SSH key auth failed and no password available for {ssh_target}. "
+                    f"Manual intervention required."
+                )
+            sshpass_check = subprocess.run(
+                ["sshpass", "-p", vm_password, *ssh_base, ssh_target, "echo OK"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if sshpass_check.returncode != 0:
+                raise TimeoutError(f"Neither key nor password auth worked on {ssh_target}")
+            print("  Password auth works — using sshpass for bootstrap")
+            use_sshpass = True
 
     def ssh_cmd(cmd: str) -> list[str]:
         if use_sshpass:
@@ -507,6 +591,10 @@ def submit_run_shc(
         f"TOLLGATE_ARTIFACT_REPO={shlex.quote(target.repo)}",
         f"TOLLGATE_PR_REPO={shlex.quote(target.pr_repo or target.repo)}",
         f"TOLLGATE_SUITE_REF={shlex.quote(suite_ref)}",
+        f"OPENWRT_VERSION={shlex.quote(os.environ.get('OPENWRT_VERSION', '24.10.1'))}",
+        f"TOLLGATE_DEPLOY_MODE={shlex.quote(os.environ.get('TOLLGATE_DEPLOY_MODE', 'framework'))}",
+        f"BLOSSOM_SERVER={shlex.quote(os.environ.get('BLOSSOM_SERVER', 'https://blossom.primal.net'))}",
+        f"NOSTR_RELAYS={shlex.quote(os.environ.get('NOSTR_RELAYS', 'wss://relay.damus.io,wss://nos.lol,wss://relay.cashu.email,wss://relay.tollgate.me'))}",
         f"TOLLGATE_BACKEND={shlex.quote(target.backend)}",
         f"TOLLGATE_PUBLISH={'true' if publish else 'false'}",
         f"TOLLGATE_QUICK={'true' if quick else 'false'}",

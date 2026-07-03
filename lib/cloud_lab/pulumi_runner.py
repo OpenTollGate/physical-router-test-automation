@@ -1,7 +1,7 @@
 """SHC VM provider backed by Pulumi Automation API.
 
 Drop-in alternative to :class:`lib.cloud_lab.provider.SHCProvider`. Selected
-when ``TOLLGATE_VM_PROVIDER=shc-pulumi`` (or via the ``--pulumi`` flag on
+when ``TOLLGATE_VM_PROVIDER=pulumi`` (or via the ``--pulumi`` flag on
 ``scripts/cloud-lab.py``). Only the VM create/destroy path is swapped to
 Pulumi Automation API; everything else (SSH key injection via
 ``apply_ssh_key_live``, SSH command execution, raw ``SHCClient`` access) is
@@ -56,7 +56,7 @@ class PulumiSHCProvider(SHCProvider):
     ``destroy_vm`` are overridden to route through a Pulumi stack.
     """
 
-    provider_name = "shc-pulumi"
+    provider_name = "pulumi"
     can_publish = True
 
     def __init__(self) -> None:
@@ -83,7 +83,6 @@ class PulumiSHCProvider(SHCProvider):
                 hostname=hostname,
                 size=size,
                 api_key=api_key,
-                auto_cancel=True,
             )
             pulumi.export("service_id", vm.service_id)
             pulumi.export("ip", vm.ip)
@@ -167,11 +166,33 @@ class PulumiSHCProvider(SHCProvider):
         )
         super().destroy_vm(vm, immediate=immediate)
 
+    def cleanup_stale(self, max_age_hours=2):
+        """Cancel old VMs (inherited) + remove orphaned Pulumi stack state files."""
+        count = super().cleanup_stale(max_age_hours=max_age_hours)
+
+        workdir = os.environ.get("PULUMI_WORKDIR", os.path.expanduser("~/.tollgate-pulumi"))
+        stacks_dir = os.path.join(workdir, ".pulumi", "stacks", _PROJECT)
+        if os.path.isdir(stacks_dir):
+            import time as _time
+            cutoff = _time.time() - (max_age_hours * 3600)
+            for fname in os.listdir(stacks_dir):
+                if not fname.endswith(".json"):
+                    continue
+                fpath = os.path.join(stacks_dir, fname)
+                try:
+                    if os.path.getmtime(fpath) < cutoff:
+                        os.remove(fpath)
+                        log.info("removed stale Pulumi stack state: %s", fname)
+                except OSError as exc:
+                    log.debug("remove stack state %s failed: %s", fpath, exc)
+
+        return count
+
     # -- helpers -----------------------------------------------------------
 
     @staticmethod
     def _size_for_machine_type(machine_type: str) -> str:
-        """Map the imperative ``machine_type`` vocab to shc-pulumi ``size`` names."""
+        """Map the imperative ``machine_type`` vocab to pulumi ``size`` names."""
         mapping = {
             "": _DEFAULT_SIZE,
             "2C/8GB": "dev-2c-8gb",

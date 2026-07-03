@@ -117,15 +117,15 @@ def _finish_pending_step() -> None:
             entry.pop("_start", None)
 
 NDS_EXPECTED_GATEWAYPORT = 2050
-NDS_EXPECTED_GATEWAYDOMAINNAME = "TollGate.lan"
 
 
-def _fix_nodogsplash_gatewayport() -> None:
+def _fix_nodogsplash_gatewayport(config: WorkerConfig) -> None:
+    expected_domain = "net4sats.lan" if config.portal == "net4sats" else "TollGate.lan"
     from lib.cloud_lab.worker.inner_ssh import inner_ssh
     r = inner_ssh(
         OPENWRT_IP,
         f"uci set nodogsplash.@nodogsplash[0].gatewayport={NDS_EXPECTED_GATEWAYPORT} && "
-        f"uci set nodogsplash.@nodogsplash[0].gatewaydomainname={NDS_EXPECTED_GATEWAYDOMAINNAME} && "
+        f"uci set nodogsplash.@nodogsplash[0].gatewaydomainname={expected_domain} && "
         f"uci commit nodogsplash",
         timeout=30,
     )
@@ -291,8 +291,13 @@ def run_worker(config: WorkerConfig) -> int:
             _step_end("env-debian-deps")
 
             _step_start("deploy-tollgate")
-            log.info("[7/10] Deploy TollGate (branch=%s, artifact_run=%s)", config.sut_branch, config.artifact_run_id)
-            deploy_tollgate(config)
+            if config.deploy_mode == "conwrt":
+                from lib.cloud_lab.worker.conwrt_deploy import deploy_via_conwrt
+                log.info("[7/10] Deploy via conwrt (portal=%s)", config.portal)
+                deploy_via_conwrt(config)
+            else:
+                log.info("[7/10] Deploy TollGate (branch=%s, artifact_run=%s)", config.sut_branch, config.artifact_run_id)
+                deploy_tollgate(config)
             _step_end("deploy-tollgate")
 
             _step_start("backend-health")
@@ -301,10 +306,10 @@ def run_worker(config: WorkerConfig) -> int:
             _step_end("backend-health")
 
             _step_start("fix-nodogsplash-port")
-            _fix_nodogsplash_gatewayport()
+            _fix_nodogsplash_gatewayport(config)
             _step_end("fix-nodogsplash-port")
 
-            if config.portal != "builtin":
+            if config.portal != "builtin" and config.deploy_mode != "conwrt":
                 _step_start("portal-overlay")
                 log.info("[8.1/10] Deploy portal overlay (%s)", config.portal)
                 try:

@@ -80,7 +80,7 @@ def _gcloud_ssh(vm_name: str, remote_cmd: str, zone: str, project: str, timeout:
 def _wait_vm_ssh(vm_name: str, zone: str, project: str, timeout: int = 180) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        r = _gcloud_ssh(vm_name, "echo SSH_OK", zone, project, timeout=15)
+        r = _gcloud_ssh(vm_name, "echo SSH_OK", zone, project, timeout=60)
         if r.returncode == 0 and "SSH_OK" in r.stdout:
             return True
         elapsed = int(time.time() - deadline + timeout)
@@ -469,7 +469,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
             f"-o ConnectTimeout=3 root@{OPENWRT_IP} 'sync; poweroff' 2>/dev/null || true; "
             "sleep 8"
         )
-        _gcloud_ssh(vm_name, shutdown_cmd, zone, project, timeout=30)
+        _gcloud_ssh(vm_name, shutdown_cmd, zone, project, timeout=60)
 
         # Step 8c: Install vwifi binaries (from Blossom cache or compile)
         _step(10, total_steps, "Installing vwifi binaries (cache or compile)")
