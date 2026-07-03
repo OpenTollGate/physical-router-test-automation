@@ -326,7 +326,7 @@ class SHCProvider(VMProvider):
         return count
 
 
-_PROVIDERS: dict[str, type[VMProvider]] = {
+_PROVIDERS: dict[str, type[VMProvider] | None] = {
     "gcloud": GCPProvider,
     "gcp": GCPProvider,
     "shc": SHCProvider,
