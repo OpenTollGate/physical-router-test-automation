@@ -559,6 +559,12 @@ def submit_run_shc(
         "-o", "LogLevel=ERROR",
         "-o", "ConnectTimeout=10",
     ]
+    # Derive private key path from the public key path for explicit -i flag.
+    # This avoids the 5-min timeout when ssh-agent is empty and default keys
+    # are passphrase-protected.
+    priv_key = ssh_key_path.replace(".pub", "") if ssh_key_path.endswith(".pub") else ssh_key_path
+    if priv_key != ssh_key_path and Path(priv_key).exists():
+        ssh_base.extend(["-i", priv_key])
 
     # 5. Wait for SSH daemon (key propagation can take 2-5 min on Standard, 10+ on Starter)
     ssh_wait_timeout = 600 if tier == "starter" else 300

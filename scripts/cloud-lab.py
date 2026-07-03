@@ -109,7 +109,7 @@ def cmd_up(args: argparse.Namespace) -> int:
         vm = provider.create_vm(name, machine_type=machine)
         print(f"Ordered service #{vm.service_id}, waiting for provisioning...")
         vm = provider.wait_for_ready(vm, timeout=300)
-        ssh_key_path = os.path.expanduser("~/.ssh/id_rsa.pub")
+        ssh_key_path = os.environ.get("SHC_SSH_KEY", os.path.expanduser("~/.ssh/id_rsa.pub"))
         if os.path.exists(ssh_key_path):
             with open(ssh_key_path) as f:
                 provider.apply_ssh_key(vm, f.read().strip())
