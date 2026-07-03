@@ -381,6 +381,7 @@ def ensure_artifact(
     workflow: str,
     commit: str | None = None,
     timeout_s: int = 1800,
+    fmt: str = "",
 ) -> str:
     """Wait until a CI run has a downloadable artifact for arch. Never triggers builds.
 
@@ -391,7 +392,7 @@ def ensure_artifact(
 
     while time.time() < deadline:
         # Try Blossom/Nostr first (instant if nak is available)
-        blossom_binary = _resolve_blossom_binary(commit, arch)
+        blossom_binary = _resolve_blossom_binary(commit, arch, fmt=fmt)
         if blossom_binary:
             log.info(
                 "Found artifact '%s' via Blossom/Nostr",
@@ -480,12 +481,13 @@ def ensure_artifact(
     )
 
 
-def _resolve_blossom_binary(commit: str | None, arch: str) -> dict | None:
+def _resolve_blossom_binary(commit: str | None, arch: str, fmt: str = "") -> dict | None:
     """Query coordination relays for latest tollgate-build event matching arch.
 
     Returns dict with url, filename, sha256 from the event content, or None.
     If commit is specified, tries exact match first, then falls back to newest
     matching arch (any commit) so PR merges and branch builds work.
+    If fmt is specified (e.g. 'apk' or 'ipk'), filters by content.format.
     """
     nak = shutil.which("nak")
     if not nak:
@@ -513,6 +515,8 @@ def _resolve_blossom_binary(commit: str | None, arch: str) -> dict | None:
             if content.get("architecture") != arch:
                 continue
             if content.get("compression", "none") != "none":
+                continue
+            if fmt and content.get("format", "ipk") != fmt:
                 continue
 
             ts = e.get("created_at", 0)
@@ -576,7 +580,7 @@ def _download_blossom_binary(url: str, build_dir: Path, sha256: str = "") -> Pat
 
 def download_artifact(branch: str, arch: str, run_id: str | None = None,
                       repo: str | None = None, workflow: str | None = None,
-                      output_name: str | None = None) -> Path:
+                      output_name: str | None = None, fmt: str = "") -> Path:
     artifact_repo = repo or REPO
     artifact_workflow = workflow or WORKFLOW
     if BUILD_DIR.exists():
@@ -584,7 +588,7 @@ def download_artifact(branch: str, arch: str, run_id: str | None = None,
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
 
     target_commit = os.environ.get("TOLLGATE_SUT_COMMIT", "")
-    blossom_binary = _resolve_blossom_binary(target_commit or None, arch)
+    blossom_binary = _resolve_blossom_binary(target_commit or None, arch, fmt=fmt)
     if blossom_binary:
         log.info("Found Blossom binary: %s", blossom_binary.get("filename", "?"))
         blossom_path = _download_blossom_binary(
@@ -738,7 +742,8 @@ def deploy(router, ipk_path: Path, reboot: bool = False, backend=None) -> dict[s
     install_test_deps(router)
 
     log.info("Copying %s to router", ipk_path.name)
-    _scp_to_router(router, ipk_path, "/tmp/tollgate-wrt.ipk")
+    remote_name = "tollgate-wrt.ipk" if ipk_path.suffix == ".ipk" else "tollgate-wrt.apk"
+    _scp_to_router(router, ipk_path, f"/tmp/{remote_name}")
 
     log.info("Installing tollgate-wrt")
     pm = detect_package_manager(router)
@@ -747,7 +752,7 @@ def deploy(router, ipk_path: Path, reboot: bool = False, backend=None) -> dict[s
             "/etc/init.d/tollgate-wrt stop 2>/dev/null;"
             "killall tollgate-wrt 2>/dev/null;"
             "sleep 1;"
-            "apk add --allow-untrusted /tmp/tollgate-wrt.ipk"
+            f"apk add --allow-untrusted /tmp/{remote_name}"
             " && /etc/init.d/tollgate-wrt restart"
             " && /etc/init.d/tollgate-basic restart 2>/dev/null"
             "; /etc/init.d/uhttpd restart 2>/dev/null"
@@ -1039,6 +1044,9 @@ def deploy_branch(router, branch: str, arch: str | None = None,
 
     artifact_repo = repo or (backend.repo if backend else None)
     artifact_workflow = backend.workflow if backend else None
+    pm = detect_package_manager(router)
+    fmt = "apk" if pm == "apk" else "ipk"
+    log.info("Router package manager: %s — requesting %s artifact", pm, fmt)
     ipk_path = download_artifact(branch, arch, run_id=run_id,
-                                 repo=artifact_repo, workflow=artifact_workflow)
+                                 repo=artifact_repo, workflow=artifact_workflow, fmt=fmt)
     return deploy(router, ipk_path, reboot=reboot, backend=backend)
