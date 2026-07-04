@@ -1866,6 +1866,21 @@ function wireUpTestTree(view) {
     });
   });
 
+  // Auto-expand failed/error tests so screenshots are immediately visible
+  view.querySelectorAll('.test-case[data-outcome="failed"], .test-case[data-outcome="error"]').forEach((tc) => {
+    const header = tc.querySelector(".test-case-header");
+    if (header && !tc.classList.contains("expanded")) header.click();
+  });
+
+  // Auto-expand first suite so test tree isn't fully collapsed on load
+  const firstSuite = view.querySelector(".test-suite:not(.collapsed)");
+  if (!firstSuite) {
+    const anySuite = view.querySelector(".test-suite");
+    if (anySuite && anySuite.classList.contains("collapsed")) {
+      anySuite.classList.remove("collapsed");
+    }
+  }
+
   view.querySelectorAll(".general-section .html-view-btn").forEach((btn) => {
     btn.addEventListener("click", () => openHtmlViewer(btn.dataset.url, btn.dataset.name));
   });
