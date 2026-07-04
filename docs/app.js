@@ -1912,6 +1912,7 @@ function renderFlatBody(view, run) {
   });
 
   lazyLoadScreenshots(view);
+  checkBlobAvailability(view);
 }
 
 async function renderFipsRun(view, run, myLoadId) {
