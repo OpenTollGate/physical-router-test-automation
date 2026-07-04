@@ -964,7 +964,7 @@ function getFilteredRuns() {
     if (filterState.project === "ours") {
       runs = runs.filter((r) => {
         const p = getRunProject(r);
-        return p === "tollgate" || p === "fips" || p === "ble" || p === "microfips" || p === "conwrt" || p === "silent-energy";
+        return p === "tollgate" || p === "boltcard" || p === "fips" || p === "ble" || p === "microfips" || p === "conwrt" || p === "silent-energy";
       });
     } else {
       runs = runs.filter((r) => getRunProject(r) === filterState.project);
@@ -1063,6 +1063,7 @@ function buildSidebar() {
         <button class="project-tab" data-project="microfips" type="button">Microfips</button>
         <button class="project-tab" data-project="conwrt" type="button">conwrt</button>
         <button class="project-tab" data-project="silent-energy" type="button">Silent Energy</button>
+        <button class="project-tab" data-project="boltcard" type="button">Boltcard</button>
         <button class="project-tab project-tab-secondary" data-project="all" type="button">All Nostr</button>
       </div>
       <input type="text" id="search-input" class="search-input" placeholder="Search runs\u2026" autocomplete="off" />
@@ -1151,7 +1152,7 @@ function scheduleRenderRunsList() {
   if (renderRunsListTimer) return;
   renderRunsListTimer = setTimeout(() => {
     renderRunsListTimer = null;
-    scheduleRenderRunsList();
+    renderRunsList();
   }, 500);
 }
 
