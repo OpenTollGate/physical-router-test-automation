@@ -88,9 +88,9 @@ class TestNet4satsPortal:
     @pytest.mark.smoke
     @pytest.mark.skipif(PORTAL_TYPE != "net4sats", reason="only for net4sats portal")
     def test_net4sats_package_installed(self, router):
-        pkgs = router.ssh("opkg list-installed | grep configurationwizzard", timeout=10)
+        pkgs = router.ssh("opkg list-installed 2>/dev/null | grep configurationwizzard || apk info -e configurationwizzard 2>/dev/null | grep configurationwizzard", timeout=10)
         assert "configurationwizzard" in pkgs, (
-            f"configurationwizzard not in opkg list-installed. Got: {pkgs!r}"
+            f"configurationwizzard not installed. Got: {pkgs!r}"
         )
 
     @pytest.mark.smoke
