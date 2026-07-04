@@ -2817,9 +2817,12 @@ function checkBlobAvailability(container) {
     const url = row.dataset.blossomUrl;
     const status = row.querySelector(".file-status");
     if (!url || !status) return;
-    fetch(url, { method: "HEAD", signal: AbortSignal.timeout(8000) })
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    fetch(url, { method: "GET", headers: { "Range": "bytes=0-0" }, signal: ctrl.signal })
       .then((resp) => {
-        if (resp.ok) {
+        clearTimeout(timer);
+        if (resp.ok || resp.status === 206) {
           status.className = "file-status file-status-ok";
           status.textContent = "ok";
           status.title = "Available";
@@ -2830,6 +2833,7 @@ function checkBlobAvailability(container) {
         }
       })
       .catch(() => {
+        clearTimeout(timer);
         status.className = "file-status file-status-gone";
         status.textContent = "gone";
         status.title = "Request failed";
