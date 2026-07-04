@@ -89,6 +89,7 @@ let currentHierarchy = null;
 let liveSockets = [];
 let liveConnectedCount = 0;
 let displayIdCache = new Map();
+let renderRunsListTimer = null;
 
 // ===========================================================================
 // WebSocket: Fetch kind 30078 (primary) + legacy DVM events (5900/6900/7000) + 1063
@@ -302,7 +303,7 @@ function handleLiveEvent(event) {
     );
     if (run && run.feedbackStatus !== status) {
       run.feedbackStatus = status;
-      renderRunsList();
+      scheduleRenderRunsList();
     }
     return;
   }
@@ -316,7 +317,7 @@ function handleLiveEvent(event) {
     displayIdCache.clear();
     saveCachedRuns(allRuns);
     populateRunnerFilter();
-    renderRunsList();
+    scheduleRenderRunsList();
     return;
   }
 
@@ -335,7 +336,7 @@ function handleLiveEvent(event) {
     displayIdCache.clear();
     saveCachedRuns(allRuns);
     populateRunnerFilter();
-    renderRunsList();
+    scheduleRenderRunsList();
     return;
   }
 }
@@ -1096,7 +1097,7 @@ function wireSidebarControls() {
       document.querySelectorAll(".project-tab").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       filterState.project = btn.dataset.project;
-      renderRunsList();
+      scheduleRenderRunsList();
     });
   });
 
@@ -1107,7 +1108,7 @@ function wireSidebarControls() {
       clearTimeout(timer);
       timer = setTimeout(() => {
         filterState.search = e.target.value.toLowerCase().trim();
-        renderRunsList();
+        scheduleRenderRunsList();
       }, 200);
     });
   }
@@ -1117,7 +1118,7 @@ function wireSidebarControls() {
       document.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       filterState.status = btn.dataset.filter;
-      renderRunsList();
+      scheduleRenderRunsList();
     });
   });
 
@@ -1125,7 +1126,7 @@ function wireSidebarControls() {
   if (sortSelect) {
     sortSelect.addEventListener("change", (e) => {
       filterState.sort = e.target.value;
-      renderRunsList();
+      scheduleRenderRunsList();
     });
   }
 
@@ -1133,7 +1134,7 @@ function wireSidebarControls() {
   if (ageFilter) {
     ageFilter.addEventListener("change", (e) => {
       filterState.maxAge = parseInt(e.target.value, 10);
-      renderRunsList();
+      scheduleRenderRunsList();
     });
   }
 
@@ -1141,9 +1142,17 @@ function wireSidebarControls() {
   if (runnerFilter) {
     runnerFilter.addEventListener("change", (e) => {
       filterState.runner = e.target.value;
-      renderRunsList();
+      scheduleRenderRunsList();
     });
   }
+}
+
+function scheduleRenderRunsList() {
+  if (renderRunsListTimer) return;
+  renderRunsListTimer = setTimeout(() => {
+    renderRunsListTimer = null;
+    scheduleRenderRunsList();
+  }, 500);
 }
 
 function renderRunsList() {
