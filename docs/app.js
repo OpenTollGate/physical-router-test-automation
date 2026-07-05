@@ -2670,7 +2670,7 @@ async function selectRun(run) {
     return;
   }
   if (project === "conwrt") {
-    await renderConwrtView(view, run, myLoadId);
+    await renderFipsRun(view, run, myLoadId);
     return;
   }
   if (project === "unknown") {
@@ -3799,88 +3799,3 @@ function renderCvmServiceExtra(got) {
     banner.hidden = false;
   })();
 })();
-
-// === CONWRT USE CASE MATRIX ===================================================
-// Renders the conwrt-specific view: a use case matrix table + evidence links
-// followed by the standard file browser for the selected run.
-async function renderConwrtView(view, run, myLoadId) {
-  var body = view.querySelector(".run-body") || view;
-  var allRuns = window.__allRuns || [];
-  var conwrtRuns = allRuns.filter(function (r) {
-    return r.projectTag === "conwrt";
-  });
-
-  // Collect use case evidence from all conwrt runs
-  var UC_LIST = [
-    "ssh-hardening","sqm","doh","wireguard-client","nodns","wireguard-server",
-    "vpn-node","adguard","guest-wifi","auto-sqm","ssl","travelmate",
-    "openclash","tollgate","mwan3","pbr"
-  ];
-  var ucMap = {};
-  UC_LIST.forEach(function (uc) { ucMap[uc] = null; });
-
-  conwrtRuns.forEach(function (r) {
-    if (!r.files) return;
-    r.files.forEach(function (f) {
-      var path = f.path || f.name || "";
-      var parts = path.split("/");
-      if (parts.length >= 2 && ucMap.hasOwnProperty(parts[0]) && !ucMap[parts[0]]) {
-        ucMap[parts[0]] = { run: r, files: [] };
-      }
-      if (parts.length >= 2 && ucMap[parts[0]]) {
-        ucMap[parts[0]].files.push(f);
-      }
-    });
-  });
-
-  var passCount = 0;
-  UC_LIST.forEach(function (uc) { if (ucMap[uc]) passCount++; });
-
-  var html = '<div style="margin-bottom:1.5rem">';
-  html += '<h3 style="font-size:1rem;margin-bottom:.5rem;color:var(--text)">Use Case Matrix <span style="color:var(--text-dim);font-size:.8rem">(' + passCount + '/' + UC_LIST.length + ' tested)</span></h3>';
-  html += '<table style="width:100%;border-collapse:collapse;font-size:.85rem">';
-  html += '<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:.4rem">Use Case</th><th style="text-align:left;padding:.4rem">Status</th><th style="text-align:left;padding:.4rem">Evidence (click to view)</th></tr></thead><tbody>';
-
-  UC_LIST.forEach(function (uc) {
-    var info = ucMap[uc];
-    if (info) {
-      var date = new Date(info.run.created_at * 1000).toLocaleDateString();
-      var links = info.files.slice(0, 5).map(function (f) {
-        var name = (f.path || "").split("/").pop();
-        var url = f.url || (f.blossom ? f.blossom : "#");
-        return '<a href="' + url + '" target="_blank" style="display:inline-block;margin-right:.4rem;color:var(--link)">' + name + '</a>';
-      }).join("");
-      html += '<tr style="border-bottom:1px solid var(--border-dim)">';
-      html += '<td style="padding:.4rem"><strong>' + uc + '</strong></td>';
-      html += '<td style="padding:.4rem"><span style="background:rgba(35,134,54,.2);color:var(--green);padding:2px 8px;border-radius:12px;font-size:.75rem;font-weight:600">PASS</span> <span style="color:var(--text-dim);font-size:.75rem">' + date + '</span></td>';
-      html += '<td style="padding:.4rem">' + links + '</td>';
-      html += '</tr>';
-    } else {
-      html += '<tr style="border-bottom:1px solid var(--border-dim)">';
-      html += '<td style="padding:.4rem;color:var(--text-dim)">' + uc + '</td>';
-      html += '<td style="padding:.4rem"><span style="background:rgba(139,148,158,.2);color:var(--text-dim);padding:2px 8px;border-radius:12px;font-size:.75rem">PENDING</span></td>';
-      html += '<td style="padding:.4rem;color:var(--text-dim)">—</td>';
-      html += '</tr>';
-    }
-  });
-
-  html += '</tbody></table></div>';
-
-  // Then show the standard file browser for the selected run
-  html += '<h3 style="font-size:1rem;margin-bottom:.5rem;color:var(--text)">Run Details</h3>';
-
-  body.innerHTML = html;
-
-  // Append the standard file browser below
-  var fileDiv = document.createElement("div");
-  fileDiv.className = "conwrt-file-browser";
-  body.appendChild(fileDiv);
-
-  // Use the existing renderFipsRun into the sub-div
-  var subView = { querySelector: function() { return fileDiv; }, innerHTML: "" };
-  try {
-    await renderFipsRun(subView, run, myLoadId);
-  } catch(e) {
-    fileDiv.innerHTML = '<p style="color:var(--text-dim)">File browser unavailable for this run.</p>';
-  }
-}
