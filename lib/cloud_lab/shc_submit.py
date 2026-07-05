@@ -319,7 +319,9 @@ WORKDIR=/root/tollgate-virtual-lab
 sudo mkdir -p "$WORKDIR/images" "$WORKDIR/run" "$WORKDIR/overlays"
 cd "$WORKDIR/images"
 OPENWRT_VERSION=${{OPENWRT_VERSION:-24.10.1}}
-sudo wget -q "https://downloads.openwrt.org/releases/${{OPENWRT_VERSION}}/targets/x86/64/openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz" || fail 10 "openwrt download"
+OWRT_IMG="openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz"
+sudo curl -sfL "https://blossom.psbt.me/924e4b83a34d600914841d53df51bba930d4a56070032a30cba5bca87273c213" -o "$OWRT_IMG" || \
+  sudo wget -q "https://downloads.openwrt.org/releases/${{OPENWRT_VERSION}}/targets/x86/64/$OWRT_IMG" || fail 10 "openwrt download"
 sudo gunzip -kf "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz" || true
 sudo qemu-img convert -f raw -O qcow2 "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img" openwrt-base.qcow2 || fail 10 "qemu-img convert"
 sudo qemu-img resize openwrt-base.qcow2 2G || fail 10 "qemu-img resize"
