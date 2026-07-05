@@ -2670,7 +2670,7 @@ async function selectRun(run) {
     return;
   }
   if (project === "conwrt") {
-    await renderFipsRun(view, run, myLoadId);
+    await renderConwrtRun(view, run, myLoadId);
     return;
   }
   if (project === "unknown") {
@@ -3799,3 +3799,85 @@ function renderCvmServiceExtra(got) {
     banner.hidden = false;
   })();
 })();
+
+async function renderConwrtRun(view, run, myLoadId) {
+  var body = view.querySelector(".detail-body");
+  if (!body) return;
+
+  var CONWRT_UC = [
+    "ssh-hardening","sqm","doh","wireguard-client","nodns","wireguard-server",
+    "vpn-node","adguard","guest-wifi","auto-sqm","ssl","travelmate",
+    "openclash","tollgate","mwan3","pbr"
+  ];
+
+  var conwrtRuns = allRuns.filter(function(r) {
+    return getRunProject(r) === "conwrt";
+  });
+
+  var ucMap = {};
+  CONWRT_UC.forEach(function(uc) { ucMap[uc] = null; });
+
+  conwrtRuns.forEach(function(r) {
+    (r.files || []).forEach(function(f) {
+      var path = f.path || "";
+      var parts = path.split("/");
+      if (parts.length >= 2 && ucMap.hasOwnProperty(parts[0]) && !ucMap[parts[0]]) {
+        ucMap[parts[0]] = { run: r, files: [] };
+      }
+      if (parts.length >= 2 && ucMap[parts[0]]) {
+        ucMap[parts[0]].files.push(f);
+      }
+    });
+  });
+
+  var passCount = 0;
+  CONWRT_UC.forEach(function(uc) { if (ucMap[uc]) passCount++; });
+
+  var html = '<div style="margin-bottom:1.5rem">';
+  html += '<div style="font-size:1rem;font-weight:600;margin-bottom:.5rem;color:var(--text)">Use Case Matrix';
+  html += ' <span style="color:var(--text-dim);font-size:.8rem;font-weight:400">(' + passCount + '/' + CONWRT_UC.length + ' tested)</span></div>';
+  html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.85rem">';
+  html += '<thead><tr><th style="text-align:left;padding:.4rem;border-bottom:1px solid var(--border)">Use Case</th>';
+  html += '<th style="text-align:left;padding:.4rem;border-bottom:1px solid var(--border)">Status</th>';
+  html += '<th style="text-align:left;padding:.4rem;border-bottom:1px solid var(--border)">Evidence</th></tr></thead><tbody>';
+
+  CONWRT_UC.forEach(function(uc) {
+    var info = ucMap[uc];
+    if (info) {
+      var date = new Date(info.run.timestamp * 1000).toLocaleDateString();
+      var links = info.files.slice(0, 5).map(function(f) {
+        var name = (f.path || "").split("/").pop();
+        return '<a href="' + escapeHtml(f.url) + '" target="_blank" rel="noopener" style="display:inline-block;margin-right:.4rem;color:var(--link);text-decoration:none">' + escapeHtml(name) + '</a>';
+      }).join("");
+      html += '<tr style="border-bottom:1px solid var(--border-dim)">';
+      html += '<td style="padding:.4rem"><strong>' + escapeHtml(uc) + '</strong></td>';
+      html += '<td style="padding:.4rem"><span style="background:rgba(35,134,54,.2);color:var(--green);padding:2px 8px;border-radius:12px;font-size:.75rem;font-weight:600">PASS</span>';
+      html += ' <span style="color:var(--text-dim);font-size:.75rem">' + date + '</span></td>';
+      html += '<td style="padding:.4rem">' + links + '</td></tr>';
+    } else {
+      html += '<tr style="border-bottom:1px solid var(--border-dim)">';
+      html += '<td style="padding:.4rem;color:var(--text-dim)">' + escapeHtml(uc) + '</td>';
+      html += '<td style="padding:.4rem"><span style="background:rgba(139,148,158,.15);color:var(--text-dim);padding:2px 8px;border-radius:12px;font-size:.75rem">PENDING</span></td>';
+      html += '<td style="padding:.4rem;color:var(--text-dim)">—</td></tr>';
+    }
+  });
+
+  html += '</tbody></table></div></div>';
+  html += '<div style="font-size:1rem;font-weight:600;margin-bottom:.5rem;color:var(--text)">Run Details</div>';
+
+  body.innerHTML = html;
+
+  var fileDiv = document.createElement("div");
+  body.appendChild(fileDiv);
+
+  var subView = { querySelector: function(sel) {
+    if (sel === ".detail-body") return fileDiv;
+    return view.querySelector(sel);
+  }};
+  
+  try {
+    await renderFipsRun(subView, run, myLoadId);
+  } catch(e) {
+    fileDiv.innerHTML = '<p style="color:var(--text-dim);padding:1rem">Select a file from the run details above.</p>';
+  }
+}
