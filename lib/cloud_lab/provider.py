@@ -308,7 +308,7 @@ class SHCProvider(VMProvider):
         return count
 
 
-_PROVIDERS: dict[str, type[VMProvider]] = {
+_PROVIDERS: dict[str, type[VMProvider] | None] = {
     "gcloud": GCPProvider,
     "gcp": GCPProvider,
     "shc": SHCProvider,
@@ -422,7 +422,7 @@ class PhysicalProvider(VMProvider):
         import subprocess
         deadline = time.time() + timeout
         while time.time() < deadline:
-            ssh_cmd = ["ssh", "-o", f"ConnectTimeout=3", "-o", "StrictHostKeyChecking=no"]
+            ssh_cmd = ["ssh", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=no"]
             if self._key:
                 ssh_cmd.extend(["-i", self._key])
             if self._port != 22:

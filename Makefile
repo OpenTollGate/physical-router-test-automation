@@ -164,7 +164,7 @@ help: ## Show this help
 
 .PHONY: smoke-degraded smoke-upstream smoke-upstream-full smoke-pin-upstream \
         smoke-dynamic-rebuild smoke-offline smoke-recovery \
-        smoke-degraded-recovery smoke-degraded-connect
+        smoke-degraded-recovery smoke-degraded-connect fips-exit-smoke
 
 smoke-degraded: ## Single-router degraded mode lifecycle (~3 min) [pytest]
 	$(call require_hardware_lock)
@@ -202,6 +202,9 @@ smoke-degraded-recovery: ## Degraded→recovery without restart [pytest]
 smoke-degraded-connect: ## WARNING: connect while degraded (RISKY) [pytest]
 	$(call require_hardware_lock)
 	$(call migrated_target,smoke-degraded-connect)
+
+fips-exit-smoke: ## FIPS exit-node VPS smoke (WireGuard + nft MASQUERADE + nostr advert) [pytest]
+	$(call migrated_target,fips-exit-smoke)
 
 # ===========================================================================
 #  STARTUP HYGIENE TESTS

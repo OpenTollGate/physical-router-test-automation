@@ -191,7 +191,7 @@ def ensure_system_deps() -> None:
         "libdbus-1-dev", "libclang-dev",
         "curl", "wget", "git", "jq", "tcpdump",
     ]
-    r = subprocess.run(["dpkg", "-l"] + [f for p in pkgs], capture_output=True, text=True)
+    r = subprocess.run(["dpkg", "-l"] + pkgs, capture_output=True, text=True)
     missing = [p for p in pkgs if p not in r.stdout]
     if missing:
         log.info("Installing %d packages...", len(missing))

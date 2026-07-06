@@ -58,6 +58,7 @@ lib/cloud_lab/shc.py
 *.pyc
 __pycache__/
 test-videos*/
+.ci-logs/
 
 # Pulumi SHC spike (infra/pulumi-shc-spike/) — local-only artifacts
 infra/pulumi-shc-spike/.venv/
