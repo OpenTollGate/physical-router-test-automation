@@ -279,15 +279,34 @@ def ensure_debian_client_deps() -> bool:
         log.info("Debian Playwright cache hit")
         return True
     log.info("Installing Debian Playwright deps (one-time)...")
-    install = (
+
+    base_install = (
         "apt-get -o Acquire::ForceIPv4=true update -qq && "
         "DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::ForceIPv4=true install -y -qq --no-install-recommends "
         "python3-pip libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libdbus-1-3 "
         "libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 "
         "libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 xvfb fonts-liberation fonts-freefont-ttf >/dev/null && "
-        "python3 -m pip install -q --break-system-packages playwright && "
-        "python3 -m playwright install chromium >/dev/null && "
-        'python3 -c "import playwright; print(\\"PLAYWRIGHT_OK\\")"'
+        "python3 -m pip install -q --break-system-packages playwright"
     )
-    r = inner_ssh(DEBIAN_IP, install, timeout=600)
+    inner_ssh(DEBIAN_IP, base_install, timeout=600)
+
+    chromium_dirs = list(Path.home().joinpath(".cache/ms-playwright").glob("chromium-*"))
+    if chromium_dirs:
+        log.info("Injecting cached Chromium from HOST (%s)...", chromium_dirs[0].name)
+        chromium_name = chromium_dirs[0].name
+        _run(f"cd ~/.cache/ms-playwright && tar cf /tmp/pw-chromium.tar {chromium_name}", timeout=30, check=False)
+        _run(
+            f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} scp -o StrictHostKeyChecking=no "
+            f"-o UserKnownHostsFile=/dev/null -o LogLevel=ERROR /tmp/pw-chromium.tar "
+            f"root@{DEBIAN_IP}:/tmp/",
+            timeout=120, check=False,
+        )
+        inner_ssh(DEBIAN_IP, "mkdir -p ~/.cache/ms-playwright && tar xf /tmp/pw-chromium.tar -C ~/.cache/ms-playwright/ && rm /tmp/pw-chromium.tar")
+        r = inner_ssh(DEBIAN_IP, 'python3 -c "import playwright; print(\\"PLAYWRIGHT_OK\\")" 2>/dev/null')
+        if "PLAYWRIGHT_OK" in r.stdout:
+            log.info("Debian Playwright ready (HOST Chromium injected)")
+            return True
+
+    log.info("Downloading Chromium from CDN (HOST cache miss)...")
+    r = inner_ssh(DEBIAN_IP, 'python3 -m playwright install chromium >/dev/null 2>&1 && python3 -c "import playwright; print(\\"PLAYWRIGHT_OK\\")"', timeout=300)
     return "PLAYWRIGHT_OK" in r.stdout
