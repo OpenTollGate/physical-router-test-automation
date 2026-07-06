@@ -392,6 +392,7 @@ const PROJECT_TAG_MAP = {
   "conwrt-bufferbloat": "conwrt",
   "silent-energy": "silent-energy",
   "fips-benchmark": "fips-benchmark",
+  "nomail": "nomail",
 };
 
 function determineProjectTag(tTags) {
@@ -415,6 +416,7 @@ const PROJECT_LABELS = {
   microfips: "Microfips",
   conwrt: "conwrt",
   "silent-energy": "Silent Energy",
+  nomail: "nomail",
   unknown: "Other",
 };
 
@@ -426,6 +428,7 @@ const PROJECT_COLORS = {
   microfips: "var(--yellow)",
   conwrt: "var(--cyan, #22d3ee)",
   "silent-energy": "var(--orange, #f59e0b)",
+  nomail: "var(--pink, #ec4899)",
   unknown: "var(--text-dim)",
 };
 
@@ -964,7 +967,7 @@ function getFilteredRuns() {
     if (filterState.project === "ours") {
       runs = runs.filter((r) => {
         const p = getRunProject(r);
-        return p === "tollgate" || p === "boltcard" || p === "fips" || p === "ble" || p === "microfips" || p === "conwrt" || p === "silent-energy";
+        return p === "tollgate" || p === "boltcard" || p === "fips" || p === "ble" || p === "microfips" || p === "conwrt" || p === "silent-energy" || p === "nomail";
       });
     } else {
       runs = runs.filter((r) => getRunProject(r) === filterState.project);
@@ -1064,6 +1067,7 @@ function buildSidebar() {
         <button class="project-tab" data-project="conwrt" type="button">conwrt</button>
         <button class="project-tab" data-project="silent-energy" type="button">Silent Energy</button>
         <button class="project-tab" data-project="boltcard" type="button">Boltcard</button>
+        <button class="project-tab" data-project="nomail" type="button">nomail</button>
         <button class="project-tab project-tab-secondary" data-project="all" type="button">All Nostr</button>
       </div>
       <input type="text" id="search-input" class="search-input" placeholder="Search runs\u2026" autocomplete="off" />
