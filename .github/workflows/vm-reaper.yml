@@ -1,0 +1,104 @@
+name: VM Reaper
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      max-age-hours:
+        description: "Max VM age in hours before reaping"
+        default: "2"
+      providers:
+        description: "Comma-separated: gcp,shc"
+        default: "gcp,shc"
+
+permissions:
+  contents: read
+
+jobs:
+  reap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install -q pyyaml jinja2 requests
+          if [ -f lib/cloud_lab/shc.py ]; then
+            pip install -q -e ../../../shc-toolkit 2>/dev/null || true
+          fi
+
+      - name: Authenticate GCP
+        if: contains(github.event.inputs.providers || 'gcp,shc', 'gcp')
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          if [ -z "$GCP_SA_KEY" ]; then
+            echo "GCP_SA_KEY not set — skipping GCP cleanup"
+            exit 0
+          fi
+          echo "$GCP_SA_KEY" > /tmp/gcp-sa.json
+          gcloud auth activate-service-account --key-file=/tmp/gcp-sa.json
+          gcloud config set project tollgate-test-lab
+          echo "GCP_AUTH_OK"
+
+      - name: Set SHC API key
+        if: contains(github.event.inputs.providers || 'gcp,shc', 'shc')
+        run: |
+          if [ -z "${{ secrets.SHC_API_KEY }}" ]; then
+            echo "SHC_API_KEY not set — skipping SHC cleanup"
+          fi
+        env:
+          SHC_API_KEY: ${{ secrets.SHC_API_KEY }}
+
+      - name: Run reaper
+        env:
+          GCP_PROJECT: tollgate-test-lab
+          GCP_ZONE: us-east1-b
+          SHC_API_KEY: ${{ secrets.SHC_API_KEY }}
+          MAX_AGE: ${{ github.event.inputs.max-age-hours || '2' }}
+          PROVIDERS: ${{ github.event.inputs.providers || 'gcp,shc' }}
+        run: |
+          echo "=== VM Reaper — $(date -u) ==="
+          echo "Max age: ${MAX_AGE}h"
+          echo "Providers: ${PROVIDERS}"
+          echo ""
+
+          TOTAL_KILLED=0
+
+          for provider in $(echo "${PROVIDERS}" | tr ',' ' '); do
+            echo "--- $provider ---"
+            case $provider in
+              gcp|gcloud)
+                if command -v gcloud &>/dev/null && gcloud auth list 2>/dev/null | grep -q ACTIVE; then
+                  RESULT=$(python3 scripts/cloud-lab.py cleanup-stale --provider gcp --max-age-hours "${MAX_AGE}" 2>&1) || true
+                  echo "$RESULT"
+                else
+                  echo "  GCP not authenticated — skipping"
+                fi
+                ;;
+              shc)
+                if [ -n "$SHC_API_KEY" ]; then
+                  RESULT=$(python3 scripts/cloud-lab.py cleanup-stale --provider shc --max-age-hours "${MAX_AGE}" 2>&1) || true
+                  echo "$RESULT"
+                else
+                  echo "  SHC_API_KEY not set — skipping"
+                fi
+                ;;
+              *)
+                echo "  Unknown provider: $provider"
+                ;;
+            esac
+            echo ""
+          done
+
+          echo "=== Reaper complete ==="
+
+      - name: Cleanup
+        if: always()
+        run: rm -f /tmp/gcp-sa.json

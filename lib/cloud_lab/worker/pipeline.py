@@ -46,11 +46,6 @@ from lib.cloud_lab.worker.report import (
     publish_to_nostr,
     verify_nostr_publish,
 )
-from lib.cloud_lab.worker.dvm_events import (
-    publish_feedback as dvm_feedback,
-    publish_job_request as dvm_job_request,
-    publish_job_result as dvm_job_result,
-)
 from lib.cloud_lab.worker.runner import run_tests
 from lib.cloud_lab.worker.shell import _redact, _run, log
 from lib.cloud_lab.worker.vms import delete_self, start_inner_vms, stop_inner_vms
@@ -214,9 +209,6 @@ def run_worker(config: WorkerConfig) -> int:
                     log.info("NSEC provisioned for Nostr publishing")
 
                 _step_end("outer-deps")
-
-                dvm_job_request(config)
-                dvm_feedback("processing", f"Cloud lab pipeline starting (run_id={config.run_id})")
 
                 if config.gh_token:
                     _step_start("gh-cli-auth")
@@ -422,7 +414,6 @@ def run_worker(config: WorkerConfig) -> int:
                 log.info("Publishing results to Blossom + Nostr (total_tests=%d)...", total_run)
                 manifest = publish_to_nostr(config, results_dir, counts)
                 manifest_files = manifest.get("files", []) if manifest else []
-                dvm_job_result(config, counts, manifest_files)
                 verify_nostr_publish(config)
                 report_url = "https://tests.tollgate.me/"
                 if config.gh_token:
@@ -431,7 +422,6 @@ def run_worker(config: WorkerConfig) -> int:
                 log.error("Publish failed (non-fatal): %s", _redact(str(pub_exc))[:500])
 
         has_failures = counts.get("failed", 0) > 0 or counts.get("error", 0) > 0
-        dvm_feedback("error" if has_failures else "success", f"exit={test_exit}")
 
         _save_pipeline_timing(results_dir)
         _log_pipeline_summary()
