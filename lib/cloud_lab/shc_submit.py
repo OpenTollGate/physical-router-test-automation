@@ -45,6 +45,15 @@ if SHC_TOOLKIT_PATH not in sys.path:
 SHC_PACKAGE_ID_STANDARD = 81
 SHC_PRICING_ID_STANDARD = 245
 
+# Starter tier: 1C/4GB/8GB at $0.24/day (48% cheaper than Standard $0.46/day)
+SHC_PACKAGE_ID_STARTER = 80
+SHC_PRICING_ID_STARTER = 241
+
+SHC_TIER_PACKAGE_PRICING = {
+    "starter": (SHC_PACKAGE_ID_STARTER, SHC_PRICING_ID_STARTER),
+    "standard": (SHC_PACKAGE_ID_STANDARD, SHC_PRICING_ID_STANDARD),
+}
+
 SUITE_REPO = "OpenTollGate/physical-router-test-automation"
 SUITE_REPO_URL = f"https://github.com/{SUITE_REPO}.git"
 TEST_DIR = "/opt/tollgate-test"
@@ -71,7 +80,7 @@ _STEPS = [
 
 
 def _suite_ref() -> str:
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[2]
     r = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         capture_output=True, text=True, cwd=repo_root, timeout=10,
@@ -96,11 +105,14 @@ def _nsec_hex() -> str:
 
 
 def _working_tree_overlay_b64() -> str:
-    repo_root = Path(__file__).resolve().parents[3]
-    changes = subprocess.run(
+    repo_root = Path(__file__).resolve().parents[2]
+    tracked = subprocess.run(
         ["git", "diff", "--name-only"], capture_output=True, text=True, cwd=repo_root,
     ).stdout.strip().split("\n")
-    changes = [c for c in changes if c and not c.startswith(".omo/") and not c.startswith(".playwright-mcp/")]
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"], capture_output=True, text=True, cwd=repo_root,
+    ).stdout.strip().split("\n")
+    changes = [c for c in tracked + untracked if c and not c.startswith(".omo/") and not c.startswith(".playwright-mcp/")]
     if not changes:
         return ""
     buf = BytesIO()
@@ -112,17 +124,19 @@ def _working_tree_overlay_b64() -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def _wait_for_ssh(ssh_base: list[str], ssh_target: str, timeout: int = 300) -> None:
+def _wait_for_ssh(ssh_base: list[str], ssh_target: str, timeout: int = 300, sshpass_password: str = "") -> None:
     """Retry SSH until the VM accepts connections.
 
     Key propagation can take 2-5 minutes after apply_ssh_key_live returns.
+    On 1C VMs (Starter tier), cloud-init takes 20+ min — password auth is faster.
     """
+    prefix = ["sshpass", "-p", sshpass_password] if sshpass_password else []
     print("Waiting for SSH daemon...", end="", flush=True)
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             r = subprocess.run(
-                [*ssh_base, ssh_target, "echo OK"],
+                [*prefix, *ssh_base, ssh_target, "echo OK"],
                 capture_output=True, text=True, timeout=10,
             )
             if r.returncode == 0 and "OK" in r.stdout:
@@ -167,8 +181,18 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/
 
 step() {{
     local n=$1 msg=$2
-    echo "[$n/$N_STEPS] $msg"
+    STEP_TIMES[$n]=$(date +%s)
+    echo "[$n/$N_STEPS] $msg ($(date -u +%H:%M:%S))..."
 }}
+
+step_done() {{
+    local n=$1
+    local elapsed=$(( $(date +%s) - ${{STEP_TIMES[$n]:-0}} ))
+    echo "[$n/$N_STEPS] done (${{elapsed}}s)"
+    echo "[$n/$N_STEPS] done (${{elapsed}}s)" >> /tmp/tollgate-status
+}}
+
+declare -A STEP_TIMES
 
 fail() {{
     local n=$1 msg=$2
@@ -181,24 +205,63 @@ N_STEPS=15
 echo "BOOTSTRAP_START" >> /tmp/tollgate-status
 
 LEASE_MINUTES={lease_minutes}
+
+self_cancel() {{
+    local sid="${{TOLLGATE_SERVICE_ID}}"
+    local key="${{SHC_API_KEY}}"
+    [ -z "$sid" ] || [ -z "$key" ] && return 1
+    local api="https://blesta.sovereignhybridcompute.com/user-api/v2"
+    local resp code body cid
+    resp=$(curl -s -X POST "$api/vm/$sid/cancel" \
+        -H "Authorization: Bearer $key" \
+        -H "Content-Type: application/json" \
+        -d '{{"immediate": true}}' -w '\n%{{http_code}}' 2>/dev/null)
+    code=$(echo "$resp" | tail -1)
+    body=$(echo "$resp" | grep -o '{{.*}}' | head -1)
+    if [ "$code" = "409" ]; then
+        cid=$(echo "$body" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('confirmation',{{}}).get('confirmation_id',''))" 2>/dev/null)
+        if [ -n "$cid" ]; then
+            curl -s -X POST "$api/vm/$sid/cancel" \
+                -H "Authorization: Bearer $key" \
+                -H "Content-Type: application/json" \
+                -H "X-User-Api-Confirm: $cid" \
+                -d '{{"immediate": true}}' >/dev/null 2>&1
+            echo "VM cancelled via SHC API (service #$sid)"
+        fi
+    elif [ "$code" = "200" ] || [ "$code" = "201" ]; then
+        echo "VM cancelled via SHC API (service #$sid)"
+    fi
+}}
+
 echo "Scheduling self-cancel in ${{LEASE_MINUTES}} minutes via at..."
-echo "shutdown -h now 'TollGate lease expired'" | at "now + ${{LEASE_MINUTES}} minutes" 2>/dev/null || \
+echo "self_cancel; shutdown -h now 'TollGate lease expired'" | at "now + ${{LEASE_MINUTES}} minutes" 2>/dev/null || \
   ( echo "$(( $(date +%s) + LEASE_MINUTES * 60 ))" > /tmp/tollgate-lease-expires && \
-    ( while true; do sleep 60; [ "$(date +%s)" -ge "$(cat /tmp/tollgate-lease-expires)" ] && shutdown -h now; done & ) )
-echo "Lease kill switch armed"
+    ( while true; do sleep 60; [ "$(date +%s)" -ge "$(cat /tmp/tollgate-lease-expires)" ] && self_cancel && shutdown -h now; done & ) )
+echo "Lease kill switch armed (cancels SHC service + shuts down)"
+
+TOTAL_RAM=$(free -m | awk '/^Mem:/{{print $2}}')
+if [ "$TOTAL_RAM" -le 4096 ] && [ "$(swapon --show 2>/dev/null | wc -l)" -eq 0 ]; then
+  sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && echo "Swap enabled (2G)"
+fi
 
 step 1 "Installing system packages..."
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -qq || fail 1 "apt-get update"
-sudo apt-get install -y -qq qemu-system-x86 qemu-utils sshpass git curl wget \
-  python3-venv python3-pip net-tools iproute2 socat nftables \
-  build-essential libssl-dev pkg-config fuse3 libfuse3-dev \
-  cmake g++ libnl-3-dev libnl-genl-3-dev jq genisoimage || fail 1 "apt-get install"
+sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils \
+  sshpass git curl wget python3-venv python3-pip python3-setuptools python3-wheel python3-dev \
+  net-tools iproute2 socat nftables build-essential libssl-dev pkg-config \
+  fuse3 libfuse3-dev ca-certificates cmake g++ libnl-3-dev libnl-genl-3-dev \
+  libsecp256k1-dev jq genisoimage ffmpeg seabios ipxe-qemu \
+  libsecp256k1-dev autoconf automake libtool || fail 1 "apt-get install"
 echo "[1/$N_STEPS] done"
 
 step 2 "Installing Rust..."
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sudo sh -s -- -y || fail 2 "rustup"
-source /root/.cargo/env
+if [ -z "$SKIP_BLOSSOMFS" ]; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sudo sh -s -- -y || fail 2 "rustup"
+  source /root/.cargo/env
+else
+  echo "  SKIP_BLOSSOMFS set — Rust not needed"
+fi
 echo "[2/$N_STEPS] done"
 
 step 3 "Installing nak..."
@@ -230,6 +293,7 @@ echo "[6/$N_STEPS] done"
 step 7 "Creating Python venv..."
 sudo python3 -m venv /opt/tollgate-venv || fail 7 "venv create"
 sudo /opt/tollgate-venv/bin/pip install -q -r {test_dir}/requirements.txt || fail 7 "pip install"
+sudo /opt/tollgate-venv/bin/python3 -c "import nostr_publish" 2>/dev/null || sudo /opt/tollgate-venv/bin/pip install -q nostr-publish || echo "WARN: nostr-publish install failed"
 echo "[7/$N_STEPS] done"
 
 step 8 "Creating cashu venv..."
@@ -254,8 +318,10 @@ step 10 "Downloading QEMU images..."
 WORKDIR=/root/tollgate-virtual-lab
 sudo mkdir -p "$WORKDIR/images" "$WORKDIR/run" "$WORKDIR/overlays"
 cd "$WORKDIR/images"
-OPENWRT_VERSION=24.10.1
-sudo wget -q "https://downloads.openwrt.org/releases/${{OPENWRT_VERSION}}/targets/x86/64/openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz" || fail 10 "openwrt download"
+OPENWRT_VERSION=${{OPENWRT_VERSION:-24.10.1}}
+OWRT_IMG="openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz"
+sudo curl -sfL "https://blossom.psbt.me/924e4b83a34d600914841d53df51bba930d4a56070032a30cba5bca87273c213" -o "$OWRT_IMG" || \
+  sudo wget -q "https://downloads.openwrt.org/releases/${{OPENWRT_VERSION}}/targets/x86/64/$OWRT_IMG" || fail 10 "openwrt download"
 sudo gunzip -kf "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz" || true
 sudo qemu-img convert -f raw -O qcow2 "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img" openwrt-base.qcow2 || fail 10 "qemu-img convert"
 sudo qemu-img resize openwrt-base.qcow2 2G || fail 10 "qemu-img resize"
@@ -277,48 +343,56 @@ genisoimage -quiet -output "$WORKDIR/images/debian-seed.iso" -volid cidata -joli
 echo "[10/$N_STEPS] done"
 
 step 11 "Installing BlossomFS (from cache)..."
-fetch_cached() {{
-  local key=$1 dest=$2
-  # Try hardcoded Blossom URL first (fastest, most reliable)
-  case "$key" in
-    blossomfs-*) sudo curl -sfL -o "$dest" "https://blossom.psbt.me/e05017b95e55a709fd30bf2c687e29b03227fa245e89664447d34a4932501c28" && sudo chmod +x "$dest" && return 0 ;;
-  esac
-  # Fall back
-  local url
-  url=$(nak req -k 1063 -l 1 -t "filename=$key" wss://relay.cashu.email < /dev/null 2>/dev/null | python3 -c "import sys,json;[print(next(t[1] for t in json.loads(l)['tags'] if t[0]=='url')) for l in [sys.stdin.readline().strip()] if l]" 2>/dev/null)
-  if [ -n "$url" ]; then sudo curl -sfL -o "$dest" "$url" && sudo chmod +x "$dest" && return 0; fi
-  return 1
-}}
-sudo mkdir -p /opt/blossomfs/target/release
-if fetch_cached blossomfs-8784100 /opt/blossomfs/target/release/blossomfs; then
-  echo "  BlossomFS from cache"
+if [ -n "$SKIP_BLOSSOMFS" ]; then
+  echo "  SKIP_BLOSSOMFS set — skipping (smoke/quick mode)"
 else
-  echo "  Compiling BlossomFS from source..."
-  sudo rm -rf /opt/blossomfs
-  sudo git clone --depth 1 https://github.com/Amperstrand/blossomfs /opt/blossomfs || fail 11 "blossomfs clone"
-  cd /opt/blossomfs && sudo /root/.cargo/bin/cargo build --release || fail 11 "blossomfs build"
-  echo "  Uploading BlossomFS binary to Blossom for caching..."
-  nak blossom upload --server blossom.psbt.me --sec "$(cat /root/nsec)" /opt/blossomfs/target/release/blossomfs 2>/dev/null && echo "  BlossomFS cached" || echo "  Upload failed (non-fatal)"
+  fetch_cached() {{
+    local key=$1 dest=$2
+    # Try hardcoded Blossom URL first (fastest, most reliable)
+    case "$key" in
+      blossomfs-*) sudo curl -sfL -o "$dest" "https://blossom.psbt.me/22c53f31f1b428d907f2276a44c9cfde8bb1a6f9ac831422ffead8f53fccabf4" && sudo chmod +x "$dest" && return 0 ;;
+    esac
+    # Fall back
+    local url
+    url=$(nak req -k 1063 -l 1 -t "filename=$key" wss://relay.cashu.email < /dev/null 2>/dev/null | python3 -c "import sys,json;[print(next(t[1] for t in json.loads(l)['tags'] if t[0]=='url')) for l in [sys.stdin.readline().strip()] if l]" 2>/dev/null)
+    if [ -n "$url" ]; then sudo curl -sfL -o "$dest" "$url" && sudo chmod +x "$dest" && return 0; fi
+    return 1
+  }}
+  sudo mkdir -p /opt/blossomfs/target/release
+  if fetch_cached blossomfs-8784100 /opt/blossomfs/target/release/blossomfs; then
+    echo "  BlossomFS from cache"
+  else
+    echo "  Compiling BlossomFS from source..."
+    sudo rm -rf /opt/blossomfs
+    sudo git clone --depth 1 https://github.com/Amperstrand/blossomfs /opt/blossomfs || fail 11 "blossomfs clone"
+    cd /opt/blossomfs && sudo /root/.cargo/bin/cargo build --release || fail 11 "blossomfs build"
+    echo "  Uploading BlossomFS binary to Blossom for caching..."
+    nak blossom upload --server blossom.psbt.me --sec "$(cat /root/nsec)" /opt/blossomfs/target/release/blossomfs 2>/dev/null && echo "  BlossomFS cached" || echo "  Upload failed (non-fatal)"
+  fi
 fi
 echo "[11/$N_STEPS] done"
 
 step 12 "Installing vwifi (from cache)..."
-sudo mkdir -p /opt/vwifi/bin/host /opt/vwifi/bin/debian /opt/vwifi/bin/openwrt
-if fetch_cached vwifi-host-server-072cdb8 /opt/vwifi/bin/host/vwifi-server \
-   && fetch_cached vwifi-host-ctrl-072cdb8 /opt/vwifi/bin/host/vwifi-ctrl \
-   && fetch_cached vwifi-guest-client-072cdb8 /opt/vwifi/bin/debian/vwifi-client; then
-  sudo cp /opt/vwifi/bin/debian/vwifi-client /opt/vwifi/bin/openwrt/vwifi-client
-  echo "  vwifi from cache"
+if [ -n "$SKIP_VWIFI" ]; then
+  echo "  SKIP_VWIFI set — skipping (smoke/quick mode)"
 else
-  echo "  Compiling vwifi from source..."
-  sudo git clone --depth 1 https://github.com/Raizo62/vwifi.git /tmp/vwifi-build || fail 12 "vwifi clone"
-  cd /tmp/vwifi-build && mkdir -p build-host && cd build-host
-  sudo cmake .. -DCMAKE_BUILD_TYPE=Release && sudo make -j$(nproc) || fail 12 "vwifi build host"
-  sudo cp vwifi-server vwifi-ctrl /opt/vwifi/bin/host/
-  cd /tmp/vwifi-build && mkdir -p build-guest && cd build-guest
-  sudo cmake .. -DCMAKE_BUILD_TYPE=Release && sudo make -j$(nproc) || fail 12 "vwifi build guest"
-  sudo cp vwifi-client vwifi-add-interfaces /opt/vwifi/bin/debian/
-  sudo cp vwifi-client vwifi-add-interfaces /opt/vwifi/bin/openwrt/
+  sudo mkdir -p /opt/vwifi/bin/host /opt/vwifi/bin/debian /opt/vwifi/bin/openwrt
+  if fetch_cached vwifi-host-server-072cdb8 /opt/vwifi/bin/host/vwifi-server \
+     && fetch_cached vwifi-host-ctrl-072cdb8 /opt/vwifi/bin/host/vwifi-ctrl \
+     && fetch_cached vwifi-guest-client-072cdb8 /opt/vwifi/bin/debian/vwifi-client; then
+    sudo cp /opt/vwifi/bin/debian/vwifi-client /opt/vwifi/bin/openwrt/vwifi-client
+    echo "  vwifi from cache"
+  else
+    echo "  Compiling vwifi from source..."
+    sudo git clone --depth 1 https://github.com/Raizo62/vwifi.git /tmp/vwifi-build || fail 12 "vwifi clone"
+    cd /tmp/vwifi-build && mkdir -p build-host && cd build-host
+    sudo cmake .. -DCMAKE_BUILD_TYPE=Release && sudo make -j$(nproc) || fail 12 "vwifi build host"
+    sudo cp vwifi-server vwifi-ctrl /opt/vwifi/bin/host/
+    cd /tmp/vwifi-build && mkdir -p build-guest && cd build-guest
+    sudo cmake .. -DCMAKE_BUILD_TYPE=Release && sudo make -j$(nproc) || fail 12 "vwifi build guest"
+    sudo cp vwifi-client vwifi-add-interfaces /opt/vwifi/bin/debian/
+    sudo cp vwifi-client vwifi-add-interfaces /opt/vwifi/bin/openwrt/
+  fi
 fi
 echo "[12/$N_STEPS] done"
 
@@ -344,6 +418,18 @@ else
   echo "  WARNING: /dev/kvm not found — QEMU will use slow TCG emulation"
 fi
 echo "[14/$N_STEPS] done"
+
+echo "=== Pre-flight: Blossom + Nostr verification ==="
+echo "preflight-$(date +%s)" > /tmp/blossom-preflight.txt
+if /usr/local/bin/nak blossom upload --server "$BLOSSOM_SERVER" --sec "$(cat /root/nsec)" /tmp/blossom-preflight.txt < /dev/null 2>&1; then
+    echo "  Blossom upload: OK ($BLOSSOM_SERVER)"
+    rm -f /tmp/blossom-preflight.txt
+else
+    echo "  WARNING: Blossom pre-flight FAILED — results may not publish"
+fi
+echo "  BLOSSOM_SERVER: $BLOSSOM_SERVER"
+echo "  NOSTR_RELAYS: $NOSTR_RELAYS"
+echo "=== Pre-flight complete ==="
 
 step 15 "Running worker pipeline..."
 cd {test_dir}
@@ -376,6 +462,8 @@ def submit_run_shc(
     portal: str = "builtin",
     keep_vm_on_failure: bool = False,
     lease_minutes: int = 90,
+    provider=None,
+    tier: str = "standard",
 ) -> dict[str, str]:
     """Order an SHC VM, bootstrap it, and run the test worker pipeline.
 
@@ -386,17 +474,23 @@ def submit_run_shc(
 
     from shc_toolkit.client import SHCClient
 
+    if tier not in SHC_TIER_PACKAGE_PRICING:
+        raise ValueError(f"Unknown tier '{tier}'. Use: {list(SHC_TIER_PACKAGE_PRICING)}")
+    package_id, pricing_id = SHC_TIER_PACKAGE_PRICING[tier]
+    tier_label = tier.capitalize()
+    tier_min_balance = 0.25 if tier == "starter" else 0.50
+
     client = SHCClient()
 
     balance = client.get_account_balance()
     credit = float(balance.get("credit", [{}])[0].get("amount", 0))
-    if credit < 0.50:
+    if credit < tier_min_balance:
         raise RuntimeError(
             f"Insufficient SHC balance: ${credit:.2f}. "
-            f"Need at least $0.50 for a Dev VPS Standard ($0.46/day). "
+            f"Need at least ${tier_min_balance:.2f} for a Dev VPS {tier_label}. "
             f"Add credit at https://blesta.sovereignhybridcompute.com"
         )
-    print(f"SHC balance: ${credit:.2f}")
+    print(f"SHC balance: ${credit:.2f} (tier: {tier_label})")
 
     print(f"Waiting for CI artifact ({target.repo}@{target.branch})...")
     artifact_run_id = ensure_artifact(
@@ -418,45 +512,57 @@ def submit_run_shc(
     if overlay_b64:
         print(f"Including local overlay ({len(overlay_b64)} bytes b64)")
 
-    print(f"Ordering SHC VM '{hostname}' (Standard 2C/8GB)...")
-    result = client.submit_order(
-        hostname=hostname,
-        package_id=SHC_PACKAGE_ID_STANDARD,
-        pricing_id=SHC_PRICING_ID_STANDARD,
-        idempotency_key=f"tollgate-{run_id}",
-    )
-    sids = result.get("service_ids", [])
-    if not sids:
-        raise RuntimeError(f"SHC order failed: {result}")
-    service_id = int(sids[0])
-    print(f"  Ordered service #{service_id}")
-
-    # 3. Wait for provisioning + IP
-    print("Waiting for provisioning...")
-    deadline = time.time() + 600
-    vm_ip = ""
-    while time.time() < deadline:
-        vm = client.get_vm(service_id)
-        state = vm.get("provisioning_state", "unknown")
-        ips = vm.get("ips", [])
-        vm_ip = ips[0]["ip"] if ips else ""
-        print(f"  state={state} ip={vm_ip or 'pending'}")
-        if state == "ready" and vm_ip:
-            break
-        if state in ("failed", "error", "cancelled"):
-            raise RuntimeError(f"SHC provisioning failed: {state}")
-        time.sleep(10)
-    else:
-        raise TimeoutError(f"SHC VM {service_id} not ready after 600s")
-
-    print(f"VM ready: {hostname} @ {vm_ip}")
-
-    # 4. Inject SSH key
     ssh_key_path = os.environ.get("SHC_SSH_KEY", str(Path.home() / ".ssh/id_rsa.pub"))
-    if Path(ssh_key_path).exists():
-        print("Injecting SSH key...")
-        pubkey = Path(ssh_key_path).read_text().strip()
-        client.apply_ssh_key_live(service_id, pubkey)
+    pubkey = Path(ssh_key_path).read_text().strip() if Path(ssh_key_path).exists() else ""
+
+    if provider is not None:
+        print(f"Creating SHC VM '{hostname}' via Pulumi ({tier_label})...")
+        machine_type = "1C/4GB" if tier == "starter" else "2C/8GB"
+        vm_info = provider.create_vm(hostname, machine_type=machine_type)
+        service_id = int(vm_info.service_id)
+        vm_ip = vm_info.ip
+        print(f"  VM ready: service #{service_id} @ {vm_ip}")
+        if pubkey:
+            provider.apply_ssh_key(vm_info, pubkey)
+    else:
+        tier_specs = {"starter": "1C/4GB/8GB", "standard": "2C/8GB/16GB"}
+        print(f"Ordering SHC VM '{hostname}' ({tier_label} {tier_specs[tier]})...")
+        result = client.submit_order(
+            hostname=hostname,
+            package_id=package_id,
+            pricing_id=pricing_id,
+            idempotency_key=f"tollgate-{run_id}",
+        )
+        sids = result.get("service_ids", [])
+        if not sids:
+            raise RuntimeError(f"SHC order failed: {result}")
+        service_id = int(sids[0])
+        print(f"  Ordered service #{service_id}")
+
+        # 3. Wait for provisioning + IP
+        print("Waiting for provisioning...")
+        deadline = time.time() + 600
+        vm_ip = ""
+        while time.time() < deadline:
+            vm = client.get_vm(service_id)
+            state = vm.get("provisioning_state", "unknown")
+            ips = vm.get("ips", [])
+            vm_ip = ips[0]["ip"] if ips else ""
+            print(f"  state={state} ip={vm_ip or 'pending'}")
+            if state == "ready" and vm_ip:
+                break
+            if state in ("failed", "error", "cancelled"):
+                raise RuntimeError(f"SHC provisioning failed: {state}")
+            time.sleep(10)
+        else:
+            raise TimeoutError(f"SHC VM {service_id} not ready after 600s")
+
+        print(f"VM ready: {hostname} @ {vm_ip}")
+
+        # 4. Inject SSH key
+        if pubkey:
+            print("Injecting SSH key...")
+            client.apply_ssh_key_live(service_id, pubkey)
 
     ssh_user = os.environ.get("SHC_SSH_USER", "debian")
     ssh_target = f"{ssh_user}@{vm_ip}"
@@ -466,26 +572,64 @@ def submit_run_shc(
         "-o", "LogLevel=ERROR",
         "-o", "ConnectTimeout=10",
     ]
+    # Derive private key path from the public key path for explicit -i flag.
+    # This avoids the 5-min timeout when ssh-agent is empty and default keys
+    # are passphrase-protected.
+    priv_key = ssh_key_path.replace(".pub", "") if ssh_key_path.endswith(".pub") else ssh_key_path
+    if priv_key != ssh_key_path and Path(priv_key).exists():
+        ssh_base.extend(["-i", priv_key])
 
-    # 5. Wait for SSH daemon (key propagation can take 2-5 min)
+    # 5. Wait for SSH daemon
+    # On Starter (1C), cloud-init key propagation takes 20+ min — password auth works in ~5 min
     use_sshpass = False
     vm_password = ""
+    if tier == "starter":
+        try:
+            creds = client.get_vm_credentials(service_id)
+            vm_password = creds.get("password", "") or creds.get("root_password", "")
+        except Exception:
+            pass
+        if vm_password:
+            use_sshpass = True
+            ssh_wait_pw = vm_password
+            ssh_wait_timeout = 900
+        else:
+            ssh_wait_pw = ""
+            ssh_wait_timeout = 600
+    else:
+        ssh_wait_pw = ""
+        ssh_wait_timeout = 300
+
     try:
-        _wait_for_ssh(ssh_base, ssh_target, timeout=300)
+        _wait_for_ssh(ssh_base, ssh_target, timeout=ssh_wait_timeout, sshpass_password=ssh_wait_pw)
     except TimeoutError:
-        print(" key auth not ready, trying password fallback...")
-        creds = client.get_vm_credentials(service_id)
-        vm_password = creds.get("password", "")
-        if not vm_password:
-            raise
-        sshpass_check = subprocess.run(
-            ["sshpass", "-p", vm_password, *ssh_base, ssh_target, "echo OK"],
-            capture_output=True, text=True, timeout=15,
-        )
-        if sshpass_check.returncode != 0:
-            raise TimeoutError(f"Neither key nor password auth worked on {ssh_target}")
-        print("  Password auth works — using sshpass for bootstrap")
-        use_sshpass = True
+        if not ssh_wait_pw:
+            print(" key auth not ready, retrying key injection...")
+            try:
+                if pubkey:
+                    client.apply_ssh_key_live(service_id, pubkey)
+            except Exception:
+                pass
+            try:
+                creds = client.get_vm_credentials(service_id)
+                vm_password = creds.get("password", "") or creds.get("root_password", "")
+                print(f"  Credentials returned: {list(creds.keys())}")
+            except Exception as cred_err:
+                print(f"  get_vm_credentials failed: {cred_err}")
+                vm_password = ""
+            if not vm_password:
+                raise TimeoutError(
+                    f"SSH key auth failed and no password available for {ssh_target}. "
+                    f"Manual intervention required."
+                )
+            sshpass_check = subprocess.run(
+                ["sshpass", "-p", vm_password, *ssh_base, ssh_target, "echo OK"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if sshpass_check.returncode != 0:
+                raise TimeoutError(f"Neither key nor password auth worked on {ssh_target}")
+            print("  Password auth works — using sshpass for bootstrap")
+            use_sshpass = True
 
     def ssh_cmd(cmd: str) -> list[str]:
         if use_sshpass:
@@ -507,10 +651,16 @@ def submit_run_shc(
         f"TOLLGATE_ARTIFACT_REPO={shlex.quote(target.repo)}",
         f"TOLLGATE_PR_REPO={shlex.quote(target.pr_repo or target.repo)}",
         f"TOLLGATE_SUITE_REF={shlex.quote(suite_ref)}",
+        f"OPENWRT_VERSION={shlex.quote(os.environ.get('OPENWRT_VERSION', '24.10.1'))}",
+        f"TOLLGATE_DEPLOY_MODE={shlex.quote(os.environ.get('TOLLGATE_DEPLOY_MODE', 'framework'))}",
+        f"BLOSSOM_SERVER={shlex.quote(os.environ.get('BLOSSOM_SERVER', 'https://blossom.psbt.me'))}",
+        f"NOSTR_RELAYS={shlex.quote(os.environ.get('NOSTR_RELAYS', 'wss://relay.cashu.email'))}",
         f"TOLLGATE_BACKEND={shlex.quote(target.backend)}",
         f"TOLLGATE_PUBLISH={'true' if publish else 'false'}",
         f"TOLLGATE_QUICK={'true' if quick else 'false'}",
         f"TOLLGATE_SMOKE={'true' if smoke else 'false'}",
+        "SKIP_BLOSSOMFS=1",
+        "SKIP_VWIFI=1",
         f"TOLLGATE_COMPLETE={'true' if complete else 'false'}",
         f"TOLLGATE_MINT={shlex.quote(mint)}",
         f"TOLLGATE_PORTAL={shlex.quote(portal)}",

@@ -1,0 +1,11 @@
+# Spike-only dependencies.
+# Both shc-toolkit and shc-pulumi are referenced as LOCAL editable installs so
+# the spike tracks the sibling checkouts (../shc-toolkit, ../shc-pulumi) and
+# never reaches out to PyPI for them.
+#
+# The relative paths assume this spike lives at:
+#   physical-router-test-automation/infra/pulumi-shc-spike/
+# pointing at siblings of physical-router-test-automation in the parent dir.
+-e ../../../shc-toolkit
+-e ../../../shc-pulumi
+pulumi>=3.0

@@ -137,6 +137,8 @@ jobs:
           source /opt/tollgate-venv/bin/activate || true
           mkdir -p "/tmp/tollgate-results/${{ inputs.run_id }}/raw"
 
+          pip install -q git+https://github.com/Amperstrand/nostr-publish-file-metadata-action.git 2>/dev/null || true
+
           # Install nak CLI (needed for Blossom download + Nostr publish)
           if ! command -v nak &>/dev/null; then
             echo "Installing nak CLI..."

@@ -24,7 +24,6 @@ COORDINATION_RELAYS = [
 #: free-tier files on blossom.psbt.me expire after a TTL, so the same
 #: content-addressed blob (SHA256) is retried on the mirrors.
 BLOSSOM_MIRROR_SERVERS = [
-    "https://blossom.primal.net",
     "https://blossom.psbt.me",
 ]
 
@@ -33,15 +32,29 @@ BLOSSOM_MIRROR_SERVERS = [
 TEST_DEPS = ["curl", "socat", "nodogsplash", "jq", "luci", "px5g-mbedtls"]
 
 
+def detect_package_manager(router) -> str:
+    """Detect whether the router uses opkg (24.x) or apk (25.x).
+
+    OpenWRT 25.x ships apk-tools and does NOT have opkg.
+    24.x and earlier ship opkg and do NOT have apk.
+    """
+    try:
+        out = router.ssh("command -v apk >/dev/null 2>&1 && echo apk || echo opkg", timeout=10)
+        pm = out.strip()
+        if pm in ("apk", "opkg"):
+            return pm
+    except Exception:
+        pass
+    return "opkg"
+
+
 def detect_arch(router) -> str:
     """Detect the package architecture from a running OpenWrt router via SSH.
 
-    Uses ``opkg print-architecture`` which lists all supported arches with
-    priority numbers.  The *highest-priority* (largest number) non-trivial
-    arch (i.e. not ``all`` / ``noarch``) is the native one.
-
-    Falls back to parsing ``/etc/openwrt_release`` DISTRIB_ARCH.
+    Tries ``opkg print-architecture`` first (24.x), then ``/etc/apk/arch``
+    (25.x), then falls back to ``/etc/openwrt_release`` DISTRIB_ARCH.
     """
+    # opkg path (24.x)
     try:
         out = router.ssh("opkg print-architecture 2>/dev/null", timeout=10)
     except Exception:
@@ -60,6 +73,16 @@ def detect_arch(router) -> str:
         if best_name:
             log.info("Detected router arch via opkg: %s", best_name)
             return best_name
+
+    # apk path (25.x)
+    try:
+        out = router.ssh("cat /etc/apk/arch 2>/dev/null", timeout=10)
+        arch = out.strip()
+        if arch:
+            log.info("Detected router arch via apk: %s", arch)
+            return arch
+    except Exception:
+        pass
 
     # Fallback: /etc/openwrt_release
     try:
@@ -256,8 +279,13 @@ def _wait_for_reboot(router, timeout=180):
 
 def install_test_deps(router):
     log.info("Installing test dependencies: %s", ", ".join(TEST_DEPS))
-    router.ssh("opkg update", timeout=60)
-    router.ssh(f"opkg install {' '.join(TEST_DEPS)}", timeout=120)
+    pm = detect_package_manager(router)
+    if pm == "apk":
+        router.ssh("apk update", timeout=60)
+        router.ssh(f"apk add {' '.join(TEST_DEPS)}", timeout=120)
+    else:
+        router.ssh("opkg update", timeout=60)
+        router.ssh(f"opkg install {' '.join(TEST_DEPS)}", timeout=120)
     log.info("Test dependencies installed")
 
 
@@ -352,6 +380,7 @@ def ensure_artifact(
     workflow: str,
     commit: str | None = None,
     timeout_s: int = 1800,
+    fmt: str = "",
 ) -> str:
     """Wait until a CI run has a downloadable artifact for arch. Never triggers builds.
 
@@ -362,7 +391,7 @@ def ensure_artifact(
 
     while time.time() < deadline:
         # Try Blossom/Nostr first (instant if nak is available)
-        blossom_binary = _resolve_blossom_binary(commit, arch)
+        blossom_binary = _resolve_blossom_binary(commit, arch, fmt=fmt)
         if blossom_binary:
             log.info(
                 "Found artifact '%s' via Blossom/Nostr",
@@ -451,12 +480,13 @@ def ensure_artifact(
     )
 
 
-def _resolve_blossom_binary(commit: str | None, arch: str) -> dict | None:
+def _resolve_blossom_binary(commit: str | None, arch: str, fmt: str = "") -> dict | None:
     """Query coordination relays for latest tollgate-build event matching arch.
 
     Returns dict with url, filename, sha256 from the event content, or None.
     If commit is specified, tries exact match first, then falls back to newest
     matching arch (any commit) so PR merges and branch builds work.
+    If fmt is specified (e.g. 'apk' or 'ipk'), filters by content.format.
     """
     nak = shutil.which("nak")
     if not nak:
@@ -484,6 +514,8 @@ def _resolve_blossom_binary(commit: str | None, arch: str) -> dict | None:
             if content.get("architecture") != arch:
                 continue
             if content.get("compression", "none") != "none":
+                continue
+            if fmt and content.get("format", "ipk") != fmt:
                 continue
 
             ts = e.get("created_at", 0)
@@ -513,10 +545,10 @@ def _resolve_blossom_binary(commit: str | None, arch: str) -> dict | None:
     return None
 
 
-def _download_blossom_binary(url: str, build_dir: Path, sha256: str = "") -> Path | None:
+def _download_blossom_binary(url: str, build_dir: Path, sha256: str = "", save_as: str = "") -> Path | None:
     """Download .ipk from Blossom. Tries primary URL, then falls back to
     mirror servers using the content-addressed SHA256 when the primary 404s."""
-    filename = url.rsplit("/", 1)[-1]
+    filename = save_as or url.rsplit("/", 1)[-1]
     dest = build_dir / filename
 
     urls_to_try = [url]
@@ -547,21 +579,31 @@ def _download_blossom_binary(url: str, build_dir: Path, sha256: str = "") -> Pat
 
 def download_artifact(branch: str, arch: str, run_id: str | None = None,
                       repo: str | None = None, workflow: str | None = None,
-                      output_name: str | None = None) -> Path:
+                      output_name: str | None = None, fmt: str = "") -> Path:
     artifact_repo = repo or REPO
     artifact_workflow = workflow or WORKFLOW
     if BUILD_DIR.exists():
-        shutil.rmtree(BUILD_DIR)
+        try:
+            shutil.rmtree(BUILD_DIR)
+        except (PermissionError, OSError):
+            subprocess.run(["sudo", "rm", "-rf", str(BUILD_DIR)], timeout=15, capture_output=True)
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
 
     target_commit = os.environ.get("TOLLGATE_SUT_COMMIT", "")
-    blossom_binary = _resolve_blossom_binary(target_commit or None, arch)
+    blossom_binary = _resolve_blossom_binary(target_commit or None, arch, fmt=fmt)
     if blossom_binary:
         log.info("Found Blossom binary: %s", blossom_binary.get("filename", "?"))
-        blossom_path = _download_blossom_binary(
-            blossom_binary["url"], BUILD_DIR,
-            sha256=blossom_binary.get("sha256", ""),
-        )
+        _sha = blossom_binary.get("sha256", "")
+        _url = blossom_binary.get("url")
+        if not _url and _sha and len(_sha) == 64:
+            _url = f"{BLOSSOM_MIRROR_SERVERS[0]}/{_sha}"
+            log.info("No url in event — constructed from sha256: %s", _url)
+        if _url:
+            blossom_path = _download_blossom_binary(
+                _url, BUILD_DIR,
+                sha256=_sha,
+                save_as=blossom_binary.get("filename", ""),
+            )
         if blossom_path:
             return blossom_path
         log.warning("Blossom download failed, falling back to GitHub Actions")
@@ -709,20 +751,37 @@ def deploy(router, ipk_path: Path, reboot: bool = False, backend=None) -> dict[s
     install_test_deps(router)
 
     log.info("Copying %s to router", ipk_path.name)
-    _scp_to_router(router, ipk_path, "/tmp/tollgate-wrt.ipk")
+    remote_name = "tollgate-wrt.ipk" if ipk_path.suffix == ".ipk" else "tollgate-wrt.apk"
+    _scp_to_router(router, ipk_path, f"/tmp/{remote_name}")
 
     log.info("Installing tollgate-wrt")
-    router.ssh(
-        "/etc/init.d/tollgate-wrt stop 2>/dev/null;"
-        "killall tollgate-wrt 2>/dev/null;"
-        "sleep 1;"
-        "opkg install /tmp/tollgate-wrt.ipk"
-        " && /etc/init.d/tollgate-wrt restart"
-        " && /etc/init.d/tollgate-basic restart 2>/dev/null"
-        "; /etc/init.d/uhttpd restart 2>/dev/null"
-        "; rm -f /tmp/tollgate-wrt.ipk",
-        timeout=120,
-    )
+    pm = detect_package_manager(router)
+    if pm == "apk":
+        router.ssh(
+            "/etc/init.d/tollgate-wrt stop 2>/dev/null;"
+            "killall tollgate-wrt 2>/dev/null;"
+            "sleep 1;"
+            f"apk add --allow-untrusted /tmp/{remote_name}"
+            " && /etc/init.d/tollgate-wrt restart"
+            " && /etc/init.d/tollgate-basic restart 2>/dev/null"
+            "; /etc/init.d/uhttpd restart 2>/dev/null"
+            "; rm -f /tmp/tollgate-wrt.ipk",
+            timeout=120,
+        )
+        version_out = router.ssh("apk info -e tollgate-wrt 2>/dev/null || opkg list-installed | grep tollgate-wrt", timeout=10)
+    else:
+        router.ssh(
+            "/etc/init.d/tollgate-wrt stop 2>/dev/null;"
+            "killall tollgate-wrt 2>/dev/null;"
+            "sleep 1;"
+            "opkg install /tmp/tollgate-wrt.ipk"
+            " && /etc/init.d/tollgate-wrt restart"
+            " && /etc/init.d/tollgate-basic restart 2>/dev/null"
+            "; /etc/init.d/uhttpd restart 2>/dev/null"
+            "; rm -f /tmp/tollgate-wrt.ipk",
+            timeout=120,
+        )
+        version_out = router.ssh("opkg list-installed | grep tollgate-wrt", timeout=10)
 
     if reboot:
         return reboot_router(router)
@@ -736,7 +795,6 @@ def deploy(router, ipk_path: Path, reboot: bool = False, backend=None) -> dict[s
     health_timeout = 120 if backend and backend.is_rust else 60
     log.info("Waiting for backend health on port 2121 (timeout=%ds)", health_timeout)
     healthy = _wait_for_health(router, timeout=health_timeout)
-    version_out = router.ssh("opkg list-installed | grep tollgate-wrt", timeout=10)
     installed_version = _parse_version(version_out)
     health_code = 200 if healthy else router.api_status("/")
 
@@ -995,6 +1053,9 @@ def deploy_branch(router, branch: str, arch: str | None = None,
 
     artifact_repo = repo or (backend.repo if backend else None)
     artifact_workflow = backend.workflow if backend else None
+    pm = detect_package_manager(router)
+    fmt = "apk" if pm == "apk" else "ipk"
+    log.info("Router package manager: %s — requesting %s artifact", pm, fmt)
     ipk_path = download_artifact(branch, arch, run_id=run_id,
-                                 repo=artifact_repo, workflow=artifact_workflow)
+                                 repo=artifact_repo, workflow=artifact_workflow, fmt=fmt)
     return deploy(router, ipk_path, reboot=reboot, backend=backend)

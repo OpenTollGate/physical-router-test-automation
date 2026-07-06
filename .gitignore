@@ -25,6 +25,9 @@ credentials/
 .tmp/
 findings/
 
+# Shallow bash-client checkout cloned by tests/api/test_bash_client.py
+tests/.bash-client/
+
 # Agent orchestration artifacts
 .sisyphus/
 .omo/
@@ -56,3 +59,13 @@ lib/cloud_lab/shc.py
 __pycache__/
 test-videos*/
 .ci-logs/
+
+# Pulumi SHC spike (infra/pulumi-shc-spike/) — local-only artifacts
+infra/pulumi-shc-spike/.venv/
+infra/pulumi-shc-spike/.state/
+infra/pulumi-shc-spike/Pulumi.*.yaml
+infra/pulumi-shc-spike/last-*.txt
+infra/pulumi-shc-spike/__pycache__/
+
+# auto-generated opencode session handover (do not commit)
+HANDOVER.md

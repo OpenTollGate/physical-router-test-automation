@@ -89,6 +89,7 @@ let currentHierarchy = null;
 let liveSockets = [];
 let liveConnectedCount = 0;
 let displayIdCache = new Map();
+let renderRunsListTimer = null;
 
 // ===========================================================================
 // WebSocket: Fetch kind 30078 (primary) + legacy DVM events (5900/6900/7000) + 1063
@@ -302,7 +303,7 @@ function handleLiveEvent(event) {
     );
     if (run && run.feedbackStatus !== status) {
       run.feedbackStatus = status;
-      renderRunsList();
+      scheduleRenderRunsList();
     }
     return;
   }
@@ -316,7 +317,7 @@ function handleLiveEvent(event) {
     displayIdCache.clear();
     saveCachedRuns(allRuns);
     populateRunnerFilter();
-    renderRunsList();
+    scheduleRenderRunsList();
     return;
   }
 
@@ -335,7 +336,7 @@ function handleLiveEvent(event) {
     displayIdCache.clear();
     saveCachedRuns(allRuns);
     populateRunnerFilter();
-    renderRunsList();
+    scheduleRenderRunsList();
     return;
   }
 }
@@ -390,6 +391,7 @@ const PROJECT_TAG_MAP = {
   "conwrt-sqm": "conwrt",
   "conwrt-bufferbloat": "conwrt",
   "silent-energy": "silent-energy",
+  "fips-benchmark": "fips-benchmark",
 };
 
 function determineProjectTag(tTags) {
@@ -962,7 +964,7 @@ function getFilteredRuns() {
     if (filterState.project === "ours") {
       runs = runs.filter((r) => {
         const p = getRunProject(r);
-        return p === "tollgate" || p === "fips" || p === "ble" || p === "microfips" || p === "conwrt" || p === "silent-energy";
+        return p === "tollgate" || p === "boltcard" || p === "fips" || p === "ble" || p === "microfips" || p === "conwrt" || p === "silent-energy";
       });
     } else {
       runs = runs.filter((r) => getRunProject(r) === filterState.project);
@@ -1061,6 +1063,7 @@ function buildSidebar() {
         <button class="project-tab" data-project="microfips" type="button">Microfips</button>
         <button class="project-tab" data-project="conwrt" type="button">conwrt</button>
         <button class="project-tab" data-project="silent-energy" type="button">Silent Energy</button>
+        <button class="project-tab" data-project="boltcard" type="button">Boltcard</button>
         <button class="project-tab project-tab-secondary" data-project="all" type="button">All Nostr</button>
       </div>
       <input type="text" id="search-input" class="search-input" placeholder="Search runs\u2026" autocomplete="off" />
@@ -1095,7 +1098,7 @@ function wireSidebarControls() {
       document.querySelectorAll(".project-tab").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       filterState.project = btn.dataset.project;
-      renderRunsList();
+      scheduleRenderRunsList();
     });
   });
 
@@ -1106,7 +1109,7 @@ function wireSidebarControls() {
       clearTimeout(timer);
       timer = setTimeout(() => {
         filterState.search = e.target.value.toLowerCase().trim();
-        renderRunsList();
+        scheduleRenderRunsList();
       }, 200);
     });
   }
@@ -1116,7 +1119,7 @@ function wireSidebarControls() {
       document.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       filterState.status = btn.dataset.filter;
-      renderRunsList();
+      scheduleRenderRunsList();
     });
   });
 
@@ -1124,7 +1127,7 @@ function wireSidebarControls() {
   if (sortSelect) {
     sortSelect.addEventListener("change", (e) => {
       filterState.sort = e.target.value;
-      renderRunsList();
+      scheduleRenderRunsList();
     });
   }
 
@@ -1132,7 +1135,7 @@ function wireSidebarControls() {
   if (ageFilter) {
     ageFilter.addEventListener("change", (e) => {
       filterState.maxAge = parseInt(e.target.value, 10);
-      renderRunsList();
+      scheduleRenderRunsList();
     });
   }
 
@@ -1140,9 +1143,17 @@ function wireSidebarControls() {
   if (runnerFilter) {
     runnerFilter.addEventListener("change", (e) => {
       filterState.runner = e.target.value;
-      renderRunsList();
+      scheduleRenderRunsList();
     });
   }
+}
+
+function scheduleRenderRunsList() {
+  if (renderRunsListTimer) return;
+  renderRunsListTimer = setTimeout(() => {
+    renderRunsListTimer = null;
+    renderRunsList();
+  }, 500);
 }
 
 function renderRunsList() {
@@ -1856,6 +1867,21 @@ function wireUpTestTree(view) {
     });
   });
 
+  // Auto-expand failed/error tests so screenshots are immediately visible
+  view.querySelectorAll('.test-case[data-outcome="failed"], .test-case[data-outcome="error"]').forEach((tc) => {
+    const header = tc.querySelector(".test-case-header");
+    if (header && !tc.classList.contains("expanded")) header.click();
+  });
+
+  // Auto-expand first suite so test tree isn't fully collapsed on load
+  const firstSuite = view.querySelector(".test-suite:not(.collapsed)");
+  if (!firstSuite) {
+    const anySuite = view.querySelector(".test-suite");
+    if (anySuite && anySuite.classList.contains("collapsed")) {
+      anySuite.classList.remove("collapsed");
+    }
+  }
+
   view.querySelectorAll(".general-section .html-view-btn").forEach((btn) => {
     btn.addEventListener("click", () => openHtmlViewer(btn.dataset.url, btn.dataset.name));
   });
@@ -1887,6 +1913,7 @@ function renderFlatBody(view, run) {
   });
 
   lazyLoadScreenshots(view);
+  checkBlobAvailability(view);
 }
 
 async function renderFipsRun(view, run, myLoadId) {
@@ -2073,6 +2100,7 @@ async function renderBleRun(view, run, myLoadId) {
 
   wireGenericFileButtons(body);
   lazyLoadScreenshots(body);
+  checkBlobAvailability(body);
 }
 
 function renderBleMetrics(summary) {
@@ -2196,6 +2224,164 @@ async function renderMicrofipsRun(view, run, myLoadId) {
   `;
 
   wireGenericFileButtons(body);
+}
+
+async function renderBenchmarkRun(view, run, myLoadId) {
+  const body = view.querySelector(".detail-body");
+  if (!body) return;
+
+  body.innerHTML = `<div class="test-tree-loading"><div class="spinner"></div><p>Loading benchmark\u2026</p></div>`;
+
+  const files = run.files || [];
+  const benchFile =
+    files.find((f) => /benchmark-results\.json$/i.test(f.path || "")) ||
+    files.find((f) => /benchmark/i.test((f.path || "") + " " + (f.url || "")));
+
+  if (!benchFile) {
+    body.innerHTML = `<p class="section-empty">No benchmark results file found in this run.</p>`;
+    return;
+  }
+
+  let data;
+  try {
+    const resp = await fetch(benchFile.url);
+    if (myLoadId !== detailLoadId) return;
+    data = JSON.parse(await resp.text());
+  } catch (e) {
+    if (myLoadId !== detailLoadId) return;
+    body.innerHTML = `<p class="section-empty">Failed to load benchmark results: ${escapeHtml(String(e))}</p>`;
+    return;
+  }
+  if (myLoadId !== detailLoadId) return;
+
+  const results = Array.isArray(data.results) ? data.results : [];
+  const echoResults = results.filter((r) => r.test === "echo");
+  const tputResults = results.filter((r) => r.test === "throughput");
+  const pairs = [...new Set(results.map((r) => r.pair).filter(Boolean))].sort();
+
+  const summaryCards = [
+    `<div class="metric"><span class="metric-value">${results.length}</span><span class="metric-label">Total Tests</span></div>`,
+    `<div class="metric"><span class="metric-value">${echoResults.length}</span><span class="metric-label">Echo Runs</span></div>`,
+    `<div class="metric"><span class="metric-value">${tputResults.length}</span><span class="metric-label">Throughput Runs</span></div>`,
+    `<div class="metric"><span class="metric-value">${pairs.length}</span><span class="metric-label">Device Pairs</span></div>`,
+  ].join("");
+
+  const echoMax = echoResults.reduce((m, r) => Math.max(m, r.median_us || 0), 0) || 1;
+  const tputMax = tputResults.reduce((m, r) => Math.max(m, r.achieved_bps || 0), 0) || 1;
+
+  const groupBars = (rows, max, accessor, formatVal, color) => {
+    if (!rows.length) return "";
+    const byPair = {};
+    for (const r of rows) {
+      const p = r.pair || "?";
+      (byPair[p] = byPair[p] || []).push(r);
+    }
+    return Object.keys(byPair).sort().map((pair) => {
+      const items = byPair[pair].slice().sort((a, b) => (accessor.sortKey(a) ?? 0) - (accessor.sortKey(b) ?? 0));
+      const bars = items.map((r) => {
+        const val = accessor.value(r) || 0;
+        const pct = Math.max(2, (val / max) * 100);
+        return `<div class="bench-bar-row">
+          <span class="bench-bar-label">${escapeHtml(accessor.label(r))}</span>
+          <div class="bench-bar-track"><div class="bench-bar-fill" style="width:${pct.toFixed(1)}%;background:${color};"></div></div>
+          <span class="bench-bar-value">${escapeHtml(formatVal(r))}</span>
+        </div>`;
+      }).join("");
+      return `<div class="bench-chart-group">
+        <div class="bench-chart-group-label">${escapeHtml(pair)}</div>
+        <div class="bench-chart-bars">${bars}</div>
+      </div>`;
+    }).join("");
+  };
+
+  const fmtUs = (r) => `${(r.median_us || 0).toLocaleString()}\u00b5s`;
+  const fmtKbps = (r) => `${Math.round((r.achieved_bps || 0) / 1000).toLocaleString()} kbps`;
+
+  const echoChart = groupBars(
+    echoResults, echoMax,
+    {
+      sortKey: (r) => r.payload_size,
+      label: (r) => (r.payload_size != null ? r.payload_size + "B" : "?"),
+      value: (r) => r.median_us,
+    },
+    fmtUs, "var(--blue)"
+  );
+
+  const tputChart = groupBars(
+    tputResults, tputMax,
+    {
+      sortKey: (r) => r.frame_size,
+      label: (r) => (r.frame_size != null ? r.frame_size + "B" : "?"),
+      value: (r) => r.achieved_bps,
+    },
+    fmtKbps, "var(--green)"
+  );
+
+  const echoSection = echoResults.length
+    ? `<section class="general-section">
+        <h3 class="section-title">Echo RTT <span class="section-count">${echoResults.length}</span></h3>
+        <div class="bench-chart">${echoChart}</div>
+      </section>`
+    : `<p class="section-empty">No echo results.</p>`;
+
+  const tputSection = tputResults.length
+    ? `<section class="general-section">
+        <h3 class="section-title">Throughput <span class="section-count">${tputResults.length}</span></h3>
+        <div class="bench-chart">${tputChart}</div>
+      </section>`
+    : `<p class="section-empty">No throughput results.</p>`;
+
+  const tableRows = results.map((r) => {
+    const isEcho = r.test === "echo";
+    const size = isEcho ? (r.payload_size ?? "?") : (r.frame_size ?? "?");
+    const value = isEcho ? fmtUs(r) : fmtKbps(r);
+    const loss = isEcho
+      ? (r.loss_count != null ? `${r.loss_count}/${r.count ?? "?"}` : "?")
+      : (r.frame_loss_rate != null ? `${(r.frame_loss_rate * 100).toFixed(3)}%` : "?");
+    return `<tr>
+      <td>${escapeHtml(r.test || "?")}</td>
+      <td>${escapeHtml(r.pair || "?")}</td>
+      <td>${escapeHtml(String(size))}</td>
+      <td>${escapeHtml(value)}</td>
+      <td>${escapeHtml(loss)}</td>
+    </tr>`;
+  }).join("");
+
+  const rawTable = results.length
+    ? `<details class="advanced-section">
+        <summary class="advanced-header">Raw Data <span class="section-count">${results.length}</span></summary>
+        <div class="bench-table-wrap">
+          <table class="bench-table">
+            <thead><tr><th>Test</th><th>Pair</th><th>Size</th><th>Value</th><th>Loss/Rate</th></tr></thead>
+            <tbody>${tableRows}</tbody>
+          </table>
+        </div>
+      </details>`
+    : "";
+
+  body.innerHTML = `
+    <style>
+      .bench-chart { display:flex; flex-direction:column; gap:18px; }
+      .bench-chart-group { display:flex; flex-direction:column; gap:6px; }
+      .bench-chart-group-label { font-size:12px; color:var(--text-muted); font-weight:600; letter-spacing:.02em; text-transform:uppercase; }
+      .bench-chart-bars { display:flex; flex-direction:column; gap:5px; }
+      .bench-bar-row { display:grid; grid-template-columns:48px 1fr 120px; align-items:center; gap:10px; }
+      .bench-bar-label { font-size:12px; color:var(--text-muted); font-variant-numeric:tabular-nums; text-align:right; }
+      .bench-bar-track { height:14px; background:var(--bg-elevated); border-radius:7px; overflow:hidden; border:1px solid var(--border-light); }
+      .bench-bar-fill { height:100%; border-radius:7px; transition:width .4s ease; }
+      .bench-bar-value { font-size:12px; color:var(--text); font-variant-numeric:tabular-nums; }
+      .bench-table-wrap { overflow-x:auto; }
+      .bench-table { width:100%; border-collapse:collapse; font-size:13px; }
+      .bench-table th, .bench-table td { padding:7px 10px; text-align:left; border-bottom:1px solid var(--border-light); }
+      .bench-table th { color:var(--text-muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.02em; }
+      .bench-table td { color:var(--text); font-variant-numeric:tabular-nums; }
+    </style>
+    <div class="detail-metrics">${summaryCards}</div>
+    ${data.scenario ? `<div class="fips-run-info"><span class="meta-chip meta-chip-branch">${escapeHtml(data.scenario)}</span>${data.timestamp ? `<span class="meta-chip">${escapeHtml(data.timestamp)}</span>` : ""}</div>` : ""}
+    ${echoSection}
+    ${tputSection}
+    ${rawTable}
+  `;
 }
 
 async function renderGenericFileBrowser(view, run, myLoadId) {
@@ -2479,8 +2665,12 @@ async function selectRun(run) {
     await renderMicrofipsRun(view, run, myLoadId);
     return;
   }
+  if (project === "fips-benchmark") {
+    await renderBenchmarkRun(view, run, myLoadId);
+    return;
+  }
   if (project === "conwrt") {
-    await renderFipsRun(view, run, myLoadId);
+    await renderConwrtRun(view, run, myLoadId);
     return;
   }
   if (project === "unknown") {
@@ -2606,18 +2796,51 @@ function renderFileList(files) {
   if (files.length === 0) {
     return `<p class="section-empty">No additional files in this run.</p>`;
   }
-  const rows = files.map((f) => {
+  const rows = files.map((f, i) => {
     const name = (f.path || "").split("/").pop() || f.url;
     const icon = fileIcon(f.mime);
-    return `<a class="file-row" href="${escapeHtml(f.url)}" target="_blank" rel="noopener">
+    return `<div class="file-row" data-blossom-url="${escapeHtml(f.url)}" data-file-idx="${i}">
       <span class="file-icon">${icon}</span>
       <span class="file-name" title="${escapeHtml(f.path)}">${escapeHtml(name)}</span>
       <span class="file-path">${escapeHtml(f.path)}</span>
       <span class="file-size">${escapeHtml(formatBytes(f.size))}</span>
       <span class="file-ext">${escapeHtml(extOf(f.path || name))}</span>
-    </a>`;
+      <span class="file-status file-status-checking" title="Checking availability...">...</span>
+      <a class="file-download" href="${escapeHtml(f.url)}" target="_blank" rel="noopener" title="Open">open</a>
+    </div>`;
   }).join("");
-  return `<div class="file-list">${rows}</div>`;
+  return `<div class="file-list" data-file-list>${rows}</div>`;
+}
+
+function checkBlobAvailability(container) {
+  if (!container) return;
+  const rows = container.querySelectorAll(".file-row[data-blossom-url]");
+  rows.forEach((row) => {
+    const url = row.dataset.blossomUrl;
+    const status = row.querySelector(".file-status");
+    if (!url || !status) return;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    fetch(url, { method: "GET", headers: { "Range": "bytes=0-0" }, signal: ctrl.signal })
+      .then((resp) => {
+        clearTimeout(timer);
+        if (resp.ok || resp.status === 206) {
+          status.className = "file-status file-status-ok";
+          status.textContent = "ok";
+          status.title = "Available";
+        } else {
+          status.className = "file-status file-status-gone";
+          status.textContent = "gone";
+          status.title = `HTTP ${resp.status}`;
+        }
+      })
+      .catch(() => {
+        clearTimeout(timer);
+        status.className = "file-status file-status-gone";
+        status.textContent = "gone";
+        status.title = "Request failed";
+      });
+  });
 }
 
 function fileIcon(mime) {
@@ -3576,3 +3799,85 @@ function renderCvmServiceExtra(got) {
     banner.hidden = false;
   })();
 })();
+
+async function renderConwrtRun(view, run, myLoadId) {
+  var body = view.querySelector(".detail-body");
+  if (!body) return;
+
+  var CONWRT_UC = [
+    "ssh-hardening","sqm","doh","wireguard-client","nodns","wireguard-server",
+    "vpn-node","adguard","guest-wifi","auto-sqm","ssl","travelmate",
+    "openclash","tollgate","mwan3","pbr"
+  ];
+
+  var conwrtRuns = allRuns.filter(function(r) {
+    return getRunProject(r) === "conwrt";
+  });
+
+  var ucMap = {};
+  CONWRT_UC.forEach(function(uc) { ucMap[uc] = null; });
+
+  conwrtRuns.forEach(function(r) {
+    (r.files || []).forEach(function(f) {
+      var path = f.path || "";
+      var parts = path.split("/");
+      if (parts.length >= 2 && ucMap.hasOwnProperty(parts[0]) && !ucMap[parts[0]]) {
+        ucMap[parts[0]] = { run: r, files: [] };
+      }
+      if (parts.length >= 2 && ucMap[parts[0]]) {
+        ucMap[parts[0]].files.push(f);
+      }
+    });
+  });
+
+  var passCount = 0;
+  CONWRT_UC.forEach(function(uc) { if (ucMap[uc]) passCount++; });
+
+  var html = '<div style="margin-bottom:1.5rem">';
+  html += '<div style="font-size:1rem;font-weight:600;margin-bottom:.5rem;color:var(--text)">Use Case Matrix';
+  html += ' <span style="color:var(--text-dim);font-size:.8rem;font-weight:400">(' + passCount + '/' + CONWRT_UC.length + ' tested)</span></div>';
+  html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.85rem">';
+  html += '<thead><tr><th style="text-align:left;padding:.4rem;border-bottom:1px solid var(--border)">Use Case</th>';
+  html += '<th style="text-align:left;padding:.4rem;border-bottom:1px solid var(--border)">Status</th>';
+  html += '<th style="text-align:left;padding:.4rem;border-bottom:1px solid var(--border)">Evidence</th></tr></thead><tbody>';
+
+  CONWRT_UC.forEach(function(uc) {
+    var info = ucMap[uc];
+    if (info) {
+      var date = new Date(info.run.timestamp * 1000).toLocaleDateString();
+      var links = info.files.slice(0, 5).map(function(f) {
+        var name = (f.path || "").split("/").pop();
+        return '<a href="' + escapeHtml(f.url) + '" target="_blank" rel="noopener" style="display:inline-block;margin-right:.4rem;color:var(--link);text-decoration:none">' + escapeHtml(name) + '</a>';
+      }).join("");
+      html += '<tr style="border-bottom:1px solid var(--border-dim)">';
+      html += '<td style="padding:.4rem"><strong>' + escapeHtml(uc) + '</strong></td>';
+      html += '<td style="padding:.4rem"><span style="background:rgba(35,134,54,.2);color:var(--green);padding:2px 8px;border-radius:12px;font-size:.75rem;font-weight:600">PASS</span>';
+      html += ' <span style="color:var(--text-dim);font-size:.75rem">' + date + '</span></td>';
+      html += '<td style="padding:.4rem">' + links + '</td></tr>';
+    } else {
+      html += '<tr style="border-bottom:1px solid var(--border-dim)">';
+      html += '<td style="padding:.4rem;color:var(--text-dim)">' + escapeHtml(uc) + '</td>';
+      html += '<td style="padding:.4rem"><span style="background:rgba(139,148,158,.15);color:var(--text-dim);padding:2px 8px;border-radius:12px;font-size:.75rem">PENDING</span></td>';
+      html += '<td style="padding:.4rem;color:var(--text-dim)">—</td></tr>';
+    }
+  });
+
+  html += '</tbody></table></div></div>';
+  html += '<div style="font-size:1rem;font-weight:600;margin-bottom:.5rem;color:var(--text)">Run Details</div>';
+
+  body.innerHTML = html;
+
+  var fileDiv = document.createElement("div");
+  body.appendChild(fileDiv);
+
+  var subView = { querySelector: function(sel) {
+    if (sel === ".detail-body") return fileDiv;
+    return view.querySelector(sel);
+  }};
+  
+  try {
+    await renderFipsRun(subView, run, myLoadId);
+  } catch(e) {
+    fileDiv.innerHTML = '<p style="color:var(--text-dim);padding:1rem">Select a file from the run details above.</p>';
+  }
+}

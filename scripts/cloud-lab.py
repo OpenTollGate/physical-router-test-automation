@@ -45,11 +45,11 @@ from lib.cloud_lab.provider import get_provider, VMProvider
 
 
 def _get_provider(args: argparse.Namespace) -> VMProvider | None:
-    cloud = getattr(args, "cloud", "gcp")
-    if cloud == "shc":
+    cloud = getattr(args, "cloud", "pulumi")
+    if cloud == "pulumi":
         os.environ.setdefault("SHC_API_KEY", "")
-        os.environ["TOLLGATE_VM_PROVIDER"] = "shc"
-        return get_provider("shc")
+        os.environ["TOLLGATE_VM_PROVIDER"] = "pulumi"
+        return get_provider("pulumi")
     return None
 
 
@@ -109,7 +109,7 @@ def cmd_up(args: argparse.Namespace) -> int:
         vm = provider.create_vm(name, machine_type=machine)
         print(f"Ordered service #{vm.service_id}, waiting for provisioning...")
         vm = provider.wait_for_ready(vm, timeout=300)
-        ssh_key_path = os.path.expanduser("~/.ssh/id_rsa.pub")
+        ssh_key_path = os.environ.get("SHC_SSH_KEY", os.path.expanduser("~/.ssh/id_rsa.pub"))
         if os.path.exists(ssh_key_path):
             with open(ssh_key_path) as f:
                 provider.apply_ssh_key(vm, f.read().strip())
@@ -218,7 +218,7 @@ def cmd_ssh(args: argparse.Namespace) -> int:
 
 def cmd_submit(args: argparse.Namespace) -> int:
     cloud = getattr(args, "cloud", "gcp")
-    if cloud != "shc":
+    if cloud != "pulumi":
         _warn_running_vms()
     target = resolve_target(
         pr=cast(str | None, args.pr),
@@ -229,7 +229,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
     )
 
     cloud = getattr(args, "cloud", "gcp")
-    if cloud == "shc":
+    if cloud in ("pulumi", "shc"):
         from lib.cloud_lab.shc_submit import submit_run_shc
         info = submit_run_shc(
             target,
@@ -241,6 +241,8 @@ def cmd_submit(args: argparse.Namespace) -> int:
             portal=cast(str, args.portal),
             keep_vm_on_failure=not getattr(args, "self_delete", False),
             lease_minutes=cast(int, getattr(args, "lease", 90)),
+            provider=None,
+            tier=cast(str, getattr(args, "tier", "standard")),
         )
         print(f"""
 Submitted SHC run {info['run_id']}
@@ -590,8 +592,8 @@ def build_parser() -> argparse.ArgumentParser:
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument("--zone", default=DEFAULT_ZONE)
         p.add_argument("--vm-name", default=VM_NAME)
-        p.add_argument("--cloud", default="gcp", choices=["gcp", "shc"],
-                       help="Cloud provider: gcp (Google Cloud) or shc (Sovereign Hybrid Compute)")
+        p.add_argument("--cloud", default="pulumi", choices=["gcp", "pulumi"],
+                       help="Cloud provider: pulumi (default, SHC via Pulumi) or gcp (legacy imperative)")
 
     def target_flags(p: argparse.ArgumentParser) -> None:
         g = p.add_mutually_exclusive_group(required=True)
@@ -622,8 +624,8 @@ def build_parser() -> argparse.ArgumentParser:
     ssh.set_defaults(func=cmd_ssh)
 
     submit = sub.add_parser("submit", help="Fire-and-forget: wait for CI artifact, spawn autonomous test VM")
-    submit.add_argument("--cloud", default="gcp", choices=["gcp", "shc"],
-                        help="Cloud provider: gcp (Google Cloud) or shc (Sovereign Hybrid Compute)")
+    submit.add_argument("--cloud", default="pulumi", choices=["gcp", "pulumi", "shc"],
+                        help="Cloud provider: pulumi/shc (SHC via imperative API) or gcp (legacy)")
     submit.add_argument("--zone", default=DEFAULT_ZONE)
     submit.add_argument("--machine-type", default=DEFAULT_MACHINE_TYPE)
     submit.add_argument("--disk-size", type=int, default=DEFAULT_DISK_SIZE_GB)
@@ -651,6 +653,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force a specific mint type instead of auto-detection. Use 'submit-all-mints' for parallel runs.")
     submit.add_argument("--portal", default="builtin", choices=["builtin", "net4sats"],
         help="Captive portal to deploy (default: builtin). 'net4sats' deploys the configurationwizzard SPA.")
+    submit.add_argument("--tier", default="standard", choices=["starter", "standard"],
+        help="SHC VPS tier: starter (1C/4GB, $0.24/day) or standard (2C/8GB, $0.46/day)")
     target_flags(submit)
     submit.set_defaults(func=cmd_submit)
 
@@ -692,11 +696,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     clean = sub.add_parser("cleanup-stale", help="Delete tollgate run VMs older than max age")
     clean.add_argument("--zone", default=DEFAULT_ZONE)
+    clean.add_argument("--cloud", default="pulumi", choices=["gcp", "pulumi"],
+                       help="Cloud provider to clean up (shc/pulumi reaps SHC VMs; pulumi also removes Pulumi stack state)")
     clean.add_argument("--max-age-hours", type=int, default=1)
     clean.set_defaults(func=cmd_cleanup_stale)
 
     nuke = sub.add_parser("cleanup-all", help="Delete ALL tollgate VMs regardless of age")
     nuke.add_argument("--zone", default=DEFAULT_ZONE)
+    nuke.add_argument("--cloud", default="pulumi", choices=["gcp", "pulumi"],
+                      help="Cloud provider to clean up")
     nuke.set_defaults(func=cmd_cleanup_all)
 
     reaper = sub.add_parser("install-reaper", help="Install cron job to auto-delete VMs older than 1 hour")
@@ -705,8 +713,8 @@ def build_parser() -> argparse.ArgumentParser:
     reaper.set_defaults(func=cmd_install_reaper)
 
     run = sub.add_parser("run-tests", help="Submit cloud run and wait (alias for submit --wait --publish)")
-    run.add_argument("--cloud", default="gcp", choices=["gcp", "shc"],
-                     help="Cloud provider: gcp or shc")
+    run.add_argument("--cloud", default="pulumi", choices=["gcp", "pulumi"],
+                     help="Cloud provider: pulumi (default, SHC via Pulumi) or gcp (legacy imperative)")
     run.add_argument("--zone", default=DEFAULT_ZONE)
     run.add_argument("--machine-type", default=DEFAULT_MACHINE_TYPE)
     run.add_argument("--disk-size", type=int, default=DEFAULT_DISK_SIZE_GB)
@@ -726,6 +734,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable vwifi cross-VM WiFi frame relay (experimental)")
     run.add_argument("--wifi-plane", default="tap", choices=["tap", "hwsim-netns"],
         help="Radio-plane mode. Default tap keeps existing VM/TAP cloud lab; hwsim-netns runs optional shared-kernel Wi-Fi POC.")
+    run.add_argument("--tier", default="standard", choices=["starter", "standard"],
+        help="SHC VPS tier: starter (1C/4GB, $0.24/day) or standard (2C/8GB, $0.46/day)")
     target_flags(run)
     run.set_defaults(func=cmd_run_tests)
 
@@ -741,7 +751,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     cloud = getattr(args, "cloud", "gcp")
-    if cloud == "shc":
+    if cloud in ("shc", "pulumi"):
         os.environ.setdefault("SHC_API_KEY", "")
         os.environ["TOLLGATE_VM_PROVIDER"] = "shc"
 

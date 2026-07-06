@@ -174,7 +174,9 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
             for line in stdout.splitlines()[-5:]:
                 log.info("nostr-publish: %s", line)
         else:
-            log.error("Nostr publish failed (rc=%d): %s", r.returncode, stdout[-300:])
+            stderr = (r.stderr or "").strip()
+            log.error("Nostr publish failed (rc=%d): stdout=%s stderr=%s",
+                      r.returncode, stdout[-200:], stderr[-300:])
     except Exception as exc:
         log.error("Nostr publish error (non-fatal): %s", _redact(str(exc))[:500])
     return manifest

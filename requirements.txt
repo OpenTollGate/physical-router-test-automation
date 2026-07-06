@@ -5,3 +5,5 @@ pytest-rerunfailures>=10.0
 coincurve>=18.0
 pyserial>=3.5
 PyYAML>=6.0
+requests
+nostr-publish @ git+https://github.com/Amperstrand/nostr-publish-file-metadata-action.git@main

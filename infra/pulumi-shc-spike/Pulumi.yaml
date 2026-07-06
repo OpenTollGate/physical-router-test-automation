@@ -1,0 +1,17 @@
+name: pulumi-shc-spike
+description: |
+  Isolated spike: provision a single disposable SHC VPS via the local
+  shc-pulumi dynamic provider. NOT wired into cloud-lab.py. Safe to delete
+  this directory without affecting any other test flow.
+runtime:
+  name: python
+  options:
+    virtualenv: .venv
+config:
+  pulumi-shc-spike:configSchemaVersion: "1"
+template:
+  description: Minimal SHC VPS spike using the local shc-pulumi provider
+  config:
+    shc_api_key:
+      description: SHC API key (shc_live_...). Leave empty to read SHC_API_KEY from env at runtime.
+      secret: true

@@ -36,21 +36,27 @@ if secondary:
 ok = True
 for host in hosts:
     router = Router(host=host, phone_ip="", phone_mac="", domain="", backend=backend)
-    result = deploy_branch(
-        router,
-        {branch_arg},
-        arch={CLOUD_ARCH!r},
-        force=True,
-        reboot=False,
-        repo={repo_arg},
-        backend=backend,
-        run_id={run_id_arg},
-    )
-    print(
-        f"host={{host}} version={{result['installed_version']}} "
-        f"health={{result['health_code']}} success={{result['success']}}"
-    )
-    ok = ok and bool(result["success"])
+    try:
+        result = deploy_branch(
+            router,
+            {branch_arg},
+            arch={CLOUD_ARCH!r},
+            force=True,
+            reboot=False,
+            repo={repo_arg},
+            backend=backend,
+            run_id={run_id_arg},
+        )
+        print(
+            f"host={{host}} version={{result['installed_version']}} "
+            f"health={{result['health_code']}} success={{result['success']}}"
+        )
+        ok = ok and bool(result["success"])
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"DEPLOY_ERROR host={{host}}: {{e}}")
+        ok = False
 
 sys.exit(0 if ok else 1)
 """

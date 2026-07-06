@@ -1,0 +1,17 @@
+# Pulumi spike local artifacts — never commit
+.venv/
+__pycache__/
+*.pyc
+
+# Local file-backend state (contains stack URNs; no secrets when using env-var auth)
+.state/
+
+# Stack config files (would only hold secrets if pulumi config set --secret were used)
+Pulumi.*.yaml
+!Pulumi.yaml
+
+# Local run logs from the wrapper scripts
+*.log
+last-preview.txt
+last-up.txt
+last-destroy.txt
