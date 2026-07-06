@@ -37,6 +37,14 @@ Configuration (no hardcoded secrets — read from env / .env):
                                                  attribute kind 30078 events)
     FIPS_EXIT_RELAYS        comma-separated wss:// relays (default: the project
                                                  coordination relays)
+    FIPS_EXIT_SUDO          when set (1/true/yes), run every remote command via
+                                                 passwordless ``sudo -n``. Use when
+                                                 the exit node does not permit direct
+                                                 root SSH (e.g. cloud images that
+                                                 force-login to an unprivileged user
+                                                 with passwordless sudo). Default off,
+                                                 so genuine root-SSH deployments run
+                                                 commands directly as before.
 
 Run via::
 
@@ -48,6 +56,7 @@ Run via::
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -83,6 +92,14 @@ EXIT_RELAYS = (
     [r.strip() for r in _relays_raw.split(",") if r.strip()]
     if _relays_raw
     else list(_DEFAULT_RELAYS)
+)
+
+# When the exit node does not permit direct root SSH (e.g. cloud images that
+# force-login to an unprivileged user with passwordless sudo), set FIPS_EXIT_SUDO
+# to run every remote command through `sudo -n`. Default off so genuine root-SSH
+# deployments run commands directly as before.
+EXIT_SUDO = os.environ.get("FIPS_EXIT_SUDO", "").strip().lower() in (
+    "1", "true", "yes", "on",
 )
 
 # Mark these as part of the extended suite. We deliberately do NOT use the
@@ -141,6 +158,11 @@ def exit_node_ssh():
         base = list(_ssh_base_args())
         if not EXIT_KEY and EXIT_PASSWORD:
             base = ["sshpass", "-e"] + base
+        if EXIT_SUDO:
+            # Wrap the whole command (including shell operators like &&/||) so
+            # every part runs as root. shlex.quote embeds cmd safely into the
+            # remote `sh -c` invocation regardless of inner quotes.
+            cmd = f"sudo -n sh -c {shlex.quote(cmd)}"
         try:
             r = subprocess.run(
                 base + [cmd],
@@ -221,38 +243,43 @@ def _require_fips_exit_node(exit_node_ssh):
 
 
 def _parse_wg_dump(stdout: str):
-    """Parse ``wg show dump`` into interface + peer records.
+    """Parse ``wg show all dump`` into peer records.
 
-    ``wg show dump`` emits a tab-separated interface line followed by one
-    peer line per peer. Peer fields (indices):
+    ``wg show all dump`` emits a tab-separated interface line followed by one
+    peer line per peer. Every line is prefixed with the interface name (e.g.
+    ``wg0``). The interface line has 5 fields
+    (iface, private-key, public-key, listen-port, fwmark); a peer line has 9:
 
-        0 pubkey  1 psk  2 endpoint  3 allowed-ips  4 rx_bytes
-        5 tx_bytes  6 keepalive  7 handshake_ts(epoch, 0=never)  8 ...
+        0 iface   1 pubkey   2 psk   3 endpoint   4 allowed-ips
+        5 handshake-epoch   6 rx-bytes   7 tx-bytes   8 keepalive
 
-    Returns ``(peers, list[dict])`` where each peer dict has keys:
-    pubkey, endpoint, allowed_ips, rx, tx, handshake_ts.
+    Interface lines are dropped by the field-count guard. Returns a list of
+    dicts with keys: pubkey, endpoint, allowed_ips, rx, tx, handshake_ts.
     """
     peers = []
     for line in stdout.strip().splitlines():
         fields = line.split("\t")
+        # Interface lines have 5 fields; peer lines have 9. The "< 8" guard
+        # drops interface lines and any short/blank lines.
         if len(fields) < 8:
             continue
-        # Heuristic: interface line has a numeric listen-port at index 2 and no
-        # base64 pubkey-as-peer. The first field of an interface line is the
-        # interface name (e.g. "wg0"); a peer line's first field is a 44-char
-        # base64 pubkey.
-        if len(fields[0]) == 44 and "=" in fields[0]:
-            try:
-                peers.append({
-                    "pubkey": fields[0],
-                    "endpoint": fields[2],
-                    "allowed_ips": fields[3],
-                    "rx": int(fields[4]) if fields[4].isdigit() else 0,
-                    "tx": int(fields[5]) if fields[5].isdigit() else 0,
-                    "handshake_ts": int(fields[7]) if fields[7].isdigit() else 0,
-                })
-            except (ValueError, IndexError):
-                continue
+        # On a peer line fields[1] is the 44-char base64 public key.
+        pubkey = fields[1]
+        if len(pubkey) != 44 or "=" not in pubkey:
+            continue
+        try:
+            peers.append({
+                "pubkey": pubkey,
+                "endpoint": fields[3],
+                "allowed_ips": fields[4],
+                "handshake_ts": (
+                    int(fields[5]) if fields[5].lstrip("-").isdigit() else 0
+                ),
+                "rx": int(fields[6]) if fields[6].isdigit() else 0,
+                "tx": int(fields[7]) if fields[7].isdigit() else 0,
+            })
+        except (ValueError, IndexError):
+            continue
     return peers
 
 
@@ -263,7 +290,7 @@ def test_wireguard_peer_has_recent_handshake(exit_node_ssh):
     rekeys every ~120-180s; we accept anything within the last 5 minutes as
     evidence of a live tunnel).
     """
-    r = exit_node_ssh("command -v wg >/dev/null 2>&1 && wg show dump", timeout=15)
+    r = exit_node_ssh("command -v wg >/dev/null 2>&1 && wg show all dump", timeout=15)
     if r.returncode != 0 or not r.stdout.strip():
         pytest.skip("WireGuard (wg) not installed or no interface on exit node")
     peers = _parse_wg_dump(r.stdout)
@@ -395,7 +422,7 @@ def test_wireguard_tunnel_has_bidirectional_traffic(exit_node_ssh):
     works. A freshly-provisioned node with zero traffic on every peer is skipped
     (not failed) since that is a legitimate pre-traffic state.
     """
-    r = exit_node_ssh("command -v wg >/dev/null 2>&1 && wg show dump", timeout=15)
+    r = exit_node_ssh("command -v wg >/dev/null 2>&1 && wg show all dump", timeout=15)
     if r.returncode != 0 or not r.stdout.strip():
         pytest.skip("WireGuard (wg) not installed or no interface on exit node")
     peers = _parse_wg_dump(r.stdout)
