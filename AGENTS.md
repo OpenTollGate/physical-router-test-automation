@@ -771,7 +771,7 @@ The fallback logic in `_create_vm_with_fallback()` tries all Tier 1 zones, then 
 │    [7] Select mint (CDK V2 if backend supports it, else V1)     │
 │    [7.5] If --two-router: configure Beta merchant + Alpha reseller + fund wallet
 │    [8] Run tests: visual → API → vl-scenarios → scenarios       │
-│    [9] Collect results, publish to Nostr+Blossom (DVM lifecycle), self-delete        │
+│    [9] Collect results, publish to Nostr+Blossom (kind 30078), self-delete        │
 │                                                                  │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -913,7 +913,7 @@ Cloud lab VMs use a three-layer safety mechanism:
 
 ### Publish to Nostr+Blossom
 
-The publish step uses Nostr events + Blossom uploads. No git operations are involved, so there are no push races, conflicts, or concurrent run issues. Each run publishes independently with its own DVM lifecycle events (kind 5900/7000/6900).
+The publish step uses Nostr events + Blossom uploads. No git operations are involved, so there are no push races, conflicts, or concurrent run issues. Each run publishes independently with its own kind 30078 summary events.
 
 ### mac80211_hwsim virtual WiFi (experimental, opt-in)
 
