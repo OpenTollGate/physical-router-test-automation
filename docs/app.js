@@ -92,11 +92,12 @@ let displayIdCache = new Map();
 let renderRunsListTimer = null;
 
 // ===========================================================================
-// WebSocket: Fetch kind 30078 (primary) + legacy DVM events (5900/6900/7000) + 1063
+// WebSocket: Fetch kind 30078 (primary) + legacy DVM events (5900/6900/7000) + ContextVM (25910) + 1063
 // DVM kinds are deprecated per ADR-007 — kept for historical run visibility only.
+// ContextVM kind 25910 is the current protocol for MCP-over-Nostr compute events.
 // ===========================================================================
 
-function fetchDvmEvents(kinds = [30078, 5900, 6900, 7000, 1063], limit = 200) {
+function fetchDvmEvents(kinds = [30078, 5900, 6900, 7000, 25910, 1063], limit = 200) {
   return new Promise((resolve) => {
     const events = new Map();
     let resolved = false;
@@ -262,7 +263,7 @@ function subscribeToRealtimeUpdates() {
       liveConnectedCount++;
       updateLiveIndicator();
       ws.send(JSON.stringify(["REQ", "prta-live", {
-        kinds: [5900, 6900, 7000, 30078],
+        kinds: [5900, 6900, 7000, 30078, 25910],
         since: Math.floor(Date.now() / 1000),
       }]));
     };
@@ -337,6 +338,24 @@ function handleLiveEvent(event) {
     saveCachedRuns(allRuns);
     populateRunnerFilter();
     scheduleRenderRunsList();
+    return;
+  }
+
+  if (event.kind === 25910) {
+    const run = parseRunFromKind25910(event);
+    if (!run) return;
+    const existing = allRuns.find((r) => r.runId === run.runId && r.source === "contextvm");
+    if (existing) {
+      if (run.timestamp > existing.timestamp) {
+        Object.assign(existing, run);
+      }
+    } else {
+      allRuns.unshift(run);
+      displayIdCache.clear();
+      saveCachedRuns(allRuns);
+      populateRunnerFilter();
+      scheduleRenderRunsList();
+    }
     return;
   }
 }
@@ -746,6 +765,86 @@ function parseRunFromKind30078(event, fileMeta) {
     summary: payload,
     runnerNpub: event.pubkey,
     feedbackStatus: null,
+  };
+}
+
+function parseRunFromKind25910(event) {
+  const tags = event.tags || [];
+  const dTag = getTag(tags, "d");
+  const tTags = getAllTags(tags, "t").map((t) => t[1]);
+  const eTag = getTag(tags, "e");
+  const projectTag = determineProjectTag(tTags);
+
+  let rpc = null;
+  try {
+    rpc = JSON.parse(event.content || "{}");
+  } catch (e) { return null; }
+
+  const isResponse = rpc.result !== undefined || rpc.error !== undefined;
+  const isRequest = rpc.method !== undefined && rpc.method.startsWith("tools/");
+  const isProgress = rpc.method === "notifications/progress";
+
+  if (!isResponse && !isRequest && !isProgress) return null;
+
+  const result = isResponse ? (rpc.result || {}) : {};
+  const content = result.content || [];
+  const textResult = Array.isArray(content)
+    ? content.find((c) => c.type === "text")?.text || ""
+    : "";
+  let payload = null;
+  try { payload = JSON.parse(textResult || "{}"); } catch (e) { /* not JSON */ }
+
+  const fileUrls = [];
+  if (payload && Array.isArray(payload.files)) {
+    for (const f of payload.files) {
+      const url = typeof f === "string" ? f : f.url;
+      if (url) fileUrls.push(url);
+    }
+  }
+
+  const screenshots = fileUrls.filter((u) => /\.(png|jpg|jpeg|gif|webp)$/i.test(u));
+  const nonScreenshotFiles = fileUrls.filter((u) => !screenshots.includes(u));
+
+  const passed = payload?.passed ?? payload?.counts?.passed ?? null;
+  const failed = payload?.failed ?? payload?.counts?.failed ?? null;
+  const skipped = payload?.skipped ?? payload?.counts?.skipped ?? null;
+  const total = payload?.total ?? payload?.counts?.total ?? null;
+
+  let status = "success";
+  if (rpc.error) status = "error";
+  else if (failed != null && failed > 0) status = "error";
+  else if (isProgress) status = "processing";
+
+  const runId = dTag || eTag || rpc.id?.toString() || event.id;
+  const rpcMethod = rpc.method || (isResponse ? "tools/call response" : "");
+
+  return {
+    id: event.id,
+    eventId: event.id,
+    runId,
+    projectTag,
+    subTags: tTags,
+    timestamp: event.created_at,
+    status,
+    passed,
+    failed,
+    skipped,
+    total,
+    rpcMethod,
+    rpcPhase: isRequest ? "request" : isResponse ? "response" : isProgress ? "progress" : "unknown",
+    requestEventId: eTag || null,
+    scenario: payload?.scenario || null,
+    branch: payload?.branch || null,
+    pr: payload?.pr || null,
+    repo: payload?.repo || null,
+    files: nonScreenshotFiles.map((url) => ({ url, path: url.slice(-40), mime: guessMimeFromPath(url) })),
+    screenshots: screenshots.map((url) => ({ url, path: url.slice(-40), mime: "image/png" })),
+    content: event.content || "",
+    rawEvent: event,
+    source: "contextvm",
+    summary: payload,
+    runnerNpub: event.pubkey,
+    feedbackStatus: isProgress ? "processing" : null,
   };
 }
 
@@ -1226,7 +1325,10 @@ function renderRunsList() {
       ${passFailBar(run)}
       <div class="run-card-meta">
         <span class="meta-chip meta-chip-project" style="--project-color: ${PROJECT_COLORS[getRunProject(run)] || "var(--text-dim)"}">${escapeHtml(PROJECT_LABELS[getRunProject(run)] || "?")}</span>
-        ${run.source === "dvm" ? `<span class="meta-chip meta-chip-legacy" title="Legacy NIP-90 DVM event">DVM</span>` : ""}
+        ${run.source === "dvm" ? `<span class="meta-chip meta-chip-legacy" title="Legacy NIP-90 DVM event (deprecated)">DVM</span>` : ""}
+        ${run.source === "k30078" ? `<span class="meta-chip meta-chip-nip78" title="NIP-78 parameterized replaceable">NIP-78</span>` : ""}
+        ${run.source === "contextvm" ? `<span class="meta-chip meta-chip-contextvm" title="ContextVM MCP-over-Nostr kind 25910">ContextVM</span>` : ""}
+        ${run.rpcPhase ? `<span class="meta-chip meta-chip-rpc" title="JSON-RPC phase">${escapeHtml(run.rpcPhase)}</span>` : ""}
         ${run.router ? `<span class="meta-chip">${escapeHtml(run.router)}</span>` : ""}
         ${run.scenario ? `<span class="meta-chip">${escapeHtml(run.scenario)}</span>` : ""}
         ${run.branch ? `<span class="meta-chip meta-chip-branch">${escapeHtml(run.branch)}</span>` : ""}
