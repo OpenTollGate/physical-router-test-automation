@@ -294,7 +294,7 @@ step 7 "Creating Python venv..."
 sudo python3 -m venv /opt/tollgate-venv || fail 7 "venv create"
 sudo /opt/tollgate-venv/bin/pip install -q -r {test_dir}/requirements.txt || fail 7 "pip install"
 sudo /opt/tollgate-venv/bin/python3 -c "import nostr_publish" 2>/dev/null || sudo /opt/tollgate-venv/bin/pip install -q nostr-publish || echo "WARN: nostr-publish install failed"
-sudo HOME=/root /opt/tollgate-venv/bin/python3 -m playwright install chromium >/dev/null 2>&1 && echo "  Chromium pre-cached on HOST" || true
+sudo /opt/tollgate-venv/bin/pip install -q playwright 2>/dev/null && sudo HOME=/root /opt/tollgate-venv/bin/python3 -m playwright install chromium >/dev/null 2>&1 && echo "  Chromium pre-cached on HOST" || echo "  Chromium pre-cache failed (non-fatal)"
 echo "[7/$N_STEPS] done"
 
 step 8 "Creating cashu venv..."
