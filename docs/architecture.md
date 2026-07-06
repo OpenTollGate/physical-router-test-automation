@@ -5,7 +5,7 @@
 │                              OPERATOR MACHINE                                │
 │                                                                             │
 │  ┌─────────────┐    ┌──────────────────┐    ┌───────────────────────────┐  │
-│  │   conwrt    │    │ cloud-lab.py     │    │    tests.tollgate.me      │  │
+│  │   conwrt    │    │ cloud-lab.py     │    │    tests.cashu.email      │  │
 │  │   wizard    │    │ submit --cloud   │    │    (dashboard SPA)        │  │
 │  │             │    │   pulumi         │    │                           │  │
 │  │ amperstrand │    │                  │    │  Reads Nostr kind 30078   │  │
@@ -144,7 +144,7 @@ result_publisher (nostr_publish package)
   └── write manifest.json
       │
       ▼
-tests.tollgate.me (dashboard SPA)
+tests.cashu.email (dashboard SPA)
   ├── subscribes to kind 30078 from all runners
   ├── filters by tag "tollgate"
   ├── on run click: fetch summary.json from Blossom

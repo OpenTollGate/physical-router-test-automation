@@ -1,6 +1,6 @@
 # Publishing Pipeline
 
-[Test results dashboard](https://tests.tollgate.me/) is a client-side SPA that reads test run summaries from Nostr relays and fetches artifacts from Blossom.
+[Test results dashboard](https://tests.cashu.email/) is a client-side SPA that reads test run summaries from Nostr relays and fetches artifacts from Blossom.
 
 ## Current Pipeline (kind 30078)
 
