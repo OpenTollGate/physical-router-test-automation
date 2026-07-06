@@ -103,8 +103,8 @@ if router_ops:
             if hl.strip().startswith("scp"):
                 hl = f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} {hl}"
             adapted_lines.append(hl)
-        log.info("conwrt: executing %d host commands", len([l for l in adapted_lines if l.strip()]))
-        _run(" && ".join(l for l in adapted_lines if l.strip()), timeout=180)
+        log.info("conwrt: executing %d host commands", len([ln for ln in adapted_lines if ln.strip()]))
+        _run(" && ".join(ln for ln in adapted_lines if ln.strip()), timeout=180)
 
     if router_script:
         log.info("conwrt: applying router ops via SSH")
