@@ -1,7 +1,8 @@
 // Amperstrand Unified Test Dashboard — Nostr reader for GitHub Pages
-// Fetches DVM-native events (kind 5900/6900/7000) + kind 1063 file metadata
-// AND kind 30078 parameterized-replaceable run summaries from ALL pubkeys.
-// Renders per-project views (tollgate / fips / BLE / microfips / generic).
+// Fetches kind 30078 (test run summaries) as primary event type.
+// Also reads legacy NIP-90 DVM events (5900/6900/7000) for historical data,
+// kind 25910 (ContextVM MCP) events, and kind 1063 (NIP-94 file metadata).
+// Renders per-project views (tollgate / fips / BLE / microfips / conwrt / generic).
 // Pure vanilla JS, no build step.
 
 // === CLIENT-SIDE ERROR CAPTURE ================================================
@@ -81,7 +82,7 @@ const MAX_CONCURRENT_IMG_LOADS = 3;
 const imgLoadQueue = [];
 
 const CACHE_KEY = "prta:runs:v6";
-const filterState = { search: "", status: "all", sort: "newest", runner: "", project: "ours", maxAge: 604800 };
+const filterState = { search: "", status: "all", sort: "newest", runner: "", project: "ours", maxAge: 604800, version: "all" };
 let detailLoadId = 0;
 let currentTestFilter = "all";
 let currentTestSearch = "";
@@ -729,6 +730,11 @@ function parseRunFromKind30078(event, fileMeta) {
   if (failed != null && failed > 0) status = "error";
   else if (passed != null && passed === 0 && total != null && total > 0) status = "error";
 
+  const versionTag = tTags.find((t) => t.startsWith("openwrt-"));
+  const openwrtVersion = versionTag ? versionTag.replace("openwrt-", "") : (payload?.metadata?.openwrt_version || null);
+  const routerModel = getTag(tags, "router") || payload?.metadata?.router || payload?.router || null;
+  const useCase = getTag(tags, "use_case") || payload?.metadata?.use_case || null;
+
   return {
     id: event.id,
     eventId: event.id,
@@ -741,6 +747,9 @@ function parseRunFromKind30078(event, fileMeta) {
     failed,
     skipped,
     total,
+    openwrtVersion,
+    routerModel,
+    useCase,
     scenario: payload?.scenario || payload?.mode || null,
     fipsRef: payload?.fips_ref || payload?.["fips-ref"] || null,
     nodes: payload?.nodes ?? null,
@@ -1093,6 +1102,14 @@ function getFilteredRuns() {
     runs = runs.filter((r) => r.status === "error");
   }
 
+  if (filterState.version && filterState.version !== "all") {
+    runs = runs.filter((r) => {
+      const v = r.openwrtVersion || "";
+      if (filterState.version === "snapshot") return v === "snapshot" || v === "SNAPSHOT";
+      return v === filterState.version;
+    });
+  }
+
   if (filterState.sort === "oldest") {
     runs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
   } else if (filterState.sort === "most") {
@@ -1189,6 +1206,12 @@ function buildSidebar() {
         <option value="2592000">Last 30 days</option>
         <option value="0">All time</option>
       </select>
+      <select id="version-filter" class="version-filter">
+        <option value="all">All versions</option>
+        <option value="24">OWrt 24</option>
+        <option value="25">OWrt 25</option>
+        <option value="snapshot">SNAPSHOT</option>
+      </select>
     </div>
     <div class="runs-scroll" id="runs-scroll"></div>
   `;
@@ -1249,6 +1272,14 @@ function wireSidebarControls() {
       scheduleRenderRunsList();
     });
   }
+
+  const versionFilter = document.getElementById("version-filter");
+  if (versionFilter) {
+    versionFilter.addEventListener("change", (e) => {
+      filterState.version = e.target.value;
+      scheduleRenderRunsList();
+    });
+  }
 }
 
 function scheduleRenderRunsList() {
@@ -1269,8 +1300,13 @@ function renderRunsList() {
       <div class="runs-empty">
         <div class="runs-empty-icon">\u26A0</div>
         <p>No test runs found.</p>
-        <p class="hint">Make sure the publisher has emitted<br>kind 6900 DVM result events.</p>
+        <p class="hint">Make sure the publisher has emitted<br>kind 30078 test run events.</p>
       </div>`;
+    return;
+  }
+
+  if (filterState.project === "conwrt") {
+    renderConwrtMatrix();
     return;
   }
 
@@ -1329,7 +1365,9 @@ function renderRunsList() {
         ${run.source === "k30078" ? `<span class="meta-chip meta-chip-nip78" title="NIP-78 parameterized replaceable">NIP-78</span>` : ""}
         ${run.source === "contextvm" ? `<span class="meta-chip meta-chip-contextvm" title="ContextVM MCP-over-Nostr kind 25910">ContextVM</span>` : ""}
         ${run.rpcPhase ? `<span class="meta-chip meta-chip-rpc" title="JSON-RPC phase">${escapeHtml(run.rpcPhase)}</span>` : ""}
-        ${run.router ? `<span class="meta-chip">${escapeHtml(run.router)}</span>` : ""}
+        ${run.router || run.routerModel ? `<span class="meta-chip">${escapeHtml(run.router || run.routerModel)}</span>` : ""}
+        ${run.openwrtVersion ? `<span class="meta-chip meta-chip-version" title="OpenWrt version">OWrt ${escapeHtml(run.openwrtVersion)}</span>` : ""}
+        ${run.useCase ? `<span class="meta-chip">${escapeHtml(run.useCase)}</span>` : ""}
         ${run.scenario ? `<span class="meta-chip">${escapeHtml(run.scenario)}</span>` : ""}
         ${run.branch ? `<span class="meta-chip meta-chip-branch">${escapeHtml(run.branch)}</span>` : ""}
         ${run.pr ? `<span class="meta-chip meta-chip-pr">#${escapeHtml(run.pr)}</span>` : ""}
@@ -1349,6 +1387,80 @@ function renderRunsList() {
 
     container.appendChild(card);
   });
+}
+
+function renderConwrtMatrix() {
+  const container = document.getElementById("runs-scroll");
+  if (!container) return;
+
+  const conwrtRuns = allRuns.filter((r) => getRunProject(r) === "conwrt");
+  if (conwrtRuns.length === 0) {
+    container.innerHTML = `<div class="runs-empty"><p>No conwrt runs found.</p></div>`;
+    return;
+  }
+
+  const versions = ["24", "25", "snapshot"];
+  const useCaseMap = new Map();
+
+  for (const run of conwrtRuns) {
+    const uc = run.useCase || run.runId.replace(/^conwrt-/, "").replace(/-\d+$/, "").replace(/^\w+-\w+-\w+-/, "");
+    const ver = run.openwrtVersion || extractVersionFromRunId(run.runId);
+    if (!uc || !ver) continue;
+
+    if (!useCaseMap.has(uc)) useCaseMap.set(uc, {});
+    const existing = useCaseMap.get(uc)[ver];
+    if (!existing || run.timestamp > existing.timestamp) {
+      useCaseMap.get(uc)[ver] = run;
+    }
+  }
+
+  const useCases = [...useCaseMap.keys()].sort();
+  let html = `<div class="conwrt-matrix"><table class="matrix-table"><thead><tr><th>Use Case</th>`;
+  for (const v of versions) {
+    html += `<th>OWrt ${escapeHtml(v)}</th>`;
+  }
+  html += `</tr></thead><tbody>`;
+
+  for (const uc of useCases) {
+    html += `<tr><td class="matrix-uc-name">${escapeHtml(uc)}</td>`;
+    for (const v of versions) {
+      const run = useCaseMap.get(uc)?.[v];
+      if (!run) {
+        html += `<td class="matrix-cell matrix-cell-none">\u2014</td>`;
+      } else if (run.status === "success") {
+        html += `<td class="matrix-cell matrix-cell-pass" data-run-id="${escapeHtml(run.runId)}" title="${escapeHtml(formatTimestamp(run.timestamp))}"><span class="matrix-pass-icon">\u2713</span></td>`;
+      } else if (run.status === "error") {
+        html += `<td class="matrix-cell matrix-cell-fail" data-run-id="${escapeHtml(run.runId)}" title="${escapeHtml(formatTimestamp(run.timestamp))}"><span class="matrix-fail-icon">\u2717</span></td>`;
+      } else {
+        html += `<td class="matrix-cell matrix-cell-unknown">?</td>`;
+      }
+    }
+    html += `</tr>`;
+  }
+  html += `</tbody></table></div>`;
+
+  const countEl = document.createElement("div");
+  countEl.className = "runs-count";
+  countEl.textContent = `${useCases.length} use cases, ${conwrtRuns.length} runs`;
+  container.innerHTML = "";
+  container.appendChild(countEl);
+  container.insertAdjacentHTML("beforeend", html);
+
+  container.querySelectorAll(".matrix-cell[data-run-id]").forEach((cell) => {
+    cell.style.cursor = "pointer";
+    cell.addEventListener("click", () => {
+      const runId = cell.dataset.runId;
+      const run = allRuns.find((r) => r.runId === runId);
+      if (run) selectRun(run);
+    });
+  });
+}
+
+function extractVersionFromRunId(runId) {
+  if (/snapshot|SNAPSHOT/i.test(runId)) return "snapshot";
+  if (/24\.10|24\.|owrt24|openwrt.*24/i.test(runId)) return "24";
+  if (/25\.|owrt25|openwrt.*25/i.test(runId)) return "25";
+  return null;
 }
 
 // ===========================================================================
@@ -2905,14 +3017,14 @@ function renderFileList(files) {
   const rows = files.map((f, i) => {
     const name = (f.path || "").split("/").pop() || f.url;
     const icon = fileIcon(f.mime);
-    return `<div class="file-row" data-blossom-url="${escapeHtml(f.url)}" data-file-idx="${i}">
+    return `<div class="file-row" data-blossom-url="${escapeHtml(f.url)}" data-file-idx="${i}" data-file-mime="${escapeHtml(f.mime || "")}" data-file-name="${escapeHtml(name)}">
       <span class="file-icon">${icon}</span>
-      <span class="file-name" title="${escapeHtml(f.path)}">${escapeHtml(name)}</span>
+      <span class="file-name file-view-btn" title="${escapeHtml(f.path)}" style="cursor:pointer;text-decoration:underline;color:var(--accent)">${escapeHtml(name)}</span>
       <span class="file-path">${escapeHtml(f.path)}</span>
       <span class="file-size">${escapeHtml(formatBytes(f.size))}</span>
       <span class="file-ext">${escapeHtml(extOf(f.path || name))}</span>
       <span class="file-status file-status-checking" title="Checking availability...">...</span>
-      <a class="file-download" href="${escapeHtml(f.url)}" target="_blank" rel="noopener" title="Open">open</a>
+      <a class="file-download" href="${escapeHtml(f.url)}" target="_blank" rel="noopener" title="Open in new tab">\u2197</a>
     </div>`;
   }).join("");
   return `<div class="file-list" data-file-list>${rows}</div>`;
@@ -2947,6 +3059,80 @@ function checkBlobAvailability(container) {
         status.title = "Request failed";
       });
   });
+
+  container.querySelectorAll(".file-view-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const row = btn.closest(".file-row");
+      if (!row) return;
+      const url = row.dataset.blossomUrl;
+      const mime = row.dataset.fileMime || "";
+      const name = row.dataset.fileName || "file";
+      openInlineViewer(url, mime, name);
+    });
+  });
+}
+
+function openInlineViewer(url, mime, name) {
+  let overlay = document.getElementById("inline-viewer");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "inline-viewer";
+    overlay.className = "inline-viewer-overlay";
+    overlay.innerHTML = `
+      <div class="inline-viewer-content">
+        <div class="inline-viewer-header">
+          <span class="inline-viewer-title"></span>
+          <div class="inline-viewer-actions">
+            <a class="inline-viewer-ext-link" target="_blank" rel="noopener">open externally \u2197</a>
+            <button class="inline-viewer-close" type="button">\u00d7</button>
+          </div>
+        </div>
+        <div class="inline-viewer-body"></div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay || e.target.classList.contains("inline-viewer-close")) {
+        overlay.style.display = "none";
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") overlay.style.display = "none";
+    });
+  }
+
+  const titleEl = overlay.querySelector(".inline-viewer-title");
+  const bodyEl = overlay.querySelector(".inline-viewer-body");
+  const extLink = overlay.querySelector(".inline-viewer-ext-link");
+  titleEl.textContent = name;
+  extLink.href = url;
+  bodyEl.innerHTML = '<div style="padding:2rem;color:var(--text-dim)">Loading...</div>';
+  overlay.style.display = "flex";
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+
+  fetch(url, { signal: ctrl.signal })
+    .then((r) => { clearTimeout(timer); if (!r.ok) throw new Error(r.status); return r.text(); })
+    .then((text) => {
+      const isImage = (mime || "").startsWith("image/") || /\.(png|jpg|jpeg|gif|svg|webp)$/i.test(name);
+      if (isImage) {
+        bodyEl.innerHTML = `<img src="${escapeHtml(url)}" alt="${escapeHtml(name)}" style="max-width:100%;max-height:80vh;display:block;margin:0 auto">`;
+      } else if ((mime || "").includes("json") || name.endsWith(".json")) {
+        let pretty = text;
+        try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {}
+        bodyEl.innerHTML = `<pre class="inline-viewer-pre">${escapeHtml(pretty)}</pre>`;
+      } else {
+        bodyEl.innerHTML = `<pre class="inline-viewer-pre">${escapeHtml(text)}</pre>`;
+      }
+    })
+    .catch(() => {
+      clearTimeout(timer);
+      bodyEl.innerHTML = `<div style="padding:2rem;color:var(--text-dim)">
+        <p>Could not load file inline.</p>
+        <a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="detail-link">Open directly \u2197</a>
+      </div>`;
+    });
 }
 
 function fileIcon(mime) {

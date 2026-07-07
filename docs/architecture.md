@@ -5,7 +5,7 @@
 │                              OPERATOR MACHINE                                │
 │                                                                             │
 │  ┌─────────────┐    ┌──────────────────┐    ┌───────────────────────────┐  │
-│  │   conwrt    │    │ cloud-lab.py     │    │    tests.cashu.email      │  │
+│  │   conwrt    │    │ cloud-lab.py     │    │    tests.tollgate.me      │  │
 │  │   wizard    │    │ submit --cloud   │    │    (dashboard SPA)        │  │
 │  │             │    │   pulumi         │    │                           │  │
 │  │ amperstrand │    │                  │    │  Reads Nostr kind 30078   │  │
@@ -144,7 +144,7 @@ result_publisher (nostr_publish package)
   └── write manifest.json
       │
       ▼
-tests.cashu.email (dashboard SPA)
+tests.tollgate.me (dashboard SPA)
   ├── subscribes to kind 30078 from all runners
   ├── filters by tag "tollgate"
   ├── on run click: fetch summary.json from Blossom
@@ -181,7 +181,8 @@ OpenWRT 25.12.5     tollgate-wrt.apk            + configurationwizzard.apk
 6. **Virtual WiFi**: `--vwifi` tests AP/STA mode with mac80211_hwsim (needs BlossomFS/vwifi compilation)
 
 ### Dashboard
-7. **Version comparison view**: Side-by-side OWRT 24 vs 25 results
-8. **Trend charts**: Pass rate over time per OpenWRT version
-9. **Faster screenshot loading**: Pre-generate thumbnails on the VM before upload
-10. **Portal comparison**: Screenshot diff between builtin and net4sats portals
+7. **Version matrix** (conwrt tab): use_case × version grid with pass/fail cells — implemented
+8. **Version filter**: dropdown to filter runs by OWrt 24/25/SNAPSHOT — implemented
+9. **Trend charts**: Pass rate over time per OpenWrt version
+10. **Faster screenshot loading**: Pre-generate thumbnails on the VM before upload
+11. **Portal comparison**: Screenshot diff between builtin and net4sats portals

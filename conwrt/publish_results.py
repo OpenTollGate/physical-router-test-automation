@@ -40,6 +40,12 @@ def main():
     parser.add_argument("--failed", type=int, default=None, help="Number of failed tests")
     parser.add_argument("--skipped", type=int, default=None, help="Number of skipped tests")
     parser.add_argument("--errors", type=int, default=None, help="Number of errored tests")
+    parser.add_argument("--openwrt-version", default=os.environ.get("OPENWRT_VERSION", ""),
+                        help="OpenWrt version tag: 24, 25, or snapshot")
+    parser.add_argument("--router", default=os.environ.get("ROUTER_MODEL", ""),
+                        help="Router model ID (e.g. dlink-covr-x1860-a1)")
+    parser.add_argument("--use-case", default=os.environ.get("USE_CASE", ""),
+                        help="Single use case name (for per-use-case runs)")
     args = parser.parse_args()
 
     results_dir = Path(args.results_dir).expanduser()
@@ -62,6 +68,15 @@ def main():
         "summary": args.summary,
         "runner": "github-actions-qemu",
     }
+    if args.openwrt_version:
+        metadata["openwrt_version"] = args.openwrt_version
+        os.environ["OPENWRT_VERSION"] = args.openwrt_version
+    if args.router:
+        metadata["router"] = args.router
+        os.environ["ROUTER_MODEL"] = args.router
+    if args.use_case:
+        metadata["use_case"] = args.use_case
+        os.environ["USE_CASE"] = args.use_case
     if args.passed is not None:
         metadata["passed"] = args.passed
     if args.failed is not None:

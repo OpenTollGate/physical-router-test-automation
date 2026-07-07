@@ -34,6 +34,7 @@ import os
 import re
 import subprocess
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -150,6 +151,173 @@ USE_CASES = [
             ("uci show pbr.config", "enabled"),
         ],
         "packages": ["pbr"],
+    }),
+    ("adguard", {
+        "configure": [
+            "uci set adguardhome.adguardhome=adguardhome",
+            "uci set adguardhome.adguardhome.enabled=1",
+            "uci set adguardhome.adguardhome.http_address='0.0.0.0:3000'",
+            "uci set adguardhome.adguardhome.dns_port='5353'",
+            "uci commit adguardhome",
+            "uci set dhcp.@dnsmasq[0].noresolv=1",
+            "uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'",
+            "uci commit dhcp",
+        ],
+        "verify": [
+            ("uci show adguardhome", "adguardhome"),
+            ("uci show dhcp.@dnsmasq[0]", "127.0.0.1#5353"),
+        ],
+        "packages": ["adguardhome"],
+    }),
+    ("auto-sqm", {
+        "configure": [
+            "touch /etc/config/auto_sqm",
+            "uci set auto_sqm.config=auto_sqm",
+            "uci set auto_sqm.config.mode='static'",
+            "uci set auto_sqm.config.interface='wan'",
+            "uci set auto_sqm.config.download_kbps='50000'",
+            "uci set auto_sqm.config.upload_kbps='10000'",
+            "uci set auto_sqm.config.target_percent='90'",
+            "uci commit auto_sqm",
+        ],
+        "verify": [
+            ("uci show auto_sqm", "auto_sqm"),
+            ("uci show auto_sqm", "static"),
+        ],
+        "packages": ["sqm-scripts", "luci-app-sqm", "iperf3"],
+    }),
+    ("guest-wifi", {
+        "configure": [
+            "uci set network.guest=interface",
+            "uci set network.guest.proto='static'",
+            "uci set network.guest.ipaddr='192.168.2.1'",
+            "uci set network.guest.netmask='255.255.255.0'",
+            "uci commit network",
+            "uci set dhcp.guest=dhcp",
+            "uci set dhcp.guest.interface='guest'",
+            "uci set dhcp.guest.start='100'",
+            "uci set dhcp.guest.limit='50'",
+            "uci commit dhcp",
+            "uci set firewall.guest=zone",
+            "uci set firewall.guest.name='guest'",
+            "uci set firewall.guest.network='guest'",
+            "uci set firewall.guest.input='REJECT'",
+            "uci set firewall.guest.output='ACCEPT'",
+            "uci set firewall.guest.forward='REJECT'",
+            "uci commit firewall",
+        ],
+        "verify": [
+            ("uci show network.guest", "guest"),
+            ("uci show firewall.guest", "REJECT"),
+        ],
+        "packages": [],
+    }),
+    ("openclash", {
+        "configure": [
+            "mkdir -p /etc/openclash/config",
+            "uci set openclash.config=config",
+            "uci set openclash.config.enable=1",
+            "uci set openclash.config.config_path='/etc/openclash/config/config.yaml'",
+            "uci set openclash.config.proxy_type='ss'",
+            "uci set openclash.config.core_type='Meta'",
+            "uci commit openclash",
+        ],
+        "verify": [
+            ("uci show openclash", "openclash"),
+            ("uci show openclash", "Meta"),
+        ],
+        "packages": ["luci-app-openclash", "bash", "iptables", "dnsmasq-full", "curl",
+                      "ca-certificates", "ca-bundle", "logd", "coreutils-nohup"],
+    }),
+    ("ssl", {
+        "configure": [
+            "uci set uhttpd.main.cert='/etc/tollgate/ssl/server.crt'",
+            "uci set uhttpd.main.key='/etc/tollgate/ssl/server.key'",
+            "uci -q delete uhttpd.main.listen_https",
+            "uci add_list uhttpd.main.listen_https='0.0.0.0:443'",
+            "uci commit uhttpd",
+            "/etc/init.d/uhttpd restart",
+        ],
+        "verify": [
+            ("uci show uhttpd.main", "server.crt|server.key"),
+            ("uci show uhttpd.main", "443"),
+        ],
+        "packages": ["libustream-wolfssl", "ca-bundle"],
+    }),
+    ("tollgate-security", {
+        "configure": [
+            "uci set firewall.Block-LAN-To-RFC1918-10=rule",
+            "uci set firewall.Block-LAN-To-RFC1918-10.name='Block-LAN-To-RFC1918-10'",
+            "uci set firewall.Block-LAN-To-RFC1918-10.src='lan'",
+            "uci set firewall.Block-LAN-To-RFC1918-10.dest='wan'",
+            "uci set firewall.Block-LAN-To-RFC1918-10.dest_ip='10.0.0.0/8'",
+            "uci set firewall.Block-LAN-To-RFC1918-10.proto='all'",
+            "uci set firewall.Block-LAN-To-RFC1918-10.target='DROP'",
+            "uci commit firewall",
+        ],
+        "verify": [
+            ("uci show firewall.Block-LAN-To-RFC1918-10", "DROP"),
+            ("uci show firewall.Block-LAN-To-RFC1918-10", "10.0.0.0/8"),
+        ],
+        "packages": [],
+    }),
+    ("travelmate", {
+        "configure": [
+            "uci set travelmate.global=global",
+            "uci set travelmate.global.trm_enabled=1",
+            "uci set travelmate.global.trm_automatic=1",
+            "uci set travelmate.global.trm_captive=1",
+            "uci set travelmate.global.trm_timeout=60",
+            "uci set travelmate.global.trm_radio='radio0'",
+            "uci commit travelmate",
+        ],
+        "verify": [
+            ("uci show travelmate", "trm_enabled"),
+            ("uci show travelmate", "radio0"),
+        ],
+        "packages": ["travelmate", "luci-app-travelmate", "ca-bundle", "ca-certificates"],
+    }),
+    ("vpn-node", {
+        "configure": [
+            "mkdir -p /etc/vpn-node",
+            "echo 'placeholder-nsec' > /etc/vpn-node/nsec",
+            "chmod 600 /etc/vpn-node/nsec",
+            "cat > /etc/vpn-listing.sh << 'SCRIPT'\n#!/bin/sh\necho vpn-listing\nSCRIPT",
+            "chmod +x /etc/vpn-listing.sh",
+        ],
+        "verify": [
+            ("test -f /etc/vpn-listing.sh && echo EXISTS", "EXISTS"),
+            ("test -f /etc/vpn-node/nsec && echo NSEC_EXISTS", "NSEC_EXISTS"),
+        ],
+        "packages": ["wireguard-tools", "luci-proto-wireguard"],
+    }),
+    ("wireguard-server", {
+        "configure": [
+            "uci set network.wg0=interface",
+            "uci set network.wg0.proto='wireguard'",
+            "uci set network.wg0.private_key='generate'",
+            "uci set network.wg0.listen_port=51820",
+            "uci add_list network.wg0.addresses='10.1.99.1/24'",
+            "uci commit network",
+            "uci set firewall.wg_server_vpn=zone",
+            "uci set firewall.wg_server_vpn.name='vpn'",
+            "uci set firewall.wg_server_vpn.network='wg0'",
+            "uci set firewall.wg_server_vpn.input='ACCEPT'",
+            "uci set firewall.wg_server_vpn.forward='REJECT'",
+            "uci set firewall.wg_server_allow=rule",
+            "uci set firewall.wg_server_allow.name='Allow-WireGuard'",
+            "uci set firewall.wg_server_allow.src='wan'",
+            "uci set firewall.wg_server_allow.dest_port=51820",
+            "uci set firewall.wg_server_allow.proto='udp'",
+            "uci set firewall.wg_server_allow.target='ACCEPT'",
+            "uci commit firewall",
+        ],
+        "verify": [
+            ("uci show network.wg0", "wireguard"),
+            ("uci show firewall.wg_server_allow", "WireGuard"),
+            ("uci show network.wg0", "51820"),
+        ],
+        "packages": ["wireguard-tools", "luci-proto-wireguard", "qrencode"],
     }),
 ]
 
