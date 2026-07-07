@@ -301,7 +301,8 @@ echo "[7/$N_STEPS] done"
 step 8 "Creating cashu venv..."
 sudo python3 -m venv /opt/cashu-venv || fail 8 "cashu venv"
 sudo /opt/cashu-venv/bin/pip install -q --upgrade pip
-sudo /opt/cashu-venv/bin/pip install -q cashu 'marshmallow<4' || fail 8 "cashu install"
+echo 'scikit-build-core<0.10' > /tmp/pip-constraint.txt && \
+  PIP_CONSTRAINT=/tmp/pip-constraint.txt sudo -E /opt/cashu-venv/bin/pip install -q cashu 'marshmallow<4' || fail 8 "cashu install"
 MODELS=$(/opt/cashu-venv/bin/python3 -c 'import cashu.core.models; print(cashu.core.models.__file__)')
 sudo sed -i 's/    active: bool$/    active: bool = True/' "$MODELS"
 echo "[8/$N_STEPS] done"
