@@ -29,7 +29,6 @@ export default defineConfig({
 		trace: 'on',
 		video: 'on',
 		actionTimeout: 30000,
-		storageState: { cookies: [], origins: [] },
 	},
 	projects: [
 		{
