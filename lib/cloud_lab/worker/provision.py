@@ -302,6 +302,7 @@ def ensure_debian_client_deps() -> bool:
             timeout=120, check=False,
         )
         inner_ssh(DEBIAN_IP, "mkdir -p ~/.cache/ms-playwright && tar xf /tmp/pw-chromium.tar -C ~/.cache/ms-playwright/ && rm /tmp/pw-chromium.tar")
+        _run("rm -f /tmp/pw-chromium.tar && rm -rf ~/.cache/ms-playwright/chromium-* ~/.cache/ms-playwright/chromium_headless_shell-* ~/.cache/ms-playwright/ffmpeg-*", timeout=15, check=False)
         r = inner_ssh(DEBIAN_IP, 'python3 -c "import playwright; print(\\"PLAYWRIGHT_OK\\")" 2>/dev/null')
         if "PLAYWRIGHT_OK" in r.stdout:
             log.info("Debian Playwright ready (HOST Chromium injected)")

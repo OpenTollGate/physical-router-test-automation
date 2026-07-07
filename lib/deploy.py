@@ -25,6 +25,8 @@ COORDINATION_RELAYS = [
 #: content-addressed blob (SHA256) is retried on the mirrors.
 BLOSSOM_MIRROR_SERVERS = [
     "https://blossom.psbt.me",
+    "https://blossom.primal.net",
+    "https://blossom1.orangesync.tech",
 ]
 
 # Packages required by the test framework on the router.
@@ -594,7 +596,7 @@ def download_artifact(branch: str, arch: str, run_id: str | None = None,
     if blossom_binary:
         log.info("Found Blossom binary: %s", blossom_binary.get("filename", "?"))
         _sha = blossom_binary.get("sha256", "")
-        _url = blossom_binary.get("url")
+        _url = blossom_binary.get("url") or (blossom_binary.get("urls") or [None])[0]
         if not _url and _sha and len(_sha) == 64:
             _url = f"{BLOSSOM_MIRROR_SERVERS[0]}/{_sha}"
             log.info("No url in event — constructed from sha256: %s", _url)

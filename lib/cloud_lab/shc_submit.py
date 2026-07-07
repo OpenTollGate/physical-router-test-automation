@@ -241,7 +241,7 @@ echo "Lease kill switch armed (cancels SHC service + shuts down)"
 
 TOTAL_RAM=$(free -m | awk '/^Mem:/{{print $2}}')
 if [ "$TOTAL_RAM" -le 4096 ] && [ "$(swapon --show 2>/dev/null | wc -l)" -eq 0 ]; then
-  sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && echo "Swap enabled (2G)"
+  sudo fallocate -l 512M /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && echo "Swap enabled (512M)"
 fi
 
 step 1 "Installing system packages..."
@@ -253,6 +253,7 @@ sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils \
   fuse3 libfuse3-dev ca-certificates cmake g++ libnl-3-dev libnl-genl-3-dev \
   libsecp256k1-dev jq genisoimage ffmpeg seabios ipxe-qemu \
   libsecp256k1-dev autoconf automake libtool || fail 1 "apt-get install"
+sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/*
 echo "[1/$N_STEPS] done"
 
 step 2 "Installing Rust..."
