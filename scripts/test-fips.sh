@@ -155,6 +155,37 @@ fi
 echo ""
 echo "Publishing to Blossom + Nostr..."
 NSEC_FILE="${NSEC_FILE:-${HOME}/.config/prta/nsec}"
+
+# Determine test outcome from result markers
+FIPS_PASSED=0
+FIPS_FAILED=0
+if [ -f "${RESULTS_DIR}/FAILED" ]; then
+  FIPS_FAILED=1
+elif [ -f "${RESULTS_DIR}/exit-code" ]; then
+  EXIT_CODE=$(cat "${RESULTS_DIR}/exit-code" 2>/dev/null | tr -dc '0-9')
+  if [ -n "$EXIT_CODE" ] && [ "$EXIT_CODE" != "0" ]; then
+    FIPS_FAILED=1
+  else
+    FIPS_PASSED=1
+  fi
+elif [ -f "${RESULTS_DIR}/DONE" ]; then
+  FIPS_PASSED=1
+fi
+
+# Generate summary.json for dashboard rendering
+FIPS_OUTCOME="failed"
+[ "$FIPS_PASSED" -gt 0 ] && FIPS_OUTCOME="passed"
+python3 -c "
+import json
+summary = {
+    'tests': [{'name': 'fips-${MODE}', 'outcome': '${FIPS_OUTCOME}', 'runner': 'fips-${MODE}'}],
+    'counts': {'passed': ${FIPS_PASSED}, 'failed': ${FIPS_FAILED}, 'skipped': 0, 'total': $((FIPS_PASSED + FIPS_FAILED))},
+}
+with open('${RESULTS_DIR}/summary.json', 'w') as f:
+    json.dump(summary, f, indent=2)
+    f.write('\n')
+" 2>/dev/null && echo "  summary.json generated"
+
 if [ -f "$NSEC_FILE" ]; then
   cd "${REPO_ROOT}"
   python3 -m lib.result_publisher "${RESULTS_DIR}" \
@@ -162,7 +193,8 @@ if [ -f "$NSEC_FILE" ]; then
     --tag "fips-${MODE}" \
     --run-id "${RUN_ID}" \
     --blossom-server https://blossom.psbt.me \
-    --relays wss://relay.cashu.email 2>/dev/null && echo "  Published" || echo "  Publish skipped"
+    --relays wss://relay.cashu.email \
+    --passed "${FIPS_PASSED}" --failed "${FIPS_FAILED}" 2>/dev/null && echo "  Published" || echo "  Publish skipped"
 else
   echo "  NSEC_FILE not found, skipping publish"
 fi

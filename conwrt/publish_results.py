@@ -16,8 +16,10 @@ The results will appear at tests.tollgate.me filtered by project=conwrt.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 SUITE_ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +28,83 @@ sys.path.insert(0, str(SUITE_ROOT))
 os.environ.setdefault("PROJECT_TAG", "conwrt")
 
 from lib.result_publisher import publish_results
+
+
+def _parse_junit_xml(xml_path: Path) -> list[dict]:
+    """Parse a JUnit XML file into summary.json test entries."""
+    tests: list[dict] = []
+    try:
+        root = ET.parse(str(xml_path)).getroot()
+    except ET.ParseError:
+        return tests
+
+    suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+    for ts in suites:
+        runner_name = ts.get("name", xml_path.stem)
+        for tc in ts.iter("testcase"):
+            name = tc.get("name", "unknown")
+            if tc.find("failure") is not None:
+                outcome = "failed"
+            elif tc.find("error") is not None:
+                outcome = "error"
+            elif tc.find("skipped") is not None:
+                outcome = "skipped"
+            else:
+                outcome = "passed"
+            tests.append({"name": name, "outcome": outcome, "runner": runner_name})
+    return tests
+
+
+def _generate_summary_json(
+    results_dir: Path,
+    passed: int | None,
+    failed: int | None,
+    skipped: int | None,
+    errors: int | None,
+) -> None:
+    """Generate summary.json in results_dir for nostr-publish to upload.
+
+    Tries JUnit XML in the results directory first; falls back to CLI counts.
+    Skips generation if summary.json already exists.
+    """
+    summary_path = results_dir / "summary.json"
+    if summary_path.exists():
+        return
+
+    tests: list[dict] = []
+
+    for xml_path in sorted(results_dir.rglob("*.xml")):
+        try:
+            root = ET.parse(str(xml_path)).getroot()
+        except ET.ParseError:
+            continue
+        if root.tag in ("testsuite", "testsuites"):
+            tests.extend(_parse_junit_xml(xml_path))
+
+    if tests:
+        c_passed = sum(1 for t in tests if t["outcome"] == "passed")
+        c_failed = sum(1 for t in tests if t["outcome"] == "failed")
+        c_skipped = sum(1 for t in tests if t["outcome"] == "skipped")
+        c_errors = sum(1 for t in tests if t["outcome"] == "error")
+    else:
+        c_passed = passed or 0
+        c_failed = failed or 0
+        c_skipped = skipped or 0
+        c_errors = errors or 0
+
+    total = c_passed + c_failed + c_skipped + c_errors
+    counts: dict = {
+        "passed": c_passed,
+        "failed": c_failed,
+        "skipped": c_skipped,
+        "total": total,
+    }
+    if c_errors:
+        counts["errors"] = c_errors
+
+    summary = {"tests": tests, "counts": counts}
+    summary_path.write_text(json.dumps(summary, indent=2) + "\n")
+    print(f"  Generated summary.json: {c_passed}p {c_failed}f {c_skipped}s")
 
 
 def main():
@@ -92,6 +171,8 @@ def main():
     print(f"  Blossom: {args.blossom_server}")
     print(f"  Relays: {args.relays}")
     print()
+
+    _generate_summary_json(results_dir, args.passed, args.failed, args.skipped, args.errors)
 
     manifest = publish_results(
         results_dir=str(results_dir),
