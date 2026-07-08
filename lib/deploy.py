@@ -482,13 +482,15 @@ def ensure_artifact(
     )
 
 
-def _resolve_blossom_binary(commit: str | None, arch: str, fmt: str = "") -> dict | None:
+def _resolve_blossom_binary(commit: str | None, arch: str, fmt: str = "", branch: str = "") -> dict | None:
     """Query coordination relays for latest tollgate-build event matching arch.
 
     Returns dict with url, filename, sha256 from the event content, or None.
     If commit is specified, tries exact match first, then falls back to newest
     matching arch (any commit) so PR merges and branch builds work.
     If fmt is specified (e.g. 'apk' or 'ipk'), filters by content.format.
+    If branch is specified, only accepts artifacts whose filename contains
+    f"_{branch}." — prevents feature-branch artifacts from testing main.
     """
     nak = shutil.which("nak")
     if not nak:
@@ -518,6 +520,10 @@ def _resolve_blossom_binary(commit: str | None, arch: str, fmt: str = "") -> dic
             if content.get("compression", "none") != "none":
                 continue
             if fmt and content.get("format", "ipk") != fmt:
+                continue
+
+            filename = content.get("filename", "")
+            if branch and f"_{branch}." not in filename:
                 continue
 
             ts = e.get("created_at", 0)
@@ -592,7 +598,7 @@ def download_artifact(branch: str, arch: str, run_id: str | None = None,
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
 
     target_commit = os.environ.get("TOLLGATE_SUT_COMMIT", "")
-    blossom_binary = _resolve_blossom_binary(target_commit or None, arch, fmt=fmt)
+    blossom_binary = _resolve_blossom_binary(target_commit or None, arch, fmt=fmt, branch=branch)
     if blossom_binary:
         log.info("Found Blossom binary: %s", blossom_binary.get("filename", "?"))
         _sha = blossom_binary.get("sha256", "")
