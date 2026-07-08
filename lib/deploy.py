@@ -523,8 +523,10 @@ def _resolve_blossom_binary(commit: str | None, arch: str, fmt: str = "", branch
                 continue
 
             filename = content.get("filename", "")
-            if branch and f"_{branch}." not in filename:
-                continue
+            if branch:
+                sanitized = branch.replace("/", "-")
+                if f"_{sanitized}." not in filename:
+                    continue
 
             ts = e.get("created_at", 0)
 
