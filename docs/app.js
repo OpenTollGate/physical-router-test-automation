@@ -1219,11 +1219,23 @@ function buildSidebar() {
 }
 
 function wireSidebarControls() {
+  const owrtProjects = new Set(["ours", "tollgate", "conwrt", "fips", "ble", "microfips", "silent-energy"]);
+
+  function syncVersionFilterVisibility() {
+    const versionFilter = document.getElementById("version-filter");
+    if (versionFilter) {
+      versionFilter.style.display = owrtProjects.has(filterState.project) ? "" : "none";
+    }
+  }
+
+  syncVersionFilterVisibility();
+
   document.querySelectorAll(".project-tab").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".project-tab").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       filterState.project = btn.dataset.project;
+      syncVersionFilterVisibility();
       scheduleRenderRunsList();
     });
   });
@@ -2911,8 +2923,8 @@ async function selectRun(run) {
       body.innerHTML = `
         ${renderFilterBar(summary)}
         ${renderFeaturedVideos(hierarchy)}
-        ${renderTestTree(hierarchy)}
         ${renderGeneralArtifacts(hierarchy)}
+        ${renderTestTree(hierarchy)}
       `;
 
       wireUpTestTree(view);
