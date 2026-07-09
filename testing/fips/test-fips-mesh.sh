@@ -10,7 +10,6 @@ set -euo pipefail
 #        FIPS_BRANCH defaults to feat/tollgate-peer-policy
 
 FIPS_BRANCH="${FIPS_BRANCH:-feat/tollgate-peer-policy}"
-REPO_URL="https://github.com/Amperstrand/fips.git"
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 PASS=0
 FAIL=0
@@ -186,7 +185,7 @@ IP_B=$(wait_vm $SID_B) || { log "FAILED: VM B provisioning"; exit 1; }
 IP_C=$(wait_vm $SID_C) || { log "FAILED: VM C provisioning"; exit 1; }
 log "VMs ready: A=$IP_A B=$IP_B C=$IP_C"
 
-trap "cancel_vm $SID_A; cancel_vm $SID_B; cancel_vm $SID_C" EXIT
+trap 'cancel_vm $SID_A; cancel_vm $SID_B; cancel_vm $SID_C' EXIT
 
 log "Building FIPS on all 3 VMs (parallel)..."
 setup_fips $IP_A &
