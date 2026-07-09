@@ -12,8 +12,6 @@ import time
 
 import pytest
 
-from lib.helpers import assert_session_active
-
 log = logging.getLogger("tollgate.api.access_denominated")
 
 pytestmark = [pytest.mark.api, pytest.mark.config, pytest.mark.slow]
@@ -33,9 +31,9 @@ def _get_step_size(router) -> int:
     return int(raw)
 
 
-def _get_metric(router) -> str:
-    raw = router.ssh("jq -r '.metric' /etc/tollgate/config.json").strip()
-    return raw
+def _reset_and_wait(router) -> None:
+    router.reset_state()
+    time.sleep(5)
 
 
 def test_price_per_step_1_face_value_equals_allotment(router, cashu):
@@ -44,6 +42,7 @@ def test_price_per_step_1_face_value_equals_allotment(router, cashu):
 
     try:
         _set_price_per_step(router, 1)
+        _reset_and_wait(router)
         step_size = _get_step_size(router)
 
         token = cashu.mint(5)
@@ -77,6 +76,7 @@ def test_price_per_step_1_minimum_token(router, cashu):
 
     try:
         _set_price_per_step(router, 1)
+        _reset_and_wait(router)
         step_size = _get_step_size(router)
 
         token = cashu.mint(1)
@@ -102,6 +102,7 @@ def test_price_per_step_2_halves_allotment(router, cashu):
 
     try:
         _set_price_per_step(router, 2)
+        _reset_and_wait(router)
         step_size = _get_step_size(router)
 
         token = cashu.mint(5)
@@ -110,7 +111,7 @@ def test_price_per_step_2_halves_allotment(router, cashu):
 
         session = router.get_session()
         remaining = session.get("remaining", 0)
-        expected = (5 // 2) * step_size  # floor(5/2)=2 steps
+        expected = (5 // 2) * step_size
         log.info("price=2: 5 units → 2 steps → %d, remaining=%d", expected, remaining)
 
         assert remaining > 0
