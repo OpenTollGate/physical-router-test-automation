@@ -1,11 +1,4 @@
-"""Access-denominated token tests — PricePerStep=1.
-
-When price_per_step=1, the token face value equals the step count directly.
-A 5-sat token grants 5 * step_size of access. This proves the access-denominated
-token concept: the token IS the access quota.
-
-These tests modify router pricing config and restore it afterward.
-"""
+"""Access-denominated token tests — PricePerStep=1."""
 import json
 import logging
 import time
@@ -13,108 +6,81 @@ import time
 import pytest
 
 log = logging.getLogger("tollgate.api.access_denominated")
-
 pytestmark = [pytest.mark.api, pytest.mark.config, pytest.mark.slow]
 
+SUCCESS_KINDS = (10021, 21000, 1022)
 
-def _set_price_per_step(router, value: int) -> None:
-    router.ssh(
-        f"jq '.accepted_mints[0].price_per_step = {value}' "
-        f"/etc/tollgate/config.json > /tmp/cfg.tmp && mv /tmp/cfg.tmp /etc/tollgate/config.json"
-    )
+
+def _set_price_per_step(router, value):
+    router.ssh(f"jq '.accepted_mints[0].price_per_step = {value}' /etc/tollgate/config.json > /tmp/cfg.tmp && mv /tmp/cfg.tmp /etc/tollgate/config.json")
     router.restart_backend()
     time.sleep(10)
 
 
-def _get_step_size(router) -> int:
-    raw = router.ssh("jq '.step_size' /etc/tollgate/config.json").strip()
-    return int(raw)
-
-
-def _reset_and_wait(router) -> None:
+def _reset_and_wait(router):
     router.reset_state()
     time.sleep(5)
 
 
-def test_price_per_step_1_face_value_equals_allotment(router, cashu):
-    """A 5-unit token with price_per_step=1 grants 5 * step_size of access."""
-    original_step = router.ssh("jq '.accepted_mints[0].price_per_step' /etc/tollgate/config.json").strip()
+def _extract_allotment(resp):
+    for tag in resp.get("tags", []):
+        if len(tag) >= 2 and tag[0] == "allotment":
+            return int(tag[1])
+    return 0
 
+
+def test_price_per_step_1_face_value_equals_allotment(router, cashu):
+    """5-unit token with price_per_step=1 grants 5 * step_size."""
+    original = router.ssh("jq '.accepted_mints[0].price_per_step' /etc/tollgate/config.json").strip()
     try:
         _set_price_per_step(router, 1)
         _reset_and_wait(router)
-        step_size = _get_step_size(router)
-
+        step_size = int(router.ssh("jq '.step_size' /etc/tollgate/config.json").strip())
         token = cashu.mint(5)
-        assert token, "Failed to mint token"
-
+        assert token, "mint failed"
         resp = router.pay_direct(token)
-        log.info("Payment response: %s", json.dumps(resp)[:200])
-
-        assert resp.get("kind") in (10021, 21000), f"Payment rejected: {resp}"
-
-        session = router.get_session()
-        assert session, "No session after payment"
-
-        remaining = session.get("remaining", 0)
+        log.info("resp: %s", json.dumps(resp)[:300])
+        assert resp.get("kind") in SUCCESS_KINDS, f"Payment rejected: {resp}"
+        allotment = _extract_allotment(resp)
         expected = 5 * step_size
-        log.info("step_size=%d, expected allotment=%d, remaining=%d", step_size, expected, remaining)
-
-        assert remaining > 0, "Session has zero remaining allotment"
-        assert remaining >= expected * 0.99, (
-            f"Remaining {remaining} < expected {expected} (5 * step_size {step_size}). "
-            f"PricePerStep=1 should make face value = step count."
-        )
-
+        log.info("step_size=%d expected=%d allotment=%d", step_size, expected, allotment)
+        assert allotment == expected, f"Allotment {allotment} != {expected}"
     finally:
-        _set_price_per_step(router, int(original_step))
+        _set_price_per_step(router, int(original))
 
 
 def test_price_per_step_1_minimum_token(router, cashu):
-    """A 1-unit token with price_per_step=1 grants exactly step_size of access."""
-    original_step = router.ssh("jq '.accepted_mints[0].price_per_step' /etc/tollgate/config.json").strip()
-
+    """1-unit token with price_per_step=1 grants step_size."""
+    original = router.ssh("jq '.accepted_mints[0].price_per_step' /etc/tollgate/config.json").strip()
     try:
         _set_price_per_step(router, 1)
         _reset_and_wait(router)
-        step_size = _get_step_size(router)
-
+        step_size = int(router.ssh("jq '.step_size' /etc/tollgate/config.json").strip())
         token = cashu.mint(1)
-        assert token, "Failed to mint 1-unit token"
-
+        assert token, "mint failed"
         resp = router.pay_direct(token)
-        assert resp.get("kind") in (10021, 21000), f"1-unit payment rejected: {resp}"
-
-        session = router.get_session()
-        remaining = session.get("remaining", 0)
+        assert resp.get("kind") in SUCCESS_KINDS, f"Payment rejected: {resp}"
+        allotment = _extract_allotment(resp)
         expected = 1 * step_size
-        log.info("1-unit: step_size=%d, expected=%d, remaining=%d", step_size, expected, remaining)
-
-        assert remaining > 0, "1-unit token gave zero allotment"
-
+        log.info("1-unit: step_size=%d expected=%d allotment=%d", step_size, expected, allotment)
+        assert allotment == expected, f"Allotment {allotment} != {expected}"
     finally:
-        _set_price_per_step(router, int(original_step))
+        _set_price_per_step(router, int(original))
 
 
 def test_price_per_step_2_halves_allotment(router, cashu):
-    """With price_per_step=2, a 5-unit token grants floor(5/2)=2 steps."""
-    original_step = router.ssh("jq '.accepted_mints[0].price_per_step' /etc/tollgate/config.json").strip()
-
+    """5-unit token with price_per_step=2 grants floor(5/2)=2 steps."""
+    original = router.ssh("jq '.accepted_mints[0].price_per_step' /etc/tollgate/config.json").strip()
     try:
         _set_price_per_step(router, 2)
         _reset_and_wait(router)
-        step_size = _get_step_size(router)
-
+        step_size = int(router.ssh("jq '.step_size' /etc/tollgate/config.json").strip())
         token = cashu.mint(5)
         resp = router.pay_direct(token)
-        assert resp.get("kind") in (10021, 21000), f"Payment rejected: {resp}"
-
-        session = router.get_session()
-        remaining = session.get("remaining", 0)
+        assert resp.get("kind") in SUCCESS_KINDS, f"Payment rejected: {resp}"
+        allotment = _extract_allotment(resp)
         expected = (5 // 2) * step_size
-        log.info("price=2: 5 units → 2 steps → %d, remaining=%d", expected, remaining)
-
-        assert remaining > 0
-
+        log.info("price=2: step_size=%d expected=%d allotment=%d", step_size, expected, allotment)
+        assert allotment == expected, f"Allotment {allotment} != {expected}"
     finally:
-        _set_price_per_step(router, int(original_step))
+        _set_price_per_step(router, int(original))
