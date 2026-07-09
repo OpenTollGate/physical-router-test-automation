@@ -413,6 +413,106 @@ class TestGoUnit:
 
 
 # ===========================================================================
+# TIER 1b: NIP-06 MNEMONIC TESTS — 12-word generation + recovery
+# ===========================================================================
+
+class TestNIP06Mnemonic:
+    """Tests for the 12-word NIP-06 mnemonic generation and recovery flow."""
+
+    def test_generate_produces_12_words(self, vm):
+        out = _ssh(f"{vm['go_ref']} --generate 2>&1", check=True)
+        mnem = [l for l in out.splitlines() if l.startswith("mnemonic=")][0].split("=", 1)[1]
+        words = mnem.split()
+        assert len(words) == 12, f"Expected 12 words, got {len(words)}: {mnem}"
+
+    def test_generate_produces_valid_hex_key(self, vm):
+        out = _ssh(f"{vm['go_ref']} --generate 2>&1", check=True)
+        key = [l for l in out.splitlines() if l.startswith("privatekey=")][0].split("=")[1]
+        assert len(key) == 64 and re.match(r'^[0-9a-f]{64}$', key), f"Bad key: {key}"
+
+    def test_generate_produces_cgnat_ip(self, vm):
+        out = _ssh(f"{vm['go_ref']} --generate 2>&1", check=True)
+        ip = [l for l in out.splitlines() if l.startswith("ipv4=")][0].split("=")[1]
+        assert _IPV4_RE.match(ip), f"Not CGNAT: {ip}"
+
+    def test_generate_produces_distinct_macs(self, vm):
+        out = _ssh(f"{vm['go_ref']} --generate 2>&1", check=True)
+        macs = {}
+        for line in out.splitlines():
+            if line.startswith("mac_"):
+                iface, mac = line[4:].split("=", 1)
+                macs[iface] = mac
+        assert len(set(macs.values())) == len(macs), f"MACs not distinct: {macs}"
+
+    def test_two_generates_produce_different_keys(self, vm):
+        a = _ssh(f"{vm['go_ref']} --generate 2>&1", check=True)
+        b = _ssh(f"{vm['go_ref']} --generate 2>&1", check=True)
+        key_a = [l for l in a.splitlines() if l.startswith("privatekey=")][0].split("=")[1]
+        key_b = [l for l in b.splitlines() if l.startswith("privatekey=")][0].split("=")[1]
+        assert key_a != key_b, "Two generates produced identical keys"
+
+    def test_recover_reproduces_same_key(self, vm):
+        gen = _ssh(f"{vm['go_ref']} --generate 2>&1", check=True)
+        mnem = [l for l in gen.splitlines() if l.startswith("mnemonic=")][0].split("=", 1)[1]
+        key_gen = [l for l in gen.splitlines() if l.startswith("privatekey=")][0].split("=")[1]
+        rec = _ssh(f'{vm["go_ref"]} --recover "{mnem}" 2>&1', check=True)
+        key_rec = [l for l in rec.splitlines() if l.startswith("privatekey=")][0].split("=")[1]
+        assert key_gen == key_rec, f"Recovery mismatch: gen={key_gen} rec={key_rec}"
+
+    def test_recover_reproduces_same_ip(self, vm):
+        gen = _ssh(f"{vm['go_ref']} --generate 2>&1", check=True)
+        mnem = [l for l in gen.splitlines() if l.startswith("mnemonic=")][0].split("=", 1)[1]
+        ip_gen = [l for l in gen.splitlines() if l.startswith("ipv4=")][0].split("=")[1]
+        rec = _ssh(f'{vm["go_ref"]} --recover "{mnem}" 2>&1', check=True)
+        ip_rec = [l for l in rec.splitlines() if l.startswith("ipv4=")][0].split("=")[1]
+        assert ip_gen == ip_rec, f"IP mismatch: gen={ip_gen} rec={ip_rec}"
+
+    def test_recover_rejects_invalid_mnemonic(self, vm):
+        r = subprocess.run(
+            ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+             "-o", "BatchMode=yes", f"{VM_USER}@{VM_HOST}",
+             f"{vm['go_ref']} --recover 'not a valid mnemonic' 2>&1; echo __RC__=$?"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert "__RC__=0" not in r.stdout, f"Invalid mnemonic should fail: {r.stdout}"
+
+    def test_recover_rejects_garbage(self, vm):
+        r = subprocess.run(
+            ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+             "-o", "BatchMode=yes", f"{VM_USER}@{VM_HOST}",
+             f"{vm['go_ref']} --recover 'zzzzzzzzzzzzzzzzzz' 2>&1; echo __RC__=$?"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert "__RC__=0" not in r.stdout
+
+    def test_different_mnemonics_different_keys(self, vm):
+        a = _ssh(f"{vm['go_ref']} --generate 2>&1", check=True)
+        b = _ssh(f"{vm['go_ref']} --generate 2>&1", check=True)
+        ip_a = [l for l in a.splitlines() if l.startswith("ipv4=")][0].split("=")[1]
+        ip_b = [l for l in b.splitlines() if l.startswith("ipv4=")][0].split("=")[1]
+        assert ip_a != ip_b, "Two mnemonics produced same IP"
+
+    def test_generate_words_are_lowercase_alpha(self, vm):
+        out = _ssh(f"{vm['go_ref']} --generate 2>&1", check=True)
+        mnem = [l for l in out.splitlines() if l.startswith("mnemonic=")][0].split("=", 1)[1]
+        for w in mnem.split():
+            assert re.match(r'^[a-z]+$', w), f"Word '{w}' not lowercase alpha"
+
+    def test_nip06_key_works_in_shell(self, vm, sb):
+        """End-to-end: generate a NIP-06 key → write to identities.json →
+        run the shell script → verify shell IP matches Go-derived IP."""
+        gen = _ssh(f"{vm['go_ref']} --generate 2>&1", check=True)
+        key = [l for l in gen.splitlines() if l.startswith("privatekey=")][0].split("=")[1]
+        ip = [l for l in gen.splitlines() if l.startswith("ipv4=")][0].split("=")[1]
+
+        sb.write_identities(key)
+        r = sb.run()
+        assert r.exit_code == 0, f"Shell failed with NIP-06 key: {r.raw}"
+        shell_ip = sb.kv_get("network_lan_ipaddr")
+        assert shell_ip == ip, f"Shell IP {shell_ip} != Go IP {ip}"
+
+
+# ===========================================================================
 # TIER 2: E2E TESTS — shell script under busybox on SHC VM
 # ===========================================================================
 
