@@ -563,9 +563,8 @@ def _download_blossom_binary(url: str, build_dir: Path, sha256: str = "", save_a
 
     urls_to_try = [url]
     if sha256 and len(sha256) == 64:
-        ext = Path(filename).suffix
         for server in BLOSSOM_MIRROR_SERVERS:
-            alt = f"{server}/{sha256}{ext}"
+            alt = f"{server}/{sha256}"
             if alt not in urls_to_try:
                 urls_to_try.append(alt)
 
