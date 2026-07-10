@@ -797,8 +797,8 @@ def deploy(router, ipk_path: Path, reboot: bool = False, backend=None) -> dict[s
         return reboot_router(router)
 
     router.ssh(
-        "iptables -C ndsRTR -p tcp --dport 2121 -j ACCEPT 2>/dev/null"
-        " || iptables -I ndsRTR 11 -p tcp --dport 2121 -j ACCEPT",
+        "iptables -C INPUT -p tcp --dport 2121 -j ACCEPT 2>/dev/null"
+        " || iptables -I INPUT -p tcp --dport 2121 -j ACCEPT",
         timeout=10,
     )
 
