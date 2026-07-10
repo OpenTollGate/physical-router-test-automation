@@ -27,8 +27,8 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.request
-import urllib.error
+
+import requests
 
 SSH_OPTS = [
     "-o", "StrictHostKeyChecking=no",
@@ -59,18 +59,17 @@ class CashuTollgate:
     def _api(self, method: str, path: str, data: dict | None = None) -> dict:
         """Make a Cashu mint API call."""
         url = f"{self.mint_url}{path}"
-        body = json.dumps(data).encode() if data else None
-        req = urllib.request.Request(url, data=body, method=method)
-        if body:
-            req.add_header("Content-Type", "application/json")
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return json.loads(resp.read())
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode()
-            raise RuntimeError(f"Mint API {method} {path} failed: {e.code} {error_body}")
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"Mint API {method} {path} unreachable: {e.reason}")
+            if method == "GET":
+                resp = requests.get(url, timeout=15)
+            else:
+                resp = requests.post(url, json=data, timeout=15)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.HTTPError as e:
+            raise RuntimeError(f"Mint API {method} {path} failed: {e.response.status_code} {e.response.text}")
+        except requests.exceptions.ConnectionError as e:
+            raise RuntimeError(f"Mint API {method} {path} unreachable: {e}")
 
     def create_invoice(self, amount_sats: int) -> dict:
         """Create a Cashu melt quote (Lightning invoice).
