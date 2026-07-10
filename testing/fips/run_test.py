@@ -131,7 +131,11 @@ echo BUILD_LAUNCHED
 
     for attempt in range(120):
         time.sleep(15)
-        out, _, _ = ssh_run(ip, "cat /tmp/build_status 2>/dev/null", timeout=10)
+        try:
+            out, _, _ = ssh_run(ip, "cat /tmp/build_status 2>/dev/null", timeout=15)
+        except subprocess.TimeoutExpired:
+            log(f"  SSH timeout polling {ip}, retrying...")
+            continue
         if "BUILD_OK" in out:
             log(f"  Build complete on {ip} (attempt {attempt + 1})")
             return True
