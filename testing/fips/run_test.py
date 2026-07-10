@@ -97,6 +97,31 @@ echo BUILD_OK
 """
 
 
+BUILD_NOHUP_SCRIPT = """cat > /tmp/build_fips.sh << 'BUILDSCRIPT'
+set -e
+export HOME=/root DEBIAN_FRONTEND=noninteractive
+echo 'debian ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/debian
+apt-get update -qq
+apt-get install -y -qq build-essential git curl pkg-config libssl-dev libclang-dev clang libdbus-1-dev >/dev/null 2>&1
+if ! command -v cargo >/dev/null 2>&1; then
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y 2>&1 | tail -1
+fi
+source /root/.cargo/env
+cd /opt && rm -rf fips
+git clone --depth 50 https://github.com/Amperstrand/fips.git
+cd fips && git fetch origin feat/tollgate-peer-policy && git checkout FETCH_HEAD -B feat/tollgate-peer-policy
+cargo build --release --bin fips --bin fipsctl 2>&1 | tail -3
+cp target/release/fips target/release/fipsctl /usr/local/bin/
+mkdir -p /etc/fips /run/fips
+echo BUILD_OK > /tmp/build_status
+BUILDSCRIPT
+chmod +x /tmp/build_fips.sh
+rm -f /tmp/build_status
+nohup bash /tmp/build_fips.sh > /tmp/build_fips.log 2>&1 &
+echo BUILD_LAUNCHED
+"""
+
+
 def build_fips_nohup(ip):
     """Launch build via nohup, then poll for completion.
 
@@ -227,7 +252,12 @@ try:
     ips = {}
     for name, sid in sids.items():
         for _ in range(180):
-            vm = c.get_vm(sid)
+            try:
+                vm = c.get_vm(sid)
+            except Exception as e:
+                log(f"  {name}: API error ({e}), retrying...")
+                time.sleep(10)
+                continue
             state = vm.get("provisioning_state", "?")
             vm_ips = vm.get("ips", [])
             ip = vm_ips[0]["ip"] if vm_ips else ""
@@ -244,13 +274,38 @@ try:
         else:
             raise RuntimeError(f"{name} timeout")
 
-    # ── Build FIPS on all 3 VMs (nohup+poll) ──────────────────────
-    log("Building FIPS on all 3 VMs (nohup+poll pattern)...")
+    # ── Build FIPS on all 3 VMs (parallel nohup+poll) ────────────
+    log("Building FIPS on all 3 VMs (parallel nohup+poll)...")
+
+    # Launch all builds simultaneously
     for name, ip in ips.items():
-        ok = build_fips_nohup(ip)
-        if not ok:
-            raise RuntimeError(f"{name} build failed")
-        log(f"  {name} build OK")
+        log(f"  Launching build on {name} ({ip})...")
+        ssh_sudo(ip, BUILD_NOHUP_SCRIPT, timeout=30)
+
+    # Poll all builds until all complete
+    pending = dict(ips)
+    start_build = time.time()
+    while pending:
+        time.sleep(15)
+        done = []
+        for name, ip in pending.items():
+            try:
+                out, _, _ = ssh_run(ip, "cat /tmp/build_status 2>/dev/null", timeout=15)
+            except subprocess.TimeoutExpired:
+                continue
+            if "BUILD_OK" in out:
+                elapsed = int(time.time() - start_build)
+                log(f"  {name} build OK ({elapsed}s)")
+                done.append(name)
+        for name in done:
+            del pending[name]
+        if pending:
+            elapsed = int(time.time() - start_build)
+            names = ", ".join(pending.keys())
+            log(f"  Still building: {names} ({elapsed}s)")
+
+    if pending:
+        raise RuntimeError(f"Build timeout: {list(pending.keys())}")
 
     # ── Start FIPS daemons ────────────────────────────────────────
     log("Starting FIPS daemons...")
