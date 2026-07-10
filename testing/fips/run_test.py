@@ -212,7 +212,7 @@ pubkey = open(KEY).read().strip()
 
 log("Ordering 3 SHC VMs...")
 sids = {}
-for name in ["fips-a", "fips-b", "fips-c"]:
+for name in ["a", "b", "c"]:
     r = c.submit_order(hostname=f"tollgate-{name}", package_id=81, pricing_id=245)
     sid = r["service_ids"][0]
     sids[name] = sid
