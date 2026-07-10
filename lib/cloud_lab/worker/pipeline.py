@@ -283,6 +283,13 @@ def run_worker(config: WorkerConfig) -> int:
             _step_end("env-debian-deps")
 
             _step_start("deploy-tollgate")
+            _run(
+                f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} "
+                f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+                f"-o ConnectTimeout=5 root@{OPENWRT_IP} "
+                f"'iptables -I INPUT -p tcp --dport 2121 -j ACCEPT 2>/dev/null || true'",
+                timeout=10, check=False,
+            )
             if config.deploy_mode == "conwrt":
                 from lib.cloud_lab.worker.conwrt_deploy import deploy_via_conwrt
                 log.info("[7/10] Deploy via conwrt (portal=%s)", config.portal)
