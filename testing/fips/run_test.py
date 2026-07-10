@@ -13,14 +13,21 @@ Key learnings baked in:
     We send it via nc -U /run/fips/control.sock.
   - Both B AND C must be Full for round-trip transit (request + response
     each transit A independently).
+  - Cashu payment (testnut FakeWallet) auto-marks invoices PAID — no
+    real Lightning needed for the demo.
 
 Run: python3 testing/fips/run_test.py
   KEEP_VMS=1  — don't cancel VMs after test (for debugging)
+  MINT_URL=…  — override Cashu mint (default: testnut.cashu.exchange)
 """
 import json, os, subprocess, sys, time
 
 sys.path.insert(0, os.path.expanduser("~/src/shc-toolkit"))
 from shc_toolkit.client import SHCClient
+
+# Import the Cashu payment bridge (same directory)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from cashu_tollgate import CashuTollgate
 
 SSH = [
     "ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
@@ -369,6 +376,68 @@ try:
     time.sleep(2)
     ok, out = ping_test(ips["b"], ipv6_c)
     result("Restore Full -> transit works again", ok, out[-100:])
+
+    # ── Cashu Payment Integration ────────────────────────────────
+    # Full TollGate flow: Cashu invoice → payment → transit enabled
+    # → expiry → transit auto-reverted.
+    # testnut mint uses FakeWallet — invoices auto-PAID instantly.
+    # We use a short duration (15s) for the demo.
+
+    log("")
+    log("=" * 60)
+    log("CASHU PAYMENT -> FIPS POLICY INTEGRATION")
+    log("=" * 60)
+
+    mint_url = os.environ.get("MINT_URL", "https://testnut.cashu.exchange")
+    transit_duration = 15
+    amount_sats = 21
+
+    # Reset to LocalOnly before payment test
+    set_peer_policy(ips["a"], npub_b, "local_only")
+    set_peer_policy(ips["a"], npub_c, "local_only")
+    time.sleep(2)
+
+    # Test 6: Verify transit blocked before payment
+    log("")
+    log("TEST 6: Transit blocked before Cashu payment")
+    ok, out = ping_test(ips["b"], ipv6_c, count=3)
+    result("Transit blocked (pre-payment)", not ok, out[-100:])
+
+    # Test 7: Create Cashu invoice, pay, transit enabled
+    log("")
+    log(f"TEST 7: Cashu payment enables transit ({amount_sats} sats, {transit_duration}s)")
+    log(f"  Mint: {mint_url}")
+    gate = CashuTollgate(mint_url, ips["a"])
+
+    # Create invoice for B's transit
+    log(f"  Creating invoice: {amount_sats} sats...")
+    quote = gate.create_invoice(amount_sats)
+    log(f"  Quote ID: {quote['quote']}")
+    log(f"  State: {quote['state']}")
+
+    # Wait for payment (FakeWallet auto-pays)
+    paid = gate.wait_for_payment(quote["quote"], timeout=30, poll_interval=1)
+    result("Cashu invoice paid", paid, "payment not received")
+
+    if paid:
+        log("  Payment confirmed! Enabling transit for both B and C...")
+        gate.enable_transit(npub_b, transit_duration)
+        gate.enable_transit(npub_c, transit_duration)
+        time.sleep(2)
+
+        ok, out = ping_test(ips["b"], ipv6_c, count=5)
+        result("Transit works after Cashu payment", ok, out[-100:])
+
+        if ok:
+            # Test 8: Wait for expiry, verify auto-revert
+            log("")
+            log(f"TEST 8: Wait for payment expiry ({transit_duration}s)...")
+            remaining = transit_duration - 5
+            if remaining > 0:
+                time.sleep(remaining + 3)
+
+            ok, out = ping_test(ips["b"], ipv6_c, count=3)
+            result("Transit blocked after expiry (auto-revert)", not ok, out[-100:])
 
     # ── Summary ───────────────────────────────────────────────────
     log("")
