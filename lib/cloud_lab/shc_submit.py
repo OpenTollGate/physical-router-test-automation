@@ -436,7 +436,7 @@ echo "=== Pre-flight complete ==="
 step 15 "Running worker pipeline..."
 cd {test_dir}
 echo "PIPELINE_START" >> /tmp/tollgate-status
-unset BOT_NSEC_HEX GH_TOKEN
+unset BOT_NSEC_HEX
 echo "  Worker env: TOLLGATE_RUN_ID=$TOLLGATE_RUN_ID SUT_BRANCH=$TOLLGATE_SUT_BRANCH BACKEND=$TOLLGATE_BACKEND PUBLISH=$TOLLGATE_PUBLISH"
 /opt/tollgate-venv/bin/python3 -m lib.cloud_lab.worker --from-env
 WORKER_EXIT=$?
