@@ -170,7 +170,7 @@ peers: []
 
 
 def start_fips(ip):
-    ssh_sudo(ip, f"""
+    return ssh_sudo(ip, f"""
 mkdir -p /etc/fips /run/fips
 cat > /etc/fips/fips.yaml << 'YAML'
 {FIPS_CONFIG}YAML
@@ -222,7 +222,7 @@ try:
     log("Waiting for provisioning + injecting keys...")
     ips = {}
     for name, sid in sids.items():
-        for _ in range(90):
+        for _ in range(180):
             vm = c.get_vm(sid)
             state = vm.get("provisioning_state", "?")
             vm_ips = vm.get("ips", [])
