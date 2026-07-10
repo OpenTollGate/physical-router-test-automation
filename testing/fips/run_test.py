@@ -258,6 +258,9 @@ try:
             log(f"  {name} FIPS FAILED: {out}")
             raise RuntimeError(f"{name} FIPS start failed")
 
+    log("Waiting 5s for control sockets to initialize...")
+    time.sleep(5)
+
     # ── Get identities ────────────────────────────────────────────
     log("Getting identities...")
     status_a = fipsctl(ips["a"], "show status")
@@ -268,6 +271,12 @@ try:
     npub_b = status_b.get("npub", "")
     npub_c = status_c.get("npub", "")
     ipv6_c = status_c.get("ipv6_addr", "")
+    if not npub_a:
+        log(f"  WARNING: A status returned no npub: {status_a}")
+    if not npub_b:
+        log(f"  WARNING: B status returned no npub: {status_b}")
+    if not npub_c:
+        log(f"  WARNING: C status returned no npub: {status_c}")
     log(f"  A: {npub_a[:20]}...")
     log(f"  B: {npub_b[:20]}...")
     log(f"  C: {npub_c[:20]}... ipv6={ipv6_c}")
@@ -450,6 +459,11 @@ try:
     else:
         log("SOME TESTS FAILED -- see output above")
 
+except Exception as e:
+    import traceback
+    log(f"ERROR: {e}")
+    log(traceback.format_exc())
+    FAIL = max(FAIL, 1)
 finally:
     cleanup = os.environ.get("KEEP_VMS", "0") != "1"
     if cleanup:
@@ -463,4 +477,4 @@ finally:
     else:
         log("KEEP_VMS=1 -- VMs left running for debugging")
 
-    sys.exit(1 if FAIL > 0 else 0)
+sys.exit(1 if FAIL > 0 else 0)
