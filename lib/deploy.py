@@ -570,8 +570,9 @@ def _download_blossom_binary(url: str, build_dir: Path, sha256: str = "", save_a
 
     for try_url in urls_to_try:
         try:
+            cache_bust = f"?cb={int(time.time())}"
             subprocess.run(
-                ["curl", "-sL", "-o", str(dest), try_url],
+                ["curl", "-sL", "-o", str(dest), f"{try_url}{cache_bust}"],
                 timeout=120, check=True, capture_output=True,
             )
             if dest.exists() and dest.stat().st_size > 1000:
