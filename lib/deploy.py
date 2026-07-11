@@ -893,10 +893,10 @@ def deploy(router, ipk_path: Path, reboot: bool = False, backend=None) -> dict[s
 
     router.ssh(
         "echo 1 > /proc/sys/net/ipv4/conf/all/route_localnet 2>/dev/null;"
-        "iptables -C INPUT -p tcp --dport 2121 -j ACCEPT 2>/dev/null"
-        " || iptables -I INPUT 1 -p tcp --dport 2121 -j ACCEPT 2>/dev/null;"
-        "iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null"
-        " || iptables -I INPUT 1 -p tcp --dport 80 -j ACCEPT 2>/dev/null;"
+        "iptables -C ndsRTR -p tcp --dport 2121 -j ACCEPT 2>/dev/null"
+        " || iptables -I ndsRTR 12 -p tcp --dport 2121 -j ACCEPT 2>/dev/null;"
+        "iptables -C ndsRTR -p tcp --dport 80 -j ACCEPT 2>/dev/null"
+        " || iptables -I ndsRTR 12 -p tcp --dport 80 -j ACCEPT 2>/dev/null;"
         "nft insert rule inet fw4 input tcp dport 2121 accept 2>/dev/null;"
         "true",
         timeout=10,
