@@ -19,6 +19,10 @@ COORDINATION_RELAYS = [
     "wss://relay2.orangesync.tech",
 ]
 
+#: Nostr pubkey CI uses to sign all release/build events (kind 1063 + 30078).
+#: Matches AGENTS.md "Publisher pubkey".
+NOSTR_PUBLISHER_PUBKEY = "5075e61f0b048148b60105c1dd72bbeae1957336ae5824087e52efa374f8416a"
+
 #: Blossom servers tried in order when the primary URL from a NIP-94 event
 #: returns 404. CI publishes to all of these (BLOSSOM_MIN_SUCCESS=2), but
 #: free-tier files on blossom.psbt.me expire after a TTL, so the same
@@ -392,8 +396,12 @@ def ensure_artifact(
     deadline = time.time() + timeout_s
 
     while time.time() < deadline:
-        # Try Blossom/Nostr first (instant if nak is available)
-        blossom_binary = _resolve_blossom_binary(commit, arch, fmt=fmt)
+        # Try Blossom/Nostr first (instant if nak is available).
+        # Pass branch so the resolver only returns artifacts whose filename
+        # contains _{branch}. — without it, a commit miss silently falls back
+        # to the newest artifact of ANY branch (e.g. feat-v3-rebase when
+        # testing main), deploying the wrong firmware.
+        blossom_binary = _resolve_blossom_binary(commit, arch, fmt=fmt, branch=branch)
         if blossom_binary:
             log.info(
                 "Found artifact '%s' via Blossom/Nostr",
@@ -482,70 +490,157 @@ def ensure_artifact(
     )
 
 
-def _resolve_blossom_binary(commit: str | None, arch: str, fmt: str = "", branch: str = "") -> dict | None:
-    """Query coordination relays for latest tollgate-build event matching arch.
+def _blossom_relays() -> list[str]:
+    return COORDINATION_RELAYS
 
-    Returns dict with url, filename, sha256 from the event content, or None.
-    If commit is specified, tries exact match first, then falls back to newest
-    matching arch (any commit) so PR merges and branch builds work.
-    If fmt is specified (e.g. 'apk' or 'ipk'), filters by content.format.
-    If branch is specified, only accepts artifacts whose filename contains
-    f"_{branch}." — prevents feature-branch artifacts from testing main.
-    """
+
+def _tags_as_dict(tags: list) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for t in tags:
+        if isinstance(t, list) and t:
+            out.setdefault(t[0], []).extend(t[1:])
+    return out
+
+
+def _nak_req(args: list[str], timeout: int = 30) -> list[dict]:
     nak = shutil.which("nak")
     if not nak:
-        return None
-
-    cmd = [nak, "req", "-k", "30078", "-t", "t=tollgate-build", "-l", "20"]
-    cmd.extend(COORDINATION_RELAYS)
+        return []
+    cmd = [nak, "req"] + args + _blossom_relays()
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except Exception:
-        return None
-
-    best_commit_match = None
-    best_commit_ts = 0
-    best_any = None
-    best_any_ts = 0
-
+        return []
+    events = []
     for line in (r.stdout or "").strip().splitlines():
         line = line.strip()
         if not line.startswith("{"):
             continue
         try:
-            e = json.loads(line)
-            content = json.loads(e.get("content", "{}"))
-            if content.get("architecture") != arch:
-                continue
-            if content.get("compression", "none") != "none":
-                continue
-            if fmt and content.get("format", "ipk") != fmt:
-                continue
-
-            filename = content.get("filename", "")
-            if branch:
-                sanitized = branch.replace("/", "-")
-                if f"_{sanitized}." not in filename:
-                    continue
-
-            ts = e.get("created_at", 0)
-
-            if commit:
-                build_id = ""
-                for tag in e.get("tags", []):
-                    if tag[0] == "r" and len(tag) > 1:
-                        build_id = tag[1]
-                if build_id.startswith(commit[:7]):
-                    if ts > best_commit_ts:
-                        best_commit_ts = ts
-                        best_commit_match = content
-                    continue
-
-            if ts > best_any_ts:
-                best_any_ts = ts
-                best_any = content
-        except (json.JSONDecodeError, KeyError):
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
             continue
+    return events
+
+
+def _event_matches(event: dict, *, arch: str, fmt: str, branch: str, commit: str | None,
+                   content_tags: dict[str, list[str]]) -> tuple[dict | None, int]:
+    """Return (artifact_dict_or_None, created_at) if the event matches filters.
+
+    ``content_tags`` is the parsed tag dict for one event; the function reads
+    architecture/format/compression/filename/version/url/sha256 from it in a
+    way that works for BOTH kind 1063 (NIP-94 tags) and kind 30078 (JSON
+    ``content`` blob, pre-flattened into a tag-like dict by the caller).
+    """
+    archs = content_tags.get("A") or content_tags.get("architecture") or []
+    if archs and arch not in archs and (len(archs) == 1 and archs[0] != arch):
+        # 30078 content uses "architecture" (scalar); 1063 uses "A" (tag list).
+        pass
+    arch_val = (archs[0] if archs else content_tags.get("architecture", ""))
+    if arch_val != arch:
+        return None, 0
+    comp = (content_tags.get("compression") or ["none"])[0]
+    if comp != "none":
+        return None, 0
+    if fmt:
+        fmt_val = (content_tags.get("format") or ["ipk"])[0]
+        if fmt_val != fmt:
+            return None, 0
+
+    filename = (content_tags.get("filename") or [""])[0]
+    if branch:
+        sanitized = branch.replace("/", "-")
+        if f"_{sanitized}." not in filename:
+            return None, 0
+
+    artifact = {
+        "url": ((content_tags.get("url") or content_tags.get("urls") or [""]))[0],
+        "filename": filename,
+        "sha256": (content_tags.get("x") or content_tags.get("ox") or content_tags.get("sha256") or [""])[0],
+        "architecture": arch,
+        "format": (content_tags.get("format") or ["ipk"])[0],
+        "compression": comp,
+    }
+    ts = int(event.get("created_at", 0) or 0)
+
+    if commit:
+        build_id = ""
+        rtags = content_tags.get("r") or []
+        if rtags:
+            build_id = rtags[0]
+        version = (content_tags.get("v") or [""])[0]
+        short = commit[:7] if len(commit) >= 7 else commit
+        if build_id.startswith(short) or (version and version.endswith("." + short)):
+            return artifact, ts
+        return None, 0  # commit pinned but no match → do not accept
+
+    return artifact, ts
+
+
+def _resolve_blossom_binary(commit: str | None, arch: str, fmt: str = "", branch: str = "") -> dict | None:
+    """Resolve a deployable artifact from Blossom via Nostr.
+
+    Primary source: kind **1063** NIP-94 file-metadata events — these are
+    persistent (one per published package) and are the canonical consumer
+    artifact index. Fallback: kind **30078** build-coordination events, which
+    are transient (deleted with kind 5 once the 1063 publishes) and only useful
+    for catching in-flight builds that have not yet published metadata.
+
+    Args:
+        commit: if set, require an exact short-SHA match (no fallback to a
+            different commit). If unset, return the newest matching build.
+        fmt: filter by 'ipk' or 'apk'.
+        branch: if set, require the filename to contain ``_{branch}.`` so a
+            feature-branch artifact is never used to test a different branch.
+
+    Returns dict with url/filename/sha256, or None.
+    """
+    best_commit_match = None
+    best_commit_ts = 0
+    best_any = None
+    best_any_ts = 0
+
+    # Kind 1063 — persistent file metadata (authoritative).
+    for e in _nak_req(["-k", "1063", "-a", NOSTR_PUBLISHER_PUBKEY,
+                       "-t", "n=tollgate-wrt", "-l", "120"]):
+        tags = _tags_as_dict(e.get("tags", []))
+        art, ts = _event_matches(e, arch=arch, fmt=fmt, branch=branch,
+                                 commit=commit, content_tags=tags)
+        if not art:
+            continue
+        if commit:
+            if ts > best_commit_ts:
+                best_commit_ts, best_commit_match = ts, art
+        elif ts > best_any_ts:
+            best_any_ts, best_any = ts, art
+
+    # Kind 30078 — transient build coordination (in-flight builds only).
+    for e in _nak_req(["-k", "30078", "-t", "t=tollgate-build", "-l", "40"]):
+        try:
+            content = json.loads(e.get("content", "{}"))
+        except json.JSONDecodeError:
+            continue
+        # Flatten the 30078 JSON content into a tag-like dict so _event_matches
+        # handles both kinds uniformly.
+        flat: dict[str, list[str]] = {}
+        for k, v in content.items():
+            if isinstance(v, list):
+                flat[k] = v
+            elif v != "":
+                flat[k] = [v]
+        # 30078 uses 'r' tag at the event level for the build id.
+        rtag = [t[1] for t in e.get("tags", []) if isinstance(t, list) and t and t[0] == "r"]
+        if rtag:
+            flat["r"] = rtag
+        art, ts = _event_matches(e, arch=arch, fmt=fmt, branch=branch,
+                                 commit=commit, content_tags=flat)
+        if not art:
+            continue
+        if commit:
+            if ts > best_commit_ts:
+                best_commit_ts, best_commit_match = ts, art
+        elif ts > best_any_ts:
+            best_any_ts, best_any = ts, art
 
     if best_commit_match:
         return best_commit_match
@@ -797,9 +892,13 @@ def deploy(router, ipk_path: Path, reboot: bool = False, backend=None) -> dict[s
         return reboot_router(router)
 
     router.ssh(
-        "nft insert rule inet fw4 input tcp dport 2121 accept 2>/dev/null"
-        " || iptables -I INPUT -p tcp --dport 2121 -j ACCEPT 2>/dev/null"
-        " || true",
+        "echo 1 > /proc/sys/net/ipv4/conf/all/route_localnet 2>/dev/null;"
+        "iptables -C INPUT -p tcp --dport 2121 -j ACCEPT 2>/dev/null"
+        " || iptables -I INPUT 1 -p tcp --dport 2121 -j ACCEPT 2>/dev/null;"
+        "iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null"
+        " || iptables -I INPUT 1 -p tcp --dport 80 -j ACCEPT 2>/dev/null;"
+        "nft insert rule inet fw4 input tcp dport 2121 accept 2>/dev/null;"
+        "true",
         timeout=10,
     )
 
