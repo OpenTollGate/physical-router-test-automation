@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import hashlib
 import json
 import logging
@@ -13,8 +15,6 @@ import re
 import threading
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 from urllib import error, request
