@@ -195,12 +195,12 @@ class CashuTollgate:
         print(f"  Invoice: {quote.get('request', 'N/A')[:60]}...")
 
         # 2. Wait for payment (FakeWallet auto-pays on testnut)
-        print(f"  Waiting for payment...")
+        print("  Waiting for payment...")
         paid = self.wait_for_payment(quote_id, timeout=30, poll_interval=1)
         t_paid = time.time()
 
         if not paid:
-            print(f"  Payment TIMEOUT")
+            print("  Payment TIMEOUT")
             return None
 
         print(f"  Payment confirmed ({t_paid - t0:.1f}s)")
@@ -208,7 +208,7 @@ class CashuTollgate:
         # 3. Enable transit
         ok = self.enable_transit(peer_npub, duration_secs)
         if not ok:
-            print(f"  Failed to enable transit")
+            print("  Failed to enable transit")
             return None
 
         t_enabled = time.time()
@@ -241,7 +241,7 @@ def main():
 
     gate = CashuTollgate(args.mint, args.fips_ip, args.fips_user)
 
-    print(f"TollGate Payment Bridge")
+    print("TollGate Payment Bridge")
     print(f"  Mint: {args.mint}")
     print(f"  FIPS: {args.fips_ip}")
     print(f"  Peer: {args.peer_npub[:20]}...")
@@ -251,7 +251,7 @@ def main():
     result = gate.pay_and_enable(args.peer_npub, args.amount, args.duration)
     if result:
         print(f"\nTransit active! Waiting {args.duration}s for expiry...")
-        print(f"  (Press Ctrl+C to revert early)")
+        print("  (Press Ctrl+C to revert early)")
         try:
             time.sleep(args.duration + 5)
         except KeyboardInterrupt:

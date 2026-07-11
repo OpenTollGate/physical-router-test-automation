@@ -558,7 +558,7 @@ def _event_matches(event: dict, *, arch: str, fmt: str, branch: str, commit: str
             return None, 0
 
     artifact = {
-        "url": ((content_tags.get("url") or content_tags.get("urls") or [""]))[0],
+        "url": (content_tags.get("url") or content_tags.get("urls") or [""])[0],
         "filename": filename,
         "sha256": (content_tags.get("x") or content_tags.get("ox") or content_tags.get("sha256") or [""])[0],
         "architecture": arch,

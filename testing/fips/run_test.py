@@ -20,7 +20,11 @@ Run: python3 testing/fips/run_test.py
   KEEP_VMS=1  — don't cancel VMs after test (for debugging)
   MINT_URL=…  — override Cashu mint (default: testnut.cashu.exchange)
 """
-import json, os, subprocess, sys, time
+import json
+import os
+import subprocess
+import sys
+import time
 
 sys.path.insert(0, os.path.expanduser("~/src/shc-toolkit"))
 from shc_toolkit.client import SHCClient
@@ -129,7 +133,7 @@ def build_fips_nohup(ip):
     cargo build takes ~5 minutes, so we can't use a blocking SSH call.
     """
     log(f"  Launching build on {ip} via nohup...")
-    ssh_sudo(ip, f"""
+    ssh_sudo(ip, """
 cat > /tmp/build_fips.sh << 'BUILDSCRIPT'
 set -e
 export HOME=/root DEBIAN_FRONTEND=noninteractive

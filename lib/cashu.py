@@ -13,9 +13,16 @@ import re
 import threading
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from urllib import error, request
 
 from lib.constants import TEST_MINT_URL
+
+if TYPE_CHECKING:
+    import coincurve
 
 log = logging.getLogger("tollgate.cashu")
 
@@ -556,7 +563,7 @@ class HttpMinter:
         raise RuntimeError(f"No active {unit} keyset at {self.mint_url}")
 
     @classmethod
-    def _hash_to_curve(cls, message: bytes) -> "coincurve.PublicKey":
+    def _hash_to_curve(cls, message: bytes) -> coincurve.PublicKey:
         """Deterministic map from message bytes to secp256k1 point (NUT-00)."""
         import coincurve
 
@@ -589,7 +596,7 @@ class HttpMinter:
         return secret_hex, r, b_.format().hex()
 
     @staticmethod
-    def _negate_point(pk: "coincurve.PublicKey") -> "coincurve.PublicKey":
+    def _negate_point(pk: coincurve.PublicKey) -> coincurve.PublicKey:
         """Negate a secp256k1 point (flip 02↔03 prefix)."""
         import coincurve
 

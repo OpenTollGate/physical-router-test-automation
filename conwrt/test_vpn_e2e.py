@@ -121,7 +121,7 @@ def test_vpn_e2e() -> dict:
     else:
         rc, priv, _ = run([wg_bin, "genkey"])
         if rc != 0:
-            print(f"   wg genkey failed")
+            print("   wg genkey failed")
             results["tests"]["wg_keygen"] = False
             results["failed"] += 1
             return results

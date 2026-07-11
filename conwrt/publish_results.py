@@ -167,7 +167,7 @@ def main():
 
     print(f"Publishing conwrt test results: {results_dir}")
     print(f"  Run ID: {args.run_id}")
-    print(f"  Project tag: conwrt")
+    print("  Project tag: conwrt")
     print(f"  Blossom: {args.blossom_server}")
     print(f"  Relays: {args.relays}")
     print()
@@ -183,9 +183,9 @@ def main():
         metadata=metadata,
     )
 
-    print(f"\nResults published!")
+    print("\nResults published!")
     print(f"  Summary event: {manifest.get('summary_event_id', '?')}")
-    print(f"  View at: https://tests.tollgate.me/ (filter: conwrt)")
+    print("  View at: https://tests.tollgate.me/ (filter: conwrt)")
 
 
 if __name__ == "__main__":

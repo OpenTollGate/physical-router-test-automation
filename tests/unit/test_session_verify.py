@@ -355,7 +355,7 @@ class TestCheckBackendLogs:
 
     def test_mac_nocolon_matching(self):
         """MAC without colons in log line should still match."""
-        logs = f"session created for aabbccddeeff"
+        logs = "session created for aabbccddeeff"
         router = MockRouter(logs=logs)
         ok, evidence = check_backend_logs(router, mac=MAC)
         assert ok is True

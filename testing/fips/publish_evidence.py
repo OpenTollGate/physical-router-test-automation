@@ -120,7 +120,7 @@ def main():
 
     summary = json.dumps(results, indent=2)
 
-    print(f"Publishing FIPS test evidence...")
+    print("Publishing FIPS test evidence...")
     print(f"  Run ID: {run_id}")
     print(f"  Project tag: {args.project_tag}")
     print(f"  Tests: {results['summary']['pass']}/{results['summary']['total']} passed")
@@ -136,8 +136,8 @@ def main():
 
     if result.get("success"):
         print(f"  Event ID: {result.get('event_id', '?')}")
-        print(f"  Published to relays successfully")
-        print(f"  Dashboard: https://tests.tollgate.me")
+        print("  Published to relays successfully")
+        print("  Dashboard: https://tests.tollgate.me")
     else:
         print(f"  FAILED: {result.get('error', 'unknown')}")
         if result.get("relay_status"):

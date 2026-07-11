@@ -290,11 +290,11 @@ def main():
             print(f"Unknown use case: {args.use_case}")
             sys.exit(1)
 
-    print(f"═══════════════════════════════════════════════════════════")
-    print(f"  conwrt Use Case Test Runner")
+    print("═══════════════════════════════════════════════════════════")
+    print("  conwrt Use Case Test Runner")
     print(f"  Use cases: {[uc['name'] for uc in use_cases]}")
     print(f"  Results: {results_dir}")
-    print(f"═══════════════════════════════════════════════════════════")
+    print("═══════════════════════════════════════════════════════════")
 
     # Boot OpenWrt
     img = args.openwrt_img
@@ -317,7 +317,7 @@ def main():
         all_results.append(result)
 
     # Shutdown OpenWrt
-    print(f"\nShutting down OpenWrt VM...")
+    print("\nShutting down OpenWrt VM...")
     ssh_to_openwrt("poweroff", timeout=5)
     time.sleep(3)
     run("sudo kill $(cat /tmp/openwrt-test.pid 2>/dev/null) 2>/dev/null")
@@ -325,13 +325,13 @@ def main():
     # Summary
     passed = sum(1 for r in all_results if r["status"] == "pass")
     failed = sum(1 for r in all_results if r["status"] == "fail")
-    print(f"\n═══════════════════════════════════════════════════════════")
+    print("\n═══════════════════════════════════════════════════════════")
     print(f"  RESULTS: {passed} passed, {failed} failed")
     print(f"  Evidence: {results_dir}")
-    print(f"═══════════════════════════════════════════════════════════")
+    print("═══════════════════════════════════════════════════════════")
 
     # Write overall summary
-    summary = f"# conwrt Use Case Test Results\n\n"
+    summary = "# conwrt Use Case Test Results\n\n"
     summary += f"**Date**: {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}\n"
     summary += f"**Passed**: {passed} | **Failed**: {failed}\n\n"
     summary += "| Use Case | Status | Description |\n|---|---|---|\n"
@@ -342,7 +342,7 @@ def main():
 
     # Publish
     if not args.skip_publish:
-        print(f"\nPublishing to Nostr/Blossom...")
+        print("\nPublishing to Nostr/Blossom...")
         run_id = f"conwrt-usecases-{int(time.time())}"
         prta_root = Path(__file__).resolve().parents[1]
         cmd = (
@@ -358,7 +358,7 @@ def main():
         rc, out = run(cmd, timeout=120)
         print(out)
         if rc == 0:
-            print(f"✅ Published! View at https://tests.tollgate.me (project: conwrt)")
+            print("✅ Published! View at https://tests.tollgate.me (project: conwrt)")
         else:
             print(f"⚠️  Publish failed (exit {rc})")
 

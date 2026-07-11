@@ -961,7 +961,7 @@ def _video_is_static(video_path: str, pixel_threshold: int = 5, min_diff_pixels:
     for i in range(n_frames - 1):
         f1 = raw[i * frame_size : (i + 1) * frame_size]
         f2 = raw[(i + 1) * frame_size : (i + 2) * frame_size]
-        diffs = sum(1 for a, b in zip(f1, f2) if abs(a - b) > pixel_threshold)
+        diffs = sum(1 for a, b in zip(f1, f2, strict=False) if abs(a - b) > pixel_threshold)
         if diffs > min_diff_pixels:
             return False
 

@@ -132,7 +132,7 @@ def _verify_internet_cutoff(router, adb, elapsed):
         log.info(f"Ping to {PING_HOST} failed — internet cut off (unbound ping)")
         return elapsed
 
-    assert False, "Internet still accessible after session expiry (wlan0 + unbound ping)"
+    raise AssertionError("Internet still accessible after session expiry (wlan0 + unbound ping)")
 
 
 def metering_test_setup(router, adb, wifi, cashu, test_pricing_fn,

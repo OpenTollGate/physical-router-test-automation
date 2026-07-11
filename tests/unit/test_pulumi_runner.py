@@ -164,7 +164,9 @@ class TestDestroyVm:
 
 class TestCleanupStale:
     def test_calls_super_then_cleans_old_stack_files(self, tmp_path):
-        import json, os, time as _time
+        import json
+        import os
+        import time as _time
         provider = PulumiSHCProvider()
         with patch.object(SHCProvider, "cleanup_stale", return_value=2):
             with patch.dict(os.environ, {"PULUMI_WORKDIR": str(tmp_path)}):

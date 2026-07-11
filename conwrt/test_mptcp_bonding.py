@@ -163,8 +163,8 @@ def test_mptcp_failover_connection_survives(ssh_router):
 
     post_kill_lines = [l for l in lines if "0.00" in l and "bits" in l]
     if post_kill_lines:
-        print(f"\nThroughput dropped to 0 after kill (expected)")
-        print(f"Connection survived: iperf3 completed normally")
+        print("\nThroughput dropped to 0 after kill (expected)")
+        print("Connection survived: iperf3 completed normally")
 
     assert "Connecting to host" in result, "iperf3 did not start"
     print(f"\nPASS: MPTCP connection survived {WAN1_IFACE} failure")

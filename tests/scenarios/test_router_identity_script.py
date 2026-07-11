@@ -221,7 +221,7 @@ class Sandbox:
             check=True,
         )
 
-    def run(self, timeout: int = 30) -> "Result":
+    def run(self, timeout: int = 30) -> Result:
         env = (f"SANDBOX={self.path} "
                f"UCI_LOG={self.path}/logs/uci.log "
                f"LOGGER_LOG={self.path}/logs/logger.log ")

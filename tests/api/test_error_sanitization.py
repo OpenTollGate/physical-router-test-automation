@@ -34,7 +34,7 @@ def test_ln_invoice_error_sanitized(router):
     import requests
     try:
         resp = requests.post(
-            f"http://[::1]:2121/ln-invoice",
+            "http://[::1]:2121/ln-invoice",
             json={"amount": 1, "mint_url": "http://nonexistent.invalid"},
             timeout=10
         )
