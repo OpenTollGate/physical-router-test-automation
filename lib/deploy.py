@@ -21,7 +21,11 @@ COORDINATION_RELAYS = [
 
 #: Nostr pubkey CI uses to sign all release/build events (kind 1063 + 30078).
 #: Matches AGENTS.md "Publisher pubkey".
+#: NOTE: the CI bot key was rotated. The resolver now queries WITHOUT an author
+#: filter (-a) and relies on the n=tollgate-wrt tag instead, so it works
+#: regardless of which key the CI uses. Both keys are listed here for reference.
 NOSTR_PUBLISHER_PUBKEY = "5075e61f0b048148b60105c1dd72bbeae1957336ae5824087e52efa374f8416a"
+NOSTR_PUBLISHER_PUBKEY_NEW = "76c714199ad17278276d4cd51ddec7d0df0715a91b2f2f03f16c03925b3a0911"
 
 #: Blossom servers tried in order when the primary URL from a NIP-94 event
 #: returns 404. CI publishes to all of these (BLOSSOM_MIN_SUCCESS=2), but
@@ -601,7 +605,10 @@ def _resolve_blossom_binary(commit: str | None, arch: str, fmt: str = "", branch
     best_any_ts = 0
 
     # Kind 1063 — persistent file metadata (authoritative).
-    for e in _nak_req(["-k", "1063", "-a", NOSTR_PUBLISHER_PUBKEY,
+    # No -a (author) filter: the CI bot key was rotated, and we rely on the
+    # n=tollgate-wrt tag to identify TollGate packages. SHA256 content
+    # addressing protects against forged events.
+    for e in _nak_req(["-k", "1063",
                        "-t", "n=tollgate-wrt", "-l", "120"]):
         tags = _tags_as_dict(e.get("tags", []))
         art, ts = _event_matches(e, arch=arch, fmt=fmt, branch=branch,
