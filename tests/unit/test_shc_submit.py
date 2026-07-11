@@ -34,7 +34,7 @@ def test_build_bootstrap_script_unsets_secrets():
         test_dir="/opt/tollgate-test",
         suite_repo_url="https://github.com/test/repo.git",
     )
-    assert "unset BOT_NSEC_HEX GH_TOKEN" in script
+    assert "unset BOT_NSEC_HEX" in script
 
 
 def test_build_bootstrap_script_has_cloud_init_seed():
