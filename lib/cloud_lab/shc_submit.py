@@ -582,25 +582,22 @@ def submit_run_shc(
         ssh_base.extend(["-i", priv_key])
 
     # 5. Wait for SSH daemon
-    # On Starter (1C), cloud-init key propagation takes 20+ min — password auth works in ~5 min
+    # cloud-init key propagation can take 5-10 min on any tier. Try to get
+    # password credentials as a fallback for all tiers, not just starter.
     use_sshpass = False
     vm_password = ""
-    if tier == "starter":
-        try:
-            creds = client.get_vm_credentials(service_id)
-            vm_password = creds.get("password", "") or creds.get("root_password", "")
-        except Exception:
-            pass
-        if vm_password:
-            use_sshpass = True
-            ssh_wait_pw = vm_password
-            ssh_wait_timeout = 900
-        else:
-            ssh_wait_pw = ""
-            ssh_wait_timeout = 600
+    try:
+        creds = client.get_vm_credentials(service_id)
+        vm_password = creds.get("password", "") or creds.get("root_password", "")
+    except Exception:
+        pass
+    if vm_password:
+        use_sshpass = True
+        ssh_wait_pw = vm_password
+        ssh_wait_timeout = 900
     else:
         ssh_wait_pw = ""
-        ssh_wait_timeout = 300
+        ssh_wait_timeout = 600
 
     try:
         _wait_for_ssh(ssh_base, ssh_target, timeout=ssh_wait_timeout, sshpass_password=ssh_wait_pw)

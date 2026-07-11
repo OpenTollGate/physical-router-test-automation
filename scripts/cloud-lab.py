@@ -218,7 +218,7 @@ def cmd_ssh(args: argparse.Namespace) -> int:
 
 def cmd_submit(args: argparse.Namespace) -> int:
     cloud = getattr(args, "cloud", "gcp")
-    if cloud != "pulumi":
+    if cloud not in ("pulumi", "shc"):
         _warn_running_vms()
     target = resolve_target(
         pr=cast(str | None, args.pr),
