@@ -1437,11 +1437,22 @@ function buildTestHierarchy(run, summary) {
     }
 
     if (!matched) {
+      const mime = file.mime || guessMimeFromPath(path);
       const vm = path.match(/^raw\/([^/]+)\//);
       if (vm) {
         const suiteName = vm[1];
-        if (!suiteFiles[suiteName]) suiteFiles[suiteName] = [];
-        suiteFiles[suiteName].push(file);
+        if (mime.startsWith("video/")) {
+          const baseName = path.split("/").pop().replace(/\.[^.]+$/, "");
+          if (!testArtifacts.has(baseName)) {
+            testArtifacts.set(baseName, { screenshots: [], videos: [], html: [] });
+          }
+          testArtifacts.get(baseName).videos.push(file);
+          testArtifacts.get(baseName)._standalone = true;
+          matchedUrls.add(file.url);
+        } else {
+          if (!suiteFiles[suiteName]) suiteFiles[suiteName] = [];
+          suiteFiles[suiteName].push(file);
+        }
       }
     }
     if (path === "debug-logs.json") {
