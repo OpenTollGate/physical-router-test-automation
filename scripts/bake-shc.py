@@ -64,9 +64,8 @@ def cmd_bake(args: argparse.Namespace) -> int:
 
     _step(1, total_steps, "Ordering SHC VM (2C/8GB/16GB)")
     t0 = time.monotonic()
-    # Standard tier: 2C/8GB/16GB Dev VPS
-    PACKAGE_ID = SHC_PACKAGE_ID_STANDARD
-    PRICING_ID = SHC_PRICING_ID_STANDARD
+    PACKAGE_ID = 81
+    PRICING_ID = 245
 
     result = client.submit_order(
         hostname=hostname,
@@ -195,7 +194,6 @@ def cmd_bake(args: argparse.Namespace) -> int:
         print(f"  export TOLLGATE_BAKED_SHC_IP={vm_ip}")
         print("\nOr cancel when done:")
         print(f"  python3 -c \"from shc_toolkit.client import SHCClient; SHCClient().cancel_vm({sid}, immediate=True)\"")
-    from lib.cloud_lab.shc_submit import SHC_PACKAGE_ID_STANDARD, SHC_PRICING_ID_STANDARD
         return 0
 
     except Exception as e:
