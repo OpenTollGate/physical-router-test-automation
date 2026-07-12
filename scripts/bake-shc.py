@@ -45,7 +45,6 @@ def _ssh(ip: str, cmd: str, timeout: int = 300, ssh_key: str = "") -> str:
 def cmd_bake(args: argparse.Namespace) -> int:
     sys.path.insert(0, os.environ.get("SHC_TOOLKIT_PATH", "/home/ubuntu/src/shc-toolkit"))
     from shc_toolkit.client import SHCClient
-    from lib.cloud_lab.shc_submit import SHC_PACKAGE_ID_STANDARD, SHC_PRICING_ID_STANDARD
 
     ssh_key_pub = args.ssh_key
     if not Path(ssh_key_pub).exists():
