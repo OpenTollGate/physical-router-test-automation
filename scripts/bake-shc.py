@@ -45,6 +45,7 @@ def _ssh(ip: str, cmd: str, timeout: int = 300, ssh_key: str = "") -> str:
 def cmd_bake(args: argparse.Namespace) -> int:
     sys.path.insert(0, os.environ.get("SHC_TOOLKIT_PATH", "/home/ubuntu/src/shc-toolkit"))
     from shc_toolkit.client import SHCClient
+    from lib.cloud_lab.shc_submit import SHC_PACKAGE_ID_STANDARD, SHC_PRICING_ID_STANDARD
 
     ssh_key_pub = args.ssh_key
     if not Path(ssh_key_pub).exists():
@@ -63,22 +64,14 @@ def cmd_bake(args: argparse.Namespace) -> int:
 
     _step(1, total_steps, "Ordering SHC VM (2C/8GB/16GB)")
     t0 = time.monotonic()
-    packages = client.list_packages()
-    pkg = next((p for p in packages if "2C" in str(p.get("name", "")) and "8GB" in str(p.get("name", ""))), packages[0] if packages else None)
-    if not pkg:
-        print("ERROR: No suitable SHC package found", file=sys.stderr)
-        return 1
-
-    pricing = client.get_pricing_options(pkg["id"])
-    price = pricing[0] if pricing else None
-    if not price:
-        print("ERROR: No pricing option found", file=sys.stderr)
-        return 1
+    # Standard tier: 2C/8GB/16GB Dev VPS
+    PACKAGE_ID = SHC_PACKAGE_ID_STANDARD
+    PRICING_ID = SHC_PRICING_ID_STANDARD
 
     result = client.submit_order(
         hostname=hostname,
-        package_id=pkg["id"],
-        pricing_id=price["id"],
+        package_id=PACKAGE_ID,
+        pricing_id=PRICING_ID,
         idempotency_key=f"bake-{hostname}",
     )
     sids = result.get("service_ids", [])
@@ -202,6 +195,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
         print(f"  export TOLLGATE_BAKED_SHC_IP={vm_ip}")
         print("\nOr cancel when done:")
         print(f"  python3 -c \"from shc_toolkit.client import SHCClient; SHCClient().cancel_vm({sid}, immediate=True)\"")
+    from lib.cloud_lab.shc_submit import SHC_PACKAGE_ID_STANDARD, SHC_PRICING_ID_STANDARD
         return 0
 
     except Exception as e:
