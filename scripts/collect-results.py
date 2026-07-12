@@ -367,6 +367,52 @@ def _humanize_test_name(name):
     return "Tests " + name.replace("_", " ").capitalize()
 
 
+_TIER_MARKERS = {
+    "tests/api/": "api",
+    "tests/phone/": "phone",
+    "tests/scenarios/": "hardware",
+    "tests/unit/": "unit",
+    "tests/web/": "web",
+}
+
+
+def _infer_markers(file_path, name):
+    markers = []
+    fpath = (file_path or "").replace("\\", "/").lower()
+    for path_fragment, marker in _TIER_MARKERS.items():
+        if path_fragment in fpath:
+            markers.append(marker)
+            break
+    for tier in ("smoke", "critical", "extended", "slow", "config", "destructive"):
+        if f"test_{tier}" in fpath or f"/{tier}/" in fpath:
+            markers.append(tier)
+    return markers
+
+
+def _extract_docstring(test_dir, file_path, func_name):
+    import ast
+    if not file_path or not func_name:
+        return None
+    candidates = [
+        os.path.join(test_dir, file_path + ".py"),
+        os.path.join(test_dir, file_path.replace("\\", "/") + ".py"),
+    ]
+    for path in candidates:
+        if not os.path.isfile(path):
+            continue
+        try:
+            tree = ast.parse(open(path).read(), filename=path)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+                    doc = ast.get_docstring(node)
+                    if doc:
+                        first_line = doc.strip().split("\n")[0]
+                        return first_line
+        except Exception:
+            pass
+    return None
+
+
 def _humanize_failure(message):
     if not message:
         return None
@@ -648,6 +694,13 @@ def main():
                 if meta.get("markers"):
                     test["markers"] = meta["markers"]
                 break
+
+        if not test["markers"]:
+            test["markers"] = _infer_markers(test.get("file", ""), test["name"])
+
+        docstring = _extract_docstring(run_dir, test.get("file", ""), test["name"])
+        if docstring:
+            test["description"] = docstring
 
     failed_tests = [t for t in all_tests if t["outcome"] in ("failed", "error")]
     skipped_tests = [t for t in all_tests if t["outcome"] == "skipped"]
