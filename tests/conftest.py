@@ -756,7 +756,7 @@ def pytest_collection_modifyitems(config, items):
     config._tollgate_test_metadata = metadata
 
 
-def pytest_sessionfinish(session, exitstatus):
+def _save_test_metadata(session):
     metadata = getattr(session.config, "_tollgate_test_metadata", None)
     if not metadata:
         return
@@ -1146,6 +1146,8 @@ def pytest_sessionstart(session):
 
 
 def pytest_sessionfinish(session, exitstatus):
+    _save_test_metadata(session)
+
     global _session_lock, _hardware_lock_acquired
     if _hardware_lock_acquired:
         from lib.hardware_lock import release_hardware_lock
