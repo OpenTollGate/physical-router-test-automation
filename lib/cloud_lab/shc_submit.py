@@ -241,7 +241,7 @@ echo "Lease kill switch armed (cancels SHC service + shuts down)"
 
 TOTAL_RAM=$(free -m | awk '/^Mem:/{{print $2}}')
 if [ "$TOTAL_RAM" -le 4096 ] && [ "$(swapon --show 2>/dev/null | wc -l)" -eq 0 ]; then
-  sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && echo "Swap enabled (2G)"
+  sudo fallocate -l 512M /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && echo "Swap enabled (512M)"
 fi
 
 step 1 "Installing system packages..."
@@ -253,6 +253,7 @@ sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils \
   fuse3 libfuse3-dev ca-certificates cmake g++ libnl-3-dev libnl-genl-3-dev \
   libsecp256k1-dev jq genisoimage ffmpeg seabios ipxe-qemu \
   libsecp256k1-dev autoconf automake libtool || fail 1 "apt-get install"
+sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/*
 echo "[1/$N_STEPS] done"
 
 step 2 "Installing Rust..."
@@ -299,7 +300,8 @@ echo "[7/$N_STEPS] done"
 step 8 "Creating cashu venv..."
 sudo python3 -m venv /opt/cashu-venv || fail 8 "cashu venv"
 sudo /opt/cashu-venv/bin/pip install -q --upgrade pip
-sudo /opt/cashu-venv/bin/pip install -q cashu 'marshmallow<4' || fail 8 "cashu install"
+echo 'scikit-build-core<0.10' > /tmp/pip-constraint.txt && \
+  PIP_CONSTRAINT=/tmp/pip-constraint.txt sudo -E /opt/cashu-venv/bin/pip install -q cashu 'marshmallow<4' || fail 8 "cashu install"
 MODELS=$(/opt/cashu-venv/bin/python3 -c 'import cashu.core.models; print(cashu.core.models.__file__)')
 sudo sed -i 's/    active: bool$/    active: bool = True/' "$MODELS"
 echo "[8/$N_STEPS] done"
@@ -434,7 +436,7 @@ echo "=== Pre-flight complete ==="
 step 15 "Running worker pipeline..."
 cd {test_dir}
 echo "PIPELINE_START" >> /tmp/tollgate-status
-unset BOT_NSEC_HEX GH_TOKEN
+unset BOT_NSEC_HEX
 echo "  Worker env: TOLLGATE_RUN_ID=$TOLLGATE_RUN_ID SUT_BRANCH=$TOLLGATE_SUT_BRANCH BACKEND=$TOLLGATE_BACKEND PUBLISH=$TOLLGATE_PUBLISH"
 /opt/tollgate-venv/bin/python3 -m lib.cloud_lab.worker --from-env
 WORKER_EXIT=$?
@@ -580,25 +582,22 @@ def submit_run_shc(
         ssh_base.extend(["-i", priv_key])
 
     # 5. Wait for SSH daemon
-    # On Starter (1C), cloud-init key propagation takes 20+ min — password auth works in ~5 min
+    # cloud-init key propagation can take 5-10 min on any tier. Try to get
+    # password credentials as a fallback for all tiers, not just starter.
     use_sshpass = False
     vm_password = ""
-    if tier == "starter":
-        try:
-            creds = client.get_vm_credentials(service_id)
-            vm_password = creds.get("password", "") or creds.get("root_password", "")
-        except Exception:
-            pass
-        if vm_password:
-            use_sshpass = True
-            ssh_wait_pw = vm_password
-            ssh_wait_timeout = 900
-        else:
-            ssh_wait_pw = ""
-            ssh_wait_timeout = 600
+    try:
+        creds = client.get_vm_credentials(service_id)
+        vm_password = creds.get("password", "") or creds.get("root_password", "")
+    except Exception:
+        pass
+    if vm_password:
+        use_sshpass = True
+        ssh_wait_pw = vm_password
+        ssh_wait_timeout = 900
     else:
         ssh_wait_pw = ""
-        ssh_wait_timeout = 300
+        ssh_wait_timeout = 600
 
     try:
         _wait_for_ssh(ssh_base, ssh_target, timeout=ssh_wait_timeout, sshpass_password=ssh_wait_pw)
@@ -654,7 +653,7 @@ def submit_run_shc(
         f"OPENWRT_VERSION={shlex.quote(os.environ.get('OPENWRT_VERSION', '24.10.1'))}",
         f"TOLLGATE_DEPLOY_MODE={shlex.quote(os.environ.get('TOLLGATE_DEPLOY_MODE', 'framework'))}",
         f"BLOSSOM_SERVER={shlex.quote(os.environ.get('BLOSSOM_SERVER', 'https://blossom.psbt.me'))}",
-        f"NOSTR_RELAYS={shlex.quote(os.environ.get('NOSTR_RELAYS', 'wss://relay.cashu.email'))}",
+        f"NOSTR_RELAYS={shlex.quote(os.environ.get('NOSTR_RELAYS', 'wss://relay.cashu.email,wss://relay2.orangesync.tech'))}",
         f"TOLLGATE_BACKEND={shlex.quote(target.backend)}",
         f"TOLLGATE_PUBLISH={'true' if publish else 'false'}",
         f"TOLLGATE_QUICK={'true' if quick else 'false'}",

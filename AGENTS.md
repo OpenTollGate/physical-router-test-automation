@@ -771,7 +771,7 @@ The fallback logic in `_create_vm_with_fallback()` tries all Tier 1 zones, then 
 │    [7] Select mint (CDK V2 if backend supports it, else V1)     │
 │    [7.5] If --two-router: configure Beta merchant + Alpha reseller + fund wallet
 │    [8] Run tests: visual → API → vl-scenarios → scenarios       │
-│    [9] Collect results, publish to Nostr+Blossom (DVM lifecycle), self-delete        │
+│    [9] Collect results, publish to Nostr+Blossom (kind 30078), self-delete        │
 │                                                                  │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -913,7 +913,7 @@ Cloud lab VMs use a three-layer safety mechanism:
 
 ### Publish to Nostr+Blossom
 
-The publish step uses Nostr events + Blossom uploads. No git operations are involved, so there are no push races, conflicts, or concurrent run issues. Each run publishes independently with its own DVM lifecycle events (kind 5900/7000/6900).
+The publish step uses Nostr events + Blossom uploads. No git operations are involved, so there are no push races, conflicts, or concurrent run issues. Each run publishes independently with its own kind 30078 summary events.
 
 ### mac80211_hwsim virtual WiFi (experimental, opt-in)
 
@@ -1285,3 +1285,32 @@ The TollGate `.ipk` creates `/etc/config/firewall-tollgate` as a UCI-format fw4 
 **Fix**: Rename the file to `.disabled`, remove the UCI include reference, restart fw4.
 
 **Impact**: `pay_direct()` tests don't catch this because they SSH to the router and hit the backend directly. Only phone tests that verify actual internet access would detect the missing masquerade.
+
+### Identity derivation: public key vs private key (PR #193 review miss)
+
+PR #193 (`feat/first-boot-handover`) derived root and WiFi passwords from the **public key** (`pubKeyHex`), which is broadcast as npub to Nostr relays. Anyone who learns a router's npub could compute its root and WiFi passwords. The fix (commit `d1881c3`) changed `DeriveRootPassword` and `DeriveWiFiPassword` to use `privKeyHex` instead.
+
+**The principle**: when reviewing identity/key derivation code, always verify which key material feeds which derived value:
+- **Public key** → public attributes only (LAN IP, MAC addresses, npub)
+- **Private key** → secret values (passwords, mnemonics, WiFi credentials)
+
+**How it was missed**: the review focused on HTTP endpoint security (loopback-only checks, flag-file gating) and the security model documentation, but did not trace the actual Go derivation functions to verify the key material input. The docs described the derivation tree correctly but the implementation diverged.
+
+**Review checklist for identity derivation PRs**:
+1. Trace every `Derive*` function to its input key material
+2. Verify: public key inputs produce only public outputs
+3. Verify: private key inputs produce secret outputs
+4. Check that the private key is never exposed on any non-loopback endpoint
+5. Verify test fixtures use real key pairs, not hardcoded public keys
+
+### Port 2121 directly exposed to WiFi clients (defense-in-depth)
+
+The TollGate backend binds to `:2121` (all interfaces). Nodogsplash explicitly allows WiFi clients to reach it (`users_to_router='allow tcp port 2121'`). This is by design — the payment flow requires browser-to-backend HTTP calls. But it means every HTTP handler is remotely exploitable by anyone in WiFi range.
+
+The frontend fetches directly from `http://<router-ip>:2121/` in three places:
+- `tollgate.js`: `fetch(\`${baseUrl}/\`)` and `fetch(\`${baseUrl}/whoami\`)`
+- `cashu.js`: `fetch(\`${baseUrl}/\`, {method: 'POST'})`
+
+**Defense-in-depth fix (not yet implemented)**: move backend to `127.0.0.1:2121`, front with a CGI reverse proxy on nodogsplash's port 2050. Frontend changes to relative URLs (`/api/` instead of `http://<ip>:2121/`). This is a cross-repo refactor (backend + frontend + packaging).
+
+Tracked as: https://github.com/OpenTollGate/tollgate-module-basic-go/issues/213

@@ -1,64 +1,51 @@
 # Publishing Pipeline
 
-[Test results dashboard](https://tests.tollgate.me/) is a client-side SPA that reads DVM lifecycle events from Nostr relays and fetches artifacts from Blossom.
+[Test results dashboard](https://tests.tollgate.me/) is a client-side SPA that reads test run summaries from Nostr relays and fetches artifacts from Blossom.
 
-## Architecture
+## Current Pipeline (kind 30078)
 
 ```
-pytest → collect_and_render → publish_to_nostr (Blossom upload + NIP-94) → DVM lifecycle (kind 5900/7000/6900)
+pytest → collect_and_render → publish_to_nostr (Blossom upload + kind 30078 summary)
 ```
 
-### DVM Event Lifecycle (NIP-90)
+1. **Kind 30078 (parameterized replaceable)** — Run summary with pass/fail counts + Blossom artifact URLs
+2. All events tagged with `["t", "<project>"]` for project filtering
+3. Dashboard fetches kind 30078 from all runner pubkeys
 
-The cloud lab pipeline publishes a full DVM job lifecycle:
+## Legacy DVM Lifecycle (NIP-90) — DEPRECATED
 
-1. **Kind 5900 (job request)** — Published at pipeline start with branch, backend, scope params
-2. **Kind 7000 (processing)** — Feedback event: "Cloud lab pipeline starting"
-3. **Kind 7000 (success/error)** — Feedback event at pipeline end
-4. **Kind 6900 (result)** — Job result with pass/fail counts + Blossom artifact URLs
+The old pipeline published DVM job lifecycle events (kinds 5900/7000/6900).
+This is deprecated. Use kind 30078 instead. See:
+- ADR-007 in hackathon-tooling: NIP-90 DVM replaced by ContextVM
+- ContextVM migration guide: hackathon-tooling/patterns/contextvm/migration-from-nip-90.md
 
-All events link back to the kind 5900 request via `e` tag.
+## Artifact Storage (Blossom)
 
-### Blossom Upload (BUD-02 + BUD-11)
+Artifacts (screenshots, HTML reports, JSON results) are uploaded to Blossom
+via BUD-02 PUT /upload with kind 24242 auth events (BUD-11).
 
-Test artifacts are uploaded to [Blossom](https://github.com/hzrd149/blossom):
+Dashboard fetches artifacts on-demand from blossom.psbt.me.
 
-1. `lib/result_publisher.py` scans the results directory
-2. Files are uploaded to Blossom via `lib/blossom_publisher.py` (BUD-02 PUT /upload)
-3. Auth is signed via nak CLI (BUD-11, kind 24242 events)
-4. NIP-94 (kind 1063) file metadata events published per file (optional, off by default)
+## Domain Setup
 
-The result_publisher captures the Blossom URLs in a JSON manifest, which the pipeline passes to the kind 6900 DVM result event.
+**Dashboard is a Cloudflare Worker** deployed via `test-dashboard/wrangler.jsonc`.
+Deploys via `.github/workflows/deploy-reader.yml` on push to `docs/**`.
 
-### Kind 30078 (deprecated)
+**Worker domain**: `tests.cashu.email` (Cloudflare Worker with `custom_domain: true`)
 
-Previously published kind 30078 (NIP-78 app-specific data) summary events. Now gated behind `SKIP_30078_SUMMARY` env var (set to `true` by the cloud lab pipeline). The dashboard no longer fetches kind 30078 — only DVM kinds (5900/6900/7000/1063).
+**Alias domain**: `tests.tollgate.me` — `tollgate.me` is in a separate
+Cloudflare account, so it can't use Worker `custom_domain`. Instead, it uses
+a Redirect Rule in the `tollgate.me` zone that 301-redirects to
+`tests.cashu.email`. To set this up:
 
-## Dashboard (tests.tollgate.me)
+**tollgate.me Cloudflare Dashboard → Rules → Redirect Rules → Create**
 
-Static SPA served from `docs/` on the `main` branch via GitHub Pages. It:
+```
+Rule name: tests-redirect
+When: http.host eq "tests.tollgate.me"
+Then: Static redirect
+  URL: https://tests.cashu.email${http.request.uri}
+  Status: 301
+```
 
-- Connects to Nostr relay (`wss://relay.cashu.email`)
-- Fetches kind 5900/6900/7000/1063 events from ALL runner pubkeys
-- Renders a sidebar of test runs with pass/fail/skip stats
-- Shows screenshots and file artifacts from Blossom URLs
-- Supports search, filter, mobile push/pop navigation
-
-## Configuration
-
-All relay and Blossom server URLs are centralized in `lib/constants.py`:
-
-| Setting | Default | Override via env |
-|---------|---------|------------------|
-| Nostr relay | `wss://relay.cashu.email` | `NOSTR_RELAYS` (comma-separated list) |
-| Blossom server | `https://blossom.psbt.me` | `BLOSSOM_SERVERS` (comma-separated list) |
-
-## Verification
-
-After publishing, `verify_nostr_publish()` queries the relay with `nak req -k 6900` for the result event matching `run_id` in the content JSON, then fetches one Blossom URL to confirm the blob is live.
-
-## Related
-
-- [hackathon-tooling/nostr-compute-kinds.md](https://github.com/Amperstrand/hackathon-tooling/blob/main/docs/nostr-compute-kinds.md) — NIP-78 vs NIP-90 analysis, kind 5900 decision
-- [hackathon-tooling/dvm-runner-pattern.md](https://github.com/Amperstrand/hackathon-tooling/blob/main/docs/dvm-runner-pattern.md) — DVM runner reference architecture
-- [hackathon-tooling/blossomfs-build-cache.md](https://github.com/Amperstrand/hackathon-tooling/blob/main/docs/blossomfs-build-cache.md) — Content-addressable build cache design
+Once configured, `tests.tollgate.me/foo` → `tests.cashu.email/foo` instantly.

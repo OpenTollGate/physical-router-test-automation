@@ -40,7 +40,7 @@ import numpy as np
 def load_json(path):
     """Load a JSON file, returning None on failure."""
     try:
-        with open(path, "r") as f:
+        with open(path) as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return None
@@ -49,7 +49,7 @@ def load_json(path):
 def load_text(path):
     """Load a text file, returning None on failure."""
     try:
-        with open(path, "r") as f:
+        with open(path) as f:
             return f.read()
     except (FileNotFoundError, OSError):
         return None
@@ -222,7 +222,7 @@ def fig_to_base64(fig, format="png", dpi=120):
     plt.close(fig)
     buf.seek(0)
     data = base64.b64encode(buf.read()).decode("ascii")
-    return "data:image/{};base64,{}".format(format, data)
+    return f"data:image/{format};base64,{data}"
 
 
 def file_to_base64(path, mime_type):
@@ -230,7 +230,7 @@ def file_to_base64(path, mime_type):
     try:
         with open(path, "rb") as f:
             data = base64.b64encode(f.read()).decode("ascii")
-        return "data:{};base64,{}".format(mime_type, data)
+        return f"data:{mime_type};base64,{data}"
     except (FileNotFoundError, OSError):
         return None
 
@@ -347,7 +347,7 @@ def draw_topology_frame(tree_snap, addr_map, title):
         for d in range(max_depth + 1):
             y = -d
             ax.text(
-                -0.08, y, "d={}".format(d), transform=ax.transData,
+                -0.08, y, f"d={d}", transform=ax.transData,
                 fontsize=8, color="#666666", va="center", ha="right",
             )
 
@@ -415,7 +415,7 @@ def make_topology_gif(tree_warmup, tree_final, addr_map, outpath):
         return outpath
     except Exception as e:
         plt.close(fig)
-        print("Warning: GIF creation failed: {}".format(e), file=sys.stderr)
+        print(f"Warning: GIF creation failed: {e}", file=sys.stderr)
         return None
 
 
@@ -443,7 +443,7 @@ def plot_link_quality(mmp_snap, addr_map):
             dst_addr = peer.get("peer")
             dst_name = peer.get("display_name")
             dst_id = resolve_name(dst_name, dst_addr, addr_map)
-            pair_key = "{}->{}".format(src_id, dst_id)
+            pair_key = f"{src_id}->{dst_id}"
             if pair_key in seen:
                 continue
             seen.add(pair_key)
@@ -466,7 +466,7 @@ def plot_link_quality(mmp_snap, addr_map):
         ax.axis("off")
         return fig
 
-    labels = ["{}->{}".format(p[0], p[1]) for p in pairs]
+    labels = [f"{p[0]}->{p[1]}" for p in pairs]
     goodputs = [p[2] for p in pairs]
     srtts = [p[3] for p in pairs]
     losses = [p[4] * 100 for p in pairs]  # as percentage
@@ -481,7 +481,7 @@ def plot_link_quality(mmp_snap, addr_map):
     ax1.set_ylabel("Goodput (bps)", fontsize=11)
     ax1.set_title("Per-Link Goodput", fontsize=13, fontweight="bold")
     ax1.axhline(y=np.mean(goodputs), color="#1565C0", linestyle="--",
-                alpha=0.5, label="mean={:.1f}".format(np.mean(goodputs)))
+                alpha=0.5, label=f"mean={np.mean(goodputs):.1f}")
     ax1.legend(fontsize=9)
     ax1.grid(axis="y", alpha=0.3)
 
@@ -491,7 +491,7 @@ def plot_link_quality(mmp_snap, addr_map):
     ax2.set_ylabel("SRTT (ms)", fontsize=11)
     ax2.set_title("Per-Link Smoothed RTT", fontsize=13, fontweight="bold")
     ax2.axhline(y=np.mean(srtts), color="#2E7D32", linestyle="--",
-                alpha=0.5, label="mean={:.2f}".format(np.mean(srtts)))
+                alpha=0.5, label=f"mean={np.mean(srtts):.2f}")
     ax2.legend(fontsize=9)
     ax2.grid(axis="y", alpha=0.3)
 
@@ -502,7 +502,7 @@ def plot_link_quality(mmp_snap, addr_map):
     ax3.set_title("Per-Link Packet Loss", fontsize=13, fontweight="bold")
     if max(losses) > 0:
         ax3.axhline(y=np.mean(losses), color="#B71C1C", linestyle="--",
-                     alpha=0.5, label="mean={:.3f}".format(np.mean(losses)))
+                     alpha=0.5, label=f"mean={np.mean(losses):.3f}")
         ax3.legend(fontsize=9)
     ax3.set_xticks(x)
     ax3.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
@@ -554,7 +554,7 @@ def plot_tree_depth(tree_warmup, tree_final):
     ax.set_title("Spanning Tree Depth Distribution", fontsize=13,
                  fontweight="bold")
     ax.set_xticks(x)
-    ax.set_xticklabels(["d={}".format(d) for d in range(max_d + 1)])
+    ax.set_xticklabels([f"d={d}" for d in range(max_d + 1)])
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
     plt.tight_layout()
@@ -927,14 +927,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 
 def make_stat_box(value, label, cls=""):
-    return '<div class="stat-box"><span class="stat-value {}">{}</span><span class="stat-label">{}</span></div>'.format(
-        cls, value, label
-    )
+    return f'<div class="stat-box"><span class="stat-value {cls}">{value}</span><span class="stat-label">{label}</span></div>'
 
 
 def generate_report(results_dir, output_path):
     """Main entry: load all data, generate charts, write HTML report."""
-    print("Loading data from {}...".format(results_dir))
+    print(f"Loading data from {results_dir}...")
 
     # Load snapshots
     tree_warmup = load_json(os.path.join(results_dir, "tree-snapshot-warmup.json"))
@@ -955,8 +953,7 @@ def generate_report(results_dir, output_path):
     print("Scanning node logs for rekey/parent-switch events...")
     rekey_events = extract_log_events(results_dir, ["rekey", "rekeying", "key rotation"])
     parent_events = extract_log_events(results_dir, ["parent switched"])
-    print("  Found {} rekey events, {} parent switches".format(
-        len(rekey_events), len(parent_events)))
+    print(f"  Found {len(rekey_events)} rekey events, {len(parent_events)} parent switches")
 
     # -----------------------------------------------------------------------
     # Generate charts
@@ -971,9 +968,9 @@ def generate_report(results_dir, output_path):
         if gif_result:
             gif_uri = file_to_base64(gif_result, "image/gif")
             if gif_uri:
-                topology_media = '<img src="{}" alt="Topology convergence" style="max-width:100%;border-radius:8px;">'.format(gif_uri)
+                topology_media = f'<img src="{gif_uri}" alt="Topology convergence" style="max-width:100%;border-radius:8px;">'
             else:
-                topology_media = "<p>GIF created at {} but could not be embedded.</p>".format(gif_result)
+                topology_media = f"<p>GIF created at {gif_result} but could not be embedded.</p>"
         else:
             # Fallback: two side-by-side PNGs
             print("  GIF failed, generating side-by-side PNGs instead...")
@@ -988,11 +985,11 @@ def generate_report(results_dir, output_path):
             topology_media = (
                 '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
                 '<div style="flex:1;min-width:300px;"><h3>Warmup</h3>'
-                '<img src="{}" style="max-width:100%;border-radius:8px;border:1px solid #233;"></div>'
+                f'<img src="{uri_w}" style="max-width:100%;border-radius:8px;border:1px solid #233;"></div>'
                 '<div style="flex:1;min-width:300px;"><h3>Final</h3>'
-                '<img src="{}" style="max-width:100%;border-radius:8px;border:1px solid #233;"></div>'
+                f'<img src="{uri_f}" style="max-width:100%;border-radius:8px;border:1px solid #233;"></div>'
                 '</div>'
-            ).format(uri_w, uri_f)
+            )
     else:
         topology_media = "<p>No tree snapshot data available.</p>"
 
@@ -1102,10 +1099,10 @@ def generate_report(results_dir, output_path):
     with open(output_path, "w") as f:
         f.write(html)
 
-    print("\nReport written to: {}".format(output_path))
+    print(f"\nReport written to: {output_path}")
     print("  Embedded: topology GIF, depth chart, link quality, rekey timeline, congestion")
     if gif_path and os.path.exists(gif_path):
-        print("  Topology GIF also saved as: {}".format(gif_path))
+        print(f"  Topology GIF also saved as: {gif_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -1135,7 +1132,7 @@ def main():
 
     results_dir = os.path.abspath(args.results_dir)
     if not os.path.isdir(results_dir):
-        print("Error: results directory not found: {}".format(results_dir),
+        print(f"Error: results directory not found: {results_dir}",
               file=sys.stderr)
         sys.exit(1)
 

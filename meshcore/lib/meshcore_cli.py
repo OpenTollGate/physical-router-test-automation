@@ -16,7 +16,7 @@ class MeshCoreCLI:
         self.timeout = timeout
         self.binary = os.path.expanduser("~/.local/bin/meshcore-cli")
 
-    def _run(self, *args, timeout: Optional[int] = None) -> dict:
+    def _run(self, *args, timeout: int | None = None) -> dict:
         """Run meshcore-cli with JSON output. Returns parsed JSON or raw output."""
         cmd = [
             self.binary,
@@ -102,7 +102,7 @@ class MeshCoreCLI:
             time.sleep(5)
         return False
 
-    def wait_for_message(self, pattern: str, max_wait: int = 60) -> Optional[str]:
+    def wait_for_message(self, pattern: str, max_wait: int = 60) -> str | None:
         """Poll for messages until one matches the pattern."""
         deadline = time.time() + max_wait
         while time.time() < deadline:

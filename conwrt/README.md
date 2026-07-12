@@ -30,11 +30,20 @@ source ~/.tollgate-test-venv/bin/activate
 # Run all conwrt tests
 pytest conwrt/ -v
 
+# Run only use case config tests
+pytest conwrt/test_use_cases.py -v
+
+# Run a specific use case
+pytest conwrt/test_use_cases.py -v -k adguard
+
 # Run only SQM config tests (no client needed)
 pytest conwrt/test_sqm_functional.py -v -k "not bufferbloat"
 
 # Run full bufferbloat test (needs client host)
 pytest conwrt/test_sqm_functional.py::test_sqm_reduces_bufferbloat -v
+
+# Run MPTCP bonding tests (needs BSBF server + MPTCP kernel)
+pytest conwrt/test_mptcp_bonding.py -v
 ```
 
 ## Cloud Lab (SHC/GCP)
@@ -47,13 +56,58 @@ pytest conwrt/test_sqm_functional.py::test_sqm_reduces_bufferbloat -v
   --publish
 ```
 
-## Test Inventory
+## QEMU VM Test Runner
 
-| Test | What it verifies | Needs client? |
-|------|-----------------|---------------|
-| `test_router_running_openwrt` | Target is OpenWrt | No |
-| `test_sqm_scripts_installed` | sqm-scripts package present | No |
-| `test_conwrt_configure_applies_sqm` | conwrt configure creates correct UCI state | No |
-| `test_sqm_service_running` | SQM service enabled and active | No |
-| `test_tc_qdisc_has_cake` | tc qdisc shows CAKE/fq_codel | No |
-| `test_sqm_reduces_bufferbloat` | Latency under load < 50ms | Yes |
+`run_use_case_tests.py` boots an OpenWrt QEMU VM and runs all use cases
+end-to-end, capturing evidence and publishing to Nostr/Blossom:
+
+```bash
+# Full run with evidence publishing
+python3 conwrt/run_use_case_tests.py \
+  --openwrt-img /tmp/openwrt.img \
+  --nsec ~/.config/prta/nsec \
+  --blossom-server https://blossom.psbt.me
+
+# Single use case, skip publishing
+python3 conwrt/run_use_case_tests.py \
+  --openwrt-img /tmp/openwrt.img \
+  --use-case sqm \
+  --skip-publish
+```
+
+## Use Case Test Inventory
+
+All 16 use cases in `test_use_cases.py` (parametrized, run against a real router):
+
+| Use Case | What it verifies | Packages |
+|----------|-----------------|----------|
+| `ssh-hardening` | PasswordAuth off, RootPasswordAuth off | — |
+| `sqm` | CAKE qdisc on eth0, correct speeds | sqm-scripts |
+| `doh` | https-dns-proxy resolver_url set | https-dns-proxy |
+| `wireguard-client` | wg0 interface, peer endpoint configured | wireguard-tools, kmod-wireguard |
+| `nodns` | dnsmasq nodns domain + server | — |
+| `mwan3` | mwan3 status shows wan interface | mwan3, iptables-nft |
+| `pbr` | pbr.config enabled, nft_file_helper | pbr |
+| `adguard` | AdGuard Home enabled, dnsmasq forwards to it | adguardhome |
+| `auto-sqm` | auto_sqm.config with static speeds | sqm-scripts, iperf3 |
+| `guest-wifi` | Guest network/firewall zone (REJECT) | — |
+| `openclash` | OpenClash config with Meta core | luci-app-openclash, bash |
+| `ssl` | uhttpd HTTPS on port 443 with cert | libustream-wolfssl |
+| `tollgate-security` | RFC 1918 DROP rules on firewall | — |
+| `travelmate` | travelmate enabled with radio0 | travelmate |
+| `vpn-node` | VPN listing script + nsec file | wireguard-tools |
+| `wireguard-server` | wg0 server interface + firewall zones | wireguard-tools, qrencode |
+
+## Other Test Files
+
+| Test File | What it verifies | Needs client? |
+|-----------|-----------------|---------------|
+| `test_sqm_functional.py` | SQM installation, UCI state, qdisc, bufferbloat | Bufferbloat: Yes |
+| `test_mptcp_bonding.py` | MPTCP kernel, BSBF endpoints, throughput, failover | No (needs BSBF server) |
+| `test_vpn_e2e.py` | VPN payment flow end-to-end (Cashu → VPS) | No (needs nodns.shop) |
+| `publish_results.py` | Nostr/Blossom evidence publishing wrapper | No |
+
+## Evidence Publishing
+
+Test results are published as kind 30078 Nostr events with Blossom file attachments.
+View live results at [tests.tollgate.me](https://tests.tollgate.me) (select "conwrt" tab).

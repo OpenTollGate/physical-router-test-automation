@@ -115,7 +115,7 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
     """Publish test results to Blossom + Nostr.
 
     Uploads artifacts to Blossom via result_publisher, returns the manifest
-    dict with file URLs for the caller to include in DVM result events.
+    dict with file URLs for the caller to include in kind 30078 result events.
     """
     import shutil
 
@@ -161,7 +161,7 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
     manifest: dict[str, Any] = {}
     try:
         log.info("Publishing to Blossom (%s) + Nostr (%s)...", blossom, relays)
-        r = _run(cmd, timeout=600, check=False)
+        r = _run(cmd, timeout=1200, check=False)
         stdout = (r.stdout or "").strip()
         if r.returncode == 0:
             mp = Path(manifest_path)

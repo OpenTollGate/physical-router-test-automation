@@ -338,12 +338,12 @@ def select_test_mint(forced_mint: str = "auto") -> str:
 
     PUBLIC_TESTNUTS = "https://testnut.cashu.exchange"
 
-    # --- CDK V2 probe (Rust backend only) ---
-    # Go/gonuts v0.7.1 loads V2 keysets at startup but serializes them wrong
-    # in /swap requests: CDK rejects with "NUT02: ID length invalid, expected
-    # 8 bytes (short/v1) or 33 bytes (v2)".  Skip CDK V2 for Go entirely.
+    # --- CDK V2 probe (all backends) ---
+    # V2 keyset swap was verified working on Go backend (main @ f4dbf73,
+    # issue #176). The previous skip was based on a transient cloud run 8
+    # failure that was fixed by PR #167 (register all accepted mints).
     cdk_ok = False
-    if backend_type == "rust":
+    if True:  # was: if backend_type == "rust"
         try:
             probe_script = textwrap.dedent(f"""\
                 import os, json, time, sys
@@ -387,7 +387,7 @@ def select_test_mint(forced_mint: str = "auto") -> str:
         except Exception as exc:
             log.warning("V2 probe failed: %s", exc)
     else:
-        log.info("Go backend — skipping CDK V2 (gonuts /swap serializes V2 keyset IDs wrong)")
+        pass  # CDK V2 probe runs for all backends (issue #176)
 
     if cdk_ok:
         log.info("Validating CDK V2 mint with mint cycle...")

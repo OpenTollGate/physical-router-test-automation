@@ -1,4 +1,4 @@
-name: Deploy Reader Page to GitHub Pages
+name: Deploy Test Dashboard
 
 on:
   push:
@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - 'docs/**'
-      - 'CNAME'
   workflow_dispatch:
 
 permissions:
@@ -17,30 +16,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Inject cache-bust version
-        run: |
-          SHA=$(git rev-parse --short HEAD)
-          sed -i "s/__BUILD_SHA__/$SHA/g" docs/index.html
-          echo "Cache version: $SHA"
-          grep -o 'v=[a-f0-9]*' docs/index.html
-
-      - name: Deploy reader page to gh-pages
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Stage docs/ content + CNAME into a temp dir
-          mkdir /tmp/deploy
-          cp -r docs/* /tmp/deploy/
-          cp CNAME /tmp/deploy/ 2>/dev/null || true
-
-          # Create orphan branch with only the reader page
-          git checkout --orphan gh-pages-fresh
-          git rm -rf . 2>/dev/null || true
-
-          # Copy reader page content
-          cp -r /tmp/deploy/* .
-          git add -A
-          git commit -m "deploy: reader page $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          git push origin gh-pages-fresh:gh-pages --force
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cd test-dashboard && npm install
+      - name: Deploy dashboard Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: cd test-dashboard && npx wrangler deploy

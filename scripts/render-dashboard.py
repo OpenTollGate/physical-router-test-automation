@@ -230,7 +230,7 @@ def badge_status(run):
 
 def repo_base_url(repo):
     if repo and repo != "unknown" and "/" in repo:
-        return "https://github.com/%s" % repo
+        return f"https://github.com/{repo}"
     return ""
 
 
@@ -251,8 +251,7 @@ def collect_runs(reports_dir):
                 run["hash_dir"] = hash_dir_name
                 run["ts_dir"] = ts_dir_name
                 run["report_path"] = (
-                    "reports/%s/%s/report/index.html"
-                    % (hash_dir_name, ts_dir_name)
+                    f"reports/{hash_dir_name}/{ts_dir_name}/report/index.html"
                 )
                 run["badge_status"] = badge_status(run)
                 runs.append(run)
@@ -282,7 +281,7 @@ def parse_version(version_str):
     display = version_str
     if len(parts) == 3:
         show_prefix = prefix if len(prefix) <= 28 else prefix[:25] + "..."
-        display = "%s · #%s" % (show_prefix, run_number)
+        display = f"{show_prefix} · #{run_number}"
 
     return {
         "raw": version_str,
@@ -304,9 +303,9 @@ def build_commit_groups(runs):
         if commit == "unknown":
             fallback = ""
             if str(pr) not in ("0", "", "None"):
-                fallback = "pr-%s" % pr
+                fallback = f"pr-{pr}"
             elif branch and branch != "unknown":
-                fallback = "branch-%s" % branch
+                fallback = f"branch-{branch}"
             group_key = "unknown:%s" % (fallback or "metadata")
         if group_key not in commit_to_runs:
             commit_to_runs[group_key] = []
@@ -324,7 +323,7 @@ def build_commit_groups(runs):
                 pr = str(p)
                 break
         if pr:
-            pr_key = "pr-%s" % pr
+            pr_key = f"pr-{pr}"
             if pr_key not in pr_groups:
                 pr_groups[pr_key] = []
             pr_groups[pr_key].append(group_key)
@@ -389,9 +388,9 @@ def build_commit_groups(runs):
             "short": short,
             "branch": branch,
             "pr": pr if str(pr) not in ("0", "") else "",
-            "commit_url": "%s/commit/%s" % (base_url, commit) if base_url else "",
-            "branch_url": "%s/tree/%s" % (base_url, branch) if base_url and branch else "",
-            "pr_url": "%s/pull/%s" % (base_url, pr) if base_url and str(pr) not in ("0", "") else "",
+            "commit_url": f"{base_url}/commit/{commit}" if base_url else "",
+            "branch_url": f"{base_url}/tree/{branch}" if base_url and branch else "",
+            "pr_url": f"{base_url}/pull/{pr}" if base_url and str(pr) not in ("0", "") else "",
             "version": version_str,
             "version_info": version_info,
             "build_time": feature_meta.get("build_time", ""),
@@ -426,7 +425,7 @@ def build_commit_groups(runs):
             if not tier:
                 continue
             scope = run.get("scope", "")
-            key = "%s|%s" % (lab, tier)
+            key = f"{lab}|{tier}"
             seen_tiers.add(tier)
             seen_labs.add(lab)
             existing = matrix.get(key)
@@ -497,7 +496,7 @@ def build_environment(templates_dir):
     env.filters["format_duration"] = format_duration
     env.filters["esc"] = esc
     cast(dict[str, Any], env.globals)["get"] = get
-    cast(dict[str, Any], env.globals)["matrix_get"] = lambda m, l, t: m.get("%s|%s" % (l, t))
+    cast(dict[str, Any], env.globals)["matrix_get"] = lambda m, l, t: m.get(f"{l}|{t}")
     return env
 
 

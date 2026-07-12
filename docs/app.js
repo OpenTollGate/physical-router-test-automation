@@ -1,7 +1,7 @@
 // Amperstrand Unified Test Dashboard — Nostr reader for GitHub Pages
-// Fetches DVM-native events (kind 5900/6900/7000) + kind 1063 file metadata
-// AND kind 30078 parameterized-replaceable run summaries from ALL pubkeys.
-// Renders per-project views (tollgate / fips / BLE / microfips / generic).
+// Fetches kind 30078 (test run summaries) as primary event type.
+// Also reads kind 25910 (ContextVM MCP) events and kind 1063 (NIP-94 file metadata).
+// Renders per-project views (tollgate / fips / BLE / microfips / conwrt / generic).
 // Pure vanilla JS, no build step.
 
 // === CLIENT-SIDE ERROR CAPTURE ================================================
@@ -43,16 +43,6 @@
 
 // === EVENT CONTRACTS =========================================================
 //
-//   kind 5900 (DVM job request):
-//     tags: ["param", key, value], ["e", request_id]
-//
-//   kind 6900 (DVM job result — legacy tollgate run parser):
-//     tags: ["param", key, value], ["e", request_id], ["file", url]
-//     content: JSON with pass/fail counts, file URLs, metadata
-//
-//   kind 7000 (DVM job feedback):
-//     tags: ["status", "processing|success|error"], ["e", request_id]
-//
 //   kind 1063 (NIP-94 file metadata, per file, BlossomFS):
 //     tags: ["url", ...], ["x", sha256], ["m", mime], ["filename", ...], ["size", ...]
 //
@@ -81,7 +71,7 @@ const MAX_CONCURRENT_IMG_LOADS = 3;
 const imgLoadQueue = [];
 
 const CACHE_KEY = "prta:runs:v6";
-const filterState = { search: "", status: "all", sort: "newest", runner: "", project: "ours", maxAge: 604800 };
+const filterState = { search: "", status: "all", sort: "newest", runner: "", project: "ours", maxAge: 604800, version: "all" };
 let detailLoadId = 0;
 let currentTestFilter = "all";
 let currentTestSearch = "";
@@ -92,11 +82,11 @@ let displayIdCache = new Map();
 let renderRunsListTimer = null;
 
 // ===========================================================================
-// WebSocket: Fetch kind 30078 (primary) + legacy DVM events (5900/6900/7000) + 1063
-// DVM kinds are deprecated per ADR-007 — kept for historical run visibility only.
+// WebSocket: Fetch kind 30078 (primary) + ContextVM (25910) + 1063.
+// ContextVM kind 25910 is the current protocol for MCP-over-Nostr compute events.
 // ===========================================================================
 
-function fetchDvmEvents(kinds = [30078, 5900, 6900, 7000, 1063], limit = 200) {
+function fetchEvents(kinds = [30078, 25910, 1063], limit = 200) {
   return new Promise((resolve) => {
     const events = new Map();
     let resolved = false;
@@ -120,7 +110,7 @@ function fetchDvmEvents(kinds = [30078, 5900, 6900, 7000, 1063], limit = 200) {
         return;
       }
 
-      const subId = "prta-dvm-" + Math.random().toString(36).slice(2, 8);
+      const subId = "prta-events-" + Math.random().toString(36).slice(2, 8);
 
       ws.onopen = () => {
         connectedCount++;
@@ -242,7 +232,7 @@ function fetchKind30078Events(limit = 200) {
 }
 
 // ===========================================================================
-// Real-time WebSocket subscription for live DVM events
+// Real-time WebSocket subscription for live run events
 // ===========================================================================
 
 function subscribeToRealtimeUpdates() {
@@ -262,7 +252,7 @@ function subscribeToRealtimeUpdates() {
       liveConnectedCount++;
       updateLiveIndicator();
       ws.send(JSON.stringify(["REQ", "prta-live", {
-        kinds: [5900, 6900, 7000, 30078],
+        kinds: [30078, 25910],
         since: Math.floor(Date.now() / 1000),
       }]));
     };
@@ -292,35 +282,6 @@ function subscribeToRealtimeUpdates() {
 function handleLiveEvent(event) {
   if (!event || !event.kind) return;
 
-  if (event.kind === 7000) {
-    const tags = event.tags || [];
-    const status = getTag(tags, "status") || "processing";
-    const requestId = getTag(tags, "e");
-    if (!requestId) return;
-
-    const run = allRuns.find(
-      (r) => r.runId === requestId || r.eventId === requestId
-    );
-    if (run && run.feedbackStatus !== status) {
-      run.feedbackStatus = status;
-      scheduleRenderRunsList();
-    }
-    return;
-  }
-
-  if (event.kind === 6900) {
-    const run = parseRunFromKind6900(event, new Map());
-    if (!run) return;
-    if (allRuns.find((r) => r.runId === run.runId && r.source === "dvm")) return;
-
-    allRuns.unshift(run);
-    displayIdCache.clear();
-    saveCachedRuns(allRuns);
-    populateRunnerFilter();
-    scheduleRenderRunsList();
-    return;
-  }
-
   if (event.kind === 30078) {
     const run = parseRunFromKind30078(event, new Map());
     if (!run) return;
@@ -337,6 +298,24 @@ function handleLiveEvent(event) {
     saveCachedRuns(allRuns);
     populateRunnerFilter();
     scheduleRenderRunsList();
+    return;
+  }
+
+  if (event.kind === 25910) {
+    const run = parseRunFromKind25910(event);
+    if (!run) return;
+    const existing = allRuns.find((r) => r.runId === run.runId && r.source === "contextvm");
+    if (existing) {
+      if (run.timestamp > existing.timestamp) {
+        Object.assign(existing, run);
+      }
+    } else {
+      allRuns.unshift(run);
+      displayIdCache.clear();
+      saveCachedRuns(allRuns);
+      populateRunnerFilter();
+      scheduleRenderRunsList();
+    }
     return;
   }
 }
@@ -392,6 +371,8 @@ const PROJECT_TAG_MAP = {
   "conwrt-bufferbloat": "conwrt",
   "silent-energy": "silent-energy",
   "fips-benchmark": "fips-benchmark",
+  "nomail": "nomail",
+  "vps-on-demand": "vps-on-demand",
 };
 
 function determineProjectTag(tTags) {
@@ -403,7 +384,6 @@ function determineProjectTag(tTags) {
 
 function getRunProject(run) {
   if (run.projectTag) return run.projectTag;
-  if (run.source === "dvm") return "tollgate";
   return "unknown";
 }
 
@@ -415,6 +395,8 @@ const PROJECT_LABELS = {
   microfips: "Microfips",
   conwrt: "conwrt",
   "silent-energy": "Silent Energy",
+  nomail: "nomail",
+  "vps-on-demand": "VPS on Demand",
   unknown: "Other",
 };
 
@@ -426,6 +408,8 @@ const PROJECT_COLORS = {
   microfips: "var(--yellow)",
   conwrt: "var(--cyan, #22d3ee)",
   "silent-energy": "var(--orange, #f59e0b)",
+  nomail: "var(--pink, #ec4899)",
+  "vps-on-demand": "var(--lightning, #f7931a)",
   unknown: "var(--text-dim)",
 };
 
@@ -543,102 +527,8 @@ function shortNpub(hex) {
 }
 
 // ===========================================================================
-// NIP-90 DVM event parsing (kind 5900/6900/7000)
+// Kind 30078 (NIP-78 run summary) parsing
 // ===========================================================================
-
-// Parse kind 6900 (DVM job result) -> run object.
-// The event carries test results as a DVM job completion. Content may be
-// JSON with pass/fail counts and file URLs. Tags carry param values and
-// file references. The linked 5900 request event provides the run_id via
-// its d-tag.
-function parseRunFromKind6900(event, fileMeta) {
-  const tags = event.tags || [];
-
-  let payload = null;
-  try {
-    payload = JSON.parse(event.content || "{}");
-  } catch (e) { /* non-JSON content */ }
-
-  const contentFiles = (payload && Array.isArray(payload.files)) ? payload.files : [];
-  const passed = payload && payload.passed != null ? payload.passed : getTagNum(tags, "passed");
-  const failed = payload && payload.failed != null ? payload.failed : getTagNum(tags, "failed");
-  const skipped = payload && payload.skipped != null ? payload.skipped : getTagNum(tags, "skipped");
-  const total = payload && payload.total != null
-    ? payload.total
-    : (passed != null || failed != null || skipped != null
-      ? (passed || 0) + (failed || 0) + (skipped || 0)
-      : null);
-
-  const branch = (payload && payload.branch)
-    || getParam(tags, "branch")
-    || getTag(tags, "branch");
-  const backend = (payload && payload.backend)
-    || getParam(tags, "backend")
-    || getTag(tags, "backend");
-  const router = (payload && payload.router)
-    || getParam(tags, "router")
-    || getTag(tags, "router");
-  const pr = (payload && payload.pr) || getParam(tags, "pr") || getTag(tags, "pr");
-
-  let files = contentFiles;
-  if (files.length === 0) {
-    files = getAllTags(tags, "file").map((t) => ({ url: t[1] || "" }));
-  }
-
-  files = files.map((f) => {
-    if (typeof f === "string") f = { url: f };
-    const fm = fileMeta.get(f.url) || {};
-    return {
-      path: f.path || fm.filename || "",
-      url: f.url,
-      sha256: f.sha256 || fm.sha256 || "",
-      mime: f.mime || fm.mime || "application/octet-stream",
-      size: f.size != null ? f.size : (fm.size != null ? fm.size : null),
-      redacted: !!f.redacted,
-    };
-  });
-
-  const screenshots = files.filter((f) => (f.mime || "").startsWith("image/"));
-  const nonScreenshotFiles = files.filter(
-    (f) => !(f.mime || "").startsWith("image/")
-  );
-
-  let runId = (payload && payload.run_id) || getTag(tags, "d") || event.id;
-
-  let status = "success";
-  if (failed != null && failed > 0) status = "error";
-  else if (passed != null && passed === 0 && total != null && total > 0) status = "error";
-
-  return {
-    id: event.id,
-    eventId: event.id,
-    runId,
-    timestamp: event.created_at,
-    status,
-    passed,
-    failed,
-    skipped,
-    total,
-    branch: branch || null,
-    pr: pr || null,
-    repo: (payload && payload.repo) || null,
-    commit: (payload && payload.commit) || getTag(tags, "commit") || null,
-    requestEventId: getTag(tags, "e") || null,
-    router: router || null,
-    backend: backend || null,
-    clientType: (payload && payload.client_type) || getTag(tags, "client_type") || null,
-    viewport: (payload && payload.viewport) || getTag(tags, "viewport") || null,
-    blossomServer: payload ? payload.blossom_server : null,
-    scanSummary: (payload && payload.scan_summary) ? payload.scan_summary : {},
-    files: nonScreenshotFiles,
-    screenshots,
-    content: event.content || "",
-    rawEvent: event,
-    source: "dvm",
-    runnerNpub: event.pubkey,
-    feedbackStatus: null,
-  };
-}
 
 function getParam(tags, name) {
   const t = (tags || []).find((tg) => tg[0] === "param" && tg[1] === name);
@@ -707,6 +597,11 @@ function parseRunFromKind30078(event, fileMeta) {
   if (failed != null && failed > 0) status = "error";
   else if (passed != null && passed === 0 && total != null && total > 0) status = "error";
 
+  const versionTag = tTags.find((t) => t.startsWith("openwrt-"));
+  const openwrtVersion = versionTag ? versionTag.replace("openwrt-", "") : (payload?.metadata?.openwrt_version || null);
+  const routerModel = getTag(tags, "router") || payload?.metadata?.router || payload?.router || null;
+  const useCase = getTag(tags, "use_case") || payload?.metadata?.use_case || null;
+
   return {
     id: event.id,
     eventId: event.id,
@@ -719,6 +614,9 @@ function parseRunFromKind30078(event, fileMeta) {
     failed,
     skipped,
     total,
+    openwrtVersion,
+    routerModel,
+    useCase,
     scenario: payload?.scenario || payload?.mode || null,
     fipsRef: payload?.fips_ref || payload?.["fips-ref"] || null,
     nodes: payload?.nodes ?? null,
@@ -746,53 +644,84 @@ function parseRunFromKind30078(event, fileMeta) {
   };
 }
 
-// Parse kind 7000 (DVM job feedback) -> status object.
-function parseFeedbackFromKind7000(event) {
+function parseRunFromKind25910(event) {
   const tags = event.tags || [];
-  const status = getTag(tags, "status") || "processing";
-  const requestId = getTag(tags, "e");
+  const dTag = getTag(tags, "d");
+  const tTags = getAllTags(tags, "t").map((t) => t[1]);
+  const eTag = getTag(tags, "e");
+  const projectTag = determineProjectTag(tTags);
+
+  let rpc = null;
+  try {
+    rpc = JSON.parse(event.content || "{}");
+  } catch (e) { return null; }
+
+  const isResponse = rpc.result !== undefined || rpc.error !== undefined;
+  const isRequest = rpc.method !== undefined && rpc.method.startsWith("tools/");
+  const isProgress = rpc.method === "notifications/progress";
+
+  if (!isResponse && !isRequest && !isProgress) return null;
+
+  const result = isResponse ? (rpc.result || {}) : {};
+  const content = result.content || [];
+  const textResult = Array.isArray(content)
+    ? content.find((c) => c.type === "text")?.text || ""
+    : "";
+  let payload = null;
+  try { payload = JSON.parse(textResult || "{}"); } catch (e) { /* not JSON */ }
+
+  const fileUrls = [];
+  if (payload && Array.isArray(payload.files)) {
+    for (const f of payload.files) {
+      const url = typeof f === "string" ? f : f.url;
+      if (url) fileUrls.push(url);
+    }
+  }
+
+  const screenshots = fileUrls.filter((u) => /\.(png|jpg|jpeg|gif|webp)$/i.test(u));
+  const nonScreenshotFiles = fileUrls.filter((u) => !screenshots.includes(u));
+
+  const passed = payload?.passed ?? payload?.counts?.passed ?? null;
+  const failed = payload?.failed ?? payload?.counts?.failed ?? null;
+  const skipped = payload?.skipped ?? payload?.counts?.skipped ?? null;
+  const total = payload?.total ?? payload?.counts?.total ?? null;
+
+  let status = "success";
+  if (rpc.error) status = "error";
+  else if (failed != null && failed > 0) status = "error";
+  else if (isProgress) status = "processing";
+
+  const runId = dTag || eTag || rpc.id?.toString() || event.id;
+  const rpcMethod = rpc.method || (isResponse ? "tools/call response" : "");
+
   return {
-    status,
-    requestId,
-    runnerNpub: event.pubkey,
-    timestamp: event.created_at,
+    id: event.id,
     eventId: event.id,
+    runId,
+    projectTag,
+    subTags: tTags,
+    timestamp: event.created_at,
+    status,
+    passed,
+    failed,
+    skipped,
+    total,
+    rpcMethod,
+    rpcPhase: isRequest ? "request" : isResponse ? "response" : isProgress ? "progress" : "unknown",
+    requestEventId: eTag || null,
+    scenario: payload?.scenario || null,
+    branch: payload?.branch || null,
+    pr: payload?.pr || null,
+    repo: payload?.repo || null,
+    files: nonScreenshotFiles.map((url) => ({ url, path: url.slice(-40), mime: guessMimeFromPath(url) })),
+    screenshots: screenshots.map((url) => ({ url, path: url.slice(-40), mime: "image/png" })),
+    content: event.content || "",
+    rawEvent: event,
+    source: "contextvm",
+    summary: payload,
+    runnerNpub: event.pubkey,
+    feedbackStatus: isProgress ? "processing" : null,
   };
-}
-
-function dedupeDvmRuns(events, fileMeta, feedback) {
-  const k6900 = events.filter((e) => e.kind === 6900);
-
-  const byRunId = new Map();
-
-  for (const evt of k6900) {
-    try {
-      const run = parseRunFromKind6900(evt, fileMeta);
-      const existing = byRunId.get(run.runId);
-      if (!existing || run.timestamp > existing.timestamp) {
-        byRunId.set(run.runId, run);
-      }
-    } catch (e) {
-      console.warn("[PRTA] Failed to parse 6900", evt.id, e);
-    }
-  }
-
-  if (feedback && feedback.length > 0) {
-    const fbByRun = new Map();
-    for (const fb of feedback) {
-      const runId = fb.requestId || fb.eventId;
-      const prev = fbByRun.get(runId);
-      if (!prev || fb.timestamp > prev.timestamp) {
-        fbByRun.set(runId, fb);
-      }
-    }
-    for (const run of byRunId.values()) {
-      const fb = fbByRun.get(run.requestEventId) || fbByRun.get(run.runId) || fbByRun.get(run.eventId);
-      if (fb) run.feedbackStatus = fb.status;
-    }
-  }
-
-  return [...byRunId.values()].sort((a, b) => b.timestamp - a.timestamp);
 }
 
 function dedupeKind30078Runs(events, fileMeta) {
@@ -964,7 +893,7 @@ function getFilteredRuns() {
     if (filterState.project === "ours") {
       runs = runs.filter((r) => {
         const p = getRunProject(r);
-        return p === "tollgate" || p === "boltcard" || p === "fips" || p === "ble" || p === "microfips" || p === "conwrt" || p === "silent-energy";
+        return p === "tollgate" || p === "boltcard" || p === "fips" || p === "ble" || p === "microfips" || p === "conwrt" || p === "silent-energy" || p === "nomail" || p === "vps-on-demand";
       });
     } else {
       runs = runs.filter((r) => getRunProject(r) === filterState.project);
@@ -989,6 +918,14 @@ function getFilteredRuns() {
     runs = runs.filter((r) => r.status === "success" && r.passed != null && r.passed > 0);
   } else if (filterState.status === "failed") {
     runs = runs.filter((r) => r.status === "error");
+  }
+
+  if (filterState.version && filterState.version !== "all") {
+    runs = runs.filter((r) => {
+      const v = r.openwrtVersion || "";
+      if (filterState.version === "snapshot") return v === "snapshot" || v === "SNAPSHOT";
+      return v === filterState.version;
+    });
   }
 
   if (filterState.sort === "oldest") {
@@ -1064,6 +1001,8 @@ function buildSidebar() {
         <button class="project-tab" data-project="conwrt" type="button">conwrt</button>
         <button class="project-tab" data-project="silent-energy" type="button">Silent Energy</button>
         <button class="project-tab" data-project="boltcard" type="button">Boltcard</button>
+        <button class="project-tab" data-project="nomail" type="button">nomail</button>
+<button class="project-tab" data-project="vps-on-demand" type="button">VPS on Demand</button>
         <button class="project-tab project-tab-secondary" data-project="all" type="button">All Nostr</button>
       </div>
       <input type="text" id="search-input" class="search-input" placeholder="Search runs\u2026" autocomplete="off" />
@@ -1086,6 +1025,12 @@ function buildSidebar() {
         <option value="2592000">Last 30 days</option>
         <option value="0">All time</option>
       </select>
+      <select id="version-filter" class="version-filter">
+        <option value="all">All versions</option>
+        <option value="24">OWrt 24</option>
+        <option value="25">OWrt 25</option>
+        <option value="snapshot">SNAPSHOT</option>
+      </select>
     </div>
     <div class="runs-scroll" id="runs-scroll"></div>
   `;
@@ -1093,11 +1038,23 @@ function buildSidebar() {
 }
 
 function wireSidebarControls() {
+  const owrtProjects = new Set(["ours", "tollgate", "conwrt", "fips", "ble", "microfips", "silent-energy"]);
+
+  function syncVersionFilterVisibility() {
+    const versionFilter = document.getElementById("version-filter");
+    if (versionFilter) {
+      versionFilter.style.display = owrtProjects.has(filterState.project) ? "" : "none";
+    }
+  }
+
+  syncVersionFilterVisibility();
+
   document.querySelectorAll(".project-tab").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".project-tab").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       filterState.project = btn.dataset.project;
+      syncVersionFilterVisibility();
       scheduleRenderRunsList();
     });
   });
@@ -1146,6 +1103,14 @@ function wireSidebarControls() {
       scheduleRenderRunsList();
     });
   }
+
+  const versionFilter = document.getElementById("version-filter");
+  if (versionFilter) {
+    versionFilter.addEventListener("change", (e) => {
+      filterState.version = e.target.value;
+      scheduleRenderRunsList();
+    });
+  }
 }
 
 function scheduleRenderRunsList() {
@@ -1166,8 +1131,13 @@ function renderRunsList() {
       <div class="runs-empty">
         <div class="runs-empty-icon">\u26A0</div>
         <p>No test runs found.</p>
-        <p class="hint">Make sure the publisher has emitted<br>kind 6900 DVM result events.</p>
+        <p class="hint">Make sure the publisher has emitted<br>kind 30078 test run events.</p>
       </div>`;
+    return;
+  }
+
+  if (filterState.project === "conwrt") {
+    renderConwrtMatrix();
     return;
   }
 
@@ -1197,11 +1167,7 @@ function renderRunsList() {
 
     const noData = run.passed == null && run.failed == null;
 
-    const feedbackBadge = run.feedbackStatus
-      ? `<span class="dvm-status-badge dvm-status-${escapeHtml(run.feedbackStatus)}">${escapeHtml(run.feedbackStatus)}</span>`
-      : "";
-
-    const npubLabel = run.runnerNpub && run.source === "dvm"
+    const npubLabel = run.runnerNpub
       ? `<span class="runner-npub" title="${escapeHtml(hexToNpub(run.runnerNpub))}">${escapeHtml(shortNpub(run.runnerNpub))}</span>`
       : "";
 
@@ -1211,7 +1177,6 @@ function renderRunsList() {
       <div class="run-card-header">
         <span class="run-id" title="${escapeHtml(run.runId)}">${escapeHtml(displayId)}</span>
         <div class="run-card-pf">
-          ${feedbackBadge}
           ${statusIcon(run.status)}
           ${noData
             ? `<span class="pf-text pf-no-data">No data</span>`
@@ -1222,8 +1187,12 @@ function renderRunsList() {
       ${passFailBar(run)}
       <div class="run-card-meta">
         <span class="meta-chip meta-chip-project" style="--project-color: ${PROJECT_COLORS[getRunProject(run)] || "var(--text-dim)"}">${escapeHtml(PROJECT_LABELS[getRunProject(run)] || "?")}</span>
-        ${run.source === "dvm" ? `<span class="meta-chip meta-chip-legacy" title="Legacy NIP-90 DVM event">DVM</span>` : ""}
-        ${run.router ? `<span class="meta-chip">${escapeHtml(run.router)}</span>` : ""}
+        ${run.source === "k30078" ? `<span class="meta-chip meta-chip-nip78" title="NIP-78 parameterized replaceable">NIP-78</span>` : ""}
+        ${run.source === "contextvm" ? `<span class="meta-chip meta-chip-contextvm" title="ContextVM MCP-over-Nostr kind 25910">ContextVM</span>` : ""}
+        ${run.rpcPhase ? `<span class="meta-chip meta-chip-rpc" title="JSON-RPC phase">${escapeHtml(run.rpcPhase)}</span>` : ""}
+        ${run.router || run.routerModel ? `<span class="meta-chip">${escapeHtml(run.router || run.routerModel)}</span>` : ""}
+        ${run.openwrtVersion ? `<span class="meta-chip meta-chip-version" title="OpenWrt version">OWrt ${escapeHtml(run.openwrtVersion)}</span>` : ""}
+        ${run.useCase ? `<span class="meta-chip">${escapeHtml(run.useCase)}</span>` : ""}
         ${run.scenario ? `<span class="meta-chip">${escapeHtml(run.scenario)}</span>` : ""}
         ${run.branch ? `<span class="meta-chip meta-chip-branch">${escapeHtml(run.branch)}</span>` : ""}
         ${run.pr ? `<span class="meta-chip meta-chip-pr">#${escapeHtml(run.pr)}</span>` : ""}
@@ -1243,6 +1212,80 @@ function renderRunsList() {
 
     container.appendChild(card);
   });
+}
+
+function renderConwrtMatrix() {
+  const container = document.getElementById("runs-scroll");
+  if (!container) return;
+
+  const conwrtRuns = allRuns.filter((r) => getRunProject(r) === "conwrt");
+  if (conwrtRuns.length === 0) {
+    container.innerHTML = `<div class="runs-empty"><p>No conwrt runs found.</p></div>`;
+    return;
+  }
+
+  const versions = ["24", "25", "snapshot"];
+  const useCaseMap = new Map();
+
+  for (const run of conwrtRuns) {
+    const uc = run.useCase || run.runId.replace(/^conwrt-/, "").replace(/-\d+$/, "").replace(/^\w+-\w+-\w+-/, "");
+    const ver = run.openwrtVersion || extractVersionFromRunId(run.runId);
+    if (!uc || !ver) continue;
+
+    if (!useCaseMap.has(uc)) useCaseMap.set(uc, {});
+    const existing = useCaseMap.get(uc)[ver];
+    if (!existing || run.timestamp > existing.timestamp) {
+      useCaseMap.get(uc)[ver] = run;
+    }
+  }
+
+  const useCases = [...useCaseMap.keys()].sort();
+  let html = `<div class="conwrt-matrix"><table class="matrix-table"><thead><tr><th>Use Case</th>`;
+  for (const v of versions) {
+    html += `<th>OWrt ${escapeHtml(v)}</th>`;
+  }
+  html += `</tr></thead><tbody>`;
+
+  for (const uc of useCases) {
+    html += `<tr><td class="matrix-uc-name">${escapeHtml(uc)}</td>`;
+    for (const v of versions) {
+      const run = useCaseMap.get(uc)?.[v];
+      if (!run) {
+        html += `<td class="matrix-cell matrix-cell-none">\u2014</td>`;
+      } else if (run.status === "success") {
+        html += `<td class="matrix-cell matrix-cell-pass" data-run-id="${escapeHtml(run.runId)}" title="${escapeHtml(formatTimestamp(run.timestamp))}"><span class="matrix-pass-icon">\u2713</span></td>`;
+      } else if (run.status === "error") {
+        html += `<td class="matrix-cell matrix-cell-fail" data-run-id="${escapeHtml(run.runId)}" title="${escapeHtml(formatTimestamp(run.timestamp))}"><span class="matrix-fail-icon">\u2717</span></td>`;
+      } else {
+        html += `<td class="matrix-cell matrix-cell-unknown">?</td>`;
+      }
+    }
+    html += `</tr>`;
+  }
+  html += `</tbody></table></div>`;
+
+  const countEl = document.createElement("div");
+  countEl.className = "runs-count";
+  countEl.textContent = `${useCases.length} use cases, ${conwrtRuns.length} runs`;
+  container.innerHTML = "";
+  container.appendChild(countEl);
+  container.insertAdjacentHTML("beforeend", html);
+
+  container.querySelectorAll(".matrix-cell[data-run-id]").forEach((cell) => {
+    cell.style.cursor = "pointer";
+    cell.addEventListener("click", () => {
+      const runId = cell.dataset.runId;
+      const run = allRuns.find((r) => r.runId === runId);
+      if (run) selectRun(run);
+    });
+  });
+}
+
+function extractVersionFromRunId(runId) {
+  if (/snapshot|SNAPSHOT/i.test(runId)) return "snapshot";
+  if (/24\.10|24\.|owrt24|openwrt.*24/i.test(runId)) return "24";
+  if (/25\.|owrt25|openwrt.*25/i.test(runId)) return "25";
+  return null;
 }
 
 // ===========================================================================
@@ -1394,11 +1437,22 @@ function buildTestHierarchy(run, summary) {
     }
 
     if (!matched) {
+      const mime = file.mime || guessMimeFromPath(path);
       const vm = path.match(/^raw\/([^/]+)\//);
       if (vm) {
         const suiteName = vm[1];
-        if (!suiteFiles[suiteName]) suiteFiles[suiteName] = [];
-        suiteFiles[suiteName].push(file);
+        if (mime.startsWith("video/")) {
+          const baseName = path.split("/").pop().replace(/\.[^.]+$/, "");
+          if (!testArtifacts.has(baseName)) {
+            testArtifacts.set(baseName, { screenshots: [], videos: [], html: [] });
+          }
+          testArtifacts.get(baseName).videos.push(file);
+          testArtifacts.get(baseName)._standalone = true;
+          matchedUrls.add(file.url);
+        } else {
+          if (!suiteFiles[suiteName]) suiteFiles[suiteName] = [];
+          suiteFiles[suiteName].push(file);
+        }
       }
     }
     if (path === "debug-logs.json") {
@@ -2693,8 +2747,8 @@ async function selectRun(run) {
       body.innerHTML = `
         ${renderFilterBar(summary)}
         ${renderFeaturedVideos(hierarchy)}
-        ${renderTestTree(hierarchy)}
         ${renderGeneralArtifacts(hierarchy)}
+        ${renderTestTree(hierarchy)}
       `;
 
       wireUpTestTree(view);
@@ -2706,35 +2760,16 @@ async function selectRun(run) {
 }
 
 function renderNostrEventsSection(run) {
-  const parts = [];
+  const raw = run.rawEvent;
+  if (!raw) return "";
 
-  const k6900 = run.rawEvent || null;
-  let requestEvent = null;
-  if (k6900) {
-    const reqTag = (k6900.tags || []).find((t) => t[0] === "request");
-    if (reqTag && reqTag[1]) {
-      try { requestEvent = JSON.parse(reqTag[1]); } catch (e) {}
-    }
-  }
-  const reqId = run.requestEventId || (requestEvent && requestEvent.id);
+  const kindLabels = {
+    30078: "Kind 30078 \u2014 Run Summary",
+    25910: "Kind 25910 \u2014 ContextVM Event",
+  };
+  const title = kindLabels[raw.kind] || `Kind ${raw.kind} \u2014 Nostr Event`;
 
-  if (requestEvent) {
-    parts.push(renderEventBlock("Kind 5900 \u2014 DVM Job Request", requestEvent, "request"));
-  } else if (reqId) {
-    parts.push(`<div class="nostr-event-block"><div class="nostr-event-kind">Kind 5900 \u2014 DVM Job Request</div><div class="nostr-event-body"><a href="https://njump.me/${escapeHtml(reqId)}" target="_blank" rel="noopener" class="detail-link">${escapeHtml(reqId.slice(0,16))}\u2026 \u2197</a></div></div>`);
-  }
-
-  if (k6900) {
-    parts.push(renderEventBlock("Kind 6900 \u2014 DVM Job Result", k6900, "result"));
-  }
-
-  if (run.feedbackStatus) {
-    parts.push(`<div class="nostr-event-block nostr-event-feedback"><div class="nostr-event-kind">Kind 7000 \u2014 DVM Feedback: <span class="feedback-${escapeHtml(run.feedbackStatus)}">${escapeHtml(run.feedbackStatus)}</span></div>${reqId ? `<div class="nostr-event-body"><a href="https://njump.me/${escapeHtml(reqId)}" target="_blank" rel="noopener" class="detail-link">View on njump \u2197</a></div>` : ""}</div>`);
-  }
-
-  if (parts.length === 0) return "";
-
-  return `<details class="nostr-events-section"><summary>Nostr DVM Events (${parts.length})</summary><div class="nostr-events-list">${parts.join("")}</div></details>`;
+  return `<details class="nostr-events-section"><summary>Nostr Event</summary><div class="nostr-events-list">${renderEventBlock(title, raw, "result")}</div></details>`;
 }
 
 function renderEventBlock(title, event, cls) {
@@ -2799,14 +2834,14 @@ function renderFileList(files) {
   const rows = files.map((f, i) => {
     const name = (f.path || "").split("/").pop() || f.url;
     const icon = fileIcon(f.mime);
-    return `<div class="file-row" data-blossom-url="${escapeHtml(f.url)}" data-file-idx="${i}">
+    return `<div class="file-row" data-blossom-url="${escapeHtml(f.url)}" data-file-idx="${i}" data-file-mime="${escapeHtml(f.mime || "")}" data-file-name="${escapeHtml(name)}">
       <span class="file-icon">${icon}</span>
-      <span class="file-name" title="${escapeHtml(f.path)}">${escapeHtml(name)}</span>
+      <span class="file-name file-view-btn" title="${escapeHtml(f.path)}" style="cursor:pointer;text-decoration:underline;color:var(--accent)">${escapeHtml(name)}</span>
       <span class="file-path">${escapeHtml(f.path)}</span>
       <span class="file-size">${escapeHtml(formatBytes(f.size))}</span>
       <span class="file-ext">${escapeHtml(extOf(f.path || name))}</span>
       <span class="file-status file-status-checking" title="Checking availability...">...</span>
-      <a class="file-download" href="${escapeHtml(f.url)}" target="_blank" rel="noopener" title="Open">open</a>
+      <a class="file-download" href="${escapeHtml(f.url)}" target="_blank" rel="noopener" title="Open in new tab">\u2197</a>
     </div>`;
   }).join("");
   return `<div class="file-list" data-file-list>${rows}</div>`;
@@ -2841,6 +2876,80 @@ function checkBlobAvailability(container) {
         status.title = "Request failed";
       });
   });
+
+  container.querySelectorAll(".file-view-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const row = btn.closest(".file-row");
+      if (!row) return;
+      const url = row.dataset.blossomUrl;
+      const mime = row.dataset.fileMime || "";
+      const name = row.dataset.fileName || "file";
+      openInlineViewer(url, mime, name);
+    });
+  });
+}
+
+function openInlineViewer(url, mime, name) {
+  let overlay = document.getElementById("inline-viewer");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "inline-viewer";
+    overlay.className = "inline-viewer-overlay";
+    overlay.innerHTML = `
+      <div class="inline-viewer-content">
+        <div class="inline-viewer-header">
+          <span class="inline-viewer-title"></span>
+          <div class="inline-viewer-actions">
+            <a class="inline-viewer-ext-link" target="_blank" rel="noopener">open externally \u2197</a>
+            <button class="inline-viewer-close" type="button">\u00d7</button>
+          </div>
+        </div>
+        <div class="inline-viewer-body"></div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay || e.target.classList.contains("inline-viewer-close")) {
+        overlay.style.display = "none";
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") overlay.style.display = "none";
+    });
+  }
+
+  const titleEl = overlay.querySelector(".inline-viewer-title");
+  const bodyEl = overlay.querySelector(".inline-viewer-body");
+  const extLink = overlay.querySelector(".inline-viewer-ext-link");
+  titleEl.textContent = name;
+  extLink.href = url;
+  bodyEl.innerHTML = '<div style="padding:2rem;color:var(--text-dim)">Loading...</div>';
+  overlay.style.display = "flex";
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+
+  fetch(url, { signal: ctrl.signal })
+    .then((r) => { clearTimeout(timer); if (!r.ok) throw new Error(r.status); return r.text(); })
+    .then((text) => {
+      const isImage = (mime || "").startsWith("image/") || /\.(png|jpg|jpeg|gif|svg|webp)$/i.test(name);
+      if (isImage) {
+        bodyEl.innerHTML = `<img src="${escapeHtml(url)}" alt="${escapeHtml(name)}" style="max-width:100%;max-height:80vh;display:block;margin:0 auto">`;
+      } else if ((mime || "").includes("json") || name.endsWith(".json")) {
+        let pretty = text;
+        try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {}
+        bodyEl.innerHTML = `<pre class="inline-viewer-pre">${escapeHtml(pretty)}</pre>`;
+      } else {
+        bodyEl.innerHTML = `<pre class="inline-viewer-pre">${escapeHtml(text)}</pre>`;
+      }
+    })
+    .catch(() => {
+      clearTimeout(timer);
+      bodyEl.innerHTML = `<div style="padding:2rem;color:var(--text-dim)">
+        <p>Could not load file inline.</p>
+        <a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="detail-link">Open directly \u2197</a>
+      </div>`;
+    });
 }
 
 function fileIcon(mime) {
@@ -3626,7 +3735,7 @@ function renderCvmServiceExtra(got) {
 (async function init() {
   console.log("[PRTA] Initializing\u2026");
   console.log("[PRTA] Relays:", RELAYS);
-  console.log("[PRTA] Fetching [5900, 6900, 7000, 1063] DVM + [30078] run summaries from all pubkeys");
+  console.log("[PRTA] Fetching [25910, 1063] + [30078] run summaries from all pubkeys");
 
   document.querySelectorAll(".view-toggle-btn").forEach((btn) => {
     btn.addEventListener("click", () => switchView(btn.dataset.view));
@@ -3712,31 +3821,24 @@ function renderCvmServiceExtra(got) {
   }
 
   try {
-    const [dvmResult, k30078Events] = await Promise.all([
-      fetchDvmEvents([5900, 6900, 7000, 1063], 200),
+    const [auxResult, k30078Events] = await Promise.all([
+      fetchEvents([25910, 1063], 200),
       fetchKind30078Events(200),
     ]);
-    const { events, connected } = dvmResult;
+    const { events, connected } = auxResult;
 
-    const n5900 = events.filter((e) => e.kind === 5900).length;
-    const n6900 = events.filter((e) => e.kind === 6900).length;
-    const n7000 = events.filter((e) => e.kind === 7000).length;
     const n1063 = events.filter((e) => e.kind === 1063).length;
+    const n25910 = events.filter((e) => e.kind === 25910).length;
     console.log("[PRTA] Connected to " + connected + "/" + RELAYS.length + " relays");
-    console.log("[PRTA] DVM events: " + events.length + " (5900: " + n5900 + ", 6900: " + n6900 + ", 7000: " + n7000 + ", 1063: " + n1063 + ")");
+    console.log("[PRTA] Aux events: " + events.length + " (25910: " + n25910 + ", 1063: " + n1063 + ")");
     console.log("[PRTA] Kind 30078 events: " + k30078Events.length);
 
     const fileMeta = buildFileMeta(events);
     console.log("[PRTA] File metadata map: " + fileMeta.size + " entries");
 
-    const feedback = events
-      .filter((e) => e.kind === 7000)
-      .map(parseFeedbackFromKind7000);
-
-    const dvmRuns = dedupeDvmRuns(events, fileMeta, feedback);
     const k30078Runs = dedupeKind30078Runs(k30078Events, fileMeta);
-    const freshRuns = [...dvmRuns, ...k30078Runs].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-    console.log("[PRTA] " + freshRuns.length + " total runs (" + dvmRuns.length + " DVM, " + k30078Runs.length + " kind 30078)");
+    const freshRuns = k30078Runs.slice().sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    console.log("[PRTA] " + freshRuns.length + " total runs");
 
     if (connected === 0 && events.length === 0 && k30078Events.length === 0) {
       if (!cached || cached.length === 0) {
@@ -3747,7 +3849,7 @@ function renderCvmServiceExtra(got) {
 
     if (freshRuns.length > 0 || (!cached || cached.length === 0)) {
       const freshKeys = new Set(freshRuns.map((r) => r.runId + ":" + r.source));
-      const keptCached = (cached || []).filter((r) => !freshKeys.has(r.runId + ":" + (r.source || "dvm")));
+      const keptCached = (cached || []).filter((r) => !freshKeys.has(r.runId + ":" + (r.source || "k30078")));
       allRuns = [...freshRuns, ...keptCached];
       displayIdCache.clear();
       saveCachedRuns(allRuns);

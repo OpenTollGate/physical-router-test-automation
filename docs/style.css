@@ -5,7 +5,7 @@
    ============================================================ */
 
 :root {
-  /* Base palette — tests.tollgate.me dark */
+  /* Base palette — tests.cashu.email dark */
   --bg:           #0a0a0a;
   --bg-secondary: #121212;
   --bg-elevated:  #181818;
@@ -2096,6 +2096,30 @@ footer a:hover { color: var(--accent); }
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
+.meta-chip-nip78 {
+  color: #58a6ff;
+  background: rgba(88, 166, 255, 0.1);
+  border-color: rgba(88, 166, 255, 0.3);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.meta-chip-contextvm {
+  color: #3fb950;
+  background: rgba(63, 185, 80, 0.1);
+  border-color: rgba(63, 185, 80, 0.3);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.meta-chip-rpc {
+  color: #d29922;
+  background: rgba(210, 153, 34, 0.1);
+  border-color: rgba(210, 153, 34, 0.3);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
 
 /* ============================================================
    FIPS renderer: file nav + report viewer
@@ -2751,3 +2775,75 @@ details.jv-block:not([open]) > .jv-summary::before { transform: rotate(-90deg); 
 }
 .error-banner-copy:hover,
 .error-banner-dismiss:hover { background: #f8514922; }
+
+/* ============================================================
+   conwrt Matrix View
+   ============================================================ */
+.conwrt-matrix { padding: 8px; overflow-x: auto; }
+.matrix-table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.matrix-table th {
+  text-align: center; padding: 8px 12px; font-weight: 600;
+  color: var(--text-dim); border-bottom: 2px solid var(--border);
+  white-space: nowrap;
+}
+.matrix-table th:first-child { text-align: left; }
+.matrix-table td {
+  padding: 6px 12px; border-bottom: 1px solid var(--border); text-align: center;
+}
+.matrix-uc-name {
+  text-align: left !important; font-weight: 500; color: var(--text);
+  white-space: nowrap;
+}
+.matrix-cell { cursor: default; min-width: 60px; }
+.matrix-cell-none { color: var(--text-muted); }
+.matrix-cell-pass { background: rgba(34,197,94,0.12); }
+.matrix-cell-pass:hover { background: rgba(34,197,94,0.22); }
+.matrix-cell-fail { background: rgba(239,68,68,0.12); }
+.matrix-cell-fail:hover { background: rgba(239,68,68,0.22); }
+.matrix-pass-icon { color: #22c55e; font-weight: bold; font-size: 15px; }
+.matrix-fail-icon { color: #ef4444; font-weight: bold; font-size: 15px; }
+.matrix-cell-unknown { color: var(--text-muted); }
+
+/* ============================================================
+   Inline File Viewer
+   ============================================================ */
+.inline-viewer-overlay {
+  display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0,0,0,0.7); z-index: 10000;
+  align-items: center; justify-content: center;
+}
+.inline-viewer-content {
+  background: var(--bg, #1a1a2e); border-radius: 8px; max-width: 90vw; max-height: 90vh;
+  display: flex; flex-direction: column; overflow: hidden;
+  border: 1px solid var(--border, #333);
+}
+.inline-viewer-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 16px; border-bottom: 1px solid var(--border, #333);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.inline-viewer-title { font-size: 14px; font-weight: 600; color: var(--text, #e0e0e0); }
+.inline-viewer-actions { display: flex; align-items: center; gap: 12px; }
+.inline-viewer-ext-link { font-size: 12px; color: var(--accent, #f60); text-decoration: none; }
+.inline-viewer-ext-link:hover { text-decoration: underline; }
+.inline-viewer-close {
+  background: none; border: none; color: var(--text-dim, #888);
+  font-size: 22px; cursor: pointer; padding: 0; line-height: 1;
+}
+.inline-viewer-close:hover { color: var(--text, #e0e0e0); }
+.inline-viewer-body { overflow: auto; padding: 0; flex: 1; }
+.inline-viewer-pre {
+  margin: 0; padding: 16px; font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 13px; line-height: 1.5; color: var(--text, #e0e0e0);
+  white-space: pre-wrap; word-break: break-all; max-width: 85vw;
+}
+
+/* ============================================================
+   Version badge in run card
+   ============================================================ */
+.meta-chip-version {
+  background: rgba(34,211,238,0.15); color: #22d3ee;
+}

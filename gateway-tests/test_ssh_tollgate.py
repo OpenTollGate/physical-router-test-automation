@@ -9,7 +9,7 @@ def _port_open(host, port, timeout=5):
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
-    except (socket.timeout, ConnectionRefusedError, OSError):
+    except (TimeoutError, ConnectionRefusedError, OSError):
         return False
 
 
@@ -19,12 +19,12 @@ def _grab_banner(host, port, timeout=5):
         s.settimeout(timeout)
         try:
             banner = s.recv(256).decode("utf-8", errors="replace")
-        except socket.timeout:
+        except TimeoutError:
             banner = ""
         finally:
             s.close()
         return banner
-    except (socket.timeout, ConnectionRefusedError, OSError):
+    except (TimeoutError, ConnectionRefusedError, OSError):
         return ""
 
 
