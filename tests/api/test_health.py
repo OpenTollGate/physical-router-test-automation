@@ -6,20 +6,31 @@ pytestmark = [pytest.mark.api, pytest.mark.smoke]
 
 
 @pytest.mark.smoke
-def test_root_endpoint(router):
+def test_root_endpoint(router, backend):
     code = router.api_status("/")
     assert code == 200, f"Expected 200, got {code}"
     body = router.api_body("/")
+    if backend.is_rust:
+        assert "<html" in body.lower() or "<svg" in body.lower(), \
+            f"Rust SUT should return HTML portal at /: {body[:200]}"
+        return
     if '"kind":21023' in body:
         pytest.skip("Discovery in degraded mode, skipping kind:10021 check")
     assert '"kind":10021' in body, f"Response missing kind:10021: {body[:200]}"
 
 
 @pytest.mark.smoke
-def test_pay_endpoint(router):
+def test_pay_endpoint(router, backend):
     code = router.api_status("/pay")
     body = router.api_body("/pay")
     assert code in (200, 402), f"Expected 200 or 402, got {code}"
+    if backend.is_rust:
+        if code == 402:
+            assert '"price"' in body or '"error"' in body, \
+                f"Rust 402 should have price or error: {body[:200]}"
+        else:
+            assert '"kind"' in body, f"Rust 200 should have kind field: {body[:200]}"
+        return
     if code == 402:
         assert '"payment_request"' in body, "402 but missing payment_request"
         assert '"qr_image"' in body, "402 but missing qr_image"

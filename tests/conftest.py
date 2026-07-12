@@ -732,6 +732,8 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "complete" in item.keywords:
             continue
+        if "publish_screenshot" in item.keywords or "virtual_lab" in item.keywords:
+            continue
         fixturenames = getattr(item, "fixturenames", [])
         if "cashu" in fixturenames:
             item.add_marker(pytest.mark.flaky(reruns=1, reruns_delay=3))

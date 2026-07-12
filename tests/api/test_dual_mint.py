@@ -12,7 +12,17 @@ pytestmark = [pytest.mark.api, pytest.mark.extended]
 
 
 @pytest.fixture(scope="module")
-def discovery(router):
+def discovery(router, backend):
+    if backend.is_rust:
+        import base64
+        from lib.helpers import create_minter
+        mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
+        minter = create_minter(mint_url)
+        minter.ensure_mint_available(timeout=10)
+        minter.warmup(timeout=30)
+        token = minter.mint(2)
+        body = router.ssh(f"curl -s -H 'X-Cashu: {token}' http://127.0.0.1:2121/pay", timeout=15)
+        return parse_json_or_fail(body, "discovery response from /pay")
     body = router.api_body("/")
     return parse_json_or_fail(body, "discovery response")
 

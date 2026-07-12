@@ -128,8 +128,9 @@ def test_rust_full_payment_cycle(router, cashu):
         pytest.skip("cashu venv not available")
     _ensure_lease(router)
 
-    # Step 1: Advertisement
-    body = router.api_body("/")
+    # Step 1: Advertisement — for Rust SUT, use /pay with token
+    token_for_ad = cashu.mint(2)
+    body = router.ssh(f"curl -s -H 'X-Cashu: {token_for_ad}' http://127.0.0.1:2121/pay", timeout=15)
     data = parse_json_or_fail(body, "advertisement")
     assert data.get("kind") == 10021, f"Expected kind:10021, got: {body[:200]}"
 
