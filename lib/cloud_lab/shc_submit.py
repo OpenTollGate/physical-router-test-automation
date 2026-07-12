@@ -309,6 +309,8 @@ echo "[8/$N_STEPS] done"
 step 9 "Downloading CDK mints..."
 CDK_VER=0.16.0
 sudo mkdir -p /opt/cdk-mintd
+sudo pkill -f cdk-mintd 2>/dev/null || true
+sudo rm -f /opt/cdk-mintd/cdk-mintd /opt/cdk-mintd/cdk-cli
 sudo wget -q -O /opt/cdk-mintd/cdk-mintd "https://github.com/cashubtc/cdk/releases/download/v${{CDK_VER}}/cdk-mintd-${{CDK_VER}}-x86_64" || fail 9 "cdk-mintd download"
 sudo chmod +x /opt/cdk-mintd/cdk-mintd
 sudo wget -q -O /opt/cdk-mintd/cdk-cli "https://github.com/cashubtc/cdk/releases/download/v${{CDK_VER}}/cdk-cli-${{CDK_VER}}-x86_64" || fail 9 "cdk-cli download"
@@ -325,6 +327,7 @@ OWRT_IMG="openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz"
 sudo curl -sfL "https://blossom.psbt.me/924e4b83a34d600914841d53df51bba930d4a56070032a30cba5bca87273c213" -o "$OWRT_IMG" || \
   sudo wget -q "https://downloads.openwrt.org/releases/${{OPENWRT_VERSION}}/targets/x86/64/$OWRT_IMG" || fail 10 "openwrt download"
 sudo gunzip -kf "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img.gz" || true
+sudo rm -f openwrt-base.qcow2
 sudo qemu-img convert -f raw -O qcow2 "openwrt-${{OPENWRT_VERSION}}-x86-64-generic-ext4-combined.img" openwrt-base.qcow2 || fail 10 "qemu-img convert"
 sudo qemu-img resize openwrt-base.qcow2 2G || fail 10 "qemu-img resize"
 sudo wget -q "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2" || fail 10 "debian download"
@@ -464,6 +467,7 @@ def submit_run_shc(
     portal: str = "builtin",
     keep_vm_on_failure: bool = False,
     lease_minutes: int = 90,
+    two_router: bool = False,
     provider=None,
     tier: str = "standard",
 ) -> dict[str, str]:
@@ -653,7 +657,7 @@ def submit_run_shc(
         f"OPENWRT_VERSION={shlex.quote(os.environ.get('OPENWRT_VERSION', '24.10.1'))}",
         f"TOLLGATE_DEPLOY_MODE={shlex.quote(os.environ.get('TOLLGATE_DEPLOY_MODE', 'framework'))}",
         f"BLOSSOM_SERVER={shlex.quote(os.environ.get('BLOSSOM_SERVER', 'https://blossom.psbt.me'))}",
-        f"NOSTR_RELAYS={shlex.quote(os.environ.get('NOSTR_RELAYS', 'wss://relay.cashu.email,wss://relay2.orangesync.tech'))}",
+        f"NOSTR_RELAYS={shlex.quote(os.environ.get('NOSTR_RELAYS', 'wss://relay.damus.io,wss://nos.lol,wss://relay.cashu.email'))}",
         f"TOLLGATE_BACKEND={shlex.quote(target.backend)}",
         f"TOLLGATE_PUBLISH={'true' if publish else 'false'}",
         f"TOLLGATE_QUICK={'true' if quick else 'false'}",
@@ -664,6 +668,7 @@ def submit_run_shc(
         f"TOLLGATE_MINT={shlex.quote(mint)}",
         f"TOLLGATE_PORTAL={shlex.quote(portal)}",
         f"TOLLGATE_KEEP_VM_ON_FAILURE={'true' if keep_vm_on_failure else 'false'}",
+        f"TOLLGATE_TWO_ROUTER={'true' if two_router else 'false'}",
         "TOLLGATE_GCP_PROJECT=tollgate-test-lab",
         "TOLLGATE_GCP_ZONE=shc",
         f"TOLLGATE_VM_NAME={hostname}",
