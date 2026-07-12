@@ -35,7 +35,7 @@ def _ssh(ip: str, cmd: str, timeout: int = 300, ssh_key: str = "") -> str:
     ]
     if ssh_key and Path(ssh_key.replace(".pub", "")).exists():
         ssh_cmd.extend(["-i", ssh_key.replace(".pub", "")])
-    ssh_cmd.extend([f"root@{ip}", cmd])
+    ssh_cmd.extend([f"debian@{ip}", cmd])
     r = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
         print(f"  SSH stderr: {r.stderr[:300]}", file=sys.stderr)
@@ -104,7 +104,14 @@ def cmd_bake(args: argparse.Namespace) -> int:
     time.sleep(5)
 
     _step(4, total_steps, "Waiting for SSH")
-    deadline = time.time() + 300
+    vm_password = ""
+    try:
+        creds = client.get_vm_credentials(sid)
+        vm_password = creds.get("password", "") or creds.get("root_password", "")
+    except Exception:
+        pass
+
+    deadline = time.time() + 600
     ssh_ok = False
     while time.time() < deadline:
         try:
@@ -114,7 +121,21 @@ def cmd_bake(args: argparse.Namespace) -> int:
                 break
         except Exception:
             pass
-        time.sleep(5)
+        if vm_password:
+            try:
+                import subprocess as _sp
+                r = _sp.run(
+                    ["sshpass", "-p", vm_password, "ssh", "-o", "StrictHostKeyChecking=no",
+                     "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
+                     "-o", "ConnectTimeout=10", f"debian@{vm_ip}", "echo SSH_OK"],
+                    capture_output=True, text=True, timeout=15
+                )
+                if "SSH_OK" in r.stdout:
+                    ssh_ok = True
+                    break
+            except Exception:
+                pass
+        time.sleep(10)
     if not ssh_ok:
         print("ERROR: SSH not available after 300s", file=sys.stderr)
         return 1
