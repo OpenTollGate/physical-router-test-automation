@@ -190,17 +190,17 @@ def cmd_bake(args: argparse.Namespace) -> int:
 
         _step(11, total_steps, "Bake complete")
         print(f"\n{'='*60}")
-        print(f"SHC VM baked successfully!")
+        print("SHC VM baked successfully!")
         print(f"  Service ID: {sid}")
         print(f"  IP:         {vm_ip}")
         print(f"  Hostname:   {hostname}")
         print(f"  SSH:        ssh root@{vm_ip}")
-        print(f"  Cost:       ~$0.27")
+        print("  Cost:       ~$0.27")
         print(f"{'='*60}")
-        print(f"\nThe VM is left running. To use it for cloud-lab tests:")
+        print("\nThe VM is left running. To use it for cloud-lab tests:")
         print(f"  export TOLLGATE_BAKED_SHC_VM={sid}")
         print(f"  export TOLLGATE_BAKED_SHC_IP={vm_ip}")
-        print(f"\nOr cancel when done:")
+        print("\nOr cancel when done:")
         print(f"  python3 -c \"from shc_toolkit.client import SHCClient; SHCClient().cancel_vm({sid}, immediate=True)\"")
         return 0
 
