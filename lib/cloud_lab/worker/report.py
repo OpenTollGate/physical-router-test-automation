@@ -134,7 +134,7 @@ def publish_to_nostr(config: WorkerConfig, results_dir: str, counts: dict[str, A
         return {}
 
     blossom = os.environ.get("BLOSSOM_SERVER", "https://blossom.psbt.me")
-    relays = os.environ.get("NOSTR_RELAYS", "wss://relay.damus.io,wss://nos.lol,wss://relay.cashu.email")
+    relays = os.environ.get("NOSTR_RELAYS", "wss://relay1.orangesync.tech,wss://relay.damus.io,wss://nos.lol")
 
     passed = counts.get("passed", 0)
     failed = counts.get("failed", 0)
@@ -206,7 +206,7 @@ def verify_nostr_publish(config: WorkerConfig) -> dict[str, Any]:
         log.warning("verify_nostr_publish skipped: nak CLI not found")
         return result
 
-    relays_env = os.environ.get("NOSTR_RELAYS", "wss://relay.damus.io,wss://nos.lol,wss://relay.cashu.email")
+    relays_env = os.environ.get("NOSTR_RELAYS", "wss://relay1.orangesync.tech,wss://relay.damus.io,wss://nos.lol")
     relay = relays_env.split(",")[0].strip()
 
     # Read our pubkey from the nsec file for targeted querying
