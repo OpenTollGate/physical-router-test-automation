@@ -647,11 +647,7 @@ class Router:
         
         cfg["accepted_mints"] = new_mints
         
-        tmp = "/tmp/config-replace-mints.json"
-        with open(tmp, "w") as f:
-            json.dump(cfg, f, indent=2)
-        self.scp_to(tmp, "/etc/tollgate/config.json")
-        os.remove(tmp)
+        self.write_remote_json("/etc/tollgate/config.json", cfg)
 
         self.restart_backend()
 
