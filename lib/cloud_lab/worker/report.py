@@ -260,6 +260,8 @@ def verify_nostr_publish(config: WorkerConfig) -> dict[str, Any]:
                     content = json.loads(candidate.get("content", "{}"))
                 except (json.JSONDecodeError, TypeError):
                     content = {}
+                if not isinstance(content, dict):
+                    content = {}
                 if d_tag == config.run_id or content.get("run_id") == config.run_id:
                     event = candidate
                     break
@@ -282,7 +284,13 @@ def verify_nostr_publish(config: WorkerConfig) -> dict[str, Any]:
     if not file_urls:
         try:
             content = json.loads(event.get("content", "{}"))
-            file_urls = [f.get("url", "") for f in content.get("files", []) if f.get("url")]
+            if not isinstance(content, dict):
+                content = {}
+            file_urls = [
+                f.get("url", "")
+                for f in content.get("files", [])
+                if isinstance(f, dict) and f.get("url")
+            ]
         except (json.JSONDecodeError, KeyError):
             pass
 
