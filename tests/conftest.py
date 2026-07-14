@@ -939,10 +939,12 @@ def _auto_portal_screenshot(item, report, results_dir, adb):
 def _video_is_static(video_path: str, pixel_threshold: int = 5, min_diff_pixels: int = 10) -> bool:
     """Check if a video shows no meaningful visual change across ALL frames.
 
-    Extracts every frame at 160x90, compares each consecutive pair at the
-    raw byte level. Returns True only if every pair is near-identical.
-    Catches changes anywhere in the video, not just first vs last frame.
+    Returns True (assume static) if ffmpeg is not installed, so test reporting
+    is never disrupted by a missing optional dependency on cloud lab VMs.
     """
+    import shutil as _shutil
+    if not _shutil.which("ffmpeg"):
+        return True
     extract = subprocess.run(
         ["ffmpeg", "-y", "-i", video_path,
          "-vf", "scale=160:90",

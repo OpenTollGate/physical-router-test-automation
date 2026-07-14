@@ -120,7 +120,9 @@ def test_setup_script_no_redirecturl(router):
 
 
 @pytest.mark.extended
-def test_nds_webroot_links_to_captive_portal(router):
+def test_nds_webroot_links_to_captive_portal(router, backend):
+    if backend.is_rust:
+        pytest.skip("Rust SUT serves embedded portal, no NDS webroot symlink")
     target = router.ssh("readlink /etc/nodogsplash/htdocs 2>/dev/null").strip()
     assert "tollgate-captive-portal-site" in target, \
         f"NDS webroot should symlink to captive portal site, got: {target}"

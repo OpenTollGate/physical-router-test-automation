@@ -54,7 +54,7 @@ def test_spent_token_detected(router, cashu):
 
 @pytest.mark.api
 @pytest.mark.extended
-def test_proxy_header_only_from_localhost(router):
+def test_proxy_header_only_from_localhost(router, backend):
     """X-Forwarded-For should only be trusted from localhost.
 
     The bug was that X-Forwarded-For and X-Real-Ip headers from external
@@ -64,6 +64,8 @@ def test_proxy_header_only_from_localhost(router):
     CLI socket — the actual header validation can only be tested with
     a captive portal proxy in front of the backend.
     """
+    if backend.is_rust:
+        pytest.skip("Rust SUT uses nftables, not CLI socket for status")
     status = router.get_tollgate_status()
     assert status.get("success") is True, \
         f"Backend status check failed: {str(status)[:200]}"

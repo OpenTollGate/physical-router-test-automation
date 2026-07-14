@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import json
 import time
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -70,26 +72,30 @@ def _has_leak(text: str) -> bool:
 
 
 def _ln_invoice_create(router, body: dict) -> dict:
-    """POST /ln-invoice on the loopback backend, return parsed JSON."""
-    # Ensure a client lease exists so MAC resolution succeeds (otherwise we hit
-    # the pre-PR generic "failed to resolve device MAC address" path, which does
-    # not exercise the sanitization we are probing).
+    """POST /ln-invoice on the backend, return parsed JSON.
+
+    Uses a direct HTTP call from the test runner (the Debian client can reach
+    the OpenWrt backend at 10.99.99.1:2121) rather than router.ssh()+wget,
+    which avoids busybox-wget header-quoting issues on OpenWrt.
+    """
+    ip = router.phone_ip or "10.99.99.100"
     try:
         router.inject_dhcp_lease()
     except Exception:
         pass
-    ip = router.phone_ip or "10.99.99.100"
-    raw = router.ssh(
-        f"wget -qO- --timeout=20 --post-data='{json.dumps(body)}' "
-        f"--header='Content-Type: application/json' "
-        f"--header='X-Forwarded-For: {ip}' "
-        f"'http://[::1]:{BACKEND_PORT}/ln-invoice' 2>/dev/null || true",
-        timeout=40,
+    url = f"http://{router.host}:{BACKEND_PORT}/ln-invoice"
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Content-Type": "application/json", "X-Forwarded-For": ip},
     )
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {"raw": raw}
+        resp = urllib.request.urlopen(req, timeout=20)
+        return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        return json.loads(e.read().decode())
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def _fix_present(router) -> bool:
@@ -104,7 +110,9 @@ def _fix_present(router) -> bool:
 
 
 @pytest.fixture(autouse=True)
-def _gate_sanitization(router):
+def _gate_sanitization(router, backend):
+    if backend.is_rust:
+        pytest.skip("/ln-invoice is a Go-specific endpoint")
     gate_bug_fix(
         _fix_present(router),
         bug_id="error-response-leak-s3",
@@ -134,14 +142,17 @@ def test_ln_invoice_unreachable_mint_status_code(router):
         router.inject_dhcp_lease()
     except Exception:
         pass
-    code = router.ssh(
-        f"wget -S -qO- --timeout=20 --post-data='{json.dumps({'amount': 21, 'mint_url': 'http://10.255.255.1:1/dead'})}' "
-        f"--header='Content-Type: application/json' "
-        f"--header='X-Forwarded-For: {ip}' "
-        f"'http://[::1]:{BACKEND_PORT}/ln-invoice' 2>&1 | grep -E 'HTTP/' | tail -1",
-        timeout=40,
+    url = f"http://{router.host}:{BACKEND_PORT}/ln-invoice"
+    data = json.dumps({"amount": 21, "mint_url": "http://10.255.255.1:1/dead"}).encode()
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Content-Type": "application/json", "X-Forwarded-For": ip},
     )
-    assert "400" in code, f"Expected HTTP 400 for unreachable mint, got: {code!r}"
+    try:
+        urllib.request.urlopen(req, timeout=20)
+        pytest.fail("Expected HTTP 400 for unreachable mint, got 200")
+    except urllib.error.HTTPError as e:
+        assert e.code == 400, f"Expected HTTP 400, got {e.code}"
 
 
 @pytest.mark.extended

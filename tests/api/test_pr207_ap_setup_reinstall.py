@@ -59,11 +59,28 @@ def _read_setup_script(router) -> str:
     return raw
 
 
+def _script_has_ap_recovery_fix(script: str) -> bool:
+    """True if the script has the version-aware AP recovery fix (PR #216/#173).
+
+    The fix adds SETUP_VERSION-based logic so the script no longer bails
+    unconditionally when the setup-done flag exists.
+    """
+    return "SETUP_VERSION" in script
+
+
 def _script_bails_on_flag(script: str) -> bool:
-    """True iff the script contains an early 'exit 0' guarded only by the flag."""
+    """True iff the script has the pre-fix unconditional early-exit bug.
+
+    The bug (main pre-#216): ``if [ -f "$SETUP_FLAG" ]; then exit 0; fi``
+    with NO version logic — the script bails entirely, skipping wireless AP
+    creation on reinstall/upgrade.
+
+    The fix (PR #216) replaces this with SETUP_VERSION-aware behavior.
+    """
     if not script or script.strip() == "MISSING":
         return False
-    # The bug: flag check followed by exit 0 before any wireless setup.
+    if _script_has_ap_recovery_fix(script):
+        return False
     pat = re.compile(
         r'SETUP_FLAG=.*?tollgate-setup-done.*?if\s+\[\s*-f\s+"\$SETUP_FLAG"\s*\].*?exit\s+0',
         re.S,
@@ -91,14 +108,13 @@ def setup_script(router):
 def test_setup_script_bails_on_existing_flag(setup_script):
     """CONFIRMS the bug on main: the script exits when setup-done flag exists.
 
-    This is the root-cause signature of #103/#173. On buggy main this passes
-    (bug present). When #173's fix lands, the early-exit-on-flag is removed and
-    this test will FAIL — that is the signal to update the assertions to the
-    fixed behavior.
+    On buggy main this passes (bug present). On PR #216 (fixed), the script
+    uses SETUP_VERSION-aware logic instead of bailing — this test FAILS,
+    which is the signal that the fix landed.
     """
     assert _script_bails_on_flag(setup_script), (
-        "Expected the early-exit-on-flag bug (lines 8-9 of 99-tollgate-setup). "
-        "It appears to have been fixed — update test_ap_setup_recovers_after_reinstall."
+        "Expected the early-exit-on-flag bug. "
+        "If SETUP_VERSION is present, the fix (PR #216/#173) has landed."
     )
 
 
@@ -154,9 +170,11 @@ def test_ap_setup_recovers_after_reinstall(router):
 
 
 @pytest.mark.extended
-def test_reinstall_setup_log_confirms_skip(router):
+def test_reinstall_setup_log_confirms_skip(router, backend):
     """When the flag exists, re-running the setup script must log that it skipped
     (or exit silently). This documents the reinstall behavior operators see."""
+    if backend.is_rust:
+        pytest.skip("Rust SUT uses different init script layout")
     router.ssh(f"touch {SETUP_FLAG} 2>/dev/null || true", timeout=5)
     router.ssh("rm -f /tmp/tollgate-setup.log /tmp/reinstall-setup.log", timeout=5)
     router.ssh(f"sh {SETUP_SCRIPT} >/tmp/reinstall-setup.log 2>&1; echo \"rc=$?\" >> /tmp/reinstall-setup.log", timeout=30)

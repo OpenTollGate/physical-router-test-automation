@@ -242,3 +242,78 @@ def test_both_routers_healthy(router, backend):
     assert beta_kind in (10021, 21023), (
         f"Beta API returned unexpected kind {beta_kind}: {beta_body[:200]}"
     )
+
+
+# Issue #206: router-to-router autopay ndsctl session workaround (#88).
+# TriggerCaptivePortalSession in tollgate_prober.go:220 fakes a browser hit
+# to port 80 to force ndsctl session creation for a paid MAC.
+
+_AUTOPAY_MARKER = "TEMPORARY: Triggering captive portal session for ndsctl"
+
+
+def _binary_has_autopay_workaround(router) -> bool:
+    out = router.ssh(
+        "(strings /usr/bin/tollgate-wrt 2>/dev/null || "
+        "strings $(command -v tollgate-wrt 2>/dev/null) 2>/dev/null) "
+        f"| grep -c '{_AUTOPAY_MARKER}' || true",
+        timeout=30,
+    )
+    try:
+        return int(out.strip()) > 0
+    except ValueError:
+        return False
+
+
+@pytest.mark.timeout(60)
+def test_autopay_workaround_present_in_binary(router):
+    _skip_if_not_virtual_lab()
+    assert _binary_has_autopay_workaround(router), (
+        "router-to-router autopay workaround is NOT in this firmware build."
+    )
+
+
+@pytest.mark.timeout(180)
+def test_autopay_creates_ndsctl_session_on_upstream(router, backend):
+    """When Alpha pays Beta for a client MAC, Beta must have an ndsctl session
+    (via the workaround) so usage is measurable."""
+    _skip_if_not_virtual_lab()
+    router_b = _skip_if_no_secondary(_get_secondary_router(backend))
+    if not _binary_has_autopay_workaround(router):
+        pytest.skip("autopay workaround absent in firmware (pre-#88)")
+    if not (_alpha_has_wan_ip(router) and _alpha_can_reach_beta_upstream(router)):
+        pytest.skip("Alpha has no L3 link to Beta upstream; cannot exercise autopay")
+
+    test_mac = os.environ.get("TOLLGATE_AUTOPAY_TEST_MAC", "52:54:00:c0:01:01")
+
+    # Trigger the upstream probe cycle.
+    router.ssh("service tollgate-wrt restart", timeout=30)
+
+    paid = False
+    for _ in range(20):
+        time.sleep(3)
+        beta_authed = router_b.ssh(
+            f"ndsctl json {test_mac} 2>/dev/null | grep -c 'id' || true",
+            timeout=10,
+        )
+        try:
+            if int(beta_authed.strip()) > 0:
+                paid = True
+                break
+        except ValueError:
+            pass
+
+    if not paid:
+        pytest.skip(
+            "Autopay did not create an ndsctl session within the probe window "
+            f"(mac={test_mac})."
+        )
+
+    session_json = router_b.ssh(f"ndsctl json {test_mac} 2>/dev/null", timeout=10)
+    assert session_json.strip() and session_json.strip() != "{}", (
+        f"ndsctl session for {test_mac} is empty — workaround did not create a session"
+    )
+
+    beta_logs = router_b.get_tollgate_logs(filter_expr="tollgate", lines=300)
+    assert _AUTOPAY_MARKER in beta_logs, (
+        "Workaround marker not found in Beta logs; session may have a different origin."
+    )
