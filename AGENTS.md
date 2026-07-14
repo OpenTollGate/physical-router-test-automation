@@ -911,6 +911,78 @@ Cloud lab VMs use a three-layer safety mechanism:
 - Verified the publish step completed (check `tests.tollgate.me`)
 - Examined the logs via `gcloud compute ssh <vm> --command='cat /var/log/tollgate-run.log'`
 
+### SHC Baked-VM Lab (cheaper alternative to GCP)
+
+SHC (Sovereign Hybrid Compute) Dev VPS plans (pkg 80–84) support **nested KVM**
+(`vmx`/`kvm_intel`/`nested=Y` verified), making them viable for the nested-QEMU
+cloud lab at ~$0.01/run vs ~$0.10/run for GCP. However, SHC has two constraints
+that require a different architecture than GCP's disposable-VM model:
+
+1. **No cross-VM snapshot/clone** — SHC `snapshot-restore` is same-VM only
+   (`POST /vm/{serviceId}/snapshots/restore`). You cannot create a new VM from a
+   snapshot. Templates are OS-only (Debian/Ubuntu/etc.).
+2. **No baked snapshot** — SHC starts from a bare OS template every time. The
+   full 15-step bootstrap (apt-get, Rust, nak, venvs, CDK mints, QEMU image
+   downloads) takes ~10–15 min and is failure-prone on a fresh VM.
+
+The solution is a **persistent baked VM + snapshot-restore cycle**:
+
+```
+Bake (one-time, ~15 min):
+  Order SHC VM → run full bootstrap (steps 1-14) → verify → create snapshot
+
+Per run (~5 min restore + ~20 min tests):
+  Stop VM → snapshot-restore (disk reset to baked state) → start VM
+  → re-fetch suite + apply overlay → run worker-only (skips bootstrap)
+```
+
+**Setup (one-time bake):**
+
+```bash
+# 1. Order a Dev VPS (standard tier, 2C/8GB, nested KVM)
+shc order --hostname tollgate-bake --package-id 81 --pricing-id 245 \
+    --ssh-key ~/.ssh/id_rsa.pub --pay
+
+# 2. Bake it (runs the full bootstrap + creates a snapshot)
+python3 scripts/shc-bake.py --service-id <ID> --ip <IP> --branch main \
+    --snapshot-name tollgate-baked-v1
+
+# 3. Record the snapshot ID from the output (bk_...)
+```
+
+**Running tests on the baked VM:**
+
+```bash
+# Snapshot-restore + run worker-only (skips 15-min bootstrap)
+python3 scripts/shc-run-baked.py --service-id <ID> --ip <IP> \
+    --snapshot-id bk_<SNAP_ID> --branch main [--pr N] [--two-router] [--publish]
+
+# Skip restore if the VM is already in the right state
+python3 scripts/shc-run-baked.py --service-id <ID> --ip <IP> \
+    --snapshot-id bk_<SNAP_ID> --branch main --no-restore
+```
+
+**Key differences from GCP `submit`:**
+- One persistent VM reused across runs (no parallelism — one run at a time)
+- Snapshot-restore wipes the disk between runs (clean state each time)
+- The worker-only script re-fetches the suite + applies the overlay AFTER
+  `git checkout`, and `ensure_suite_checkout` skips re-checkout when HEAD
+  matches (preserving overlay changes to tracked files)
+- The OpenWrt serial-provisioning fallback is essential — inner VM SSH takes
+  ~60s to come up; the SSH-first path times out, serial provisioning succeeds
+
+**Known issues fixed during development:**
+- Stale `apt-get` lock from cloud-init → wait for provisioning to finish
+- `qemu-img convert` write-lock on stale `openwrt-base.qcow2` → `rm -f` before convert
+- `cdk-mintd: Text file busy` → `pkill` + `rm -f` before download
+- Blossom resolver missing `branch` filter → deployed wrong firmware (fixed in `lib/deploy.py`)
+- Blossom resolver queried transient kind 30078 instead of persistent kind 1063 (fixed)
+- GCP overlay allowlist excluded new test files (fixed in `lib/cloud_lab/gcp.py`)
+
+**SHC snapshot limits:** Dev VPS plans advertise `snapshot_limit: 5` but may
+enforce 1 in practice. Delete old snapshots before creating new ones:
+`shc snapshot-delete <service_id> <snapshot_id>`.
+
 ### Publish to Nostr+Blossom
 
 The publish step uses Nostr events + Blossom uploads. No git operations are involved, so there are no push races, conflicts, or concurrent run issues. Each run publishes independently with its own kind 30078 summary events.
