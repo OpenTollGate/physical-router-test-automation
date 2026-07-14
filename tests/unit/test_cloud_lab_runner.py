@@ -81,7 +81,7 @@ def test_build_runners_full_with_optional_suites():
 def test_vl_scenarios_paths_cover_scenario_files():
     runners = build_runners(_base_config())
     vl = next(r for r in runners if r.name == "vl-scenarios")
-    assert len(vl.paths) == 4
+    assert len(vl.paths) == 5
     assert all(p.startswith("tests/scenarios/") for p in vl.paths)
 
 
