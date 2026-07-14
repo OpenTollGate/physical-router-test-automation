@@ -361,6 +361,10 @@ _OVERLAY_ALLOWLIST = {
     "tests/api/test_try_all_mints.py",
     "tests/api/test_virtual_wifi_hwsim_netns.py",
     "tests/api/test_dual_mint.py",
+    "tests/api/test_pr193_identity_endpoints.py",
+    "tests/api/test_pr198_ssrf_callback.py",
+    "tests/api/test_pr202_error_sanitization.py",
+    "tests/api/test_pr207_ap_setup_reinstall.py",
     "tests/scenarios/test_reseller_mode.py",
     "tests/scenarios/test_two_router_cloud.py",
 }

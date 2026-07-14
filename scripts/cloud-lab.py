@@ -243,6 +243,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
             lease_minutes=cast(int, getattr(args, "lease", 90)),
             provider=None,
             tier=cast(str, getattr(args, "tier", "standard")),
+            two_router=cast(bool, getattr(args, "two_router", False)),
         )
         print(f"""
 Submitted SHC run {info['run_id']}
