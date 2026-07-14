@@ -102,3 +102,18 @@ def test_build_bootstrap_script_overlay_applied():
     )
     assert "dGVzdA==" in script
     assert "base64 -d /tmp/overlay.b64" in script
+
+
+def test_build_bootstrap_script_logs_publisher_npub():
+    from lib.cloud_lab.shc_submit import _build_bootstrap_script
+    script = _build_bootstrap_script(
+        bootstrap_env="TOLLGATE_RUN_ID=test",
+        overlay_b64="",
+        test_dir="/opt/tollgate-test",
+        suite_repo_url="https://github.com/test/repo.git",
+    )
+    assert 'nak key public "$(cat /root/nsec)"' in script
+    assert "Publisher npub:" in script
+    assert "EXPECTED_NPUB" in script
+    assert "STRICT_NPUB_CHECK" in script
+    assert "npub mismatch" in script
