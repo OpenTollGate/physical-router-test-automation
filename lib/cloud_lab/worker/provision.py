@@ -31,6 +31,13 @@ from lib.cloud_lab.worker.shell import _run, log
 def ensure_suite_checkout(config: WorkerConfig) -> None:
     test_dir = Path(TEST_DIR)
     if test_dir.exists() and (test_dir / ".git").exists():
+        # If HEAD already matches suite_ref, skip checkout — a prior overlay
+        # (applied after checkout by the bootstrap or shc-run-baked) would be
+        # discarded by `git checkout <sha>`, losing tracked-file modifications.
+        head = _run(f"cd {TEST_DIR} && git rev-parse HEAD", timeout=10, check=False)
+        if head.returncode == 0 and head.stdout.strip() == config.suite_ref:
+            log.info("Suite already at %s — keeping working tree (overlay preserved)", config.suite_ref[:7])
+            return
         log.info("Suite checkout: re-fetching %s at %s", SUITE_REPO_URL, config.suite_ref[:7])
         _run(
             f"cd {TEST_DIR} && git fetch --depth 1 origin {shlex.quote(config.suite_ref)}",
