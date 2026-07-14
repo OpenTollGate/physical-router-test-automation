@@ -89,6 +89,8 @@ jobs:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN || secrets.GH_TOKEN }}
           BOT_NSEC_HEX: ${{ secrets.BOT_NSEC_HEX }}
           SHC_TOOLKIT_PATH: /tmp/shc-toolkit
+          EXPECTED_NPUB: 28602aa4b9a599e5fb6a1ee974dbb5447c6baab7f677803d140cdbae6fdc9010
+          STRICT_NPUB_CHECK: "1"
         run: |
           ARGS=""
           [ -n "${{ inputs.pr }}" ] && ARGS="$ARGS --pr ${{ inputs.pr }}"

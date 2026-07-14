@@ -133,6 +133,8 @@ jobs:
       - name: Set up environment
         env:
           BOT_NSEC_HEX: ${{ secrets.BOT_NSEC_HEX }}
+          EXPECTED_NPUB: 28602aa4b9a599e5fb6a1ee974dbb5447c6baab7f677803d140cdbae6fdc9010
+          STRICT_NPUB_CHECK: "1"
         run: |
           source /opt/tollgate-venv/bin/activate || true
           mkdir -p "/tmp/tollgate-results/${{ inputs.run_id }}/raw"
@@ -152,6 +154,15 @@ jobs:
             echo "$BOT_NSEC_HEX" > /root/nsec
             chmod 600 /root/nsec
             echo "NSEC written to /root/nsec"
+            RUNNER_NPUB="$(nak key public "$(cat /root/nsec)" 2>/dev/null || echo DERIVE_FAILED)"
+            echo "Publisher npub: $RUNNER_NPUB"
+            if [ -n "$EXPECTED_NPUB" ] && [ "$RUNNER_NPUB" != "$EXPECTED_NPUB" ]; then
+              echo "WARNING: npub mismatch — got $RUNNER_NPUB, expected $EXPECTED_NPUB"
+              if [ "${STRICT_NPUB_CHECK:-0}" = "1" ]; then
+                echo "::error::npub mismatch (STRICT_NPUB_CHECK=1): got $RUNNER_NPUB, expected $EXPECTED_NPUB"
+                exit 1
+              fi
+            fi
           else
             echo "WARNING: BOT_NSEC_HEX not set — Nostr publishing will be skipped"
           fi

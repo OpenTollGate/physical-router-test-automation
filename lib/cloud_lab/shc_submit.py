@@ -274,6 +274,14 @@ echo "[3/$N_STEPS] done"
 step 4 "Writing nsec..."
 echo -n "$BOT_NSEC_HEX" | sudo tee /root/nsec > /dev/null
 sudo chmod 600 /root/nsec
+VM_NPUB="$(nak key public "$(cat /root/nsec)" 2>/dev/null || echo DERIVE_FAILED)"
+echo "  Publisher npub: $VM_NPUB"
+if [ -n "$EXPECTED_NPUB" ] && [ "$VM_NPUB" != "$EXPECTED_NPUB" ]; then
+  echo "  WARNING: npub mismatch — got $VM_NPUB, expected $EXPECTED_NPUB"
+  if [ "${{STRICT_NPUB_CHECK:-0}}" = "1" ]; then
+    fail 4 "npub mismatch (STRICT_NPUB_CHECK=1): got $VM_NPUB, expected $EXPECTED_NPUB"
+  fi
+fi
 echo "[4/$N_STEPS] done"
 
 step 5 "Cloning test suite..."
@@ -677,6 +685,8 @@ def submit_run_shc(
         f"SHC_API_KEY={shlex.quote(os.environ.get('SHC_API_KEY', ''))}",
         f"GH_TOKEN={shlex.quote(token)}",
         f"BOT_NSEC_HEX={shlex.quote(nsec)}",
+        f"EXPECTED_NPUB={shlex.quote(os.environ.get('EXPECTED_NPUB', ''))}",
+        f"STRICT_NPUB_CHECK={shlex.quote(os.environ.get('STRICT_NPUB_CHECK', '0'))}",
         f"VIRT_LAB_PASSWORD={VIRT_LAB_PASSWORD}",
         "NSEC_FILE=/root/nsec",
         "HOME=/root",
