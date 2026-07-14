@@ -62,11 +62,11 @@ Systematic testing plan covering: protocol validation (cloud), BLE transport
 
 1. **GCP baked image**: Merge `fips-cloud-lab-baked` and `tollgate-runner-baked-v16` into one image with both fips + TollGate deps. Saves cost (one snapshot vs two).
 
-2. **Blossom + Nostr**: Both projects publish to npub `9a515b0f...` with different `#t` tags:
-   - `fips-test`, `fips-interop`, `fips-rekey`, `fips-throughput` → fips-cloud-lab
-   - `fips-ble`, `fips-benchmark` → fips-lab
-   - `test-run`, `benchmark` → physical-router-test-automation
-   - Dashboard filters by tag
+2. **Blossom + Nostr**: Projects publish across two npubs (split after the 2026-07 key rotation):
+   - `9a515b0f...` (historical, still active for fips): `fips-test`, `fips-interop`, `fips-rekey`, `fips-throughput` → fips-cloud-lab; `fips-ble`, `fips-benchmark` → fips-lab
+   - `28602aa4...` (current tollgate publisher): `test-run`, `benchmark` → physical-router-test-automation
+   - Both are whitelisted in `blossomflare.pubkey_whitelist` (`blossomflare-meta` D1)
+   - Dashboard filters by tag, not by author
 
 3. **Cloud-lab worker**: physical-router-test-automation's cloud-lab already boots OpenWrt QEMU + Debian QEMU. Add:
    - Install fips .apk on OpenWrt VM
@@ -372,7 +372,7 @@ THROUGHPUT_RATE = 30000  # 30kbps target
 | GCP baked image | fips-cloud-lab-baked (Docker+Rust) | Merge with tollgate-runner-baked (add TollGate deps) |
 | Blossom server | blossom.psbt.me | Keep (or switch to blossomflare) |
 | Nostr relays | relay.cashu.email + nos.lol | Keep |
-| Nostr npub | 9a515b0f... (shared tollgate+fips) | Keep |
+| Nostr npub | `9a515b0f...` (fips) + `28602aa4...` (tollgate, rotated 2026-07) | Both whitelisted in blossomflare; dashboard filters by tag |
 | Dashboard | fips-cloud-lab.pages.dev | Expand to show both fips + tollgate runs |
 | Cloud-lab | physical-router-test-automation/lib/cloud_lab | Add fips .apk install to provision step |
 
