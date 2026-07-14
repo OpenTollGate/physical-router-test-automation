@@ -77,7 +77,9 @@ class TestBuiltinPortal:
 
     @pytest.mark.smoke
     @pytest.mark.skipif(PORTAL_TYPE != "builtin", reason="only for builtin portal")
-    def test_builtin_portal_has_spa_assets(self, router):
+    def test_builtin_portal_has_spa_assets(self, router, backend):
+        if backend.is_rust:
+            pytest.skip("Rust SUT serves embedded portal, no htdocs/assets")
         ls = router.ssh("ls /etc/nodogsplash/htdocs/assets/*.js 2>/dev/null")
         assert ls.strip(), "builtin portal missing SPA JS bundles in htdocs/assets/"
 
