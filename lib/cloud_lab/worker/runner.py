@@ -16,6 +16,7 @@ VL_SCENARIO_PATHS = (
     "tests/scenarios/test_mint_health.py",
     "tests/scenarios/test_boot_hygiene.py",
     "tests/scenarios/test_upstream_wifi.py",
+    "tests/scenarios/test_upgrade.py",
 )
 
 
