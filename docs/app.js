@@ -1044,8 +1044,8 @@ function buildSidebar() {
       </select>
       <select id="age-filter" class="age-filter">
         <option value="86400">Last 24h</option>
-        <option value="604800" selected>Last 7 days</option>
-        <option value="2592000">Last 30 days</option>
+        <option value="604800">Last 7 days</option>
+        <option value="2592000" selected>Last 30 days</option>
         <option value="0">All time</option>
       </select>
       <select id="version-filter" class="version-filter">
