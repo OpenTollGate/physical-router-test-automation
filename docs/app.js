@@ -55,12 +55,17 @@ const RELAYS = [
   "wss://relay.cashu.email",
   "wss://relay.damus.io",
   "wss://nos.lol",
-  "wss://relay.contextvm.org",
-  "wss://relay2.contextvm.org",
-  "wss://cvm.otherstuff.ai",
+  "wss://nostr.mom",
+  "wss://relay1.orangesync.tech",
 ];
 const FETCH_TIMEOUT_MS = 12000;
 const FETCH_SINCE_DAYS = 90;
+const KNOWN_PUBLISHERS = [
+  "9a515b0f08d554b582e54202c7ca0e6ee56d81559957cbf9b40047d391b95fd5",
+  "28602aa4b9a599e5fb6a1ee974dbb5447c6baab7f677803d140cdbae6fdc9010",
+  "76c714199ad17278276d4cd51ddec7d0df0715a91b2f2f03f16c03925b3a0911",
+  "5075e61f0b048148b60105c1dd72bbeae1957336ae5824087e52efa374f8416a",
+];
 
 // === STATE ==================================================================
 let allRuns = [];
@@ -71,7 +76,7 @@ const MAX_CONCURRENT_IMG_LOADS = 3;
 const imgLoadQueue = [];
 
 const CACHE_KEY = "prta:runs:v6";
-const filterState = { search: "", status: "all", sort: "newest", runner: "", project: "ours", maxAge: 604800, version: "all" };
+const filterState = { search: "", status: "all", sort: "newest", runner: "", project: "ours", maxAge: 2592000, version: "all" };
 let detailLoadId = 0;
 let currentTestFilter = "all";
 let currentTestSearch = "";
@@ -86,7 +91,7 @@ let renderRunsListTimer = null;
 // ContextVM kind 25910 is the current protocol for MCP-over-Nostr compute events.
 // ===========================================================================
 
-function fetchEvents(kinds = [30078, 25910, 1063], limit = 200) {
+function fetchEvents(kinds = [30078, 25910, 1063], limit = 500) {
   return new Promise((resolve) => {
     const events = new Map();
     let resolved = false;
@@ -159,7 +164,7 @@ function fetchEvents(kinds = [30078, 25910, 1063], limit = 200) {
   });
 }
 
-function fetchKind30078Events(limit = 200) {
+function fetchKind30078Events(limit = 500) {
   return new Promise((resolve) => {
     const events = new Map();
     let resolved = false;
@@ -191,6 +196,7 @@ function fetchKind30078Events(limit = 200) {
           "REQ", subId,
           {
             kinds: [30078],
+            authors: KNOWN_PUBLISHERS,
             limit,
             since: Math.floor(Date.now() / 1000) - 86400 * FETCH_SINCE_DAYS,
           },
@@ -878,6 +884,23 @@ function updateConnectionStatus(connected, total) {
   } else {
     el.textContent = connected + "/" + total + " relays";
     el.className = "conn-badge online";
+  }
+  var warn = document.getElementById("relay-health-warning");
+  if (!warn) {
+    warn = document.createElement("div");
+    warn.id = "relay-health-warning";
+    warn.style.cssText = "background:#f59e0b;color:#1a1a1a;padding:8px 16px;font-size:14px;font-weight:600;text-align:center;z-index:9999;";
+    var main = document.querySelector("main") || document.body;
+    main.insertBefore(warn, main.firstChild);
+  }
+  if (connected < 3 && connected > 0) {
+    warn.textContent = "WARNING: Only " + connected + "/" + total + " relays connected. Some test runs may not appear.";
+    warn.style.display = "block";
+  } else if (connected === 0) {
+    warn.textContent = "OFFLINE: No relays reachable. The dashboard cannot fetch any data.";
+    warn.style.display = "block";
+  } else {
+    warn.style.display = "none";
   }
 }
 
@@ -3822,8 +3845,8 @@ function renderCvmServiceExtra(got) {
 
   try {
     const [auxResult, k30078Events] = await Promise.all([
-      fetchEvents([25910, 1063], 200),
-      fetchKind30078Events(200),
+      fetchEvents([25910, 1063], 500),
+      fetchKind30078Events(500),
     ]);
     const { events, connected } = auxResult;
 
