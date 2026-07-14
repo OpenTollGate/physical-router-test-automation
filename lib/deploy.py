@@ -16,7 +16,7 @@ COORDINATION_RELAYS = [
     "wss://relay.damus.io",
     "wss://nos.lol",
     "wss://nostr.mom",
-    "wss://relay2.orangesync.tech",
+    "wss://relay1.orangesync.tech",
 ]
 
 #: Nostr pubkey CI uses to sign all release/build events (kind 1063 + 30078).

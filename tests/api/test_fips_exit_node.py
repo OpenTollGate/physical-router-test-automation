@@ -85,7 +85,7 @@ _DEFAULT_RELAYS = [
     "wss://relay.damus.io",
     "wss://nos.lol",
     "wss://nostr.mom",
-    "wss://relay2.orangesync.tech",
+    "wss://relay1.orangesync.tech",
 ]
 _relays_raw = os.environ.get("FIPS_EXIT_RELAYS", "").strip()
 EXIT_RELAYS = (
