@@ -457,10 +457,10 @@ def run_worker(config: WorkerConfig) -> int:
             log.info("Force-deleting VM (2h lifetime exceeded)")
             stop_inner_vms()
             delete_self(config)
-        elif config.keep_vm_on_failure:
-            log.warning("Keeping VM + inner VMs alive for log inspection (keep_vm_on_failure=true). "
-                        "Lease kill switch will delete at tollgate-delete-at timestamp (3h hard backstop).")
+        elif config.keep_vm_on_failure and test_exit != 0:
+            log.warning("Keeping VM + inner VMs alive for log inspection (keep_vm_on_failure=true, exit=%d). "
+                        "Lease kill switch will delete at tollgate-delete-at timestamp (3h hard backstop).", test_exit)
         else:
             stop_inner_vms()
-            log.info("Self-deleting VM %s", config.vm_name)
+            log.info("Self-deleting VM %s (exit=%d)", config.vm_name, test_exit)
             delete_self(config)

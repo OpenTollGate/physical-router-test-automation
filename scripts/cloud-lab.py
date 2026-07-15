@@ -231,6 +231,16 @@ def cmd_submit(args: argparse.Namespace) -> int:
     cloud = getattr(args, "cloud", "gcp")
     if cloud in ("pulumi", "shc"):
         from lib.cloud_lab.shc_submit import submit_run_shc
+
+        try:
+            from lib.cloud_lab.provider import SHCProvider
+            shc = SHCProvider()
+            stale = shc.cleanup_stale(max_age_hours=2)
+            if stale:
+                print(f"Cleaned up {stale} stale SHC VM(s) (>2h old)", file=sys.stderr)
+        except Exception as e:
+            print(f"SHC stale cleanup skipped: {e}", file=sys.stderr)
+
         info = submit_run_shc(
             target,
             publish=cast(bool, args.publish),

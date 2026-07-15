@@ -154,10 +154,22 @@ def main() -> int:
     ap.add_argument("--portal", default="builtin")
     ap.add_argument("--no-restore", action="store_true", help="Skip snapshot restore (VM already baked)")
     ap.add_argument("--no-monitor", action="store_true", help="Fire-and-forget: upload + launch, then exit")
+    ap.add_argument("--cleanup-stale", action="store_true", default=True, help="Cancel orphaned SHC VMs before running (default: on)")
+    ap.add_argument("--no-cleanup", action="store_true", help="Skip stale VM cleanup")
     args = ap.parse_args()
 
     ip = args.ip
     user = args.user
+
+    if args.cleanup_stale and not args.no_cleanup:
+        try:
+            from lib.cloud_lab.provider import SHCProvider
+            shc = SHCProvider()
+            stale = shc.cleanup_stale(max_age_hours=2)
+            if stale:
+                print(f"Cleaned up {stale} stale SHC VM(s) (>2h old)")
+        except Exception as e:
+            print(f"Stale cleanup skipped: {e}")
 
     # 1. Restore snapshot (reset to baked state)
     if not args.no_restore:
