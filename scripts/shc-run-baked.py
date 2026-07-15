@@ -49,8 +49,13 @@ def _ssh_base(ip: str, user: str = "debian") -> list[str]:
 
 def _ssh(ip: str, cmd: str, user: str = "debian", timeout: int = 30, stdin: str | None = None) -> tuple[int, str, str]:
     base = _ssh_base(ip, user)
-    r = subprocess.run(base + [cmd], capture_output=True, text=True, timeout=timeout, input=stdin)
-    return r.returncode, r.stdout, r.stderr
+    try:
+        r = subprocess.run(base + [cmd], capture_output=True, text=True, timeout=timeout, input=stdin)
+        return r.returncode, r.stdout, r.stderr
+    except subprocess.TimeoutExpired:
+        return 1, "", "TIMEOUT"
+    except Exception:
+        return 1, "", "SSH_ERROR"
 
 
 def _wait_ssh(ip: str, user: str = "debian", timeout: int = 300) -> bool:
@@ -68,54 +73,65 @@ def _restore_snapshot(service_id: int, snapshot_id: str) -> bool:
 
     Stop → restore → start → wait for SSH. Returns True if restore completed.
     """
+    from shc_toolkit import SHCClient
+    client = SHCClient()
+
     # 1. Stop the VM (required before restore — restore wipes the disk)
-    print(f"Stopping VM {service_id} for snapshot restore...", end=" ", flush=True)
-    r = subprocess.run(["shc", "stop", str(service_id)], capture_output=True, text=True, timeout=60)
-    if r.returncode != 0 and "already" not in (r.stdout + r.stderr).lower():
-        print(f"FAILED: {(r.stderr or r.stdout)[:150]}")
-        return False
-    # Wait for the VM to be stopped
-    for _ in range(36):  # 3 min max
-        time.sleep(5)
-        r2 = subprocess.run(["shc", "info", str(service_id)], capture_output=True, text=True, timeout=30)
-        status = r2.stdout
-        if any(s in status for s in ('"service_status": "stopped"', '"service_status": "offline"', '"service_status": "maintenance"')):
-            print("stopped")
-            break
-    else:
-        print("stop timeout (continuing anyway)")
+    print(f"Stopping VM {service_id}...", end=" ", flush=True)
+    try:
+        vm = client.get_vm(service_id)
+        if vm.get("service_status") == "stopped":
+            print("already stopped")
+        else:
+            client.stop_vm(service_id)
+            for _ in range(36):
+                time.sleep(5)
+                vm = client.get_vm(service_id)
+                if vm.get("service_status") in ("stopped", "offline", "maintenance"):
+                    print("stopped")
+                    break
+            else:
+                print("stop timeout (continuing anyway)")
+    except Exception as e:
+        print(f"stop error ({e}) — continuing")
 
-    # 2. Restore the snapshot (disk reset to baked state)
+    # 2. Restore the snapshot
     print(f"Restoring snapshot {snapshot_id}...", end=" ", flush=True)
-    r = subprocess.run(
-        ["shc", "snapshot-restore", str(service_id), snapshot_id],
-        capture_output=True, text=True, timeout=60,
-    )
-    out = (r.stdout or "") + (r.stderr or "")
-    if r.returncode != 0 and "queued" not in out.lower() and "confirm" not in out.lower():
-        print(f"FAILED: {out[:200]}")
-        return False
-    print("queued")
+    try:
+        client.restore_snapshot(service_id, snapshot_id)
+        print("queued")
+    except Exception as e:
+        if "confirm" in str(e).lower() or "queued" in str(e).lower():
+            print("queued")
+        else:
+            print(f"FAILED: {e}")
+            return False
 
-    # 3. Wait for the restore job to complete.
-    # SHC transitions: provisioning → active|ready (not stopped). Poll for ready.
-    print("  Waiting for restore job...", end=" ", flush=True)
-    for _ in range(72):  # 6 min max
+    # 3. Wait for restore → VM auto-starts
+    print("  Waiting for restore...", end=" ", flush=True)
+    for _ in range(72):
         time.sleep(5)
-        r3 = subprocess.run(["shc", "info", str(service_id)], capture_output=True, text=True, timeout=30)
-        if '"provisioning_state": "ready"' in r3.stdout and '"service_status": "active"' in r3.stdout:
-            print("restore done (active|ready)")
-            break
+        try:
+            vm = client.get_vm(service_id)
+            prov = vm.get("provisioning_state", "")
+            status = vm.get("service_status", "")
+            if prov == "ready" and status == "active":
+                print("done (active|ready)")
+                break
+        except Exception:
+            pass
     else:
-        print("restore timeout — proceeding to start")
+        print("timeout — proceeding")
 
-    # 4. Start the VM
-    print(f"Starting VM {service_id}...", end=" ", flush=True)
-    r = subprocess.run(["shc", "start", str(service_id)], capture_output=True, text=True, timeout=60)
-    if r.returncode != 0 and "already" not in (r.stdout + r.stderr).lower():
-        print(f"FAILED: {(r.stderr or r.stdout)[:150]}")
-        return False
-    print("started")
+    # 4. Ensure VM is started
+    try:
+        vm = client.get_vm(service_id)
+        if vm.get("service_status") != "active":
+            client.start_vm(service_id)
+            print(f"Starting VM {service_id}...")
+    except Exception:
+        pass
+
     return True
 
 
@@ -137,6 +153,7 @@ def main() -> int:
     ap.add_argument("--mint", default="auto")
     ap.add_argument("--portal", default="builtin")
     ap.add_argument("--no-restore", action="store_true", help="Skip snapshot restore (VM already baked)")
+    ap.add_argument("--no-monitor", action="store_true", help="Fire-and-forget: upload + launch, then exit")
     args = ap.parse_args()
 
     ip = args.ip
@@ -148,7 +165,28 @@ def main() -> int:
             print("Snapshot restore failed — aborting")
             return 1
 
-    # 2. Wait for SSH
+    # 2. Re-apply SSH key (snapshot restore may reset authorized_keys)
+    if not args.no_restore:
+        from shc_toolkit import SHCClient
+        client = SHCClient()
+        key_path = Path.home() / ".ssh/id_rsa.pub"
+        if key_path.exists():
+            pubkey = key_path.read_text().strip()
+            print("Re-applying SSH key...", end=" ", flush=True)
+            applied = False
+            for attempt in range(12):
+                try:
+                    client.apply_ssh_key_live(args.service_id, pubkey)
+                    print(f"OK ({attempt+1} tries)")
+                    applied = True
+                    break
+                except Exception:
+                    time.sleep(10)
+            if not applied:
+                print("SKIP (guest agent unavailable — trying SSH anyway, key may be in snapshot)")
+        time.sleep(5)
+
+    # 3. Wait for SSH
     print("Waiting for SSH...", end=" ", flush=True)
     if not _wait_ssh(ip, user=user, timeout=300):
         print("FAILED — SSH not reachable after restore")
@@ -248,9 +286,11 @@ touch /tmp/tollgate-done
     # 5. Upload + launch
     script_path = "/tmp/tollgate-baked-worker.sh"
     print("Uploading worker script...")
+    import base64
+    b64_script = base64.b64encode(worker_script.encode()).decode()
     _ssh(ip, "sudo rm -f /tmp/tollgate-status /tmp/tollgate-done /var/log/tollgate-run.log", user=user)
-    rc, _, err = _ssh(ip, f"cat > {script_path} && chmod +x {script_path}",
-                      user=user, timeout=30, stdin=worker_script)
+    rc, _, err = _ssh(ip, f"echo '{b64_script}' | base64 -d > {script_path} && chmod +x {script_path}",
+                      user=user, timeout=30)
     if rc != 0:
         print(f"Upload failed: {err}")
         return 1
@@ -261,6 +301,11 @@ touch /tmp/tollgate-done
     # 6. Monitor
     print(f"Run ID: {run_id}")
     print(f"Logs: ssh {user}@{ip} 'tail -f /var/log/tollgate-run.log'")
+    if args.no_monitor:
+        print(f"\nFire-and-forget mode. Monitor with:")
+        print(f"  ssh {user}@{ip} 'tail -f /var/log/tollgate-run.log'")
+        return 0
+
     print("\nMonitoring (worker-only, should be fast)...")
     last_line = ""
     deadline = time.time() + 2400  # 40 min max
