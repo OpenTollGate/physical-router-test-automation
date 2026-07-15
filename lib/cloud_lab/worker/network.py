@@ -35,6 +35,7 @@ from lib.cloud_lab.constants import (
     chain_mgmt_ip,
     chain_mgmt_tap,
     chain_subnet,
+    chain_subnet_prefix,
     chain_wan_tap,
 )
 from lib.cloud_lab.worker.config import WorkerConfig
