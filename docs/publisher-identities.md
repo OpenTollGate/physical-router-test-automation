@@ -95,6 +95,11 @@ for the `Publisher npub:` line that step 4 now emits):
 [4/15] done (0s)
 ```
 
+**Verified 2026-07-15**: EXPECTED_NPUB=28602aa4... is correct. The GitHub
+secret `BOT_NSEC_HEX` produces this npub. End-to-end smoke test passed with
+STRICT_NPUB_CHECK=1 — the assertion accepted the key and the bootstrap
+completed. Events from 28602aa4... confirmed on relay.cashu.email and nos.lol.
+
 Or check recent Nostr events from a key you control locally:
 
 ```bash
