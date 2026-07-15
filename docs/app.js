@@ -642,6 +642,7 @@ function parseRunFromKind30078(event, fileMeta) {
     viewport: payload?.viewport || null,
     blossomServer: payload?.blossom_server || null,
     scanSummary: payload?.scan_summary || {},
+    manifestUrl: payload?.manifest_url || null,
     files: nonScreenshotFiles,
     screenshots,
     content: event.content || "",
@@ -1409,6 +1410,49 @@ async function fetchTestSummary(run) {
     return await resp.json();
   } catch {
     return null;
+  }
+}
+
+async function loadManifestFiles(run) {
+  if (!run.manifestUrl) return null;
+  try {
+    const resp = await fetch(run.manifestUrl);
+    if (!resp.ok) return null;
+    const manifest = await resp.json();
+    return Array.isArray(manifest.files) ? manifest.files : null;
+  } catch {
+    return null;
+  }
+}
+
+async function enrichRunWithManifest(run) {
+  if (run._manifestLoaded || !run.manifestUrl) return;
+  run._manifestLoaded = true;
+  const manifestFiles = await loadManifestFiles(run);
+  if (!manifestFiles) return;
+
+  const existingUrls = new Set([...(run.files || []), ...(run.screenshots || [])].map((f) => f.url));
+  for (const f of manifestFiles) {
+    if (typeof f === "string") continue;
+    if (existingUrls.has(f.url)) {
+      const existing = [...(run.files || []), ...(run.screenshots || [])].find((e) => e.url === f.url);
+      if (existing && !existing.path && f.path) existing.path = f.path;
+      continue;
+    }
+    const fileObj = {
+      path: f.path || "",
+      url: f.url,
+      sha256: f.sha256 || "",
+      mime: f.mime || guessMimeFromPath(f.path || f.url),
+      size: f.size != null ? f.size : null,
+      redacted: !!f.redacted,
+    };
+    if ((fileObj.mime || "").startsWith("image/")) {
+      run.screenshots = [...(run.screenshots || []), fileObj];
+    } else {
+      run.files = [...(run.files || []), fileObj];
+    }
+    existingUrls.add(f.url);
   }
 }
 
@@ -2714,6 +2758,7 @@ async function selectRun(run) {
     </div>
   `;
 
+  await enrichRunWithManifest(run);
   const summary = await fetchTestSummary(run);
 
   const backBtn = view.querySelector("#back-to-list");
