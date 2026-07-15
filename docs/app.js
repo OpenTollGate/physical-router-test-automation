@@ -379,6 +379,7 @@ const PROJECT_TAG_MAP = {
   "fips-benchmark": "fips-benchmark",
   "nomail": "nomail",
   "vps-on-demand": "vps-on-demand",
+  "centurymetadata-ai-experimental-client": "centurymetadata",
 };
 
 function determineProjectTag(tTags) {
@@ -403,6 +404,7 @@ const PROJECT_LABELS = {
   "silent-energy": "Silent Energy",
   nomail: "nomail",
   "vps-on-demand": "VPS on Demand",
+  centurymetadata: "centurymetadata",
   unknown: "Other",
 };
 
@@ -416,6 +418,7 @@ const PROJECT_COLORS = {
   "silent-energy": "var(--orange, #f59e0b)",
   nomail: "var(--pink, #ec4899)",
   "vps-on-demand": "var(--lightning, #f7931a)",
+  centurymetadata: "var(--teal, #14b8a6)",
   unknown: "var(--text-dim)",
 };
 
@@ -916,7 +919,7 @@ function getFilteredRuns() {
     if (filterState.project === "ours") {
       runs = runs.filter((r) => {
         const p = getRunProject(r);
-        return p === "tollgate" || p === "boltcard" || p === "fips" || p === "ble" || p === "microfips" || p === "conwrt" || p === "silent-energy" || p === "nomail" || p === "vps-on-demand";
+        return p === "tollgate" || p === "boltcard" || p === "fips" || p === "ble" || p === "microfips" || p === "conwrt" || p === "silent-energy" || p === "nomail" || p === "vps-on-demand" || p === "centurymetadata";
       });
     } else {
       runs = runs.filter((r) => getRunProject(r) === filterState.project);
@@ -1026,6 +1029,7 @@ function buildSidebar() {
         <button class="project-tab" data-project="boltcard" type="button">Boltcard</button>
         <button class="project-tab" data-project="nomail" type="button">nomail</button>
 <button class="project-tab" data-project="vps-on-demand" type="button">VPS on Demand</button>
+        <button class="project-tab" data-project="centurymetadata" type="button">centurymetadata</button>
         <button class="project-tab project-tab-secondary" data-project="all" type="button">All Nostr</button>
       </div>
       <input type="text" id="search-input" class="search-input" placeholder="Search runs\u2026" autocomplete="off" />
