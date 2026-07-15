@@ -19,7 +19,6 @@ Setup (one-time):
 import argparse
 import hashlib
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -30,7 +29,7 @@ except ImportError:
     sys.exit("requests not installed: pip install requests")
 
 try:
-    from nostr_sdk import Keys, SecretKey, EventBuilder, Client, NostrSigner, Tag, TagKind, Kind
+    from nostr_sdk import Keys, SecretKey, EventBuilder, Client, NostrSigner, Kind
     HAS_NOSTR_SDK = True
 except ImportError:
     HAS_NOSTR_SDK = False

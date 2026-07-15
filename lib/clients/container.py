@@ -571,14 +571,14 @@ class ContainerClient:
                 out = self._exec("test -f /tmp/tg-portal-ready && echo YES || echo NO", timeout=5)
                 if "YES" in out:
                     return True
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("portal-ready check failed: %s", e)
             time.sleep(0.5)
         try:
             err = self._exec("echo '=== record.out ==='; cat /tmp/tg-record.out 2>/dev/null; echo '=== record.err ==='; cat /tmp/tg-record.err 2>/dev/null; echo '=== processes ==='; ps aux | grep tg-record | grep -v grep", timeout=5)
             log.warning("Portal ready timeout after %ds. Diagnostics:\n%s", timeout, err[:1000])
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Portal ready diagnostics also failed: %s", e)
         return False
 
     def signal_paid(self) -> None:

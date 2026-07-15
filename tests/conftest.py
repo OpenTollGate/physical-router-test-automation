@@ -371,6 +371,34 @@ def secondary_router(backend):
     secondary.close()
 
 
+@pytest.fixture(scope="session")
+def chain_routers(backend):
+    hosts_str = os.environ.get("TOLLGATE_CHAIN_ROUTER_HOSTS", "")
+    count_str = os.environ.get("TOLLGATE_CHAIN_ROUTER_COUNT", "0")
+    count = int(count_str) if count_str else 0
+
+    if count < 3 or not hosts_str:
+        yield []
+        return
+
+    hosts = hosts_str.split()
+    routers: list[Router] = []
+    for host in hosts:
+        r = Router(
+            host=host,
+            phone_ip="",
+            phone_mac="",
+            domain="",
+            backend=backend,
+        )
+        routers.append(r)
+
+    yield routers
+
+    for r in routers:
+        r.close()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def deploy_session(request, router, backend):
     from lib import deploy as deploy_lib

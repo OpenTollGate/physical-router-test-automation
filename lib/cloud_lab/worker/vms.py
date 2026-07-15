@@ -36,6 +36,17 @@ from lib.cloud_lab.constants import (
     UPSTREAM_TAP_BETA,
     VIRT_LAB_PASSWORD,
     VIRT_LAB_WORKDIR,
+    chain_bridge,
+    chain_disk_name,
+    chain_host_ip,
+    chain_lan_ip,
+    chain_lan_mac,
+    chain_lan_tap,
+    chain_mgmt_ip,
+    chain_mgmt_mac,
+    chain_mgmt_tap,
+    chain_wan_mac,
+    chain_wan_tap,
 )
 from lib.cloud_lab.worker.config import WorkerConfig
 from lib.cloud_lab.worker.inner_ssh import inner_ssh, wait_inner_ssh
@@ -410,6 +421,142 @@ def start_inner_vms(config: WorkerConfig) -> None:
         raise RuntimeError("Debian VM did not become reachable")
     log.info("Debian VM SSH OK")
     configure_mgmt_nic(DEBIAN_IP, MGMT_DEBIAN_IP, MGMT_DEBIAN_MAC)
+def reset_chain_overlays(router_count: int) -> None:
+    log.info("Resetting OpenWrt overlays for %d-router chain", router_count)
+    rm_list = " ".join(f"overlays/{chain_disk_name(i)}" for i in range(router_count))
+    create_list = " ".join(
+        f'qemu-img create -f qcow2 -F qcow2 -b "$OWRT_BASE" overlays/{chain_disk_name(i)} >/dev/null'
+        for i in range(router_count)
+    )
+    _run(
+        "killall -9 qemu-system-x86_64 2>/dev/null || true; sleep 1; "
+        f"cd {VIRT_LAB_WORKDIR} && "
+        "OWRT_BASE=images/openwrt-base.qcow2; "
+        "[ -f \"$OWRT_BASE\" ] || OWRT_BASE=../images/openwrt-base.qcow2; "
+        "OWRT_BASE=$(readlink -f \"$OWRT_BASE\"); "
+        f"rm -f {rm_list} && "
+        f"{create_list}",
+        timeout=60,
+    )
+    r = _run(f"test -f {VIRT_LAB_WORKDIR}/overlays/debian-client.qcow2 && echo DEBIAN_OVERLAY_OK", check=False)
+    if "DEBIAN_OVERLAY_OK" not in r.stdout:
+        _run(
+            f"cd {VIRT_LAB_WORKDIR} && "
+            "DEB_BASE=images/debian-12-base.qcow2; "
+            "[ -f \"$DEB_BASE\" ] || DEB_BASE=../images/debian-12-base.qcow2; "
+            "[ -f \"$DEB_BASE\" ] || DEB_BASE=images/debian-12-nocloud-amd64.qcow2; "
+            "[ -f \"$DEB_BASE\" ] || DEB_BASE=../images/debian-12-nocloud-amd64.qcow2; "
+            "DEB_BASE=$(readlink -f \"$DEB_BASE\"); "
+            "qemu-img create -f qcow2 -F qcow2 -b \"$DEB_BASE\" overlays/debian-client.qcow2 >/dev/null && "
+            "qemu-img resize --shrink overlays/debian-client.qcow2 10G >/dev/null 2>&1 || true",
+            timeout=60,
+        )
+
+
+def start_chain_vms(config: WorkerConfig) -> None:
+    from lib.cloud_lab.worker.network import (
+        configure_chain_router_lan,
+        configure_chain_router_wan,
+        setup_chain_bridges,
+    )
+
+    n = config.effective_router_count
+    setup_bridge()
+    setup_chain_bridges(n)
+    reset_chain_overlays(n)
+
+    if config.vwifi_enabled:
+        _run("modprobe vhost_vsock 2>/dev/null || true && chmod a+rw /dev/vhost-vsock 2>/dev/null || true", timeout=10)
+
+    config.secondary_router_host = ""
+    mgmt_ips: list[str] = []
+
+    for i in range(n - 1, -1, -1):
+        lan_tap = chain_lan_tap(i)
+        lan_mac = chain_lan_mac(i)
+        lan_ip = chain_lan_ip(i)
+        host_ip = chain_host_ip(i)
+
+        wan_tap = chain_wan_tap(i) if i < n - 1 else None
+        wan_mac = chain_wan_mac(i) if i < n - 1 else None
+
+        mgmt_tap = chain_mgmt_tap(i)
+        mgmt_mac = chain_mgmt_mac(i)
+        mgmt_ip = chain_mgmt_ip(i)
+
+        name = f"openwrt-chain-{i}"
+        log.info("[chain] Starting router[%d] VM (%s)...", i, name)
+
+        proc = _launch_qemu(
+            name=name,
+            memory_mb=512,
+            cpus=1,
+            disk_name=chain_disk_name(i),
+            tap_name=lan_tap,
+            mac=lan_mac,
+            wan_tap=wan_tap,
+            wan_mac=wan_mac,
+            mgmt_tap=mgmt_tap,
+            mgmt_mac=mgmt_mac,
+        )
+        _provision_openwrt_serial(name, lan_ip, gateway=host_ip)
+        if proc.poll() is not None:
+            raise RuntimeError(f"router[{i}] VM exited during provisioning with rc={proc.returncode}")
+        if not wait_inner_ssh(lan_ip):
+            raise RuntimeError(f"router[{i}] VM did not become reachable at {lan_ip}")
+
+        actual_mgmt = configure_chain_router_lan(i, n)
+        mgmt_ips.append(actual_mgmt)
+
+        if i < n - 1:
+            configure_chain_router_wan(i)
+
+        if i > 0:
+            from lib.cloud_lab.constants import DEBIAN_IP as _DEBIAN_IP, DEBIAN_MAC as _DEBIAN_MAC
+            inner_ssh(
+                lan_ip,
+                f"uci add dhcp host 2>/dev/null; "
+                f"uci set dhcp.@host[-1].mac='{_DEBIAN_MAC}'; "
+                f"uci set dhcp.@host[-1].ip='{_DEBIAN_IP}'; "
+                f"uci commit dhcp; /etc/init.d/dnsmasq restart 2>/dev/null; echo DHCP_RESERVED",
+                timeout=15,
+            )
+
+        log.info("[chain] router[%d] SSH OK at %s (lan=%s, mgmt=%s)", i, lan_ip, lan_ip, actual_mgmt)
+
+    config.secondary_router_host = mgmt_ips[-2] if len(mgmt_ips) >= 2 else ""
+    _start_chain_debian(config)
+
+    env_hosts = " ".join(mgmt_ips)
+    _run(f"echo 'TOLLGATE_CHAIN_ROUTER_HOSTS={env_hosts}' >> {os.environ.get('GITHUB_WORKSPACE', '/opt/tollgate-test')}/.env",
+         timeout=5, check=False)
+    log.info("[chain] All %d routers booted. mgmt_ips=[%s]", n, ", ".join(mgmt_ips))
+
+
+def _start_chain_debian(config: WorkerConfig) -> None:
+    log.info("Starting Debian VM (cached overlay)...")
+    workdir = _virt_lab_workdir()
+    debian_seed = workdir / "images" / "debian-seed.iso"
+    debian_proc = _launch_qemu(
+        name="debian",
+        memory_mb=1536,
+        cpus=2,
+        disk_name="debian-client.qcow2",
+        tap_name="tg-poc-tap2",
+        mac=DEBIAN_MAC,
+        mgmt_tap=MGMT_TAP_DEBIAN,
+        mgmt_mac=MGMT_DEBIAN_MAC,
+        seed_iso=str(debian_seed) if debian_seed.exists() else None,
+    )
+    time.sleep(30)
+    if debian_proc.poll() is not None:
+        raise RuntimeError(f"Debian VM exited before SSH with rc={debian_proc.returncode}")
+    if not wait_inner_ssh(DEBIAN_IP, timeout=120):
+        raise RuntimeError("Debian VM did not become reachable")
+    log.info("Debian VM SSH OK")
+    configure_mgmt_nic(DEBIAN_IP, MGMT_DEBIAN_IP, MGMT_DEBIAN_MAC)
+
+
 def stop_inner_vms() -> None:
     _run("killall -9 qemu-system-x86_64 2>/dev/null || true", timeout=15, check=False)
 def delete_self(config: WorkerConfig) -> None:

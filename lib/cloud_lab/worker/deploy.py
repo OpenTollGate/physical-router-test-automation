@@ -6,7 +6,7 @@ import logging
 import shlex
 import time
 
-from lib.cloud_lab.constants import CLOUD_ARCH, OPENWRT_IP, TEST_DIR
+from lib.cloud_lab.constants import CLOUD_ARCH, OPENWRT_IP, TEST_DIR, chain_mgmt_ip
 from lib.cloud_lab.worker.config import WorkerConfig
 from lib.cloud_lab.worker.shell import _run, log
 
@@ -28,10 +28,14 @@ os.environ["TOLLGATE_DISABLE_ARTIFACT_RERUN"] = "1"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s", datefmt="%H:%M:%S")
 
 backend = BackendConfig({backend_arg})
-hosts = [{OPENWRT_IP!r}]
-secondary = {config.secondary_router_host!r}
-if secondary:
-    hosts.append(secondary)
+    n = config.effective_router_count
+    if n >= 3:
+        hosts = [chain_mgmt_ip(i) for i in range(n)]
+    else:
+        hosts = [OPENWRT_IP]
+        secondary = {config.secondary_router_host!r}
+        if secondary:
+            hosts.append(secondary)
 
 ok = True
 for host in hosts:
@@ -65,7 +69,7 @@ sys.exit(0 if ok else 1)
         f"python3 -c {shlex.quote(py)}",
         timeout=300,
     )
-    log.info("Deploy complete for %d host(s)", 1 + bool(config.secondary_router_host))
+    log.info("Deploy complete for %d host(s)", len(hosts))
 def deploy_portal_overlay(config: WorkerConfig) -> None:
     """Download and install an alternative portal .ipk on the OpenWrt VM."""
     from lib.portal import PortalConfig

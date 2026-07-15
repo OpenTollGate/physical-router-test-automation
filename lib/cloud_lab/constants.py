@@ -75,3 +75,70 @@ BETA_LAN_SUBNET = "10.99.96.0/24"
 
 # Backwards-compatible alias
 NUTSHELL_V1_MINT_LAN = V1_TESTNUT_NUTSHELL_LAN
+
+MAX_CHAIN_ROUTERS = 5
+
+# ── Multi-hop chain topology (N >= 2 routers) ──────────────
+# Each router[i] has:
+#   NIC0 (br-lan): on chain_bridge(i), IP chain_lan_ip(i), serves DHCP
+#   NIC1 (eth1/WAN): on chain_bridge(i+1), gets DHCP from router[i+1] (only if i < N-1)
+#   NIC2 (mgmt): on mgmt-br, IP chain_mgmt_ip(i)
+# The topmost router[N-1] has Host NAT on its br-lan bridge for internet access.
+# Router[0] reuses the existing tg-poc-br (10.99.99.0/24).
+# Router[i>=1] uses 10.99.{50+i}.0/24 to avoid conflicts with existing subnets.
+
+
+def chain_bridge(router_index: int) -> str:
+    if router_index == 0:
+        return "tg-poc-br"
+    return f"tg-hop-{router_index}-br"
+
+
+def chain_subnet_prefix(router_index: int) -> int:
+    if router_index == 0:
+        return 99
+    return 50 + router_index
+
+
+def chain_lan_ip(router_index: int) -> str:
+    return f"10.99.{chain_subnet_prefix(router_index)}.1"
+
+
+def chain_host_ip(router_index: int) -> str:
+    return f"10.99.{chain_subnet_prefix(router_index)}.2"
+
+
+def chain_subnet(router_index: int) -> str:
+    return f"10.99.{chain_subnet_prefix(router_index)}.0/24"
+
+
+def chain_lan_tap(router_index: int) -> str:
+    return f"tg-hop-{router_index}-lan"
+
+
+def chain_wan_tap(router_index: int) -> str:
+    return f"tg-hop-{router_index}-wan"
+
+
+def chain_mgmt_tap(router_index: int) -> str:
+    return f"mgmt-tap-{router_index}"
+
+
+def chain_mgmt_ip(router_index: int) -> str:
+    return f"10.99.97.{11 + router_index}"
+
+
+def chain_lan_mac(router_index: int) -> str:
+    return f"52:54:00:dd:{router_index:02x}:00"
+
+
+def chain_wan_mac(router_index: int) -> str:
+    return f"52:54:00:dd:{router_index:02x}:01"
+
+
+def chain_mgmt_mac(router_index: int) -> str:
+    return f"52:54:00:dd:{router_index:02x}:02"
+
+
+def chain_disk_name(router_index: int) -> str:
+    return f"tollgate-chain-{router_index}.qcow2"

@@ -7,6 +7,7 @@ import os
 import urllib.request
 from dataclasses import dataclass
 
+from lib.cloud_lab.constants import MAX_CHAIN_ROUTERS
 from lib.cloud_lab.worker.shell import log
 
 METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/instance/attributes"
@@ -39,11 +40,19 @@ class WorkerConfig:
     smoke: bool
     complete: bool
     wifi_plane: str
+    router_count: int = 0
     lease_minutes: int = 60
     runner_mode: bool = False  # True when running inside GitHub Actions self-hosted runner
     cloud: str = "gcp"  # "gcp" or "shc" — determines self-delete mechanism
     service_id: str = ""  # SHC service ID (only set for SHC VMs)
     deploy_mode: str = "framework"  # "framework" (default) or "conwrt"
+
+    @property
+    def effective_router_count(self) -> int:
+        """Normalized router count: explicit router_count wins, else derive from two_router."""
+        if self.router_count and self.router_count >= 2:
+            return min(self.router_count, MAX_CHAIN_ROUTERS)
+        return 2 if self.two_router else 1
 def _metadata_get(key: str) -> str:
     req = urllib.request.Request(
         f"{METADATA_URL}/{key}",
@@ -69,6 +78,7 @@ def load_config_from_metadata() -> WorkerConfig:
         backend=_metadata_get("tollgate-backend"),
         reseller_scenarios=_metadata_get_optional("tollgate-reseller-scenarios").lower() in ("true", "1", "yes"),
         two_router=_metadata_get_optional("tollgate-two-router").lower() in ("true", "1", "yes"),
+        router_count=int(_metadata_get_optional("tollgate-router-count", "0")) or 0,
         secondary_router_host=_metadata_get_optional("tollgate-secondary-router-host"),
         secondary_router_port=_metadata_get_optional("tollgate-secondary-router-port"),
         keep_vm_on_failure=_metadata_get_optional("tollgate-keep-vm-on-failure").lower() not in ("false", "0", "no"),
@@ -127,6 +137,7 @@ def load_config_from_env() -> WorkerConfig:
         backend=_env("TOLLGATE_BACKEND", "go"),
         reseller_scenarios=_env_bool("TOLLGATE_RESELLER_SCENARIOS"),
         two_router=_env_bool("TOLLGATE_TWO_ROUTER"),
+        router_count=int(_env("TOLLGATE_ROUTER_COUNT", "0")) or 0,
         secondary_router_host=_env("TOLLGATE_SECONDARY_ROUTER_HOST", ""),
         secondary_router_port=_env("TOLLGATE_SECONDARY_ROUTER_PORT", ""),
         keep_vm_on_failure=_env_bool("TOLLGATE_KEEP_VM_ON_FAILURE", default=True),

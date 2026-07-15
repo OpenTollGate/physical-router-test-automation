@@ -29,8 +29,8 @@ class WiFi:
                 if m and m.group(1).startswith(self.ssid_prefix + "-"):
                     log.info(f"Auto-detected SSID: {m.group(1)}")
                     return m.group(1)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("SSID auto-detection via iwinfo failed: %s", e)
         try:
             out = self.router.ssh("uci show wireless 2>/dev/null | grep '\\.ssid=' | grep -v private")
             for line in out.strip().split("\n"):
@@ -39,8 +39,8 @@ class WiFi:
                 if val.startswith(self.ssid_prefix + "-"):
                     log.info(f"Auto-detected SSID from config: {val}")
                     return val
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("SSID auto-detection via uci failed: %s", e)
         return fallback
 
     def _tap_ssid(self, xml: str, ssid: str) -> bool:

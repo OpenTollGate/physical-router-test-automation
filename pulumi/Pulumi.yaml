@@ -1,0 +1,10 @@
+name: tollgate-test-lab
+description: TollGate test lab VM provisioning via Pulumi
+runtime:
+  name: python
+  options:
+    virtualenv: ../.tollgate-test-venv
+config:
+  pulumi:tags:
+    value:
+      pulumi:template: ""

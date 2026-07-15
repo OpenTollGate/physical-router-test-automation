@@ -126,13 +126,11 @@ def _generate_comment_canonical(run_data, results_dir, summary_json_path, dashbo
     router_arch = lab.get('router_arch', 'unknown')
     client_type = lab.get('client_type', 'unknown')
 
+    run_status = run_data.get('status', 'unknown')
+    total = counts.get('total', 0)
     passed = counts.get('passed', 0)
     failed = counts.get('failed', 0)
     skipped = counts.get('skipped', 0)
-    errors = counts.get('errors', 0)
-    total = counts.get('total', 0)
-
-    run_status = run_data.get('status', 'unknown')
     if run_status == 'passed':
         status_badge = '✅ PASSED'
     elif run_status == 'failed':
@@ -243,7 +241,6 @@ def _generate_comment_legacy(run_data, results_dir, dashboard_url):
     router_model = run_data.get('router_model', 'unknown')
     router_arch = run_data.get('router_arch', 'unknown')
     router_ip = run_data.get('router_ip', 'unknown')
-    installed_version = run_data.get('installed_version', 'unknown')
 
     summary = results_data.get('summary', {})
     passed = summary.get('passed', 0)

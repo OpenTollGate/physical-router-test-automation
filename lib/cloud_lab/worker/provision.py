@@ -58,9 +58,13 @@ def write_env_file(config: WorkerConfig) -> None:
     reseller_scenarios = "1" if config.reseller_scenarios else ""
     backend = config.backend
     secondary_host = config.secondary_router_host
-    if config.reseller_scenarios and not secondary_host:
+    if config.effective_router_count >= 3:
+        from lib.cloud_lab.constants import chain_mgmt_ip
+        chain_hosts = " ".join(chain_mgmt_ip(i) for i in range(config.effective_router_count))
+        secondary_host = chain_mgmt_ip(1)
+    elif config.reseller_scenarios and not secondary_host:
         secondary_host = SELLER_OPENWRT_IP
-    if config.two_router and not secondary_host:
+    elif config.two_router and not secondary_host:
         secondary_host = MGMT_BETA_IP
     env_content = (
         f"TOLLGATE_LUCI_PASSWORD={VIRT_LAB_PASSWORD}\n"
@@ -92,6 +96,8 @@ def write_env_file(config: WorkerConfig) -> None:
         f"TOLLGATE_SECONDARY_ROUTER_HOST={secondary_host}\n"
         f"TOLLGATE_SECONDARY_ROUTER_PORT={config.secondary_router_port}\n"
         f"TOLLGATE_SECONDARY_ROUTER_PASSWORD={VIRT_LAB_PASSWORD}\n"
+        f"TOLLGATE_CHAIN_ROUTER_COUNT={config.effective_router_count}\n"
+        f"TOLLGATE_CHAIN_ROUTER_HOSTS={chain_hosts if config.effective_router_count >= 3 else ''}\n"
         f"TOLLGATE_PORTAL={config.portal}\n"
         f"TOLLGATE_ENABLE_HWSIM={'1' if config.hwsim_enabled else ''}\n"
         f"TOLLGATE_ENABLE_VWIFI={'1' if config.vwifi_enabled else ''}\n"
@@ -211,7 +217,7 @@ def ensure_blossomfs() -> None:
             log.warning("BlossomFS skipped: could not derive npub from nsec")
             return
 
-        server_url = "https://blossom.psbt.me"
+        server_url = os.environ.get("BLOSSOM_SERVER", "https://tests.cashu.email")
         _run(f"mkdir -p {mountpoint}", timeout=10, check=False)
         _run(
             f'. "$HOME/.cargo/env" && {clone_dir}/target/release/blossomfs mount '

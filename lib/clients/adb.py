@@ -64,8 +64,8 @@ class ADBDevice:
                     with open(raw_path, "rb") as src, open(report_path, "wb") as dst:
                         dst.write(src.read())
                     return True
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug("screenshot copy %s→%s failed: %s", raw_path, report_path, e)
         return False
 
     def ui_xml(self) -> str:

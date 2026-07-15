@@ -10,20 +10,22 @@ This file exists for backward compat with code that does:
 All logic now lives in nostr_publish.publisher.
 """
 
+__all__ = [
+    "publish_results",
+    "publish_single_file",
+    "main",
+    "DEFAULT_MAX_FILE_SIZE",
+    "DEFAULT_BLOSSOM_SERVER",
+    "DEFAULT_RELAYS",
+    "HARD_BLOCKED_NAMES",
+    "HARD_BLOCKED_SUFFIXES",
+    "logger",
+]
+
 from nostr_publish.publisher import (  # noqa: F401
     publish_results,
     publish_single_file,
     main,
-    _build_parser,
-    _upload_one,
-    _publish_file_event,
-    _generate_run_id,
-    _guess_mime_type,
-    _is_hard_blocked,
-    _is_probably_binary,
-    _hard_filter,
-)
-from nostr_publish.publisher import (  # noqa: F401
     DEFAULT_MAX_FILE_SIZE,
     DEFAULT_BLOSSOM_SERVER,
     DEFAULT_RELAYS,

@@ -476,6 +476,7 @@ def submit_run_shc(
     keep_vm_on_failure: bool = False,
     lease_minutes: int = 90,
     two_router: bool = False,
+    router_count: int = 0,
     provider=None,
     tier: str = "standard",
 ) -> dict[str, str]:
@@ -677,6 +678,8 @@ def submit_run_shc(
         f"TOLLGATE_PORTAL={shlex.quote(portal)}",
         f"TOLLGATE_KEEP_VM_ON_FAILURE={'true' if keep_vm_on_failure else 'false'}",
         f"TOLLGATE_TWO_ROUTER={'true' if two_router else 'false'}",
+        f"TOLLGATE_ROUTER_COUNT={router_count or 0}",
+        "BLOSSOM_SERVER=https://tests.cashu.email",
         "TOLLGATE_GCP_PROJECT=tollgate-test-lab",
         "TOLLGATE_GCP_ZONE=shc",
         f"TOLLGATE_VM_NAME={hostname}",

@@ -243,7 +243,8 @@ def cmd_submit(args: argparse.Namespace) -> int:
             lease_minutes=cast(int, getattr(args, "lease", 90)),
             provider=None,
             tier=cast(str, getattr(args, "tier", "standard")),
-            two_router=cast(bool, getattr(args, "two_router", False)),
+            two_router=cast(bool, getattr(args, "two_router", False)) or getattr(args, "routers", 0) >= 2,
+            router_count=cast(int, getattr(args, "routers", 0)),
         )
         print(f"""
 Submitted SHC run {info['run_id']}
@@ -289,7 +290,8 @@ Submitted SHC run {info['run_id']}
         machine_type=cast(str, args.machine_type),
         disk_size_gb=cast(int, args.disk_size),
         reseller_scenarios=cast(bool, args.reseller_scenarios),
-        two_router=cast(bool, args.two_router),
+        two_router=cast(bool, args.two_router) or getattr(args, "routers", 0) >= 2,
+        router_count=cast(int, getattr(args, "routers", 0)),
         secondary_router_host=cast(str, args.secondary_router_host or ""),
         secondary_router_port=cast(str, args.secondary_router_port or ""),
         keep_vm_on_failure=not getattr(args, "self_delete", False),
@@ -370,7 +372,8 @@ def cmd_submit_all_mints(args: argparse.Namespace) -> int:
             machine_type=cast(str, args.machine_type),
             disk_size_gb=cast(int, args.disk_size),
             reseller_scenarios=cast(bool, args.reseller_scenarios),
-            two_router=cast(bool, args.two_router),
+        two_router=cast(bool, args.two_router) or getattr(args, "routers", 0) >= 2,
+        router_count=cast(int, getattr(args, "routers", 0)),
             secondary_router_host=cast(str, args.secondary_router_host or ""),
             secondary_router_port=cast(str, args.secondary_router_port or ""),
             keep_vm_on_failure=not getattr(args, "self_delete", False),
@@ -645,6 +648,8 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--wait", action="store_true", help="Block until VM self-deletes")
     submit.add_argument("--reseller-scenarios", action="store_true", help="Run virtualizable reseller-mode scenario tests")
     submit.add_argument("--two-router", action="store_true", help="Boot second OpenWrt VM for two-router degraded-mode tests")
+    submit.add_argument("--routers", type=int, default=0, metavar="N",
+        help="Boot N OpenWrt VMs in a chain topology (2+). Implies --two-router. Max 5.")
     submit.add_argument("--secondary-router-host", default="", help="Seller/secondary router IP or host for reseller scenarios")
     submit.add_argument("--secondary-router-port", default="", help="Optional SSH port for the seller/secondary router")
     submit.add_argument("--self-delete", action="store_true", help="Self-delete VM after tests complete (default: keep alive for debugging, 1h kill switch)")
@@ -666,6 +671,8 @@ def build_parser() -> argparse.ArgumentParser:
     all_mints.add_argument("--publish", action="store_true", help="Publish to Blossom + Nostr when done")
     all_mints.add_argument("--reseller-scenarios", action="store_true", help="Run virtualizable reseller-mode scenario tests")
     all_mints.add_argument("--two-router", action="store_true", help="Boot second OpenWrt VM for two-router degraded-mode tests")
+    all_mints.add_argument("--routers", type=int, default=0, metavar="N",
+        help="Boot N OpenWrt VMs in a chain topology (2+). Implies --two-router. Max 5.")
     all_mints.add_argument("--secondary-router-host", default="", help="Seller/secondary router IP or host for reseller scenarios")
     all_mints.add_argument("--secondary-router-port", default="", help="Optional SSH port for the seller/secondary router")
     all_mints.add_argument("--self-delete", action="store_true", help="Self-delete VM after tests complete (default: keep alive for debugging, 1h kill switch)")
@@ -723,6 +730,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-publish", action="store_true", help="Skip publishing")
     run.add_argument("--reseller-scenarios", action="store_true", help="Run virtualizable reseller-mode scenario tests")
     run.add_argument("--two-router", action="store_true", help="Boot second OpenWrt VM for two-router degraded-mode tests")
+    run.add_argument("--routers", type=int, default=0, metavar="N",
+        help="Boot N OpenWrt VMs in a chain topology (2+). Implies --two-router. Max 5.")
     run.add_argument("--secondary-router-host", default="", help="Seller/secondary router IP or host for reseller scenarios")
     run.add_argument("--secondary-router-port", default="", help="Optional SSH port for the seller/secondary router")
     run.add_argument("--self-delete", action="store_true", help="Self-delete VM after tests complete (default: keep alive for debugging, 1h kill switch)")

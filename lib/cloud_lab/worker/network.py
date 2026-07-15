@@ -28,6 +28,14 @@ from lib.cloud_lab.constants import (
     UPSTREAM_TAP_BETA,
     VIRT_LAB_PASSWORD,
     VIRT_LAB_WORKDIR,
+    chain_bridge,
+    chain_host_ip,
+    chain_lan_ip,
+    chain_lan_tap,
+    chain_mgmt_ip,
+    chain_mgmt_tap,
+    chain_subnet,
+    chain_wan_tap,
 )
 from lib.cloud_lab.worker.config import WorkerConfig
 from lib.cloud_lab.worker.inner_ssh import inner_ssh
@@ -274,3 +282,208 @@ def configure_two_router_payment(config: WorkerConfig, chosen_mint_url: str) -> 
         log.info("[two-router] Alpha wallet balance: %s", balance)
     else:
         log.warning("[two-router] Could not verify Alpha wallet balance: %s", balance[-200:])
+
+
+# ── Multi-hop chain topology (N >= 2 routers) ──────────────
+# Each router[i] br-lan is on chain_bridge(i) with subnet chain_subnet(i).
+# router[i-1]'s eth1 connects to chain_bridge(i) (the upstream link).
+# The topmost router gets Host NAT on its bridge for internet.
+
+def setup_chain_bridges(router_count: int) -> None:
+    """Create all bridges, TAPs, and NAT rules for an N-router chain.
+
+    Must be called AFTER setup_bridge() (which creates mgmt-br and tg-poc-br).
+    """
+    parts: list[str] = []
+
+    for i in range(1, router_count):
+        bridge = chain_bridge(i)
+        host_ip = chain_host_ip(i)
+        parts.append(f"ip link add name {bridge} type bridge 2>/dev/null || true")
+        parts.append(f"ip addr add {host_ip}/24 dev {bridge} 2>/dev/null || true")
+        parts.append(f"ip link set {bridge} up")
+
+    for i in range(router_count):
+        bridge = chain_bridge(i)
+
+        lan_tap = chain_lan_tap(i)
+        parts.append(f"ip tuntap add dev {lan_tap} mode tap user root 2>/dev/null || true")
+        parts.append(f"ip link set {lan_tap} master {bridge} 2>/dev/null || true")
+        parts.append(f"ip link set {lan_tap} up")
+
+        if i < router_count - 1:
+            wan_tap = chain_wan_tap(i)
+            upstream_bridge = chain_bridge(i + 1)
+            parts.append(f"ip tuntap add dev {wan_tap} mode tap user root 2>/dev/null || true")
+            parts.append(f"ip link set {wan_tap} master {upstream_bridge} 2>/dev/null || true")
+            parts.append(f"ip link set {wan_tap} up")
+
+        mgmt_tap = chain_mgmt_tap(i)
+        parts.append(f"ip tuntap add dev {mgmt_tap} mode tap user root 2>/dev/null || true")
+        parts.append(f"ip link set {mgmt_tap} master {MGMT_BRIDGE} 2>/dev/null || true")
+        parts.append(f"ip link set {mgmt_tap} up")
+
+        if i == router_count - 1:
+            subnet = chain_subnet(i)
+            parts.append(
+                f"iptables -t nat -C POSTROUTING -s {subnet} ! -o {bridge} -j MASQUERADE 2>/dev/null || "
+                f"iptables -t nat -A POSTROUTING -s {subnet} ! -o {bridge} -j MASQUERADE"
+            )
+
+    _run("; ".join(parts), timeout=30)
+    log.info("[chain] Created %d bridges + TAPs for %d-router chain", router_count, router_count)
+
+
+def configure_chain_router_lan(router_index: int, router_count: int) -> str:
+    from lib.cloud_lab.constants import chain_lan_mac, chain_mgmt_mac
+
+    lan_ip = chain_lan_ip(router_index)
+    host_ip = chain_host_ip(router_index)
+    mgmt_ip = chain_mgmt_ip(router_index)
+    lan_mac = chain_lan_mac(router_index)
+    mgmt_mac = chain_mgmt_mac(router_index)
+
+    log.info("[chain] Configuring router[%d] br-lan=%s mgmt=%s", router_index, lan_ip, mgmt_ip)
+
+    inner_ssh(lan_ip, f"""
+        uci set network.lan.ipaddr='{lan_ip}'
+        uci set network.lan.netmask='255.255.255.0'
+        uci set network.lan.gateway='{host_ip}'
+        uci set network.lan.dns='8.8.8.8'
+        uci commit network
+        /etc/init.d/network restart
+    """, timeout=30)
+    time.sleep(8)
+
+    if router_index < router_count - 1:
+        inner_ssh(lan_ip, f"""
+            uci set dhcp.lan.start='10'
+            uci set dhcp.lan.limit='50'
+            uci set dhcp.lan.leasetime='2m'
+            uci commit dhcp
+            /etc/init.d/dnsmasq restart 2>/dev/null || true
+            nft add table ip tollgate-nat 2>/dev/null || true
+            nft add chain ip tollgate-nat postrouting "{{ type nat hook postrouting priority srcnat ; policy accept ; }}" 2>/dev/null || true
+            nft add rule ip tollgate-nat postrouting ip saddr {chain_subnet(router_index)} oifname "br-lan" masquerade 2>/dev/null || true
+            nft add rule ip filter forward iifname "br-lan" accept 2>/dev/null || true
+        """, timeout=30)
+        time.sleep(3)
+
+    _configure_chain_mgmt_nic(lan_ip, mgmt_ip, mgmt_mac)
+    return mgmt_ip
+
+
+def configure_chain_router_wan(router_index: int) -> None:
+    lan_ip = chain_lan_ip(router_index)
+    upstream_subnet = chain_subnet(router_index + 1)
+    upstream_gw = chain_lan_ip(router_index + 1)
+
+    log.info("[chain] Configuring router[%d] eth1 as WAN (DHCP from %s)", router_index, upstream_gw)
+
+    inner_ssh(lan_ip, """
+        uci set network.wan=interface
+        uci set network.wan.proto='dhcp'
+        uci set network.wan.device='eth1'
+        uci commit network
+        /etc/init.d/network restart
+    """, timeout=30)
+    inner_ssh(lan_ip, "ifdown wan 2>/dev/null; sleep 2; ifup wan", timeout=15)
+    time.sleep(12)
+
+    r = inner_ssh(lan_ip, "ip addr show eth1 2>/dev/null | grep 'inet '", timeout=10)
+    expected_prefix = f"10.99.{chain_subnet_prefix(router_index + 1)}."
+    if expected_prefix in r.stdout:
+        log.info("[chain] router[%d] WAN got DHCP lease", router_index)
+    else:
+        log.warning("[chain] router[%d] WAN may not have DHCP: %s", router_index, r.stdout.strip()[-200:])
+
+
+def _configure_chain_mgmt_nic(guest_ip: str, mgmt_ip: str, mgmt_mac: str) -> None:
+    from lib.cloud_lab.worker.vms import configure_mgmt_nic
+    configure_mgmt_nic(guest_ip, mgmt_ip, mgmt_mac)
+
+
+def configure_chain_payment(config: WorkerConfig, chosen_mint_url: str) -> None:
+    """Configure the multi-hop payment chain.
+
+    Topmost router = merchant (direct mint access).
+    All lower routers = resellers (pay upstream for access).
+    Each router gets its wallet funded so it can pay the one above.
+    """
+    n = config.effective_router_count
+    if n < 2:
+        return
+
+    log.info("[chain] Configuring %d-hop payment chain...", n)
+
+    for i in range(n - 1, -1, -1):
+        mgmt_ip = chain_mgmt_ip(i)
+        lan_ip = chain_lan_ip(i)
+
+        router_config = json.loads(
+            inner_ssh(mgmt_ip, "cat /etc/tollgate/config.json 2>/dev/null || echo '{}'", timeout=10).stdout.strip()
+            or "{}"
+        )
+
+        if i == n - 1:
+            router_config["accepted_mints"] = [{
+                "url": chosen_mint_url,
+                "min_balance": 0,
+                "balance_tolerance_percent": 0,
+                "payout_interval_seconds": 60,
+                "min_payout_amount": 0,
+                "price_per_step": 1,
+                "price_unit": "sats",
+                "purchase_min_steps": 0,
+            }]
+            router_config["metric"] = "milliseconds"
+            router_config["step_size"] = 60000
+            router_config["margin"] = 0
+            router_config["profit_share"] = [{"factor": 1.0, "identity": "owner"}]
+            log.info("[chain] router[%d] = merchant (topmost)", i)
+        else:
+            router_config["reseller_mode"] = True
+            ignore_ifaces = router_config.get("upstream_detector", {}).get("ignore_interfaces", [])
+            allowed = {"lo", "docker0", "br-lan", "hostap0"}
+            router_config.setdefault("upstream_detector", {})["ignore_interfaces"] = [
+                iface for iface in ignore_ifaces if iface in allowed
+            ]
+            log.info("[chain] router[%d] = reseller (pays upstream)", i)
+
+        config_json = json.dumps(router_config)
+        inner_ssh(
+            mgmt_ip,
+            f"cat > /etc/tollgate/config.json << 'CHAINCFG'\n{config_json}\nCHAINCFG",
+            timeout=15,
+        )
+        inner_ssh(mgmt_ip, "/etc/init.d/tollgate-wrt restart", timeout=30)
+        time.sleep(8)
+
+        for attempt in range(15):
+            r = _run(f"curl -s -o /dev/null -w '%{{http_code}}' http://{lan_ip}:2121/ || true", timeout=10, check=False)
+            if "200" in r.stdout:
+                log.info("[chain] router[%d] backend healthy (attempt %d)", i, attempt + 1)
+                break
+            time.sleep(2)
+        else:
+            log.warning("[chain] router[%d] backend may not be healthy — continuing", i)
+
+        if i < n - 1:
+            upstream_mgmt = chain_mgmt_ip(i + 1)
+            upstream_lan = chain_lan_ip(i + 1)
+            log.info("[chain] Funding router[%d] wallet via upstream router[%d]...", i, i + 1)
+
+            mint_url_arg = shlex.quote(chosen_mint_url)
+            token_r = _run(
+                f"/opt/cashu-venv/bin/cashu -u {mint_url_arg} send 100 --legacy 2>&1",
+                timeout=60,
+                check=False,
+            )
+            token_lines = [line.strip() for line in (token_r.stdout or "").splitlines() if line.strip().startswith("cashu")]
+            if not token_lines:
+                log.error("[chain] Failed to mint token for router[%d]: %s", i, (token_r.stdout or "")[-300:])
+                continue
+
+            token = token_lines[0]
+            fund_r = inner_ssh(mgmt_ip, f"tollgate wallet fund '{token}'", timeout=30)
+            log.info("[chain] router[%d] wallet fund result: %s", i, fund_r.stdout.strip()[-200:] if fund_r.stdout else "(no output)")

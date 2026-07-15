@@ -48,7 +48,7 @@ from lib.cloud_lab.worker.report import (
 )
 from lib.cloud_lab.worker.runner import run_tests
 from lib.cloud_lab.worker.shell import _redact, _run, log
-from lib.cloud_lab.worker.vms import delete_self, start_inner_vms, stop_inner_vms
+from lib.cloud_lab.worker.vms import delete_self, start_chain_vms, start_inner_vms, stop_inner_vms
 from lib.cloud_lab.worker.wifi import setup_hwsim_wifi, setup_vwifi_guests, setup_vwifi_host
 
 MAX_WALL_SECONDS = 7200
@@ -234,7 +234,11 @@ def run_worker(config: WorkerConfig) -> int:
 
             _step_start("inner-vms")
             log.info("[4/10] Inner VMs (OpenWrt + Debian)")
-            start_inner_vms(config)
+            if config.effective_router_count >= 3:
+                log.info("[chain] Using multi-hop chain path (%d routers)", config.effective_router_count)
+                start_chain_vms(config)
+            else:
+                start_inner_vms(config)
             _step_end("inner-vms")
 
             _step_start("hwsim-wifi")
@@ -321,7 +325,13 @@ def run_worker(config: WorkerConfig) -> int:
                 log.info("Updated .env TOLLGATE_TEST_MINT_URL=%s", chosen_mint)
             _step_end("select-mint")
 
-            if config.two_router:
+            if config.effective_router_count >= 3:
+                _step_start("chain-payment")
+                log.info("[8.6/11] Configure %d-hop chain payment", config.effective_router_count)
+                from lib.cloud_lab.worker.network import configure_chain_payment
+                configure_chain_payment(config, chosen_mint)
+                _step_end("chain-payment")
+            elif config.two_router:
                 _step_start("two-router-payment")
                 log.info("[8.6/11] Configure two-router payment (Beta merchant + Alpha reseller)")
                 configure_two_router_payment(config, chosen_mint)

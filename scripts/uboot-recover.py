@@ -40,7 +40,6 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Optional
 
 
 UBOOT_IP = "192.168.1.1"
