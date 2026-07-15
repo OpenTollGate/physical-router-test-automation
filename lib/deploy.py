@@ -13,6 +13,7 @@ REPO = "OpenTollGate/tollgate-module-basic-go"
 WORKFLOW = "Build and Publish"
 BUILD_DIR = Path("/tmp/tollgate-build")
 COORDINATION_RELAYS = [
+    "wss://relay.cashu.email",
     "wss://relay.damus.io",
     "wss://nos.lol",
     "wss://nostr.mom",

@@ -65,6 +65,13 @@ jobs:
           pip install -q requests
           echo "SHC_TOOLKIT_PATH=/tmp/shc-toolkit" >> $GITHUB_ENV
 
+      - name: Install nak CLI
+        run: |
+          TAG=$(curl -s https://api.github.com/repos/fiatjaf/nak/releases/latest | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['tag_name'])")
+          curl -sL "https://github.com/fiatjaf/nak/releases/download/${TAG}/nak-${TAG}-linux-amd64" -o /usr/local/bin/nak
+          chmod +x /usr/local/bin/nak
+          nak --version
+
       - name: Configure SHC credentials
         env:
           SHC_API_KEY: ${{ secrets.SHC_API_KEY }}
