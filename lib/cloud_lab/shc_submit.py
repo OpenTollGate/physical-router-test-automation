@@ -679,7 +679,6 @@ def submit_run_shc(
         f"TOLLGATE_KEEP_VM_ON_FAILURE={'true' if keep_vm_on_failure else 'false'}",
         f"TOLLGATE_TWO_ROUTER={'true' if two_router else 'false'}",
         f"TOLLGATE_ROUTER_COUNT={router_count or 0}",
-        "BLOSSOM_SERVER=https://tests.cashu.email",
         "TOLLGATE_GCP_PROJECT=tollgate-test-lab",
         "TOLLGATE_GCP_ZONE=shc",
         f"TOLLGATE_VM_NAME={hostname}",

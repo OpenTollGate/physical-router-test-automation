@@ -217,7 +217,7 @@ def ensure_blossomfs() -> None:
             log.warning("BlossomFS skipped: could not derive npub from nsec")
             return
 
-        server_url = os.environ.get("BLOSSOM_SERVER", "https://tests.cashu.email")
+        server_url = os.environ.get("BLOSSOM_SERVER", "https://blossom.psbt.me")
         _run(f"mkdir -p {mountpoint}", timeout=10, check=False)
         _run(
             f'. "$HOME/.cargo/env" && {clone_dir}/target/release/blossomfs mount '
