@@ -271,6 +271,26 @@ echo "=== TollGate baked-worker started $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 export {bootstrap_env}
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.cargo/bin"
 
+# Install systemd lease kill switch (survives reboot, cancels SHC VM)
+LEASE_SECONDS=$(( {args.lease_minutes if hasattr(args, 'lease_minutes') else 90} * 60 ))
+HARD_LIMIT_SECONDS=$(( 3 * 3600 ))
+cat > /etc/systemd/system/tollgate-lease.service <<EOF
+[Unit]
+Description=TollGate SHC lease kill switch
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c 'sleep ${{LEASE_SECONDS}}; curl -sf -X POST -H "Authorization: Bearer $SHC_API_KEY" -H "Content-Type: application/json" -d "{{\\"immediate\\":true}}" "https://blesta.sovereignhybridcompute.com/user-api/v2/vm/$TOLLGATE_SERVICE_ID/cancel" 2>/dev/null; shutdown -h now'
+TimeoutStartSec=${{HARD_LIMIT_SECONDS}}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now tollgate-lease.service
+echo "Lease kill switch armed (cancels in {args.lease_minutes if hasattr(args, 'lease_minutes') else 90} min, hard limit 3h)"
+
 echo "[1] Re-fetching suite at $TOLLGATE_SUITE_REF..."
 cd {TEST_DIR}
 sudo git fetch --depth 1 origin "$TOLLGATE_SUITE_REF" 2>/dev/null || true
