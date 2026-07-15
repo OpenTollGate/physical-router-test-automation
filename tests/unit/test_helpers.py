@@ -92,20 +92,32 @@ class TestParseJsonOrFail:
         assert parse_json_or_fail('[1, 2, 3]') == [1, 2, 3]
 
     def test_invalid_json_fails(self):
-        with pytest.raises(Exception):
+        try:
             parse_json_or_fail("not json")
+            assert False, "should have raised"
+        except BaseException as e:
+            assert "Non-JSON" in str(e)
 
     def test_invalid_json_skip(self):
-        with pytest.raises(Exception, match="Non-JSON"):
+        try:
             parse_json_or_fail("not json", skip=True)
+            assert False, "should have raised"
+        except BaseException as e:
+            assert "Non-JSON" in str(e)
 
     def test_empty_string_fails(self):
-        with pytest.raises(Exception):
+        try:
             parse_json_or_fail("")
+            assert False, "should have raised"
+        except BaseException as e:
+            assert "Non-JSON" in str(e)
 
     def test_with_label(self):
-        with pytest.raises(Exception, match="balance"):
+        try:
             parse_json_or_fail("not json", label="balance")
+            assert False, "should have raised"
+        except BaseException as e:
+            assert "balance" in str(e)
 
 
 # --------------------------------------------------------------------------- #
