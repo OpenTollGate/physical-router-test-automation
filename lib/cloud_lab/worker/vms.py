@@ -424,7 +424,7 @@ def start_inner_vms(config: WorkerConfig) -> None:
 def reset_chain_overlays(router_count: int) -> None:
     log.info("Resetting OpenWrt overlays for %d-router chain", router_count)
     rm_list = " ".join(f"overlays/{chain_disk_name(i)}" for i in range(router_count))
-    create_list = " ".join(
+    create_list = " && ".join(
         f'qemu-img create -f qcow2 -F qcow2 -b "$OWRT_BASE" overlays/{chain_disk_name(i)} >/dev/null'
         for i in range(router_count)
     )

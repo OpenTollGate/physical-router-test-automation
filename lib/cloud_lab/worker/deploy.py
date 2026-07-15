@@ -15,6 +15,16 @@ def deploy_tollgate(config: WorkerConfig) -> None:
     branch_arg = repr(config.sut_branch)
     run_id_arg = repr(config.artifact_run_id)
     backend_arg = repr(config.backend)
+
+    if config.effective_router_count >= 3:
+        from lib.cloud_lab.constants import chain_mgmt_ip
+        hosts_list = [chain_mgmt_ip(i) for i in range(config.effective_router_count)]
+    else:
+        hosts_list = [OPENWRT_IP]
+        if config.secondary_router_host:
+            hosts_list.append(config.secondary_router_host)
+    hosts_repr = repr(hosts_list)
+
     py = f"""
 import logging
 import os
@@ -28,14 +38,7 @@ os.environ["TOLLGATE_DISABLE_ARTIFACT_RERUN"] = "1"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s", datefmt="%H:%M:%S")
 
 backend = BackendConfig({backend_arg})
-    n = config.effective_router_count
-    if n >= 3:
-        hosts = [chain_mgmt_ip(i) for i in range(n)]
-    else:
-        hosts = [OPENWRT_IP]
-        secondary = {config.secondary_router_host!r}
-        if secondary:
-            hosts.append(secondary)
+hosts = {hosts_repr}
 
 ok = True
 for host in hosts:
