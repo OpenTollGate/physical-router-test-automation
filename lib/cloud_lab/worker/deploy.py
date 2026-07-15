@@ -72,7 +72,7 @@ sys.exit(0 if ok else 1)
         f"python3 -c {shlex.quote(py)}",
         timeout=300,
     )
-    log.info("Deploy complete for %d host(s)", len(hosts))
+    log.info("Deploy complete for %d host(s)", len(hosts_list))
 def deploy_portal_overlay(config: WorkerConfig) -> None:
     """Download and install an alternative portal .ipk on the OpenWrt VM."""
     from lib.portal import PortalConfig
