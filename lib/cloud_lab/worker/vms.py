@@ -511,7 +511,7 @@ def start_chain_vms(config: WorkerConfig) -> None:
         if i < n - 1:
             configure_chain_router_wan(i)
 
-        if i > 0:
+        if i == 0:
             from lib.cloud_lab.constants import DEBIAN_IP as _DEBIAN_IP, DEBIAN_MAC as _DEBIAN_MAC
             inner_ssh(
                 lan_ip,
