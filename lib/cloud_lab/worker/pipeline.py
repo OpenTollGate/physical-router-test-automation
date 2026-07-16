@@ -269,7 +269,14 @@ def run_worker(config: WorkerConfig) -> int:
                 log.warning("Syslog capture start failed (non-fatal): %s", exc)
             try:
                 configure_openwrt_syslog(OPENWRT_IP)
-                if config.secondary_router_host:
+                if config.effective_router_count >= 3:
+                    from lib.cloud_lab.constants import chain_mgmt_ip
+                    for i in range(1, config.effective_router_count):
+                        try:
+                            configure_openwrt_syslog(chain_mgmt_ip(i))
+                        except Exception as router_exc:
+                            log.warning("Syslog config for router[%d] failed (non-fatal): %s", i, router_exc)
+                elif config.secondary_router_host:
                     configure_openwrt_syslog(config.secondary_router_host)
             except Exception as exc:
                 log.warning("OpenWrt syslog config failed (non-fatal): %s", exc)
