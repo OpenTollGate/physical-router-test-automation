@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shlex
 import time
 
@@ -41,6 +42,64 @@ from lib.cloud_lab.constants import (
 from lib.cloud_lab.worker.config import WorkerConfig
 from lib.cloud_lab.worker.inner_ssh import inner_ssh
 from lib.cloud_lab.worker.shell import _run, log
+
+
+def _ensure_outer_wallet_balance(mint_url: str, needed: int) -> bool:
+    """Warm up the outer VM's cashu wallet and ensure sufficient balance.
+
+    The cashu CLI wallet DB must be initialised with the mint URL (keysets
+    fetched) before any ``send`` command — otherwise the CLI raises
+    ``KeyError: '<mint_url>'`` because the mint is not in its trusted list.
+
+    This function:
+      1. Calls ``cashu -h <url> -t balance`` to fetch keysets + check balance.
+      2. If balance < needed, mints tokens via auto-settled invoice
+         (``cashu -h <url> -t -y invoice <amount>``).
+
+    Returns True if the wallet has >= *needed* sats after the call.
+    """
+    cashu_bin = "/opt/cashu-venv/bin/cashu"
+    url = shlex.quote(mint_url)
+
+    warmup_r = _run(
+        f"{cashu_bin} -h {url} -t balance 2>&1",
+        timeout=30,
+        check=False,
+    )
+
+    balance = 0
+    match = re.search(r"Balance:\s*(\d+)", warmup_r.stdout or "")
+    if match:
+        balance = int(match.group(1))
+
+    if balance >= needed:
+        log.info("[cashu] Outer wallet balance=%d (needed=%d) — OK", balance, needed)
+        return True
+
+    mint_amount = needed - balance + 50  # small buffer
+    log.info("[cashu] Outer wallet balance=%d, minting %d sats...", balance, mint_amount)
+    _run(
+        f"{cashu_bin} -h {url} -t -y invoice {mint_amount} 2>&1",
+        timeout=120,
+        check=False,
+    )
+
+    check_r = _run(
+        f"{cashu_bin} -h {url} -t balance 2>&1",
+        timeout=30,
+        check=False,
+    )
+    match = re.search(r"Balance:\s*(\d+)", check_r.stdout or "")
+    if match:
+        balance = int(match.group(1))
+
+    if balance >= needed:
+        log.info("[cashu] Outer wallet funded: balance=%d", balance)
+        return True
+
+    log.error("[cashu] Failed to fund outer wallet (balance=%d, needed=%d)", balance, needed)
+    return False
+
 
 def setup_bridge() -> None:
     _run(
@@ -257,8 +316,9 @@ def configure_two_router_payment(config: WorkerConfig, chosen_mint_url: str) -> 
     log.info("[two-router] Funding Alpha's wallet via cashu CLI...")
 
     mint_url_arg = shlex.quote(chosen_mint_url)
+    _ensure_outer_wallet_balance(chosen_mint_url, 100)
     token_r = _run(
-        f"/opt/cashu-venv/bin/cashu -u {mint_url_arg} send 100 --legacy 2>&1",
+        f"/opt/cashu-venv/bin/cashu -h {mint_url_arg} send 100 --legacy 2>&1",
         timeout=60,
         check=False,
     )
@@ -417,6 +477,8 @@ def configure_chain_payment(config: WorkerConfig, chosen_mint_url: str) -> None:
 
     log.info("[chain] Configuring %d-hop payment chain...", n)
 
+    _ensure_outer_wallet_balance(chosen_mint_url, (n - 1) * 100)
+
     for i in range(n - 1, -1, -1):
         mgmt_ip = chain_mgmt_ip(i)
         lan_ip = chain_lan_ip(i)
@@ -476,7 +538,7 @@ def configure_chain_payment(config: WorkerConfig, chosen_mint_url: str) -> None:
 
             mint_url_arg = shlex.quote(chosen_mint_url)
             token_r = _run(
-                f"/opt/cashu-venv/bin/cashu -u {mint_url_arg} send 100 --legacy 2>&1",
+                f"/opt/cashu-venv/bin/cashu -h {mint_url_arg} send 100 --legacy 2>&1",
                 timeout=60,
                 check=False,
             )
