@@ -28,21 +28,19 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -q pyyaml jinja2 requests
-          if [ -f lib/cloud_lab/shc.py ]; then
-            pip install -q -e ../../../shc-toolkit 2>/dev/null || true
-          fi
+          pip install -q pyyaml jinja2 requests httpx
+          pip install -q shc-toolkit || true
 
       - name: Authenticate GCP
         if: contains(github.event.inputs.providers || 'gcp,shc', 'gcp')
         env:
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
         run: |
-          if [ -z "$GCP_SA_KEY" ]; then
-            echo "GCP_SA_KEY not set — skipping GCP cleanup"
+          if [ -z "$GCP_SERVICE_ACCOUNT_KEY" ]; then
+            echo "GCP_SERVICE_ACCOUNT_KEY not set — skipping GCP cleanup"
             exit 0
           fi
-          echo "$GCP_SA_KEY" > /tmp/gcp-sa.json
+          echo "$GCP_SERVICE_ACCOUNT_KEY" > /tmp/gcp-sa.json
           gcloud auth activate-service-account --key-file=/tmp/gcp-sa.json
           gcloud config set project tollgate-test-lab
           echo "GCP_AUTH_OK"
@@ -76,7 +74,7 @@ jobs:
             case $provider in
               gcp|gcloud)
                 if command -v gcloud &>/dev/null && gcloud auth list 2>/dev/null | grep -q ACTIVE; then
-                  RESULT=$(python3 scripts/cloud-lab.py cleanup-stale --provider gcp --max-age-hours "${MAX_AGE}" 2>&1) || true
+                  RESULT=$(python3 scripts/cloud-lab.py cleanup-stale --cloud pulumi --max-age-hours "${MAX_AGE}" 2>&1) || true
                   echo "$RESULT"
                 else
                   echo "  GCP not authenticated — skipping"
@@ -84,7 +82,7 @@ jobs:
                 ;;
               shc)
                 if [ -n "$SHC_API_KEY" ]; then
-                  RESULT=$(python3 scripts/cloud-lab.py cleanup-stale --provider shc --max-age-hours "${MAX_AGE}" 2>&1) || true
+                  RESULT=$(python3 scripts/cloud-lab.py cleanup-stale --cloud shc --max-age-hours "${MAX_AGE}" 2>&1) || true
                   echo "$RESULT"
                 else
                   echo "  SHC_API_KEY not set — skipping"

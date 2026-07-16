@@ -11,7 +11,7 @@ import pulumi
 from shc_pulumi import SHCVMResource
 
 cfg = pulumi.Config()
-size = cfg.get("size") or "nvme-2c-8gb"
+size = cfg.get("size") or "dev-2c-8gb"
 hostname_prefix = cfg.get("hostname_prefix") or "tollgate"
 api_key = os.environ.get("SHC_API_KEY", "")
 

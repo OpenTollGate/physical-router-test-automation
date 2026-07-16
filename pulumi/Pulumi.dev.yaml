@@ -1,3 +1,3 @@
 config:
-  tollgate-test-lab:size: nvme-2c-8gb
+  tollgate-test-lab:size: dev-2c-8gb
   tollgate-test-lab:hostname_prefix: tollgate

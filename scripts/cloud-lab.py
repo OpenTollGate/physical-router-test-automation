@@ -241,6 +241,11 @@ def cmd_submit(args: argparse.Namespace) -> int:
         except Exception as e:
             print(f"SHC stale cleanup skipped: {e}", file=sys.stderr)
 
+        vm_provider = None
+        if cloud == "pulumi":
+            from lib.cloud_lab.pulumi_runner import PulumiSHCProvider
+            vm_provider = PulumiSHCProvider()
+
         info = submit_run_shc(
             target,
             publish=cast(bool, args.publish),
@@ -251,7 +256,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
             portal=cast(str, args.portal),
             keep_vm_on_failure=not getattr(args, "self_delete", False),
             lease_minutes=cast(int, getattr(args, "lease", 90)),
-            provider=None,
+            provider=vm_provider,
             tier=cast(str, getattr(args, "tier", "standard")),
             two_router=cast(bool, getattr(args, "two_router", False)) or getattr(args, "routers", 0) >= 2,
             router_count=cast(int, getattr(args, "routers", 0)),

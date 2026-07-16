@@ -100,7 +100,7 @@ def submit_run_pulumi(
         f"TOLLGATE_TWO_ROUTER={'true' if two_router else 'false'}",
         f"TOLLGATE_ROUTER_COUNT={router_count or 0}",
         "TOLLGATE_VIRTUAL_LAB=1",
-        "BLOSSOM_SERVER=https://tests.cashu.email",
+        "BLOSSOM_SERVER=https://blossom.psbt.me",
         f"TOLLGATE_CLOUD=shc",
         f"TOLLGATE_SERVICE_ID={service_id}",
         f"SHC_API_KEY={shlex.quote(os.environ.get('SHC_API_KEY', ''))}",
@@ -121,11 +121,14 @@ def submit_run_pulumi(
     _scp_script(ssh_base, ssh_target, script, script_path)
 
     log.info("[pulumi] Launching worker pipeline...")
-    subprocess.run(
-        [*ssh_base, ssh_target, f"sudo bash {script_path}"],
-        timeout=60,
-        check=False,
-    )
+    try:
+        subprocess.run(
+            [*ssh_base, ssh_target, f"sudo bash {script_path}"],
+            timeout=30,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        pass  # bootstrap script detaches; the short timeout is intentional
 
     log_hint = f"ssh {os_user}@{ip} 'tail -f /var/log/tollgate-run.log'"
 
@@ -146,8 +149,8 @@ def _pulumi_up(provider: str, tier: str) -> dict[str, str]:
     env["PULUMI_SKIP_UPDATE_CHECK"] = "1"
 
     size_map = {
-        ("shc", "starter"): "nvme-1c-4gb",
-        ("shc", "standard"): "nvme-2c-8gb",
+        ("shc", "starter"): "dev-1c-4gb",
+        ("shc", "standard"): "dev-2c-8gb",
         ("gcp", "starter"): "n2-standard-2",
         ("gcp", "standard"): "n2-standard-4",
     }
@@ -192,7 +195,7 @@ def _pulumi_up(provider: str, tier: str) -> dict[str, str]:
 def _scp_script(ssh_base: list[str], ssh_target: str, script: str, remote_path: str) -> None:
     import subprocess as sp
     proc = sp.run(
-        [*ssh_base, ssh_target, f"cat > /tmp/bootstrap.sh && chmod +x /tmp/bootstrap.sh"],
+        [*ssh_base, ssh_target, f"cat > {remote_path} && chmod +x {remote_path}"],
         input=script,
         text=True,
         timeout=30,
