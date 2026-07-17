@@ -250,13 +250,16 @@ def skip_if_no_sessions_json(router):
 
 
 def skip_if_no_quote_persistence(router):
-    """Skip if backend lacks Lightning quote persistence (no /etc/tollgate/quotes.json)."""
+    """Skip if backend binary lacks Lightning quote persistence code."""
     try:
-        out = router.ssh("ls /etc/tollgate/quotes.json 2>/dev/null", timeout=5)
-        if not out.strip():
-            pytest.skip("No /etc/tollgate/quotes.json (Lightning quote persistence not supported)")
+        out = router.ssh(
+            "strings /usr/bin/tollgate-wrt 2>/dev/null | grep -c 'loadLightningQuotesFromDisk'",
+            timeout=10,
+        )
+        if out.strip() == "0":
+            pytest.skip("Binary lacks loadLightningQuotesFromDisk (quote persistence not supported)")
     except Exception:
-        pytest.skip("Cannot check quotes.json")
+        pytest.skip("Cannot check quote persistence support")
 
 
 def is_full_merchant(router) -> bool:

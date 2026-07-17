@@ -24,8 +24,8 @@ pytestmark = [pytest.mark.api, pytest.mark.slow, pytest.mark.go_only, pytest.mar
 
 def _skip_if_no_ln_invoice(router):
     resp = router.api_status("/ln-invoice")
-    if resp != 405:
-        pytest.skip(f"ln-invoice endpoint not available (status={resp}, expected 405 on GET)")
+    if resp == 404 or resp == 0:
+        pytest.skip(f"ln-invoice endpoint not available (status={resp})")
 
 
 def _skip_if_degraded(router):

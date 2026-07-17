@@ -22,8 +22,8 @@ pytestmark = [pytest.mark.api, pytest.mark.slow, pytest.mark.go_only, pytest.mar
 
 def _skip_if_no_ln_invoice(router):
     resp = router.api_status("/ln-invoice")
-    if resp != 405:
-        pytest.skip(f"ln-invoice endpoint not available (status={resp}, expected 405 on GET)")
+    if resp == 404 or resp == 0:
+        pytest.skip(f"ln-invoice endpoint not available (status={resp})")
 
 
 def _skip_if_degraded(router):
@@ -38,10 +38,16 @@ def _skip_if_degraded(router):
 
 
 def _skip_if_no_backoff_support(router):
-    """Skip if the monitor doesn't have backoff logging (pre-PR #249 firmware)."""
-    logs = router.get_tollgate_logs(lines=500)
-    if "monitorLightningQuote" not in logs:
-        pytest.skip("No monitorLightningQuote log entries (backoff logging not present)")
+    """Skip if the monitor binary lacks backoff support (pre-PR #249 firmware)."""
+    try:
+        out = router.ssh(
+            "strings /usr/bin/tollgate-wrt 2>/dev/null | grep -c 'lightningQuoteMonitorMaxBackoff'",
+            timeout=10,
+        )
+        if out.strip() == "0":
+            pytest.skip("Binary lacks lightningQuoteMonitorMaxBackoff (backoff not supported)")
+    except Exception:
+        pytest.skip("Cannot check backoff support")
 
 
 def _create_invoice(router, amount=21):
