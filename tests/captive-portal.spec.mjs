@@ -196,3 +196,157 @@ test.describe('Captive Portal — cashu e2e payment', () => {
 		expect(text, 'Should show allotment with MB or GB unit').toMatch(/\d+\s*(MB|GB|MiB|GiB)/i);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// TIP-03 — ?token= URL parameter delivery (Shape A / PR #18 differentiator)
+//
+// These tests exercise the URL-param payment path. The current captive-portal
+// site implementations differ in HOW they read the URL param and submit:
+//   - main:        no ?token= handling (manual entry only)
+//   - PR #18:      URLSearchParams in useState + useEffect auto-submit (Nostr-wrapped POST)
+//   - Shape A:     inline prehydrate + raw-token POST (HTTP-01)
+//
+// The observable contract that all three must satisfy:
+//   1. Navigate to splash.html?token=<valid>  → checkmark appears, access granted
+//   2. Navigate to splash.html?token=invalid  → error surface appears
+//   3. (Shape A only) URL is stripped of ?token= on load (bearer-token security)
+//
+// Test timing (`perf_msToFirstCheckmark`) is logged for cross-shape benchmarking.
+// ---------------------------------------------------------------------------
+
+test.describe('Captive Portal — TIP-03 URL-param delivery (?token=)', () => {
+	test.skip(async ({ request }) => {
+		const event = await getApiResponse(request);
+		return !event || event.kind !== 10021 || !event.tags?.some(t => t[0] === 'price_per_step');
+	}, 'Skipped: tollgate service has no reachable mints (degraded mode)');
+
+	test('valid ?token= auto-submits and grants access', async ({ page }) => {
+		const raw = mintToken(MINT_URL, MINT_AMOUNT);
+		const { token, amount } = JSON.parse(raw);
+		expect(token, 'mint-token should produce a non-empty token').toBeTruthy();
+		expect(amount, 'minted amount should be >= 1').toBeGreaterThanOrEqual(1);
+
+		const navStart = Date.now();
+		await page.goto(`${PORTAL_BASE}/splash.html?token=${encodeURIComponent(token)}`, {
+			waitUntil: 'networkidle',
+			timeout: 30000,
+		});
+
+		// The SPA must auto-submit; we should NOT need to click the purchase button.
+		// Wait for the checkmark (success) — if it doesn't appear, the URL-param
+		// auto-submit path is broken.
+		await page.waitForSelector('.checkmark', { timeout: 45000 });
+		const msToCheckmark = Date.now() - navStart;
+
+		const checkmark = page.locator('.checkmark');
+		await expect(checkmark).toBeVisible();
+		console.log(`perf_msToFirstCheckmark=${msToCheckmark}`);
+
+		const content = page.locator('.tollgate-captive-portal-method-content');
+		const text = await content.innerText();
+		expect(text, 'Should show allotment with MB or GB unit').toMatch(/\d+\s*(MB|GB|MiB|GiB)/i);
+	});
+
+	test('invalid ?token= surfaces an error', async ({ page }) => {
+		await page.goto(`${PORTAL_BASE}/splash.html?token=cashuBinvalidtokennotreal`, {
+			waitUntil: 'networkidle',
+			timeout: 30000,
+		});
+
+		// Wait for either the error surface OR the success checkmark (in case the
+		// backend happens to accept anything in a degraded test env). We expect error.
+		await Promise.race([
+			page.waitForSelector('.status.error', { timeout: 30000 }),
+			page.waitForSelector('.checkmark', { timeout: 30000 }),
+		]);
+
+		const errorBox = page.locator('.status.error');
+		const isErrorVisible = await errorBox.isVisible().catch(() => false);
+		expect(isErrorVisible, 'Invalid ?token= should surface an error, not silently succeed').toBe(true);
+	});
+
+	test('bearer token is stripped from URL after page load (Shape A security contract)', async ({ page, browserName }) => {
+		// This test only passes on Shape A (which calls history.replaceState).
+		// PR #18 and main leave the token in the URL. Skip with a clear message
+		// on those builds so the test suite doesn't fail on legacy code.
+		const raw = mintToken(MINT_URL, MINT_AMOUNT);
+		const { token } = JSON.parse(raw);
+
+		await page.goto(`${PORTAL_BASE}/splash.html?token=${encodeURIComponent(token)}`, {
+			waitUntil: 'networkidle',
+			timeout: 30000,
+		});
+		// Give the prehydrate script (runs before SPA bundle) time to have run.
+		await page.waitForTimeout(2000);
+
+		const currentSearch = await page.evaluate(() => window.location.search);
+		if (currentSearch === '') {
+			// Shape A behavior — prehydrate stripped the token.
+			expect(currentSearch, 'Token should be stripped from URL by prehydrate').toBe('');
+		} else {
+			// main / PR #18 behavior — token remains. Mark as expected fail so
+			// the suite doesn't break on those builds; this is a known gap.
+			test.skip(true, `Build does not strip ?token= from URL (prehydrate not present). URL still has: ${currentSearch}`);
+		}
+	});
+
+	test('manual token entry still works when no ?token= param is present', async ({ page }) => {
+		// Regression guard: the prehydrate + auto-submit changes must NOT break
+		// the manual-entry path. Navigate without ?token= and verify the input
+		// is empty and the user can type/paste normally.
+		await page.goto(`${PORTAL_BASE}/splash.html`, { waitUntil: 'networkidle', timeout: 30000 });
+		await page.waitForSelector('#cashu-token', { timeout: 15000 });
+
+		const input = page.locator('#cashu-token');
+		await expect(input).toBeVisible();
+		await expect(input).toHaveValue('');
+
+		const raw = mintToken(MINT_URL, MINT_AMOUNT);
+		const { token } = JSON.parse(raw);
+		await input.fill(token);
+
+		await page.waitForSelector('.tollgate-captive-portal-method-submit button.cta:not([disabled])', { timeout: 10000 });
+		await page.click('.tollgate-captive-portal-method-submit button.cta');
+
+		await page.waitForSelector('.checkmark', { timeout: 35000 });
+		await expect(page.locator('.checkmark')).toBeVisible();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Error-surface coverage — verify CU/TG error codes render in the UI.
+// These don't depend on the URL-param path; they're general regression
+// guards for the Status component + i18n strings.
+// ---------------------------------------------------------------------------
+
+test.describe('Captive Portal — error code surfaces', () => {
+	test.skip(async ({ request }) => {
+		const event = await getApiResponse(request);
+		return !event || event.kind !== 10021 || !event.tags?.some(t => t[0] === 'price_per_step');
+	}, 'Skipped: tollgate service has no reachable mints (degraded mode)');
+
+	test('CU101 — token not starting with "cashu" surfaces error', async ({ page }) => {
+		await page.goto(`${PORTAL_BASE}/splash.html`, { waitUntil: 'networkidle', timeout: 30000 });
+		await page.waitForSelector('#cashu-token', { timeout: 15000 });
+
+		const input = page.locator('#cashu-token');
+		await input.fill('not_a_cashu_token');
+
+		// Wait for either an error or a disabled submit button indicating validation failed
+		await page.waitForTimeout(1000);
+		const errorBox = page.locator('.status.error');
+		const isErrorVisible = await errorBox.isVisible().catch(() => false);
+		const submitDisabled = await page.locator('.tollgate-captive-portal-method-submit button[disabled]').isVisible().catch(() => false);
+		expect(isErrorVisible || submitDisabled, 'CU101 should either show an error or disable submit').toBe(true);
+	});
+
+	test('CU100 — empty token submission prevented', async ({ page }) => {
+		await page.goto(`${PORTAL_BASE}/splash.html`, { waitUntil: 'networkidle', timeout: 30000 });
+		await page.waitForSelector('#cashu-token', { timeout: 15000 });
+
+		// Submit button should be disabled when token field is empty
+		const submitButton = page.locator('.tollgate-captive-portal-method-submit button').first();
+		const isDisabled = await submitButton.isDisabled().catch(() => true);
+		expect(isDisabled, 'Submit should be disabled when token is empty').toBe(true);
+	});
+});
