@@ -10,6 +10,7 @@ that only exist when PR #249 is deployed. On older firmware, they skip.
 """
 
 import json
+import os
 import re
 import time
 
@@ -51,9 +52,11 @@ def _skip_if_no_backoff_support(router):
 
 
 def _create_invoice(router, amount=21, retries=3):
+    mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "http://10.99.99.2:8383")
+    body = json.dumps({"amount": amount, "mint_url": mint_url})
     for attempt in range(retries):
         create_resp = router.ssh(
-            f"wget -qO- --timeout=15 --post-data='{{\"amount\": {amount}}}' "
+            f"wget -qO- --timeout=15 --post-data='{body}' "
             f"--header='Content-Type: application/json' "
             f"'http://[::1]:{BACKEND_PORT}/ln-invoice'",
             timeout=30,
