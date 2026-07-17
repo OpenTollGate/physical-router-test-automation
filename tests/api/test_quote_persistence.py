@@ -58,16 +58,15 @@ def _create_invoice(router, amount=21, retries=3):
 
 
 def _get_quote_status(router, quote):
-    status_resp = router.ssh(
-        f"wget -qO- --timeout=10 'http://[::1]:{BACKEND_PORT}/ln-invoice?quote={quote}'",
-        timeout=15,
-    )
-    if not status_resp:
-        return None
+    backend_ip = os.environ.get("TOLLGATE_SSH_HOST", "10.99.99.1")
+    url = f"http://{backend_ip}:{BACKEND_PORT}/ln-invoice?quote={quote}"
     try:
-        return json.loads(status_resp)
-    except json.JSONDecodeError:
-        return None
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        pass
+    return None
 
 
 @pytest.mark.slow

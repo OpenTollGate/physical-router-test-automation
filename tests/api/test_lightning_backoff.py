@@ -52,6 +52,25 @@ def _skip_if_no_backoff_support(router):
         pytest.skip("Cannot check backoff support")
 
 
+def _block_mint_iptables(router):
+    """Block the mint via iptables (works for IP-based mint URLs where /etc/hosts is ineffective)."""
+    from urllib.parse import urlparse
+    mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "http://10.99.99.2:8383")
+    parsed = urlparse(mint_url)
+    host = parsed.hostname
+    port = parsed.port or 80
+    router.ssh(f"iptables -I OUTPUT -d {host} -p tcp --dport {port} -j REJECT", timeout=10)
+
+
+def _unblock_mint_iptables(router):
+    from urllib.parse import urlparse
+    mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "http://10.99.99.2:8383")
+    parsed = urlparse(mint_url)
+    host = parsed.hostname
+    port = parsed.port or 80
+    router.ssh(f"iptables -D OUTPUT -d {host} -p tcp --dport {port} -j REJECT", timeout=10)
+
+
 def _create_invoice(router, amount=21, retries=3):
     mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "http://10.99.99.2:8383")
     backend_ip = os.environ.get("TOLLGATE_SSH_HOST", "10.99.99.1")
@@ -101,7 +120,7 @@ def test_backoff_progression_on_mint_error(router):
 
     try:
         _create_invoice(router)
-        router.block_mint()
+        _block_mint_iptables(router)
         time.sleep(35)
 
         logs = router.get_tollgate_logs(lines=500)
@@ -123,7 +142,7 @@ def test_backoff_progression_on_mint_error(router):
                 f"Interval decreased at step {i}: {intervals[i - 1]:.1f}s -> {intervals[i]:.1f}s"
             )
     finally:
-        router.unblock_mint()
+        _unblock_mint_iptables(router)
 
 
 def test_jitter_present_in_polling(router):
@@ -133,7 +152,7 @@ def test_jitter_present_in_polling(router):
 
     try:
         _create_invoice(router)
-        router.block_mint()
+        _block_mint_iptables(router)
         time.sleep(40)
 
         logs = router.get_tollgate_logs(lines=500)
@@ -148,7 +167,7 @@ def test_jitter_present_in_polling(router):
                 f"Consecutive intervals identical at step {i} ({intervals[i]}s) — no jitter"
             )
     finally:
-        router.unblock_mint()
+        _unblock_mint_iptables(router)
 
 
 def test_no_backoff_hammering_on_mint_error(router):
@@ -158,7 +177,7 @@ def test_no_backoff_hammering_on_mint_error(router):
 
     try:
         _create_invoice(router)
-        router.block_mint()
+        _block_mint_iptables(router)
         time.sleep(10)
 
         logs = router.get_tollgate_logs(lines=500)
@@ -170,4 +189,4 @@ def test_no_backoff_hammering_on_mint_error(router):
             f"Monitor hammered {len(recent)} times in 10s — old 2s fixed ticker present"
         )
     finally:
-        router.unblock_mint()
+        _unblock_mint_iptables(router)
