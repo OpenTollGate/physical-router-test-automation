@@ -15,6 +15,7 @@ import os
 import time
 
 import pytest
+import requests
 
 from lib.constants import BACKEND_PORT
 from lib.helpers import skip_if_no_quote_persistence
@@ -41,21 +42,19 @@ def _skip_if_degraded(router):
 
 def _create_invoice(router, amount=21, retries=3):
     mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "http://10.99.99.2:8383")
-    body = json.dumps({"amount": amount, "mint_url": mint_url})
+    backend_ip = os.environ.get("TOLLGATE_SSH_HOST", "10.99.99.1")
+    url = f"http://{backend_ip}:{BACKEND_PORT}/ln-invoice"
+    payload = {"amount": amount, "mint_url": mint_url}
     for attempt in range(retries):
-        create_resp = router.ssh(
-            f"wget -qO- --timeout=15 --post-data='{body}' "
-            f"--header='Content-Type: application/json' "
-            f"'http://[::1]:{BACKEND_PORT}/ln-invoice'",
-            timeout=30,
-        )
-        if create_resp:
-            try:
-                return json.loads(create_resp)
-            except json.JSONDecodeError:
-                pytest.fail(f"ln-invoice response not JSON: {create_resp[:300]}")
+        try:
+            resp = requests.post(url, json=payload, timeout=15)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
         time.sleep(5)
-    pytest.fail(f"POST /ln-invoice returned empty after {retries} attempts")
+    last = resp.status_code if "resp" in dir() else "?"
+    pytest.fail(f"POST /ln-invoice failed after {retries} attempts (last status: {last})")
 
 
 def _get_quote_status(router, quote):
