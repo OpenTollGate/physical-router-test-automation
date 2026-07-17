@@ -80,12 +80,7 @@ _STEPS = [
 
 
 def _suite_ref() -> str:
-    repo_root = Path(__file__).resolve().parents[2]
-    r = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        capture_output=True, text=True, cwd=repo_root, timeout=10,
-    )
-    return r.stdout.strip() if r.returncode == 0 else "main"
+    return os.environ.get("TOLLGATE_SUITE_REF", "main")
 
 
 def _gh_token() -> str:
