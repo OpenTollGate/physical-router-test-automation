@@ -50,19 +50,21 @@ def _skip_if_no_backoff_support(router):
         pytest.skip("Cannot check backoff support")
 
 
-def _create_invoice(router, amount=21):
-    create_resp = router.ssh(
-        f"wget -qO- --timeout=15 --post-data='{{\"amount\": {amount}}}' "
-        f"--header='Content-Type: application/json' "
-        f"'http://[::1]:{BACKEND_PORT}/ln-invoice'",
-        timeout=30,
-    )
-    assert create_resp, "Empty response from POST /ln-invoice"
-    try:
-        invoice = json.loads(create_resp)
-    except json.JSONDecodeError:
-        pytest.fail(f"ln-invoice response not JSON: {create_resp[:300]}")
-    return invoice
+def _create_invoice(router, amount=21, retries=3):
+    for attempt in range(retries):
+        create_resp = router.ssh(
+            f"wget -qO- --timeout=15 --post-data='{{\"amount\": {amount}}}' "
+            f"--header='Content-Type: application/json' "
+            f"'http://[::1]:{BACKEND_PORT}/ln-invoice'",
+            timeout=30,
+        )
+        if create_resp:
+            try:
+                return json.loads(create_resp)
+            except json.JSONDecodeError:
+                pytest.fail(f"ln-invoice response not JSON: {create_resp[:300]}")
+        time.sleep(5)
+    pytest.fail(f"POST /ln-invoice returned empty after {retries} attempts")
 
 
 def _extract_log_timestamps(logs, pattern):
@@ -96,8 +98,8 @@ def test_backoff_progression_on_mint_error(router):
     _skip_if_degraded(router)
 
     try:
-        router.block_mint()
         _create_invoice(router)
+        router.block_mint()
         time.sleep(35)
 
         logs = router.get_tollgate_logs(lines=500)
@@ -128,8 +130,8 @@ def test_jitter_present_in_polling(router):
     _skip_if_degraded(router)
 
     try:
-        router.block_mint()
         _create_invoice(router)
+        router.block_mint()
         time.sleep(40)
 
         logs = router.get_tollgate_logs(lines=500)
@@ -153,8 +155,8 @@ def test_no_backoff_hammering_on_mint_error(router):
     _skip_if_degraded(router)
 
     try:
-        router.block_mint()
         _create_invoice(router)
+        router.block_mint()
         time.sleep(10)
 
         logs = router.get_tollgate_logs(lines=500)

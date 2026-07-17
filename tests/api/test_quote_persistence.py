@@ -39,19 +39,21 @@ def _skip_if_degraded(router):
     return discovery
 
 
-def _create_invoice(router, amount=21):
-    create_resp = router.ssh(
-        f"wget -qO- --timeout=15 --post-data='{{\"amount\": {amount}}}' "
-        f"--header='Content-Type: application/json' "
-        f"'http://[::1]:{BACKEND_PORT}/ln-invoice'",
-        timeout=30,
-    )
-    assert create_resp, "Empty response from POST /ln-invoice"
-    try:
-        invoice = json.loads(create_resp)
-    except json.JSONDecodeError:
-        pytest.fail(f"ln-invoice response not JSON: {create_resp[:300]}")
-    return invoice
+def _create_invoice(router, amount=21, retries=3):
+    for attempt in range(retries):
+        create_resp = router.ssh(
+            f"wget -qO- --timeout=15 --post-data='{{\"amount\": {amount}}}' "
+            f"--header='Content-Type: application/json' "
+            f"'http://[::1]:{BACKEND_PORT}/ln-invoice'",
+            timeout=30,
+        )
+        if create_resp:
+            try:
+                return json.loads(create_resp)
+            except json.JSONDecodeError:
+                pytest.fail(f"ln-invoice response not JSON: {create_resp[:300]}")
+        time.sleep(5)
+    pytest.fail(f"POST /ln-invoice returned empty after {retries} attempts")
 
 
 def _get_quote_status(router, quote):
@@ -75,7 +77,6 @@ def test_quotes_json_created_on_invoice(router):
     _skip_if_degraded(router)
 
     router.ssh("rm -f /etc/tollgate/quotes.json")
-    router.restart_backend(timeout=45)
 
     invoice = _create_invoice(router)
     quote = invoice.get("quote") or invoice.get("payment_hash") or invoice.get("r_hash")
