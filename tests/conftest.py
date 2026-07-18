@@ -245,6 +245,9 @@ def pytest_addoption(parser):
     parser.addoption("--lab-type", default=None,
                      choices=["virtual-lab", "gcloud", "physical", "browserstack"],
                      help="Lab environment type. Default: TOLLGATE_LAB_TYPE env or 'physical'")
+    parser.addoption("--post-test-reflash", action="store_true",
+                     help="Reflash every router via conwrt after the session. "
+                          "Requires TOLLGATE_REFLASH_IMAGE. Default OFF.")
 
 
 def pytest_configure(config):
@@ -499,6 +502,22 @@ def deploy_session(request, router, backend):
         if not no_deploy:
             router.disable_debug_portal()
         router.close()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def post_test_fleet_reflash(request, all_routers):
+    yield
+    enable = request.config.getoption("--post-test-reflash") or (
+        os.environ.get("TOLLGATE_POST_TEST_REFLASH") == "1"
+    )
+    if not enable:
+        return
+    from lib.reflash import reflash_fleet
+    reflash_fleet(
+        all_routers,
+        os.environ.get("TOLLGATE_REFLASH_IMAGE"),
+        enable=True,
+    )
 
 
 @pytest.fixture(scope="session")
