@@ -81,7 +81,7 @@ def _extract_log_timestamps(logs, pattern):
     for line in logs.splitlines():
         if pattern not in line:
             continue
-        m = re.match(r"^(\w{3})\s+(\d+)\s+(\d{2}):(\d{2}):(\d{2})", line)
+        m = re.search(r"(\w{3})\s+(\d+)\s+(\d{2}):(\d{2}):(\d{2})", line)
         if not m:
             continue
         month_str, day, hour, minute, second = m.groups()
