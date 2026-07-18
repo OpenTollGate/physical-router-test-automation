@@ -14,6 +14,7 @@ from pathlib import Path
 
 from lib.cloud_lab.constants import (
     CDK_MINT_DIR,
+    CDK_MINT_INTERNAL_PORT,
     CDK_MINT_PORT,
     CDK_MINT_URL,
     CDK_VERSION,
@@ -25,6 +26,9 @@ from lib.cloud_lab.constants import (
     NUTSHELL_V2_MINT_URL,
     OPENWRT_IP,
     TEST_DIR,
+    TOXIPROXY_DIR,
+    TOXIPROXY_MGMT_PORT,
+    TOXIPROXY_VERSION,
     V1_TESTNUT_NUTSHELL_LAN,
     V2_TESTNUT_CDK_LAN,
     V2_TESTNUT_NUTSHELL_LAN,
@@ -82,6 +86,79 @@ def _download_cdk_cached(dest: str, binary_name: str) -> None:
         log.info("Downloading CDK %s v%s (no cache — no nsec)", binary_name, CDK_VERSION)
         url = f"https://github.com/cashubtc/cdk/releases/download/v{CDK_VERSION}/{binary_name}-{CDK_VERSION}-x86_64"
         _run(f"wget -q -O {shlex.quote(dest)} {shlex.quote(url)}", timeout=120)
+
+
+def ensure_toxiproxy() -> None:
+    binary = f"{TOXIPROXY_DIR}/toxiproxy-server"
+    r = _run(f"test -x {shlex.quote(binary)} && echo TOXIPROXY_OK", timeout=10, check=False)
+    if "TOXIPROXY_OK" in r.stdout:
+        log.info("Toxiproxy binary already cached")
+        return
+    _run(f"mkdir -p {shlex.quote(TOXIPROXY_DIR)}", timeout=10)
+    url = f"https://github.com/Shopify/toxiproxy/releases/download/v{TOXIPROXY_VERSION}/toxiproxy-server-linux-amd64"
+    log.info("Downloading Toxiproxy v%s", TOXIPROXY_VERSION)
+    _run(f"wget -q -O {shlex.quote(binary)} {shlex.quote(url)}", timeout=60)
+    _run(f"chmod +x {shlex.quote(binary)}", timeout=10)
+
+
+def start_toxiproxy() -> subprocess.Popen[str] | None:
+    import urllib.request as ur
+    try:
+        ur.urlopen(f"http://127.0.0.1:{TOXIPROXY_MGMT_PORT}/version", timeout=2)
+        log.info("Toxiproxy already running on port %d", TOXIPROXY_MGMT_PORT)
+    except Exception:
+        binary = f"{TOXIPROXY_DIR}/toxiproxy-server"
+        tox_log = Path("/tmp/toxiproxy.log")
+        proc = subprocess.Popen(
+            [binary, "-host", "0.0.0.0", "-port", str(TOXIPROXY_MGMT_PORT)],
+            stdout=tox_log.open("w"),
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+        for attempt in range(10):
+            try:
+                ur.urlopen(f"http://127.0.0.1:{TOXIPROXY_MGMT_PORT}/version", timeout=2)
+                log.info("Toxiproxy started (pid=%d, mgmt port=%d)", proc.pid, TOXIPROXY_MGMT_PORT)
+                break
+            except Exception:
+                if proc.poll() is not None:
+                    log.error("Toxiproxy exited early (rc=%d)", proc.returncode)
+                    return None
+                time.sleep(1)
+        else:
+            log.error("Toxiproxy did not become healthy")
+            return None
+
+    create_toxiproxy_proxy(CDK_PROXY_NAME, LOCAL_MINT_HOST, CDK_MINT_PORT, CDK_MINT_INTERNAL_PORT)
+    return None
+
+
+def create_toxiproxy_proxy(name: str, host: str, listen_port: int, upstream_port: int) -> None:
+    import requests
+    base = f"http://127.0.0.1:{TOXIPROXY_MGMT_PORT}"
+    try:
+        requests.delete(f"{base}/proxies/{name}", timeout=3)
+    except Exception:
+        pass
+    resp = requests.post(
+        f"{base}/proxies",
+        json={
+            "name": name,
+            "listen": f"{host}:{listen_port}",
+            "upstream": f"{host}:{upstream_port}",
+        },
+        timeout=5,
+    )
+    if resp.status_code in (200, 201):
+        log.info("Toxiproxy proxy '%s': %s:%d → %s:%d", name, host, listen_port, host, upstream_port)
+    else:
+        log.error("Failed to create Toxiproxy proxy: %s %s", resp.status_code, resp.text[:200])
+
+
+CDK_PROXY_NAME = "cdk_mint"
+
+
 def start_local_mints(config: WorkerConfig) -> dict[str, subprocess.Popen[str]]:
     mints: dict[str, subprocess.Popen[str]] = {}
 
@@ -93,12 +170,14 @@ def start_local_mints(config: WorkerConfig) -> dict[str, subprocess.Popen[str]]:
         check=False,
     )
 
-    # --- CDK V2 Mint (port 8383) ---
+    ensure_toxiproxy()
+
+    # --- CDK V2 Mint (internal port 18383, behind Toxiproxy on 8383) ---
     cdk_config = f"""\
 [info]
 url = "http://{LOCAL_MINT_HOST}:{CDK_MINT_PORT}/"
 listen_host = "{LOCAL_MINT_HOST}"
-listen_port = {CDK_MINT_PORT}
+listen_port = {CDK_MINT_INTERNAL_PORT}
 mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 
 [database]
@@ -127,7 +206,10 @@ max_delay_time = 0
         start_new_session=True,
     )
     mints["cdk-v2"] = cdk_proc
-    log.info("Started CDK V2 mint (pid=%d, port=%d)", cdk_proc.pid, CDK_MINT_PORT)
+    log.info("Started CDK V2 mint (pid=%d, internal port=%d, public port=%d via Toxiproxy)",
+             cdk_proc.pid, CDK_MINT_INTERNAL_PORT, CDK_MINT_PORT)
+
+    start_toxiproxy()
 
     # --- Nutshell V2 Mint (port 8384) ---
     _run("rm -rf /tmp/nutshell-v2-mint-data && mkdir -p /tmp/nutshell-v2-mint-data", timeout=10)

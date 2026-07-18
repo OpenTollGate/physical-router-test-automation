@@ -56,6 +56,14 @@ NUTSHELL_V1_MINT_PORT = 8385
 CDK_VERSION = "0.16.0"
 CDK_MINT_DIR = "/opt/cdk-mintd"
 
+# Toxiproxy — chaos engineering proxy for controllable mint connectivity.
+# CDK V2 mint runs on CDK_MINT_INTERNAL_PORT; Toxiproxy listens on
+# CDK_MINT_PORT and forwards, allowing tests to toggle connectivity.
+TOXIPROXY_MGMT_PORT = 8474
+TOXIPROXY_VERSION = "2.11.0"
+TOXIPROXY_DIR = "/opt/toxiproxy"
+CDK_MINT_INTERNAL_PORT = 18383
+
 # IP-based URLs — used for health checks before /etc/hosts is configured
 CDK_MINT_URL = f"http://{LOCAL_MINT_HOST}:{CDK_MINT_PORT}"
 NUTSHELL_V2_MINT_URL = f"http://{LOCAL_MINT_HOST}:{NUTSHELL_V2_MINT_PORT}"
