@@ -10,6 +10,7 @@ import os
 import time
 
 import pytest
+import requests
 
 from lib.constants import BACKEND_PORT
 
@@ -18,8 +19,8 @@ pytestmark = [pytest.mark.api, pytest.mark.critical, pytest.mark.timeout(120), p
 
 def _skip_if_no_ln_invoice(router):
     resp = router.api_status("/ln-invoice")
-    if resp != 405:
-        pytest.skip(f"ln-invoice endpoint not available (status={resp}, expected 405 on GET)")
+    if resp == 404 or resp == 0:
+        pytest.skip(f"ln-invoice endpoint not available (status={resp})")
 
 
 def _skip_if_degraded(router):
@@ -34,36 +35,39 @@ def _skip_if_degraded(router):
 
 
 def _create_invoice(router, amount=21):
-    create_resp = router.ssh(
-        f"wget -qO- --timeout=15 --post-data='{{\"amount\": {amount}}}' "
-        f"--header='Content-Type: application/json' "
-        f"'http://[::1]:{BACKEND_PORT}/ln-invoice'",
-        timeout=30,
-    )
-    assert create_resp, "Empty response from POST /ln-invoice"
+    mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "")
+    backend_ip = os.environ.get("TOLLGATE_SSH_HOST", router.gateway_ip if hasattr(router, "gateway_ip") else "127.0.0.1")
+    url = f"http://{backend_ip}:{BACKEND_PORT}/ln-invoice"
+    payload = {"amount": amount}
+    if mint_url:
+        payload["mint_url"] = mint_url
     try:
-        invoice = json.loads(create_resp)
-    except json.JSONDecodeError:
-        pytest.fail(f"ln-invoice response not JSON: {create_resp[:300]}")
-    return invoice
+        resp = requests.post(url, json=payload, timeout=15)
+        if resp.status_code == 200:
+            return resp.json()
+        pytest.fail(f"POST /ln-invoice returned {resp.status_code}: {resp.text[:300]}")
+    except requests.RequestException as e:
+        pytest.fail(f"POST /ln-invoice failed: {e}")
 
 
 def _poll_until_settled(router, quote, timeout_s=45):
+    backend_ip = os.environ.get("TOLLGATE_SSH_HOST", router.gateway_ip if hasattr(router, "gateway_ip") else "127.0.0.1")
+    url = f"http://{backend_ip}:{BACKEND_PORT}/ln-invoice?quote={quote}"
     deadline = time.time() + timeout_s
     last_status = ""
     while time.time() < deadline:
-        status_resp = router.ssh(
-            f"wget -qO- --timeout=10 'http://[::1]:{BACKEND_PORT}/ln-invoice?quote={quote}'",
-            timeout=15,
-        )
         try:
-            status = json.loads(status_resp)
-        except json.JSONDecodeError:
+            resp = requests.get(url, timeout=10)
+            if resp.status_code != 200:
+                time.sleep(2)
+                continue
+            status = resp.json()
+        except (requests.RequestException, json.JSONDecodeError):
             time.sleep(2)
             continue
 
         state = (status.get("status") or "").lower()
-        last_status = status_resp[:200]
+        last_status = json.dumps(status)[:200]
         if state in ("settled", "paid", "complete"):
             return status
         if state in ("expired", "cancelled"):
