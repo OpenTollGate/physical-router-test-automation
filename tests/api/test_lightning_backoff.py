@@ -107,7 +107,7 @@ def test_backoff_progression_on_mint_error(router):
         time.sleep(35)
 
         logs = router.get_tollgate_logs(lines=500)
-        timestamps = _extract_log_timestamps(logs, "mint state check failed")
+        timestamps = _extract_log_timestamps(logs, "monitorLightningQuote")
         assert len(timestamps) >= 2, (
             f"Expected >=2 'mint state check failed' entries, got {len(timestamps)}"
         )
@@ -140,7 +140,7 @@ def test_jitter_present_in_polling(router):
         time.sleep(40)
 
         logs = router.get_tollgate_logs(lines=500)
-        timestamps = _extract_log_timestamps(logs, "mint state check failed")
+        timestamps = _extract_log_timestamps(logs, "monitorLightningQuote")
         assert len(timestamps) >= 3, (
             f"Need >=3 timestamps to detect jitter, got {len(timestamps)}"
         )
@@ -166,7 +166,7 @@ def test_no_backoff_hammering_on_mint_error(router):
         time.sleep(10)
 
         logs = router.get_tollgate_logs(lines=500)
-        timestamps = _extract_log_timestamps(logs, "mint state check failed")
+        timestamps = _extract_log_timestamps(logs, "monitorLightningQuote")
         cutoff = time.time() - 12
         recent = [t for t in timestamps if t >= cutoff]
         assert len(recent) >= 1, "Monitor produced no error entries in 10s (not running?)"
