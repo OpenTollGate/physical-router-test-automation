@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/Origami74/gonuts-tollgate/cashu"
@@ -52,17 +53,30 @@ func main() {
 		log.Fatalf("RequestMint(%d, %s): %v", mintAmount, mintURL, err)
 	}
 
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
+	backoff := 500 * time.Millisecond
+	const maxBackoff = 10 * time.Second
 	for time.Now().Before(deadline) {
 		state, err := w.MintQuoteState(quote.Quote)
 		if err != nil {
+			errStr := err.Error()
+			if strings.Contains(errStr, "429") || strings.Contains(strings.ToLower(errStr), "rate limit") {
+				log.Printf("mint rate-limited, backing off %v", backoff)
+				time.Sleep(backoff)
+				backoff = time.Duration(float64(backoff) * 2)
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+				continue
+			}
 			w.Shutdown()
 			log.Fatalf("MintQuoteState: %v", err)
 		}
 		if state.State == nut04.Paid {
 			break
 		}
-		time.Sleep(500 * time.Millisecond)
+		backoff = 500 * time.Millisecond
+		time.Sleep(backoff)
 	}
 
 	minted, err := w.MintTokens(quote.Quote)
