@@ -84,14 +84,14 @@ class PulumiSHCProvider(SHCProvider):
                 size=size,
                 api_key=api_key,
             )
-            pulumi.export("service_id", vm.service_id)
-            pulumi.export("ip", vm.ip)
-            pulumi.export("hostname", vm.hostname)
-            pulumi.export("os_user", vm.os_user)
+            pulumi.export("service_id", vm.service_id)  # type: ignore[attr-defined]
+            pulumi.export("ip", vm.ip)  # type: ignore[attr-defined]
+            pulumi.export("hostname", vm.hostname)  # type: ignore[attr-defined]
+            pulumi.export("os_user", vm.os_user)  # type: ignore[attr-defined]
         return program
 
     def _workspace_opts(self):
-        from pulumi import automation as auto
+        from pulumi import automation as auto  # type: ignore[attr-defined]
 
         workdir = os.environ.get("PULUMI_WORKDIR", os.path.expanduser("~/.tollgate-pulumi"))
         os.makedirs(workdir, exist_ok=True)
@@ -106,7 +106,7 @@ class PulumiSHCProvider(SHCProvider):
         )
 
     def _get_stack(self, name: str, hostname: str, size: str):
-        from pulumi import automation as auto
+        from pulumi import automation as auto  # type: ignore[attr-defined]
 
         ws = self._workspace_opts()
         stack = auto.create_or_select_stack(
