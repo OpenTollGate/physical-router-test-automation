@@ -55,11 +55,6 @@ class TestDisabledByDefault:
 
 
 class TestImageMissing:
-    def test_none_image_path(self, fleet, tmp_conwrt):
-        result = reflash_fleet(fleet, None, enable=True, conwrt_dir=tmp_conwrt)
-        assert result.image_missing is True
-        assert result.reflashed == []
-
     def test_nonexistent_image_path(self, fleet, tmp_conwrt):
         result = reflash_fleet(fleet, "/no/such/firmware.bin", enable=True, conwrt_dir=tmp_conwrt)
         assert result.image_missing is True
@@ -84,6 +79,7 @@ class TestHappyPath:
             fleet, tmp_image, enable=True, conwrt_dir=tmp_conwrt,
             flash_fn=flash, reboot_wait_fn=reboot_wait,
         )
+        assert result.method == "firmware"
         assert set(result.reflashed) == {"router-a", "router-b"}
         assert result.failed == {}
         assert flash.call_count == 2
@@ -120,10 +116,46 @@ class TestPartialFailure:
         assert set(result.failed) == {"router-a", "router-b"}
 
     def test_router_without_host_recorded_as_failed(self, tmp_image, tmp_conwrt):
-        fleet = {"router-x": types.SimpleNamespace()}  # no .host attr
+        fleet = {"router-x": types.SimpleNamespace()}
         result = reflash_fleet(
             fleet, tmp_image, enable=True, conwrt_dir=tmp_conwrt,
             flash_fn=MagicMock(), reboot_wait_fn=MagicMock(),
         )
         assert result.reflashed == []
         assert "router-x" in result.failed
+
+
+class TestResetFallback:
+    def test_no_image_uses_reset_fn(self, fleet, tmp_conwrt):
+        reset = MagicMock()
+        result = reflash_fleet(
+            fleet, None, enable=True, conwrt_dir=tmp_conwrt,
+            reset_fn=reset,
+        )
+        assert result.method == "reset"
+        assert set(result.reflashed) == {"router-a", "router-b"}
+        assert result.failed == {}
+        assert reset.call_count == 2
+        reset.assert_any_call(fleet["router-a"])
+        reset.assert_any_call(fleet["router-b"])
+
+    def test_no_image_does_not_call_conwrt_flash(self, fleet, tmp_conwrt):
+        flash = MagicMock()
+        reset = MagicMock()
+        reflash_fleet(
+            fleet, None, enable=True, conwrt_dir=tmp_conwrt,
+            flash_fn=flash, reboot_wait_fn=MagicMock(), reset_fn=reset,
+        )
+        flash.assert_not_called()
+        assert reset.call_count == 2
+
+    def test_reset_exception_isolated(self, fleet, tmp_conwrt):
+        def flaky_reset(router):
+            if router is fleet["router-a"]:
+                raise RuntimeError("firstboot failed")
+        result = reflash_fleet(
+            fleet, None, enable=True, conwrt_dir=tmp_conwrt,
+            reset_fn=flaky_reset,
+        )
+        assert result.reflashed == ["router-b"]
+        assert "router-a" in result.failed
