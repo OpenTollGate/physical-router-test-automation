@@ -119,6 +119,12 @@ def _working_tree_overlay_b64() -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
+def _generate_run_id(target: RunTarget) -> str:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    short = (target.sut_commit or target.branch)[:7].replace("/", "-")
+    return f"{timestamp}-{short}"
+
+
 def _wait_for_ssh(ssh_base: list[str], ssh_target: str, timeout: int = 300, sshpass_password: str = "") -> None:
     """Retry SSH until the VM accepts connections.
 
@@ -510,9 +516,9 @@ def submit_run_shc(
     )
     print(f"Artifact ready: run {artifact_run_id}")
 
+    run_id = _generate_run_id(target)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     short = (target.sut_commit or target.branch)[:7].replace("/", "-")
-    run_id = f"{timestamp}-{short}"
     hostname = f"tollgate-{short[:8]}-{timestamp[-6:]}"
 
     suite_ref = _suite_ref()
