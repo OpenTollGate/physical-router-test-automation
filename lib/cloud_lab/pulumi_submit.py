@@ -95,7 +95,7 @@ def submit_run_pulumi(
         f"TOLLGATE_ARTIFACT_REPO={target.repo}",
         f"TOLLGATE_ARTIFACT_RUN_ID={artifact_run_id}",
         f"TOLLGATE_SUITE_REF={suite_ref}",
-        f"TOLLGATE_BACKEND=go",
+        "TOLLGATE_BACKEND=go",
         f"TOLLGATE_PUBLISH={'true' if publish else 'false'}",
         f"TOLLGATE_TWO_ROUTER={'true' if two_router else 'false'}",
         f"TOLLGATE_ROUTER_COUNT={router_count or 0}",
