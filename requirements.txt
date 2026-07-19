@@ -8,3 +8,4 @@ PyYAML>=6.0
 requests
 nostr-publish @ git+https://github.com/Amperstrand/nostr-publish-file-metadata-action.git@main
 httpx
+tollgate-lab>=0.1.0
