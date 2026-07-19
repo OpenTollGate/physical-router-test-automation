@@ -1,0 +1,21 @@
+# SHC cloud lab environment — OpenWrt in QEMU on SHC VM
+# Usage: pytest --lg-env=configs/labgrid/cloud-shc.yaml tests/
+#
+# Provisioned by tollgate_lab.cloud.get_provider("shc")
+
+targets:
+  openwrt-vm:
+    resources:
+      NetworkService:
+        address: "${SHC_VM_IP}"
+        username: "root"
+    drivers:
+      RouterDriver: {}
+
+  debian-client:
+    resources:
+      NetworkService:
+        address: "${SHC_VM_IP}"
+        username: "ubuntu"
+    drivers:
+      RouterDriver: {}

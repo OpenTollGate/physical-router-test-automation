@@ -1,0 +1,12 @@
+# Local QEMU lab — for development without physical hardware
+# Usage: pytest --lg-env=configs/labgrid/local-qemu.yaml tests/
+
+targets:
+  openwrt-local:
+    resources:
+      NetworkService:
+        address: "127.0.0.1"
+        username: "root"
+        port: 2222
+    drivers:
+      RouterDriver: {}

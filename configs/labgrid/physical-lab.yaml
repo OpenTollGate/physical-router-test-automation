@@ -1,0 +1,38 @@
+# Physical lab labgrid environment for TollGate router testing
+# Usage: pytest --lg-env=configs/labgrid/physical-lab.yaml tests/
+#
+# Requires tollgate-lab's custom drivers to be importable.
+
+targets:
+  router-alpha:
+    resources:
+      NetworkService:
+        address: "192.168.13.112"
+        username: "root"
+    drivers:
+      RouterDriver: {}
+
+  router-beta:
+    resources:
+      NetworkService:
+        address: "100.90.216.248"
+        username: "root"
+    drivers:
+      RouterDriver: {}
+
+  esp32-board-a:
+    resources:
+      USBSerialPort:
+        match:
+          ID_SERIAL_SHORT: "esp32-board-a-serial"
+        speed: 115200
+    drivers:
+      SerialDriver: {}
+
+  android-phone:
+    resources:
+      AndroidUSBDevice:
+        match:
+          ID_PATH: 'pci-0000:00:14.0-usb-0:1:1'
+    drivers:
+      AndroidADBDriver: {}
