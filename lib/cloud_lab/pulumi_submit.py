@@ -101,7 +101,7 @@ def submit_run_pulumi(
         f"TOLLGATE_ROUTER_COUNT={router_count or 0}",
         "TOLLGATE_VIRTUAL_LAB=1",
         "BLOSSOM_SERVER=https://blossom.psbt.me",
-        f"TOLLGATE_CLOUD=shc",
+        "TOLLGATE_CLOUD=shc",
         f"TOLLGATE_SERVICE_ID={service_id}",
         f"SHC_API_KEY={shlex.quote(os.environ.get('SHC_API_KEY', ''))}",
         f"GH_TOKEN={shlex.quote(token)}",
