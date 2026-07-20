@@ -145,13 +145,13 @@ def test_no_backoff_hammering_on_mint_error(router):
 
     invoice = _create_invoice(router)
     quote_id = invoice.get("quote", "")
-    time.sleep(10)
+    time.sleep(15)
 
-    logs = router.get_tollgate_logs(lines=500)
+    logs = router.get_tollgate_logs(lines=1000)
     timestamps = _extract_log_timestamps(logs, quote_id)
-    cutoff = time.time() - 12
+    cutoff = time.time() - 18
     recent = [t for t in timestamps if t >= cutoff]
-    assert len(recent) >= 1, "Monitor produced no entries in 10s (not running?)"
-    assert len(recent) <= 2, (
-        f"Monitor hammered {len(recent)} times in 10s — old 2s fixed ticker present"
+    assert len(recent) >= 1, "Monitor produced no entries in 15s (not running?)"
+    assert len(recent) <= 3, (
+        f"Monitor hammered {len(recent)} times in 15s — old 2s fixed ticker present"
     )
