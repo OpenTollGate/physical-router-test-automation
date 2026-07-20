@@ -1,3 +1,14 @@
+"""
+Nostr helpers — delegates to tollgate_lab when available.
+
+Canonical: tollgate_lab/reporting/nostr_events.py
+"""
+
+try:
+    from tollgate_lab.reporting.nostr_events import *
+except ImportError:
+    pass  # Fall through to local implementation
+
 import json
 import hashlib
 import time

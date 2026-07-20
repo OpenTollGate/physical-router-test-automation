@@ -1,3 +1,14 @@
+"""
+Serial console — delegates to tollgate_lab when available.
+
+Canonical: tollgate_lab/drivers/serial_console.py
+"""
+
+try:
+    from tollgate_lab.drivers.serial_console import *
+except ImportError:
+    pass  # Fall through to local implementation
+
 """Wrapper around scripts/router-serial.py for pymake and pytest."""
 
 from __future__ import annotations

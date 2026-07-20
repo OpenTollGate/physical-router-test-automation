@@ -1,3 +1,19 @@
+"""
+Router SSH interaction — delegates to tollgate_lab when available.
+
+The canonical implementation lives in tollgate_lab/drivers/router.py.
+This file provides backward-compatible imports for existing tests.
+
+To use tollgate_lab directly:
+    from tollgate_lab.drivers.router import Router, BackendConfig
+"""
+
+# Re-export from tollgate_lab for new code
+try:
+    from tollgate_lab.drivers.router import Router, BackendConfig
+except ImportError:
+    pass  # Fall through to local implementation below
+
 import subprocess
 import json
 import os
