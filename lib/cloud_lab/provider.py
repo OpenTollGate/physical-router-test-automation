@@ -284,6 +284,8 @@ class SHCProvider(VMProvider):
         "fips-test-",
     )
 
+    _EXCLUDE_HOSTNAMES = frozenset({"europa-vpn-vps"})
+
     def cleanup_stale(self, max_age_hours=2):
         import datetime
         import os
@@ -297,6 +299,8 @@ class SHCProvider(VMProvider):
             keep_patterns = [*keep_patterns, *(p.strip() for p in env_extra.split(",") if p.strip())]
         for vm in self.list_vms():
             hostname = vm.hostname
+            if hostname in self._EXCLUDE_HOSTNAMES:
+                continue
             if any(p in hostname for p in keep_patterns):
                 continue
             if not any(hostname.startswith(p) for p in self._REAPABLE_PREFIXES):
