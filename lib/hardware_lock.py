@@ -1,7 +1,6 @@
 """Hardware lock — delegates to tollgate_lab.
 
-Backward compatible: existing imports (from lib.hardware_lock import ...)
-continue to work.
+Backward compatible: existing imports continue to work.
 """
 
 try:
@@ -11,18 +10,23 @@ try:
         is_hardware_locked,
         require_hardware_lock,
         read_hardware_lock,
+        _session_id,
+        _git_branch,
+        _is_stale,
+        HARDWARE_LOCK,
+        _PROJECT_ROOT,
+        _SESSION_ID,
+        _STALE_THRESHOLD,
     )
 except ImportError:
-    # Fallback: keep the original implementation for standalone operation
-    # The tollgate_lab version is the canonical one
     import os, json, platform, subprocess, tempfile
     from datetime import datetime, timezone, timedelta
     from pathlib import Path
-    from lib.router_lock import _STALE_THRESHOLD
 
     _PROJECT_ROOT = Path(__file__).resolve().parents[1]
     _SESSION_ID = os.environ.get("GITHUB_RUN_ID", os.environ.get("USER", "unknown"))
     HARDWARE_LOCK = Path(tempfile.gettempdir()) / "tollgate_hardware.lock"
+    _STALE_THRESHOLD = timedelta(hours=1)
 
     def _session_id():
         return _SESSION_ID
@@ -71,3 +75,12 @@ except ImportError:
     def release_hardware_lock():
         if HARDWARE_LOCK.exists():
             HARDWARE_LOCK.unlink()
+
+__all__ = [
+    "acquire_hardware_lock",
+    "release_hardware_lock",
+    "is_hardware_locked",
+    "require_hardware_lock",
+    "read_hardware_lock",
+    "HARDWARE_LOCK",
+]
