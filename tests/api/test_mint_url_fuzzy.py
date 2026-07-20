@@ -1,8 +1,8 @@
 """Mint URL fuzzy matching tests for PR #252.
 
-PR #252 (now merged) changes calculateAllotment() from exact string
-equality (==) to MintURLMatches(), which tolerates trailing slashes,
-case differences, and path normalization.
+PR #252 (merged) changes calculateAllotment() from exact string equality
+(==) to MintURLMatches(), which tolerates trailing slashes, case
+differences, and path normalization.
 
 These tests verify end-to-end: modify the router's accepted_mints URL
 to differ from the token's embedded URL, then pay — should succeed.
@@ -37,6 +37,18 @@ def _set_config_mint_url_safe(router, new_url):
     router.restart_backend(timeout=45)
 
 
+def _pay_via_requests(router, token):
+    backend_ip = os.environ.get("TOLLGATE_SSH_HOST", "10.99.99.1")
+    url = f"http://{backend_ip}:{BACKEND_PORT}/"
+    try:
+        resp = requests.post(url, data=token, headers={"Content-Type": "text/plain"}, timeout=15)
+        if resp.status_code == 200:
+            return resp.json()
+        return {"raw": resp.text[:300], "status": resp.status_code}
+    except Exception as e:
+        return {"raw": str(e)[:200]}
+
+
 def test_payment_with_trailing_slash_mismatch(router, cashu):
     """Token has no trailing slash, config has trailing slash — payment succeeds."""
     require_client_identity(router)
@@ -52,8 +64,8 @@ def test_payment_with_trailing_slash_mismatch(router, cashu):
 
     try:
         _set_config_mint_url_safe(router, slashed_url)
-        time.sleep(3)
-        resp = router.pay_direct(token)
+        time.sleep(5)
+        resp = _pay_via_requests(router, token)
         if is_mac_lookup_failure(resp):
             pytest.skip("No client on TollGate AP")
         assert is_session_event(resp), (
@@ -88,8 +100,8 @@ def test_payment_with_case_mismatch(router, cashu):
 
     try:
         _set_config_mint_url_safe(router, upper_url)
-        time.sleep(3)
-        resp = router.pay_direct(token)
+        time.sleep(5)
+        resp = _pay_via_requests(router, token)
         if is_mac_lookup_failure(resp):
             pytest.skip("No client on TollGate AP")
         assert is_session_event(resp), (

@@ -1,12 +1,17 @@
-"""Lightning quote monitor backoff and jitter (PR #249).
+"""Lightning quote monitor backoff and jitter (PR #249/#270).
 
 Validates that the lightning quote monitor uses adaptive polling:
 - Base interval is 5s (not the old 2s)
-- On mint API errors, backoff doubles up to 30s
+- On ndsctl failures, backoff doubles up to 30s cap
 - Jitter is present (inter-poll intervals are not uniform)
 
-Feature gating: these tests probe logread for backoff-related log messages
-that only exist when PR #249 is deployed. On older firmware, they skip.
+In the cloud lab, the FakeWallet settles instantly, so the monitor sees
+"Paid" and tries ensureLightningAccessGranted. ndsctl auth fails because
+there's no real WiFi client — this triggers backoff via the
+ensureLightningAccessGranted failure path (the fix from PR #249/#270).
+
+No mint blocking or chaos proxy needed — the ndsctl failures are the
+natural backoff trigger in this environment.
 """
 
 import json
@@ -17,7 +22,6 @@ import time
 import pytest
 import requests
 
-from lib.chaos import MintChaosController
 from lib.constants import BACKEND_PORT
 
 pytestmark = [pytest.mark.api, pytest.mark.slow, pytest.mark.go_only, pytest.mark.extended]
@@ -40,21 +44,18 @@ def _skip_if_degraded(router):
     return discovery
 
 
-def _skip_if_no_backoff_support(router):
-    """Skip if the monitor binary lacks backoff support (pre-PR #249 firmware)."""
-    try:
-        out = router.ssh(
-            "strings /usr/bin/tollgate-wrt 2>/dev/null | grep -c 'lightningQuoteMonitorMaxBackoff'",
-            timeout=10,
-        )
-        if out.strip() == "0":
-            pytest.skip("Binary lacks lightningQuoteMonitorMaxBackoff (backoff not supported)")
-    except Exception:
-        pytest.skip("Cannot check backoff support")
-
-
 def _create_invoice(router, amount=21, retries=3):
-    mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "http://10.99.99.2:8383")
+    mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "")
+    if not mint_url:
+        discovery = _skip_if_degraded(router)
+        tags = discovery.get("tags", [])
+        for tag in tags:
+            if isinstance(tag, list) and len(tag) >= 5 and tag[0] == "price_per_step":
+                mint_url = tag[4]
+                break
+    if not mint_url:
+        pytest.skip("Cannot determine mint URL from backend or env")
+
     backend_ip = os.environ.get("TOLLGATE_SSH_HOST", "10.99.99.1")
     url = f"http://{backend_ip}:{BACKEND_PORT}/ln-invoice"
     payload = {"amount": amount, "mint_url": mint_url}
@@ -71,11 +72,6 @@ def _create_invoice(router, amount=21, retries=3):
 
 
 def _extract_log_timestamps(logs, pattern):
-    """Extract timestamps from logread lines matching the given pattern.
-
-    logread format: 'Jul 17 19:26:40 routername tollgate-wrt[123]: message'
-    Returns list of epoch floats.
-    """
     timestamps = []
     current_year = time.localtime().tm_year
     for line in logs.splitlines():
@@ -96,33 +92,28 @@ def _extract_log_timestamps(logs, pattern):
 
 
 def test_backoff_progression_on_mint_error(router):
-    """On mint errors, poll intervals double (5s -> 10s -> 20s -> 30s cap)."""
+    """On ndsctl failures, poll intervals for ensureLightningAccessGranted increase via backoff."""
     _skip_if_no_ln_invoice(router)
     _skip_if_degraded(router)
 
-    chaos = MintChaosController()
-    try:
-        invoice = _create_invoice(router)
-        quote_id = invoice.get("quote", "")
-        chaos.block_until_reset()
-        time.sleep(35)
+    invoice = _create_invoice(router)
+    quote_id = invoice.get("quote", "")
+    time.sleep(35)
 
-        logs = router.get_tollgate_logs(lines=500)
-        timestamps = _extract_log_timestamps(logs, quote_id)
-        assert len(timestamps) >= 2, (
-            f"Expected >=2 monitor entries for quote {quote_id[:12]}, got {len(timestamps)}"
-        )
+    logs = router.get_tollgate_logs(lines=500)
+    timestamps = _extract_log_timestamps(logs, quote_id)
+    assert len(timestamps) >= 2, (
+        f"Expected >=2 monitor entries for quote {quote_id[:12]}, got {len(timestamps)}"
+    )
 
-        intervals = [timestamps[i + 1] - timestamps[i] for i in range(len(timestamps) - 1)]
-        assert intervals[0] >= 4.0, (
-            f"First interval {intervals[0]:.1f}s < 4s (base 5s minus jitter slack)"
+    intervals = [timestamps[i + 1] - timestamps[i] for i in range(len(timestamps) - 1)]
+    assert intervals[0] >= 4.0, (
+        f"First interval {intervals[0]:.1f}s < 4s (base 5s minus jitter slack)"
+    )
+    if len(intervals) >= 2:
+        assert intervals[1] >= 8.0, (
+            f"Second interval {intervals[1]:.1f}s < 8s (doubled 10s minus jitter slack)"
         )
-        if len(intervals) >= 2:
-            assert intervals[1] >= 8.0, (
-                f"Second interval {intervals[1]:.1f}s < 8s (doubled 10s minus jitter slack)"
-            )
-    finally:
-        chaos.reset()
 
 
 def test_jitter_present_in_polling(router):
@@ -130,26 +121,21 @@ def test_jitter_present_in_polling(router):
     _skip_if_no_ln_invoice(router)
     _skip_if_degraded(router)
 
-    chaos = MintChaosController()
-    try:
-        invoice = _create_invoice(router)
-        quote_id = invoice.get("quote", "")
-        chaos.block_until_reset()
-        time.sleep(40)
+    invoice = _create_invoice(router)
+    quote_id = invoice.get("quote", "")
+    time.sleep(40)
 
-        logs = router.get_tollgate_logs(lines=500)
-        timestamps = _extract_log_timestamps(logs, quote_id)
-        assert len(timestamps) >= 2, (
-            f"Need >=2 timestamps to detect jitter, got {len(timestamps)}"
-        )
+    logs = router.get_tollgate_logs(lines=500)
+    timestamps = _extract_log_timestamps(logs, quote_id)
+    assert len(timestamps) >= 2, (
+        f"Need >=2 timestamps to detect jitter, got {len(timestamps)}"
+    )
 
-        intervals = [round(timestamps[i + 1] - timestamps[i], 3) for i in range(len(timestamps) - 1)]
-        identical = sum(1 for i in range(1, len(intervals)) if intervals[i] == intervals[i - 1])
-        assert identical <= max(1, len(intervals) // 4), (
-            f"{identical}/{len(intervals)} identical consecutive intervals — no jitter"
-        )
-    finally:
-        chaos.reset()
+    intervals = [round(timestamps[i + 1] - timestamps[i], 3) for i in range(len(timestamps) - 1)]
+    identical = sum(1 for i in range(1, len(intervals)) if intervals[i] == intervals[i - 1])
+    assert identical <= max(1, len(intervals) // 4), (
+        f"{identical}/{len(intervals)} identical consecutive intervals — no jitter"
+    )
 
 
 def test_no_backoff_hammering_on_mint_error(router):
@@ -157,19 +143,15 @@ def test_no_backoff_hammering_on_mint_error(router):
     _skip_if_no_ln_invoice(router)
     _skip_if_degraded(router)
 
-    chaos = MintChaosController()
-    try:
-        _create_invoice(router)
-        chaos.block_until_reset()
-        time.sleep(10)
+    invoice = _create_invoice(router)
+    quote_id = invoice.get("quote", "")
+    time.sleep(10)
 
-        logs = router.get_tollgate_logs(lines=500)
-        timestamps = _extract_log_timestamps(logs, "monitorLightningQuote")
-        cutoff = time.time() - 12
-        recent = [t for t in timestamps if t >= cutoff]
-        assert len(recent) >= 1, "Monitor produced no error entries in 10s (not running?)"
-        assert len(recent) <= 2, (
-            f"Monitor hammered {len(recent)} times in 10s — old 2s fixed ticker present"
-        )
-    finally:
-        chaos.reset()
+    logs = router.get_tollgate_logs(lines=500)
+    timestamps = _extract_log_timestamps(logs, quote_id)
+    cutoff = time.time() - 12
+    recent = [t for t in timestamps if t >= cutoff]
+    assert len(recent) >= 1, "Monitor produced no entries in 10s (not running?)"
+    assert len(recent) <= 2, (
+        f"Monitor hammered {len(recent)} times in 10s — old 2s fixed ticker present"
+    )
