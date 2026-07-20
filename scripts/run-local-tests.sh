@@ -128,11 +128,19 @@ run_tests() {
   export TOLLGATE_CLIENT_TYPE=container
   export TOLLGATE_VM_PROVIDER=local
   export TOLLGATE_NO_DEPLOY=1
+  export TOLLGATE_CASHU_VENV=/opt/cashu-venv
   export TOLLGATE_CLIENT_IP="${DEBIAN_IP}"
   export TOLLGATE_CLIENT_MAC="de:54:4e:91:49:da"
+  export CASHU_DIR=/tmp/cashu-local
+
+  mkdir -p /tmp/cashu-local
+
+  # Pre-trigger NDS for Debian client (required for payment tests)
+  ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${DEBIAN_IP}" \
+    "curl -s -o /dev/null --max-time 5 http://example.com" 2>/dev/null || true
 
   log "Running pytest: ${test_files}"
-  python3 -m pytest ${test_files} -v --timeout=180 --tb=short -rs "$@"
+  python3 -m pytest ${test_files} -v --no-deploy --timeout=180 --tb=short -rs "$@"
 }
 
 cleanup() {
