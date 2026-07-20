@@ -87,3 +87,7 @@ __all__ = [
     "HARDWARE_LOCK",
     "_SESSION_ID",
 ]
+
+# DEPRECATED: This module is a backward-compat shim.
+# All consumers should import from tollgate_lab.hardware.lock directly.
+# This file will be removed once all external consumers are migrated.
