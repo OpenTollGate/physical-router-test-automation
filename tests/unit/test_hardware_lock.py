@@ -24,13 +24,13 @@ def _write_lock(path, locked="true", session="user@host", ts=None):
 
 class TestReadHardwareLock:
     def test_no_file(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("lib.hardware_lock.HARDWARE_LOCK", tmp_path / "no.lock")
+        monkeypatch.setattr("tollgate_lab.hardware.lock.HARDWARE_LOCK", tmp_path / "no.lock")
         assert read_hardware_lock() is None
 
     def test_valid(self, tmp_path, monkeypatch):
         lock = tmp_path / "hw.lock"
         _write_lock(lock, session="alice@host1")
-        monkeypatch.setattr("lib.hardware_lock.HARDWARE_LOCK", lock)
+        monkeypatch.setattr("tollgate_lab.hardware.lock.HARDWARE_LOCK", lock)
         result = read_hardware_lock()
         assert result["session"] == "alice@host1"
         assert result["locked"] == "true"
@@ -38,7 +38,7 @@ class TestReadHardwareLock:
     def test_corrupt(self, tmp_path, monkeypatch):
         lock = tmp_path / "bad.lock"
         lock.write_text("this line has no colon so it is skipped\nvalid: yes")
-        monkeypatch.setattr("lib.hardware_lock.HARDWARE_LOCK", lock)
+        monkeypatch.setattr("tollgate_lab.hardware.lock.HARDWARE_LOCK", lock)
         result = read_hardware_lock()
         assert result.get("valid") == "yes"
 
@@ -61,27 +61,27 @@ class TestIsStale:
 
 class TestIsHardwareLocked:
     def test_no_lock(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("lib.hardware_lock.HARDWARE_LOCK", tmp_path / "no.lock")
+        monkeypatch.setattr("tollgate_lab.hardware.lock.HARDWARE_LOCK", tmp_path / "no.lock")
         assert is_hardware_locked() is False
 
     def test_locked_by_other(self, tmp_path, monkeypatch):
         lock = tmp_path / "hw.lock"
         _write_lock(lock, session="other@host")
-        monkeypatch.setattr("lib.hardware_lock.HARDWARE_LOCK", lock)
-        monkeypatch.setattr("lib.hardware_lock._session_id", lambda: "me@host")
+        monkeypatch.setattr("tollgate_lab.hardware.lock.HARDWARE_LOCK", lock)
+        monkeypatch.setattr("tollgate_lab.hardware.lock._session_id", lambda: "me@host")
         assert is_hardware_locked() is True
 
     def test_unlocked_flag(self, tmp_path, monkeypatch):
         lock = tmp_path / "hw.lock"
         _write_lock(lock, locked="false", session="me@host")
-        monkeypatch.setattr("lib.hardware_lock.HARDWARE_LOCK", lock)
+        monkeypatch.setattr("tollgate_lab.hardware.lock.HARDWARE_LOCK", lock)
         assert is_hardware_locked() is False
 
     def test_stale_lock_treated_as_locked(self, tmp_path, monkeypatch):
         old_ts = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
         lock = tmp_path / "hw.lock"
         _write_lock(lock, session="old@host", ts=old_ts)
-        monkeypatch.setattr("lib.hardware_lock.HARDWARE_LOCK", lock)
+        monkeypatch.setattr("tollgate_lab.hardware.lock.HARDWARE_LOCK", lock)
         # is_hardware_locked only checks locked=true — staleness is handled by acquire
         assert is_hardware_locked() is True
 
@@ -90,10 +90,10 @@ class TestIsHardwareLocked:
 class TestAcquireRelease:
     def test_acquire_creates(self, tmp_path, monkeypatch):
         lock = tmp_path / "hw.lock"
-        monkeypatch.setattr("lib.hardware_lock.HARDWARE_LOCK", lock)
-        monkeypatch.setattr("lib.hardware_lock._session_id", lambda: "test@host")
-        monkeypatch.setattr("lib.hardware_lock._git_branch", lambda: "test-branch")
-        monkeypatch.setattr("lib.hardware_lock._PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr("tollgate_lab.hardware.lock.HARDWARE_LOCK", lock)
+        monkeypatch.setattr("tollgate_lab.hardware.lock._session_id", lambda: "test@host")
+        monkeypatch.setattr("tollgate_lab.hardware.lock._git_branch", lambda: "test-branch")
+        monkeypatch.setattr("tollgate_lab.hardware.lock._PROJECT_ROOT", tmp_path)
         acquire_hardware_lock("test-phase")
         assert lock.exists()
         data = read_hardware_lock()
@@ -103,10 +103,10 @@ class TestAcquireRelease:
     def test_release_removes(self, tmp_path, monkeypatch):
         lock = tmp_path / "hw.lock"
         _write_lock(lock)
-        monkeypatch.setattr("lib.hardware_lock.HARDWARE_LOCK", lock)
+        monkeypatch.setattr("tollgate_lab.hardware.lock.HARDWARE_LOCK", lock)
         release_hardware_lock()
         assert not lock.exists()
 
     def test_release_nonexistent(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("lib.hardware_lock.HARDWARE_LOCK", tmp_path / "no.lock")
+        monkeypatch.setattr("tollgate_lab.hardware.lock.HARDWARE_LOCK", tmp_path / "no.lock")
         release_hardware_lock()
