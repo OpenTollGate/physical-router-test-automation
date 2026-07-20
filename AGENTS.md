@@ -429,7 +429,7 @@ Nodogsplash's default `gatewayport` is `2050` (hardcoded in `src/conf.h`). The T
 
 **Why this matters**: The captive portal CGI scripts in `/usr/lib/nodogsplash/` are configured to listen on port 2050. If the port is 80, NDS's own HTTP server clashes with uhttpd/LuCI and the portal breaks silently — clients get LuCI HTML instead of the captive portal page.
 
-**Current state**: The pipeline fix is a band-aid. The real fix requires changing `99-tollgate-setup` in the backend package to use port 2050 instead of 80. Tracked as issue #32.
+**Current state**: The pipeline fix is a band-aid. The real fix requires changing `99-tollgate-setup` in the backend package to use port 2050 instead of 80. Tracked as [issue #32](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/32) (closed).
 
 ### Offline router deployment (no internet, no opkg update)
 
@@ -513,7 +513,7 @@ quote := storage.MintQuote{..., CreatedAt: createdAt}
 
 **Tracked as**: https://github.com/OpenTollGate/tollgate-module-basic-go/issues/156
 
-**Workaround**: `scripts/patch-gonuts-version.sh` is called by `deploy.sh` after cloning. It sed-replaces `v0.7.0` → `v0.0.0-20260528233401-9b2b84344c3a` in all three `go.mod` files before building. **Remove this script and its call in `deploy.sh` when gonuts-tollgate includes the bolt11 fix in a tagged release and tollgate-module-basic-go updates to it.**
+**Workaround**: `scripts/patch-gonuts-version.sh` is orphaned (exists but no longer called by `deploy.sh`). It was used to sed-replace `v0.7.0` → `v0.0.0-20260528233401-9b2b84344c3a` in all three `go.mod` files before building. The bolt11 tolerance fix only exists on the `Amperstrand/gonuts-tollgate feature/v2-keyset-ids` branch. **Safe to delete.**
 
 ### Lightning invoice flow and testnut bolt11 limitation
 
@@ -529,6 +529,8 @@ quote := storage.MintQuote{..., CreatedAt: createdAt}
 8. Monitoring goroutine polls `MintQuoteState()` every 2s, detects payment, mints tokens, grants access
 
 **testnut.cashu.exchange returns a dummy string, not bolt11**:
+
+> **Note (July 2026)**: `testnut.cashu.space` is currently unreachable (HTTP 000 / connection refused). Only `testnut.cashu.exchange` is operational. The `.space` domain was previously the recommended fallback for valid bolt11 invoices but is no longer available.
 
 ```
 testnut.cashu.exchange → "dummy-mint-4-46876457c0684c65d07e993705706d7b84c528aa75be1c722b8970f37585c7ba-exp1780177644"
@@ -724,7 +726,7 @@ After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check tha
 
 The fallback logic in `_create_vm_with_fallback()` tries all Tier 1 zones, then Tier 2, then alternates machine type (N1 → N2). **Never fall back to regions >20% more expensive** without asking the user first.
 
-`scripts/cloud-lab.py submit` runs TollGate tests in nested KVM on a GCP VM (`n1-standard-2` + the `SNAPSHOT_NAME` configured in `lib/cloud_lab/constants.py`). The current snapshot is `tollgate-runner-baked-v10`; newer baked snapshots must be verified before becoming the default.
+`scripts/cloud-lab.py submit` runs TollGate tests in nested KVM on a GCP VM (`n1-standard-2` + the `SNAPSHOT_NAME` configured in `lib/cloud_lab/constants.py`). The current snapshot is `tollgate-runner-baked-v16`; newer baked snapshots must be verified before becoming the default.
 
 ### Architecture
 
@@ -843,7 +845,7 @@ What it bakes into the snapshot:
 
 The baker must run remote setup with `HOME=/root`, because the GCP startup worker also exports `HOME=/root`. If bake commands accidentally write to `/home/<ssh-user>/tollgate-virtual-lab`, the worker will read stale images from `/root/tollgate-virtual-lab`.
 
-After baking, verify the snapshot with a throwaway cloud run or `cloud-lab.py up` before updating `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py` to the new snapshot name (auto-incremented, e.g. `tollgate-runner-baked-v9`).
+After baking, verify the snapshot with a throwaway cloud run or `cloud-lab.py up` before updating `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py` to the new snapshot name (auto-incremented, e.g. `tollgate-runner-baked-v17`).
 
 The worker (`lib/cloud_lab/worker.py`) detects pre-provisioned OpenWrt bases automatically — if SSH works within 15s of boot, serial provisioning is skipped. Falls back to serial provisioning for old snapshots without pre-provisioned bases.
 
