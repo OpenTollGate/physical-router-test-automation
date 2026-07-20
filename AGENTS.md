@@ -401,17 +401,19 @@ The OpenWrt ASU (Attended Sysupgrade) server at `sysupgrade.openwrt.org` returns
 
 When testing router access from a machine that also has SSH access to the upstream/main router, be extremely careful with IP addresses. Commands like `passwd` or `chpasswd` run without confirmation. Always verify which host you're SSH'd into before running destructive commands.
 
-### Go wallet (gonuts) vs CDK Keyset ID V1/V2 incompatibility
+### Go wallet (gonuts) vs CDK Keyset ID V1/V2 — resolved
 
-The TollGate Go backend uses `gonuts` which only supports Keyset ID V1 (`00`-prefix, 8 bytes, e.g. `0016f5fb5e5278f2`). CDK 0.16.0+ generates Keyset ID V2 (`01`-prefix, 33 bytes, e.g. `01df97b6fb8a572a718d7df7fcbf4387e2d455134ea8004c9c8c51e1b3391f909e`).
-
-Configuring the Go backend with a CDK mint causes a FATAL crash on startup: `"error adding new mint: Got invalid keyset. Derived id: '0016f5fb5e5278f2' but got '01df97b6...' from mint"`. The router's `/etc/tollgate/config.json` must use `testnut.cashu.exchange` (V1 keysets), NOT the local CDK mint.
-
-The local CDK mint (port 8085) works fine with the Python `cashu` CLI. It just can't be the Go backend's configured mint. This is tracked as GitHub issue #18.
-
+V1 keyset IDs: `00`-prefix, 16 hex chars (8 bytes), e.g. `0016f5fb5e5278f2`.
+V2 keyset IDs: `01`-prefix, 66 hex chars (33 bytes), e.g. `01df97b6fb8a572a718d7df7fcbf4387e2d455134ea8004c9c8c51e1b3391f909e`.
 V2 spec (NUT-02 PR #182, merged Jan 2026): `01` + SHA256(`amount:pubkey_hex` pairs sorted, comma-separated, `|unit:sat`). V1: `00` + first 14 hex chars of SHA256(concat of raw pubkeys).
 
-**Fix path**: `Amperstrand/gonuts-tollgate` fork at `feature/v2-keyset-ids` branch adds `DeriveKeysetIdV2()` and `IsKeysetIdV2()` following NUT-02. The fix updates `wallet/keyset.go:GetKeysetKeys()` to use V2 derivation when the keyset ID starts with `01`. To apply: update `src/tollwallet/go.mod` in `tollgate-module-basic-go` to pin `github.com/Amperstrand/gonuts-tollgate` at the V2 branch, then rebuild the `.ipk`.
+**Previous belief (STALE)**: Configuring the Go backend with a CDK V2 mint causes a FATAL crash on startup. Believed to require the `Amperstrand/gonuts-tollgate` fork at `feature/v2-keyset-ids` and `scripts/patch-gonuts-version.sh` to work around.
+
+**Actual resolution (June 2026)**: The crash was NOT a V2 keyset issue — it was a multi-mint wallet registration bug in `tollgate-module-basic-go`. [Issue #176](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/176) verified that V2 keyset swap WORKS correctly after [PR #167](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/167) ("register all accepted mints in wallet"). The `Amperstrand/gonuts-tollgate` V2 fork is no longer needed. `scripts/patch-gonuts-version.sh` has been removed.
+
+**Current state (July 2026)**: The Go backend (`tollgate-module-basic-go`) uses `OpenTollGate/gonuts-tollgate v0.7.4` (V1-only derivation, active fork). V2 keysets from CDK mints are accepted and swapped correctly. Both V1 (`testnut.cashu.exchange`) and V2 (local CDK mint) can be configured.
+
+**Upstream status**: `elnosh/gonuts` (the original) is dead — last commit August 2025, no V2 support, no activity. `OpenTollGate/gonuts-tollgate` is the active maintenance fork. Long-term, the Rust backend (`tollgate-rs`, uses CDK natively) is the migration path — see the Go→Rust migration planning doc (TBD).
 
 ### Nodogsplash DHCP bypass required
 
@@ -1368,10 +1370,10 @@ Full findings and test matrix: `docs/portal-test-findings.md`.
 
 | Keyset Version | Prefix | Go Backend | Notes |
 |---------------|--------|------------|-------|
-| V1 | `00` (16 hex chars) | **Required** | gonuts only supports V1 keysets |
-| V2 | `01` (66 hex chars) | **Fatal crash** | Backend refuses to start |
+| V1 | `00` (16 hex chars) | **Supported** | gonuts native; used by `testnut.cashu.exchange` |
+| V2 | `01` (66 hex chars) | **Supported** (post-PR #167) | CDK mints; swap verified working per [issue #176](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/176) |
 
-Only `testnut.cashu.exchange` returns V1 keysets. CDK mints return V2 keysets and will crash the Go backend on startup.
+Both V1 and V2 keysets are supported by the current Go backend. The previous "fatal crash" on V2 was a multi-mint wallet registration bug, not a keyset version issue — resolved in [PR #167](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/167).
 
 ## Captive Portal Flow (Physical Router)
 

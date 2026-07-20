@@ -391,9 +391,8 @@ def select_test_mint(forced_mint: str = "auto") -> str:
 
     Strategy (backend-aware):
     1. If forced, use that mint directly (no failover).
-    2. If Rust backend: try CDK V2 with mint_cycle validation.
-       If Go backend: skip CDK V2 — gonuts v0.7.1 loads V2 keysets but
-       serializes them wrong in /swap requests (NUT-02 ID length mismatch).
+    2. Try CDK V2 first (all backends). V2 keyset swap verified working
+       on Go backend (PR #167, issue #176). Falls back if probe fails.
     3. Try Nutshell V1 (V1 keysets, works with all backends) with mint_cycle
        validation.
     4. Fall back to public testnut.cashu.exchange.
