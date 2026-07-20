@@ -286,10 +286,19 @@ class SHCProvider(VMProvider):
 
     def cleanup_stale(self, max_age_hours=2):
         import datetime
+        import os
         count = 0
         now = datetime.datetime.now(datetime.timezone.utc)
+        # Parity with SHCClient.reap_orphans: spare intentional test VMs.
+        # Default: tollgate-main-*. Extend via SHC_REAPER_EXTRA_KEEP_PATTERNS.
+        keep_patterns = ["tollgate-main-"]
+        env_extra = os.environ.get("SHC_REAPER_EXTRA_KEEP_PATTERNS", "")
+        if env_extra:
+            keep_patterns = [*keep_patterns, *(p.strip() for p in env_extra.split(",") if p.strip())]
         for vm in self.list_vms():
             hostname = vm.hostname
+            if any(p in hostname for p in keep_patterns):
+                continue
             if not any(hostname.startswith(p) for p in self._REAPABLE_PREFIXES):
                 continue
             try:

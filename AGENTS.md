@@ -983,6 +983,48 @@ python3 scripts/shc-run-baked.py --service-id <ID> --ip <IP> \
 enforce 1 in practice. Delete old snapshots before creating new ones:
 `shc snapshot-delete <service_id> <snapshot_id>`.
 
+### SHC Zone Reachability + Reaper Gotchas
+
+**Zone 7 (Cherryvale, Kansas / Dev VPS tier) is unreachable from Europe.**
+The `66.92.204.0/24` subnet (Cherryvale) has no working BGP route from at
+least Telenor Norway → Arelion/Telia backbone. ICMP, TCP, and SSH all return
+100% packet loss — even ping to the gateway `66.92.204.1` fails. The SHC API
+(`blesta.sovereignhybridcompute.com` at `23.182.128.0/24`) is reachable; only
+the VM subnet isn't. If your host is in Europe, **use Zone 4 (Katy, Texas /
+NVMe VPS tier, pkgs 23-35) instead** — it's on the same `/24` as the API and
+inherits working routes.
+
+| Zone | Location | Plans | European reachability |
+|------|----------|-------|----------------------|
+| 4 | Katy, Texas | NVMe VPS (pkgs 23-35) | ✅ ~142ms, SSH works first try |
+| 7 | Cherryvale, Kansas | Dev VPS (pkgs 80-84) + SSD VPS (pkgs 56-60) | ❌ 100% packet loss |
+| 8 | Katy, Texas — HDD | HDD VPS (pkgs 36-40) | ✅ (same /16 as Zone 4) |
+
+**The SHC reaper kills test VMs by hostname prefix.** Two GHA workflows run
+automatically:
+- `shc-toolkit/.github/workflows/reap-orphan-vms.yml` (hourly)
+- `physical-router-test-automation/.github/workflows/vm-reaper.yml` (every 30 min)
+
+Both reap VMs whose hostnames start with: `tf-acc-`, `tollgate-`, `test-`,
+`tmp-`, `ci-`, `tg-`, `zone-test-`, `nutshell-`, `pytest-test-`. VMs are
+eligible after 2 hours of age.
+
+**Workarounds** (pick one):
+1. **Name your VM with `tollgate-main-` prefix** (e.g.
+   `tollgate-main-mytask-<ts>`) — matches the default `keep_patterns` and is
+   always spared.
+2. **Set `SHC_REAPER_EXTRA_KEEP_PATTERNS` env var** in the GHA workflow or
+   locally — comma-separated substring patterns to keep (e.g.
+   `SHC_REAPER_EXTRA_KEEP_PATTERNS=nutshell-524,my-task-`). This env var was
+   added in `shc-toolkit` commit `7cfea29` (July 2026).
+3. **Pass `keep_patterns=[...]` to `reap_orphans()`** programmatically.
+
+**The reaper spares**: `europa-vpn-vps` (explicit exclude), `tollgate-main-*`
+(default keep pattern), and anything matching `SHC_REAPER_EXTRA_KEEP_PATTERNS`.
+Both reaper workflows (hourly `shc-toolkit` via `SHCClient.reap_orphans()` and
+every-30-min `physical-router-test-automation` via `SHCProvider.cleanup_stale()`)
+honor the same keep mechanism — parity enforced across both code paths.
+
 ### Publish to Nostr+Blossom
 
 The publish step uses Nostr events + Blossom uploads. No git operations are involved, so there are no push races, conflicts, or concurrent run issues. Each run publishes independently with its own kind 30078 summary events.
