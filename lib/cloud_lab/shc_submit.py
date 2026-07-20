@@ -582,10 +582,19 @@ def submit_run_shc(
 
         print(f"VM ready: {hostname} @ {vm_ip}")
 
-        # 4. Inject SSH key
+        # 4. Inject SSH key (wait for OS to boot before injecting)
         if pubkey:
-            print("Injecting SSH key...")
-            client.apply_ssh_key_live(service_id, pubkey)
+            print("Waiting 30s for OS boot before SSH key injection...")
+            time.sleep(30)
+            for attempt in range(3):
+                try:
+                    print(f"Injecting SSH key (attempt {attempt + 1}/3)...")
+                    client.apply_ssh_key_live(service_id, pubkey)
+                    break
+                except Exception as key_err:
+                    print(f"  Key injection failed: {key_err}")
+                    if attempt < 2:
+                        time.sleep(30)
 
     ssh_user = os.environ.get("SHC_SSH_USER", "debian")
     ssh_target = f"{ssh_user}@{vm_ip}"
