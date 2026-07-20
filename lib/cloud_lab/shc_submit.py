@@ -567,17 +567,18 @@ def submit_run_shc(
                     time.sleep(15)
                     continue
                 raise
+            svc_status = vm.get("service_status", "unknown")
             state = vm.get("provisioning_state", "unknown")
             ips = vm.get("ips", [])
             vm_ip = ips[0]["ip"] if ips else ""
-            print(f"  state={state} ip={vm_ip or 'pending'}")
-            if state == "ready" and vm_ip:
+            print(f"  service_status={svc_status} provisioning_state={state} ip={vm_ip or 'pending'}")
+            if svc_status == "active" and vm_ip:
                 break
-            if state in ("failed", "error", "cancelled", "canceled"):
-                raise RuntimeError(f"SHC provisioning failed: {state}")
+            if svc_status in ("cancelled", "canceled", "suspended", "terminated"):
+                raise RuntimeError(f"SHC VM {service_id} entered terminal state: {svc_status}")
             time.sleep(10)
         else:
-            raise TimeoutError(f"SHC VM {service_id} not ready after 900s")
+            raise TimeoutError(f"SHC VM {service_id} not active after 900s")
 
         print(f"VM ready: {hostname} @ {vm_ip}")
 
