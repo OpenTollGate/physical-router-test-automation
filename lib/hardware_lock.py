@@ -15,9 +15,11 @@ try:
         _is_stale,
         HARDWARE_LOCK,
         _PROJECT_ROOT,
-        _SESSION_ID,
         _STALE_THRESHOLD,
     )
+    import os
+    _SESSION_ID = os.environ.get("GITHUB_RUN_ID", os.environ.get("USER", "unknown"))
+
 except ImportError:
     import os, json, platform, subprocess, tempfile
     from datetime import datetime, timezone, timedelta
@@ -83,4 +85,5 @@ __all__ = [
     "require_hardware_lock",
     "read_hardware_lock",
     "HARDWARE_LOCK",
+    "_SESSION_ID",
 ]
