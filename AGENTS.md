@@ -409,7 +409,7 @@ V2 spec (NUT-02 PR #182, merged Jan 2026): `01` + SHA256(`amount:pubkey_hex` pai
 
 **Previous belief (STALE)**: Configuring the Go backend with a CDK V2 mint causes a FATAL crash on startup. Believed to require the `Amperstrand/gonuts-tollgate` fork at `feature/v2-keyset-ids` and `scripts/patch-gonuts-version.sh` to work around.
 
-**Actual resolution (June 2026)**: The crash was NOT a V2 keyset issue — it was a multi-mint wallet registration bug in `tollgate-module-basic-go`. [Issue #176](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/176) verified that V2 keyset swap WORKS correctly after [PR #167](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/167) ("register all accepted mints in wallet"). The `Amperstrand/gonuts-tollgate` V2 fork is no longer needed. `scripts/patch-gonuts-version.sh` has been removed.
+**Actual resolution (June 2026)**: The crash was NOT a V2 keyset issue — it was a multi-mint wallet registration bug in `tollgate-module-basic-go`. [Issue #176](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/176) verified that V2 keyset swap WORKS correctly after [PR #167](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/167) ("register all accepted mints in wallet"). The `Amperstrand/gonuts-tollgate` V2 fork is no longer needed. `scripts/patch-gonuts-version.sh` is orphaned (exists but no longer called by `deploy.sh`).
 
 **Current state (July 2026)**: The Go backend (`tollgate-module-basic-go`) uses `OpenTollGate/gonuts-tollgate v0.7.4` (V1-only derivation, active fork). V2 keysets from CDK mints are accepted and swapped correctly. Both V1 (`testnut.cashu.exchange`) and V2 (local CDK mint) can be configured.
 
