@@ -158,7 +158,7 @@ def metering_test_setup(router, adb, wifi, cashu, test_pricing_fn,
 
 
 def post_payment_event(router, token):
-    from lib.nostr import payment_event
+    from tollgate_lab.reporting.nostr_events import payment_event
     event = payment_event(token)
     body = json.dumps(event, separators=(",", ":"))
     return router.ssh(

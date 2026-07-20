@@ -275,7 +275,7 @@ def test_cold_boot_via_serial(router):
     Marked destructive because it reboots the router.
     Marked slow because boot takes 60-180 seconds.
     """
-    from lib.serial_console import SerialConsole
+    from tollgate_lab.drivers.serial_console import SerialConsole
 
     serial_port = os.environ.get("TOLLGATE_SERIAL_PORT", "").strip()
     if not serial_port:

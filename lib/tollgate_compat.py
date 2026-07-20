@@ -17,7 +17,7 @@ try:
     )
 except ImportError:
     # Fallback to local copy if tollgate-lab not installed
-    from lib.hardware_lock import (
+    from tollgate_lab.hardware.lock import (
         acquire_hardware_lock,
         release_hardware_lock,
         is_hardware_locked,

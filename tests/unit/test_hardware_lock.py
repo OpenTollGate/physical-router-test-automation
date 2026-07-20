@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from lib.hardware_lock import (
+from tollgate_lab.hardware.lock import (
     HARDWARE_LOCK,
     _is_stale,
     read_hardware_lock,

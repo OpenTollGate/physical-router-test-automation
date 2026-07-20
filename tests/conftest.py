@@ -1141,7 +1141,7 @@ def serial_console(router):
     port = os.environ.get("TOLLGATE_SERIAL_PORT", "").strip()
     if not port:
         pytest.skip("TOLLGATE_SERIAL_PORT not set")
-    from lib.serial_console import SerialConsole
+    from tollgate_lab.drivers.serial_console import SerialConsole
     return SerialConsole(port)
 
 
@@ -1153,7 +1153,7 @@ def pytest_sessionstart(session):
         or os.environ.get("TOLLGATE_USE_HARDWARE_LOCK", "").lower() in ("1", "true", "yes")
     )
     if use_hardware:
-        from lib.hardware_lock import acquire_hardware_lock, require_hardware_lock
+        from tollgate_lab.hardware.lock import acquire_hardware_lock, require_hardware_lock
         try:
             if lock_phase:
                 acquire_hardware_lock(lock_phase)
@@ -1182,7 +1182,7 @@ def pytest_sessionfinish(session, exitstatus):
 
     global _session_lock, _hardware_lock_acquired
     if _hardware_lock_acquired:
-        from lib.hardware_lock import release_hardware_lock
+        from tollgate_lab.hardware.lock import release_hardware_lock
         release_hardware_lock()
         _hardware_lock_acquired = False
     if _session_lock is not None:

@@ -12,7 +12,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from lib.hardware_lock import (  # noqa: E402
+from tollgate_lab.hardware.lock import (  # noqa: E402
     acquire_hardware_lock,
     release_hardware_lock,
     require_hardware_lock,
@@ -106,7 +106,7 @@ def _run_make_delegate(entry: MigrationEntry) -> int:
 
 
 def _run_serial_ops(target: str, args: argparse.Namespace) -> int:
-    from lib.serial_console import SerialConsole
+    from tollgate_lab.drivers.serial_console import SerialConsole
 
     port = os.environ.get("TOLLGATE_SERIAL_PORT", "")
     if not port:
