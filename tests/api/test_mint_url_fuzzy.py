@@ -1,11 +1,13 @@
-"""Mint URL fuzzy matching tests for PR #252.
+"""Mint URL fuzzy matching tests for PR #252 (merged).
 
-PR #252 (merged) changes calculateAllotment() from exact string equality
-(==) to MintURLMatches(), which tolerates trailing slashes, case
-differences, and path normalization.
+PR #252 changes calculateAllotment() from exact string equality (==) to
+MintURLMatches(), which tolerates trailing slashes, case differences,
+and path normalization.
 
-These tests verify end-to-end: modify the router's accepted_mints URL
-to differ from the token's embedded URL, then pay — should succeed.
+These tests require a connected WiFi client to complete the payment
+flow. Without a client, the tests skip — the unit tests in the Go
+codebase (TestCalculateAllotment_TrailingSlashMintURL,
+TestCalculateAllotment_CaseInsensitiveMintURL) provide full coverage.
 """
 
 import json
@@ -35,6 +37,12 @@ def _set_config_mint_url_safe(router, new_url):
         timeout=10,
     )
     router.restart_backend(timeout=45)
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if router.api_status("/") == 200:
+            return
+        time.sleep(2)
+    pytest.fail("Backend did not become healthy after config change")
 
 
 def _pay_via_requests(router, token):
@@ -64,12 +72,11 @@ def test_payment_with_trailing_slash_mismatch(router, cashu):
 
     try:
         _set_config_mint_url_safe(router, slashed_url)
-        time.sleep(5)
         resp = _pay_via_requests(router, token)
         if is_mac_lookup_failure(resp):
             pytest.skip("No client on TollGate AP")
         assert is_session_event(resp), (
-            f"Payment with trailing-slash URL mismatch failed (fuzzy match should handle it): {str(resp)[:200]}"
+            f"Payment with trailing-slash URL mismatch failed: {str(resp)[:200]}"
         )
     finally:
         _set_config_mint_url_safe(router, original_url)
@@ -100,12 +107,11 @@ def test_payment_with_case_mismatch(router, cashu):
 
     try:
         _set_config_mint_url_safe(router, upper_url)
-        time.sleep(5)
         resp = _pay_via_requests(router, token)
         if is_mac_lookup_failure(resp):
             pytest.skip("No client on TollGate AP")
         assert is_session_event(resp), (
-            f"Payment with case-mismatch URL failed (fuzzy match should handle it): {str(resp)[:200]}"
+            f"Payment with case-mismatch URL failed: {str(resp)[:200]}"
         )
     finally:
         _set_config_mint_url_safe(router, original_url)
