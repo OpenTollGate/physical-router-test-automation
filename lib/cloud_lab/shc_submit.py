@@ -547,6 +547,7 @@ def submit_run_shc(
             package_id=package_id,
             pricing_id=pricing_id,
             idempotency_key=f"tollgate-{run_id}",
+            ssh_key=pubkey or None,
         )
         sids = result.get("service_ids", [])
         if not sids:
