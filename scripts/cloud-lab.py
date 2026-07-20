@@ -600,7 +600,7 @@ def build_parser() -> argparse.ArgumentParser:
         g.add_argument("--pr", default=None)
         g.add_argument("--branch", default=None)
         p.add_argument("--commit", default=None)
-        p.add_argument("--backend", default="go", choices=["go", "rust"])
+        p.add_argument("--backend", default="go", choices=["go", "rust", "basic-rust"])
         p.add_argument("--repo", default=None,
                         help="Override the artifact repo (e.g. Amperstrand/tollgate-module-basic-go for fork branches)")
 

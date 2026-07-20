@@ -237,8 +237,8 @@ def pytest_addoption(parser):
                      help="Reboot router after deploy and wait for it to come back")
     parser.addoption("--expected-pr", default=None, type=int,
                      help="PR number being tested. Tests marked @pytest.mark.pr(N) where N != expected_pr are expected to fail/skip.")
-    parser.addoption("--backend", default=None, choices=["go", "rust"],
-                     help="TollGate backend type: 'go' (Go v1) or 'rust' (Rust v1). Default: TOLLGATE_BACKEND env or 'go'")
+    parser.addoption("--backend", default=None, choices=["go", "rust", "basic-rust"],
+                     help="TollGate backend type: 'go' (Go v1), 'rust' (experimental Rust v1), or 'basic-rust' (Rust 1:1 Go clone). Default: TOLLGATE_BACKEND env or 'go'")
     parser.addoption("--lock-phase", default=None,
                      help="Auto-acquire router lock with this phase description. "
                           "Prevents concurrent sessions on the same router.")
