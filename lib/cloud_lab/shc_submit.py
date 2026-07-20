@@ -556,21 +556,28 @@ def submit_run_shc(
 
         # 3. Wait for provisioning + IP
         print("Waiting for provisioning...")
-        deadline = time.time() + 600
+        deadline = time.time() + 900
         vm_ip = ""
         while time.time() < deadline:
-            vm = client.get_vm(service_id)
+            try:
+                vm = client.get_vm(service_id)
+            except Exception as exc:
+                if "not_found" in str(exc).lower():
+                    print(f"  VM not yet in hypervisor (404), retrying...")
+                    time.sleep(15)
+                    continue
+                raise
             state = vm.get("provisioning_state", "unknown")
             ips = vm.get("ips", [])
             vm_ip = ips[0]["ip"] if ips else ""
             print(f"  state={state} ip={vm_ip or 'pending'}")
             if state == "ready" and vm_ip:
                 break
-            if state in ("failed", "error", "cancelled"):
+            if state in ("failed", "error", "cancelled", "canceled"):
                 raise RuntimeError(f"SHC provisioning failed: {state}")
             time.sleep(10)
         else:
-            raise TimeoutError(f"SHC VM {service_id} not ready after 600s")
+            raise TimeoutError(f"SHC VM {service_id} not ready after 900s")
 
         print(f"VM ready: {hostname} @ {vm_ip}")
 
