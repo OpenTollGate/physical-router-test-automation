@@ -78,9 +78,9 @@ cd "$REPO_ROOT/src"
 # Build main service
 echo "Building TollGate service..."
 if [[ $DEVICE == "gl-mt3000" ]]; then
-  env GOOS=linux GOARCH=arm64 go build -o $EXECUTABLE_NAME -trimpath -ldflags="-s -w"
+  env $CGO_FLAG GOOS=linux GOARCH=arm64 go build $BUILD_TAGS -o $EXECUTABLE_NAME -trimpath -ldflags="-s -w"
 elif [[ $DEVICE == "gl-ar300" ]]; then
-  env GOOS=linux GOARCH=mips GOMIPS=softfloat go build -o $EXECUTABLE_NAME -trimpath -ldflags="-s -w"
+  env $CGO_FLAG GOOS=linux GOARCH=mips GOMIPS=softfloat go build $BUILD_TAGS -o $EXECUTABLE_NAME -trimpath -ldflags="-s -w"
 else
   echo "Unknown device: $DEVICE"
   exit 1
@@ -98,9 +98,9 @@ go clean -cache
 go mod tidy
 
 if [[ $DEVICE == "gl-mt3000" ]]; then
-  env GOOS=linux GOARCH=arm64 go build -o $CLI_NAME -trimpath -ldflags="-s -w"
+  env $CGO_FLAG GOOS=linux GOARCH=arm64 go build $BUILD_TAGS -o $CLI_NAME -trimpath -ldflags="-s -w"
 elif [[ $DEVICE == "gl-ar300" ]]; then
-  env GOOS=linux GOARCH=mips GOMIPS=softfloat go build -o $CLI_NAME -trimpath -ldflags="-s -w"
+  env $CGO_FLAG GOOS=linux GOARCH=mips GOMIPS=softfloat go build $BUILD_TAGS -o $CLI_NAME -trimpath -ldflags="-s -w"
 else
   echo "Unknown device: $DEVICE"
   exit 1
@@ -127,6 +127,19 @@ echo "Service binary copied to router"
 echo "Copying CLI binary to router..."
 scp -O $SSH_OPTS "cmd/tollgate-cli/$CLI_NAME" "$ROUTER_USERNAME@$ROUTER_IP:$CLI_PATH"
 echo "CLI binary copied to router at $CLI_PATH"
+
+if [[ "$WALLET" == "cdk" ]]; then
+  CDK_SO_SRC="$(go env GOMODCACHE)/github.com/cashubtc/cdk-go@v0.17.3/bindings/cdkffi/native/linux_arm64/libcdk_ffi.so"
+  if [[ -f "$CDK_SO_SRC" ]]; then
+    echo "Deploying libcdk_ffi.so (cdk_wallet)..."
+    scp -O $SSH_OPTS "$CDK_SO_SRC" "$ROUTER_USERNAME@$ROUTER_IP:/usr/lib/libcdk_ffi.so"
+    ssh $SSH_OPTS $ROUTER_USERNAME@$ROUTER_IP "ldconfig"
+    echo "libcdk_ffi.so deployed to /usr/lib/"
+  else
+    echo "WARNING: libcdk_ffi.so not found at $CDK_SO_SRC"
+    echo "         Run 'go mod download github.com/cashubtc/cdk-go' in src/ first."
+  fi
+fi
 
 echo "Setting executable permissions..."
 ssh $SSH_OPTS $ROUTER_USERNAME@$ROUTER_IP "chmod +x $CLI_PATH"

@@ -9,8 +9,8 @@ class BackendConfig:
     def __init__(self, backend_type: str | None = None):
         self.type = (backend_type
                      or os.environ.get("TOLLGATE_BACKEND", "go")).lower()
-        if self.type not in ("go", "rust"):
-            raise ValueError(f"Unknown backend: {self.type!r}. Must be 'go' or 'rust'")
+        if self.type not in ("go", "go-cdk", "rust"):
+            raise ValueError(f"Unknown backend: {self.type!r}. Must be 'go', 'go-cdk', or 'rust'")
 
     @property
     def is_rust(self) -> bool:
@@ -18,7 +18,19 @@ class BackendConfig:
 
     @property
     def is_go(self) -> bool:
-        return self.type == "go"
+        return self.type in ("go", "go-cdk")
+
+    @property
+    def is_go_cdk(self) -> bool:
+        return self.type == "go-cdk"
+
+    @property
+    def build_tags(self) -> str:
+        return "cdk_wallet" if self.is_go_cdk else ""
+
+    @property
+    def needs_cgo(self) -> bool:
+        return self.is_go_cdk
 
     @property
     def repo(self) -> str:

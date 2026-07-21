@@ -69,6 +69,17 @@ MATRIX = {
     ("V1_token", "V2_keyset", "rust"): "accept",
     ("V3_token", "V2_keyset", "rust"): "accept",
     ("V4_token", "V2_keyset", "rust"): "unknown",
+
+    # ── Go backend with cdk-go wallet (go-cdk) ─────────────────────
+    # All "unknown" until CdkWallet adapter is implemented and tested
+    # on physical hardware. Expected: all "accept" because CDK handles
+    # V2 keysets and V4 tokens natively (the bugs gonuts has).
+    ("V1_token", "V1_keyset", "go-cdk"): "unknown",
+    ("V3_token", "V1_keyset", "go-cdk"): "unknown",
+    ("V4_token", "V1_keyset", "go-cdk"): "unknown",
+    ("V1_token", "V2_keyset", "go-cdk"): "unknown",
+    ("V3_token", "V2_keyset", "go-cdk"): "unknown",
+    ("V4_token", "V2_keyset", "go-cdk"): "unknown",
 }
 
 
