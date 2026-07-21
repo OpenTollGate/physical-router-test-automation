@@ -199,15 +199,13 @@ Port or rebuild admin UI.
 
 ### Why now, not later
 
-1. **V4 tokens are rejected.** As Cashu wallets default to V4 (CBOR), Go becomes unusable for an increasing share of users. This is the primary migration driver — V4 is a format the Go backend's gonuts library cannot parse at all.
+1. **V4 token encoding bug in CDK.** V4 tokens fail on BOTH Go and Rust backends due to a CDK bug in `ShortKeysetId::from(Id)` ([nut02.rs:419](https://github.com/cashubtc/cdk/blob/ca341b9f5464edb76fd0ace3f568600c44ca5534/crates/cashu/src/nuts/nut02.rs#L419)) which truncates V2 keyset IDs to 7 bytes. This is NOT a backend-specific issue — migrating to Rust would NOT fix V4. The fix must be in CDK itself. Workaround: use V3 tokens (`cashuA` prefix) which store full keyset IDs.
 
-2. **CDK is the official Cashu library.** No fork maintenance. Community-maintained, regularly audited, supports the full evolving protocol.
+2. **CDK is the official Cashu library.** No fork maintenance. Community-maintained, regularly audited, supports the full evolving protocol. When CDK fixes V4 encoding, Rust backend gets the fix for free. Go backend (gonuts) would need a separate fix.
 
 3. **The cost is low.** Both backends share the same packaging. Switching is a deploy command, not a migration project. Profit share is already implemented in Rust (verified July 2026). The remaining work is closing 2 feature gaps (LuCI, session persistence).
 
-4. **Rust backend verified processing payments on localhost.** July 2026 virtual lab test: token parsed ✅, mint verified ✅, payment processed ✅, swap completed ✅, profit share attempted ✅. Only failure: QEMU VM MAC authorization OOM (not a backend issue).
-
-5. **V2-keyset token verification is untested on Go.** The Go backend starts with V2 keysets (no crash) but V2-keyset token payment verification was not tested with correct format (raw body) because the CDK V2 mint was unavailable during investigation. This is a secondary concern — V4 is the primary driver.
+4. **Both backends verified processing V1/V2/V3 payments on localhost.** July 2026 virtual lab test: Go and Rust both process V1 keyset (testnut) and V2 keyset (CDK V2 mint) V3 tokens correctly. Amount, swap, allotment, and MAC authorization all succeed.
 
 ### Rollback procedure
 
