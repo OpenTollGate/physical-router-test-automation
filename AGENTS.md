@@ -162,6 +162,8 @@ The framework supports testing both the Go and Rust TollGate backends interchang
 
 **Token payment format (CRITICAL):** Both Go and Rust backends expect the token as a **raw body** (`Content-Type: text/plain`), NOT as JSON. Sending `{"token": "cashuA..."}` as JSON causes the backend to treat the entire JSON string as the token — the prefix becomes `{"toke` instead of `cashuA`, causing `ErrInvalidTokenV3`. The test framework's `pay_direct()` method uses `curl -d @- -H 'Content-Type: text/plain'` (correct). Manual curl tests must use `-d "$TOKEN"` not `-d '{"token":"$TOKEN"}'`.
 
+**Virtual lab payment testing:** `pay_direct()` routes payments through the Debian VM (10.99.99.100) instead of running curl on the router itself. This ensures the backend sees the correct source IP → MAC in ARP/DHCP. Running curl on the router (localhost) fails MAC lookup because `::1` has no MAC in DHCP leases or ARP table. The `container_nds_preflight` fixture deauths the client MAC before each test to prevent "already authenticated" errors.
+
 **V3 token payment verification (July 2026, localhost virtual lab):**
 Both Go and Rust backends successfully process V3 token payments end-to-end:
 - Go + V1 keyset (testnut): `kind=1022, allotment=66060288 bytes, HTTP 200`
