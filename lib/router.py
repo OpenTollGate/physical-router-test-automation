@@ -375,6 +375,24 @@ class Router:
 
     def pay_direct(self, token: str, ip: str | None = None) -> dict:
         ip = ip or self.phone_ip
+        host = self.host if self.host else "127.0.0.1"
+        url = f"http://{host}:{BACKEND_PORT}/"
+        try:
+            import requests as _requests
+            resp = _requests.post(
+                url,
+                data=token,
+                headers={"Content-Type": "text/plain", "X-Forwarded-For": ip},
+                timeout=20,
+            )
+            try:
+                return resp.json()
+            except (json.JSONDecodeError, ValueError):
+                return {"raw": resp.text[:500]}
+        except Exception:
+            pass
+
+        # Fallback: SSH + curl (original path)
         cmd = (
             f"curl -s --max-time 20 -d @- "
             f"-H 'Content-Type: text/plain' "
