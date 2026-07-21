@@ -47,6 +47,7 @@ echo "Compiling to router"
 ROUTER_USERNAME=root
 ROUTER_IP=192.168.1.1
 DEVICE="gl-mt3000"
+WALLET="gonuts"
 
 # Check for router IP as first argument
 if [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -61,10 +62,26 @@ for i in "$@"; do
       DEVICE="${i#*=}"
       shift
       ;;
+    --wallet=*)
+      WALLET="${i#*=}"
+      shift
+      ;;
     *)
       ;;
   esac
 done
+
+if [[ "$WALLET" == "cdk" ]]; then
+  BUILD_TAGS="-tags cdk_wallet"
+  CGO_FLAG="CGO_ENABLED=1"
+  if [[ "$DEVICE" == "gl-ar300" ]]; then
+    echo "ERROR: --wallet=cdk requires CGO, not available for MIPS (gl-ar300)." >&2
+    exit 1
+  fi
+else
+  BUILD_TAGS=""
+  CGO_FLAG="CGO_ENABLED=0"
+fi
 
 # SSH/SCP connection options
 SSH_OPTS="-o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
