@@ -127,7 +127,7 @@ run_tests() {
   export TOLLGATE_BACKEND=go
   export TOLLGATE_CLIENT_TYPE=container
   export TOLLGATE_VM_PROVIDER=local
-  export TOLLGATE_NO_DEPLOY=1
+  export 
   export TOLLGATE_CASHU_VENV=/opt/cashu-venv
   export TOLLGATE_CLIENT_IP="${DEBIAN_IP}"
   export TOLLGATE_CLIENT_MAC="de:54:4e:91:49:da"
@@ -140,7 +140,7 @@ run_tests() {
     "curl -s -o /dev/null --max-time 5 http://example.com" 2>/dev/null || true
 
   log "Running pytest: ${test_files}"
-  python3 -m pytest ${test_files} -v --no-deploy --timeout=180 --tb=short -rs "$@"
+  python3 -m pytest ${test_files} -v  --timeout=180 --tb=short -rs "$@"
 }
 
 cleanup() {
