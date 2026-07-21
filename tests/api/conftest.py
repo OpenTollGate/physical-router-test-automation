@@ -25,8 +25,10 @@ def _reset_nds_and_trigger(router):
     try:
         subprocess.run(
             ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
-             f"root@{client_ip}", "curl -s -o /dev/null --max-time 5 http://example.com"],
-            capture_output=True, timeout=10,
+             f"root@{client_ip}",
+             "curl -s -o /dev/null --max-time 5 http://10.99.99.1:2050/ && "
+             "curl -s -o /dev/null --max-time 5 http://connectivitycheck.gstatic.com/generate_204"],
+            capture_output=True, timeout=15,
         )
         time.sleep(2)
     except Exception:
