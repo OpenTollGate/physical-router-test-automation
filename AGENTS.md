@@ -1341,10 +1341,10 @@ Full findings and test matrix: `docs/portal-test-findings.md`.
 
 | Keyset Version | Prefix | Go Backend | Notes |
 |---------------|--------|------------|-------|
-| V1 | `00` (16 hex chars) | **Supported** | gonuts native; used by `testnut.cashu.exchange` |
-| V2 | `01` (66 hex chars) | **Supported** (post-PR #167) | CDK mints; swap verified working per [issue #176](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/176) |
+| V1 | `00` (16 hex chars) | **Full support** | gonuts native; used by `testnut.cashu.exchange`. Payments work. |
+| V2 | `01` (66 hex chars) | **Partial** — starts but can't process payments | Backend starts with V2 keysets (no crash, post-PR #167). But POST / returns `400: "invalid V3 token"` for V2-keyset tokens. gonuts can't verify V2 signatures. |
 
-Both V1 and V2 keysets are supported by the current Go backend. The previous "fatal crash" on V2 was a multi-mint wallet registration bug, not a keyset version issue — resolved in [PR #167](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/167).
+The Go backend can be CONFIGURED with V2 mints without crashing, but cannot ACCEPT token payments from V2-keyset mints. The Rust backend (CDK native) handles both V1 and V2 fully.
 
 ## Captive Portal Flow (Physical Router)
 
