@@ -15,6 +15,14 @@ def _reset_nds_and_trigger(router):
     client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
     client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
 
+    router_arp = ""
+    try:
+        router_arp = router.ssh("cat /proc/net/arp 2>/dev/null | grep '10.99.99.100' | awk '{print $4}' || true", timeout=5).strip()
+    except Exception:
+        pass
+    if router_arp:
+        client_mac = router_arp
+
     if client_mac:
         try:
             router.ssh(f"ndsctl deauth {client_mac} 2>/dev/null || true", timeout=5)
