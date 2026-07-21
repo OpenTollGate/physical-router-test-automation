@@ -102,8 +102,15 @@ configure_mint() {
 
   for i in $(seq 1 15); do
     if sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no "root@${OPENWRT_IP}" \
-      "wget -qO- --timeout=3 http://[::1]:2121/ 2>/dev/null | head -c 20" 2>/dev/null | grep -q "10021"; then
+      "wget -qO- --timeout=3 http://127.0.0.1:2121/ 2>/dev/null | head -c 20" 2>/dev/null | grep -q "10021\|21023"; then
       log "Backend healthy with local mint"
+      # Now replace mints in the wallet (same as deploy_session does)
+      sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no "root@${OPENWRT_IP}" "
+        jq '.accepted_mints = [{\"url\": \"${MINT_URL}\", \"min_balance\": 0, \"balance_tolerance_percent\": 0, \"price_per_step\": 1, \"price_unit\": \"sats\", \"purchase_min_steps\": 0}]' /etc/tollgate/config.json > /tmp/cfg2.json
+        mv /tmp/cfg2.json /etc/tollgate/config.json
+        /etc/init.d/tollgate-wrt restart
+      " 2>&1 | tail -2
+      sleep 5
       return
     fi
     sleep 2
@@ -140,7 +147,7 @@ run_tests() {
     "curl -s -o /dev/null --max-time 5 http://example.com" 2>/dev/null || true
 
   log "Running pytest: ${test_files}"
-  python3 -m pytest ${test_files} -v  --timeout=180 --tb=short -rs "$@"
+  python3 -m pytest ${test_files} -v --no-deploy --timeout=180 --tb=short -rs "$@"
 }
 
 cleanup() {
