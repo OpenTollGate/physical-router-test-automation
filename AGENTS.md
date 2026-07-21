@@ -157,16 +157,19 @@ The framework supports testing both the Go and Rust TollGate backends interchang
 | Session persistence | `/etc/tollgate/sessions.json` | In-memory only |
 | Profit share | Yes | **Yes** (verified July 2026 — logs show factor-based payouts) |
 | API endpoints | 7 (all) | 7 (all) — v1 parity complete |
-| V3 token payments | ✅ Verified (amount=3, err=nil — raw body format required) | ✅ Verified (amount=3, err=nil) |
-| Mint keyset support | V1 full; V2 starts but payment verification untested with correct format | V1 + V2 (cdk) |
+| V3 token payments | ✅ Verified (V1 keyset: allotment=66060288, V2 keyset: allotment=88080384) | ✅ Verified (amount=3, err=nil) |
+| Mint keyset support | V1 + V2 full support (both verified end-to-end) | V1 + V2 (cdk) |
 
 **Token payment format (CRITICAL):** Both Go and Rust backends expect the token as a **raw body** (`Content-Type: text/plain`), NOT as JSON. Sending `{"token": "cashuA..."}` as JSON causes the backend to treat the entire JSON string as the token — the prefix becomes `{"toke` instead of `cashuA`, causing `ErrInvalidTokenV3`. The test framework's `pay_direct()` method uses `curl -d @- -H 'Content-Type: text/plain'` (correct). Manual curl tests must use `-d "$TOKEN"` not `-d '{"token":"$TOKEN"}'`.
 
 **V3 token payment verification (July 2026, localhost virtual lab):**
-Both Go and Rust backends successfully process V3 token payments from testnut.cashu.exchange:
-- Go backend: `Receive completed, amount=3, err=<nil>` + allotment granted (66060288 bytes)
-- Rust backend: same result — `Receive completed, amount=3, err=<nil>`
-- Only failure: MAC authorization (`exit status 1` / `signal: killed`) — QEMU VM 236MB RAM OOM, not a backend issue
+Both Go and Rust backends successfully process V3 token payments end-to-end:
+- Go + V1 keyset (testnut): `kind=1022, allotment=66060288 bytes, HTTP 200`
+- Go + V2 keyset (CDK V2 mint): `kind=1022, allotment=88080384 bytes, HTTP 200`
+- Rust + V1 keyset (testnut): `Receive completed, amount=3, err=<nil>`
+- Both backends: token parsed, verified, payment processed, MAC authorized, session event returned
+
+The ONLY token format the Go backend cannot process is **V4** (CBOR, `cashuB` prefix) — this is a gonuts library limitation. V1, V2, and V3 are all fully supported.
 
 **Switching backends:**
 
@@ -421,7 +424,11 @@ V2 spec (NUT-02 PR #182, merged Jan 2026): `01` + SHA256(`amount:pubkey_hex` pai
 
 **Actual resolution (June 2026)**: The crash was NOT a V2 keyset issue — it was a multi-mint wallet registration bug in `tollgate-module-basic-go`. [Issue #176](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/176) verified that V2 keyset swap WORKS correctly after [PR #167](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/167) ("register all accepted mints in wallet"). The `Amperstrand/gonuts-tollgate` V2 fork is no longer needed. `scripts/patch-gonuts-version.sh` is orphaned (exists but no longer called by `deploy.sh`).
 
-**Current state (July 2026)**: The Go backend (`tollgate-module-basic-go`) uses `OpenTollGate/gonuts-tollgate v0.7.1` (via `replace` directive in go.mod). The backend **starts cleanly** with V2 keysets configured (no crash — verified on localhost virtual lab). V3 token payments with V1 keysets from testnut.cashu.exchange **work correctly** when sent as raw body (verified: `Receive completed, amount=3, err=<nil>`). V2-keyset token payment verification is **untested** with correct format — earlier "invalid V3 token" errors were a test format artifact (JSON body instead of raw body). The #176 resolution fixed multi-mint startup registration (the original "fatal crash").
+**Current state (July 2026)**: The Go backend (`tollgate-module-basic-go`) uses `OpenTollGate/gonuts-tollgate v0.7.1` (via `replace` directive in go.mod). The backend **fully supports** both V1 and V2 keysets — verified end-to-end on localhost virtual lab (July 2026):
+- V1 keyset payment (testnut.cashu.exchange): `kind=1022, allotment=66060288 bytes` ✅
+- V2 keyset payment (local CDK V2 mint, keyset `01df97b6fb8a...`): `kind=1022, allotment=88080384 bytes` ✅
+
+The #176 resolution (PR #167) fixed multi-mint startup registration (the original "fatal crash"). V2 keyset token verification works correctly with `OpenTollGate/gonuts-tollgate v0.7.1`.
 
 **Upstream status**: `elnosh/gonuts` (the original) is dead — last commit August 2025, no V2 support, no activity. `Origami74/gonuts-tollgate` is the active fork currently used by the Go backend. Long-term, the Rust backend (`tollgate-rs`, uses CDK natively) is the migration path.
 
@@ -1351,8 +1358,8 @@ Full findings and test matrix: `docs/portal-test-findings.md`.
 
 | Keyset Version | Prefix | Go Backend | Notes |
 |---------------|--------|------------|-------|
-| V1 | `00` (16 hex chars) | **Full support** | gonuts native; used by `testnut.cashu.exchange`. Payments verified (amount=3, err=nil). |
-| V2 | `01` (66 hex chars) | **Untested** | Backend starts with V2 keysets (no crash). Payment verification with correct format (raw body) not yet tested — CDK mint was unavailable during investigation. Earlier "invalid V3 token" errors were a test format artifact (JSON body instead of raw body). |
+| V1 | `00` (16 hex chars) | **Full support** | Verified end-to-end: `kind=1022, allotment=66060288 bytes` |
+| V2 | `01` (66 hex chars) | **Full support** | Verified end-to-end: `kind=1022, allotment=88080384 bytes` (CDK V2 mint, keyset `01df97b6fb8a...`) |
 
 The Go backend can be CONFIGURED with V2 mints without crashing, but cannot ACCEPT token payments from V2-keyset mints. The Rust backend (CDK native) handles both V1 and V2 fully.
 
