@@ -155,8 +155,18 @@ The framework supports testing both the Go and Rust TollGate backends interchang
 | LuCI UI | Yes | No |
 | CLI socket | `/var/run/tollgate.sock` | Not implemented |
 | Session persistence | `/etc/tollgate/sessions.json` | In-memory only |
+| Profit share | Yes | **Yes** (verified July 2026 — logs show factor-based payouts) |
 | API endpoints | 7 (all) | 7 (all) — v1 parity complete |
-| Mint keyset support | V1 only (gonuts) | V1 + V2 (cdk) |
+| V3 token payments | ❌ Rejects all V3 tokens ("invalid V3 token" — gonuts parser bug) | ✅ Verified (amount=3, err=nil) |
+| Mint keyset support | V1 only (gonuts); V2 starts but payments fail | V1 + V2 (cdk) |
+
+**V3 token payment verification (July 2026, localhost virtual lab):**
+Rust backend (`feat/v3-rebase` build 57) deployed to OpenWrt QEMU VM (10.99.99.1).
+Same V3 token, same mint (testnut.cashu.exchange), different outcome:
+- Go backend: `400 Bad Request: "Invalid cashu token: invalid token: invalid V3 token"`
+- Rust backend: `Receive completed, amount=3, err=<nil>` + allotment granted (66060288 bytes)
+- Rust profit share: attempted payouts to c08r4d0r, amperstrand, origami74 (amounts rounded to 0)
+- Only failure: MAC authorization `signal: killed` (QEMU VM 236MB RAM OOM — not a backend issue)
 
 **Switching backends:**
 
