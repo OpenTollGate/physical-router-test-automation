@@ -171,7 +171,11 @@ Both Go and Rust backends successfully process V3 token payments end-to-end:
 - Rust + V1 keyset (testnut): `Receive completed, amount=3, err=<nil>`
 - Both backends: token parsed, verified, payment processed, MAC authorized, session event returned
 
-The ONLY token format that currently fails is **V4** (CBOR, `cashuB` prefix). However, the root cause is NOT a gonuts limitation — it's a **CDK mint keyset ID format issue**. The Go backend's `DecodeTokenV4` function successfully parses V4 tokens, but when it sends the swap request to the CDK mint (cdk-mintd 0.16.0), the mint rejects it: `inputs[0].id: NUT02: ID length invalid, expected 8 bytes (short/v1) or 33 bytes (v2)`. The cdk-cli 0.17.3 V4 encoding truncates V2 keyset IDs to 8 bytes, but the mint expects 8-byte IDs to be V1 (starting with `00`, not `01`). This may be fixed in a newer CDK mint version. V1, V2, and V3 tokens all work end-to-end.
+The ONLY token format that currently fails is **V4** (CBOR, `cashuB` prefix). The root cause is a **CDK V4 encoding bug** in `ShortKeysetId::from(Id)` ([cashubtc/cdk nut02.rs:410-426](https://github.com/cashubtc/cdk/blob/ca341b9f5464edb76fd0ace3f568600c44ca5534/crates/cashu/src/nuts/nut02.rs#L410-L426)). For V2 keyset IDs (32 bytes), CDK truncates to only the first 7 bytes, creating an 8-byte short ID with `01` prefix that the mint rejects as neither valid V1 (expects `00` prefix) nor valid V2 (expects 33 bytes).
+
+Error chain: gonuts `DecodeTokenV4` parses V4 CBOR ✅ → `PurchaseSession` processes payment ✅ → swap request to CDK mint with truncated 8-byte ID → `NUT02: ID length invalid` ❌
+
+This is NOT a gonuts bug. The Go backend correctly parses V4 and forwards proofs to the mint. The fix must be in CDK's `ShortKeysetId::from()` to use the full 32-byte V2 ID. Upgrading cdk-mintd will NOT fix this — the bug is in cdk-cli's encoding. Workaround: use V3 tokens (`cashuA` prefix) which store full keyset IDs as strings. V1, V2, and V3 tokens all work end-to-end on both Go and Rust backends.
 
 **Switching backends:**
 
@@ -1350,7 +1354,7 @@ The Go backend (gonuts) only supports V1 and V3 Cashu tokens. V4 tokens are reje
 |---------------|--------|----------|------------|-------|
 | V1 | `cashuA` | Base64 JSON | **Accepted** | Legacy format |
 | V3 | `cashuAeyJ` | Base64 JSON | **Accepted** | Current standard, tested with 378-char testnut tokens |
-| V4 | `cashuB` | Binary CBOR | **Mint rejects swap** | Go parses V4 correctly, but CDK mint 0.16.0 rejects truncated keyset IDs. Error: `NUT02: ID length invalid`. Not a gonuts bug. |
+| V4 | `cashuB` | Binary CBOR | **CDK encoding bug** | Go parses V4 ✅. CDK `ShortKeysetId::from()` truncates V2 IDs to 7 bytes ([nut02.rs:419](https://github.com/cashubtc/cdk/blob/ca341b9f5464edb76fd0ace3f568600c44ca5534/crates/cashu/src/nuts/nut02.rs#L419)). Mint rejects truncated ID at swap: `NUT02: ID length invalid`. Fix needed in CDK, not gonuts. |
 
 Users with modern Cashu wallets (eNuts, cashu.me with latest CDK) may produce V4 tokens that the Go backend cannot process. This is a backend limitation, not a mint-specific issue.
 
