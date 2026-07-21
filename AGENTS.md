@@ -411,9 +411,9 @@ V2 spec (NUT-02 PR #182, merged Jan 2026): `01` + SHA256(`amount:pubkey_hex` pai
 
 **Actual resolution (June 2026)**: The crash was NOT a V2 keyset issue — it was a multi-mint wallet registration bug in `tollgate-module-basic-go`. [Issue #176](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/176) verified that V2 keyset swap WORKS correctly after [PR #167](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/167) ("register all accepted mints in wallet"). The `Amperstrand/gonuts-tollgate` V2 fork is no longer needed. `scripts/patch-gonuts-version.sh` is orphaned (exists but no longer called by `deploy.sh`).
 
-**Current state (July 2026)**: The Go backend (`tollgate-module-basic-go`) uses `OpenTollGate/gonuts-tollgate v0.7.4` (V1-only derivation, active fork). V2 keysets from CDK mints are accepted and swapped correctly. Both V1 (`testnut.cashu.exchange`) and V2 (local CDK mint) can be configured.
+**Current state (July 2026)**: The Go backend (`tollgate-module-basic-go`) uses `Origami74/gonuts-tollgate v0.6.1` (V1-only derivation, active fork of `elnosh/gonuts`). V2 keysets from CDK mints are accepted and swapped correctly. Both V1 (`testnut.cashu.exchange`) and V2 (local CDK mint) can be configured.
 
-**Upstream status**: `elnosh/gonuts` (the original) is dead — last commit August 2025, no V2 support, no activity. `OpenTollGate/gonuts-tollgate` is the active maintenance fork. Long-term, the Rust backend (`tollgate-rs`, uses CDK natively) is the migration path — see the Go→Rust migration planning doc (TBD).
+**Upstream status**: `elnosh/gonuts` (the original) is dead — last commit August 2025, no V2 support, no activity. `Origami74/gonuts-tollgate` is the active fork currently used by the Go backend. Long-term, the Rust backend (`tollgate-rs`, uses CDK natively) is the migration path.
 
 ### Nodogsplash DHCP bypass required
 
@@ -480,40 +480,9 @@ Combined, these require ~52 packages (including transitive deps like `iptables-n
 
 **Note:** Always use `scp -O` for OpenWrt (no sftp-server). The total dependency bundle for mipsel_24kc is ~1.8MB. The TollGate ipk itself is ~6.3MB.
 
-### gonuts-tollgate bolt11 decode tolerance (FakeWallet mints)
+### gonuts-tollgate dependency chain (changed)
 
-**Status**: Hacky but working. Lightning payments confirmed with testnut.cashu.exchange.
-
-**The problem**: FakeWallet mints (testnut.cashu.exchange) return non-standard "invoice" strings in their NUT-04 mint quote responses — not valid bolt11 invoices. gonuts-tollgate's `Wallet.RequestMint()` called `decodepay.Decodepay()` on the response and treated any decode failure as fatal, rejecting the entire mint quote. This blocked all Lightning payments against testnut.
-
-**The fix** (in `Amperstrand/gonuts-tollgate` `feature/v2-keyset-ids`, commit `9b2b843`):
-```go
-// Before (fatal):
-bolt11, err := decodepay.Decodepay(mintResponse.Request)
-if err != nil {
-    return nil, fmt.Errorf("error decoding bolt11 invoice: %v", err)
-}
-quote := storage.MintQuote{..., CreatedAt: int64(bolt11.CreatedAt)}
-
-// After (tolerant):
-createdAt := time.Now().Unix()
-if bolt11, err := decodepay.Decodepay(mintResponse.Request); err == nil {
-    createdAt = int64(bolt11.CreatedAt)
-}
-quote := storage.MintQuote{..., CreatedAt: createdAt}
-```
-
-`decodepay.Decodepay()` is only used to extract `CreatedAt` from the invoice. When the mint returns garbage, we fall back to `time.Now()`. The quote is still stored, monitoring still works, tokens still get minted when paid — the entire Lightning flow works.
-
-**Why it couldn't be fixed at a higher layer**: The error occurs inside gonuts's `RequestMint()` before the quote is stored. The backend's `merchant/lightning.go` calls `tollwallet.RequestMintQuote()` which calls `wallet.RequestMint()`. If `RequestMint()` fails, no quote exists in gonuts's internal DB, so `MintQuoteState()` and `MintTokens()` can't find it later. The monitoring goroutine in `merchant/lightning.go` depends on gonuts having the quote. Duplicating this logic in the backend would require rearchitecting the wallet layer.
-
-**Portal-side fix** (in `net4sats-captive-portal`): Added `LN005` error code that detects bolt11/zpay32 errors and shows "Lightning payments are not available with this mint. Please use Cashu tokens instead." This is a fallback for any remaining edge cases.
-
-**Deployment regression**: PR #126 was merged as `2cb771f` but the merge commit resolved the gonuts version conflict to the **tagged `v0.7.0` release**, which does NOT include the bolt11 tolerance fix. The `v0.7.0` tag was created from gonuts `main` before the `9b2b843` commit was merged. The fix only exists on the `feature/v2-keyset-ids` branch as pseudo-version `v0.0.0-20260528233401-9b2b84344c3a`.
-
-**Tracked as**: https://github.com/OpenTollGate/tollgate-module-basic-go/issues/156
-
-**Workaround**: `scripts/patch-gonuts-version.sh` is orphaned (exists but no longer called by `deploy.sh`). It was used to sed-replace `v0.7.0` → `v0.0.0-20260528233401-9b2b84344c3a` in all three `go.mod` files before building. The bolt11 tolerance fix only exists on the `Amperstrand/gonuts-tollgate feature/v2-keyset-ids` branch. **Safe to delete.**
+The Go backend's wallet dependency has changed from `OpenTollGate/gonuts-tollgate` to `Origami74/gonuts-tollgate v0.6.1` (a fork of `elnosh/gonuts`). The previous `Amperstrand/gonuts-tollgate feature/v2-keyset-ids` branch (which added bolt11 decode tolerance for FakeWallet mints + V2 keyset IDs) is no longer used. `scripts/patch-gonuts-version.sh` is orphaned (exists, not called by `deploy.sh`). Tracked as [issue #156](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/156).
 
 ### Lightning invoice flow and testnut bolt11 limitation
 
