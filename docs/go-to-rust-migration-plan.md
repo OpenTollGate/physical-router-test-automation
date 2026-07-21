@@ -199,15 +199,15 @@ Port or rebuild admin UI.
 
 ### Why now, not later
 
-1. **V3 token payments are broken in Go.** Not just V2 — the Go backend's gonuts library rejects ALL current V3 tokens with "invalid V3 token", regardless of keyset version. This was verified July 2026 on localhost virtual lab: same token format, same mint, Rust backend processes it (amount=3, err=nil), Go backend rejects it (400). This is a production-breaking issue affecting ALL users, not just V2/V4 wallet users.
+1. **V4 tokens are rejected.** As Cashu wallets default to V4 (CBOR), Go becomes unusable for an increasing share of users. This is the primary migration driver — V4 is a format the Go backend's gonuts library cannot parse at all.
 
-2. **V4 tokens are rejected.** As Cashu wallets default to V4 (CBOR), Go becomes unusable for an increasing share of users.
+2. **CDK is the official Cashu library.** No fork maintenance. Community-maintained, regularly audited, supports the full evolving protocol.
 
-3. **CDK is the official Cashu library.** No fork maintenance. Community-maintained, regularly audited, supports the full evolving protocol.
+3. **The cost is low.** Both backends share the same packaging. Switching is a deploy command, not a migration project. Profit share is already implemented in Rust (verified July 2026). The remaining work is closing 2 feature gaps (LuCI, session persistence).
 
-4. **The cost is low.** Both backends share the same packaging. Switching is a deploy command, not a migration project. Profit share is already implemented in Rust (verified July 2026). The remaining work is closing 2 feature gaps (LuCI, session persistence).
+4. **Rust backend verified processing payments on localhost.** July 2026 virtual lab test: token parsed ✅, mint verified ✅, payment processed ✅, swap completed ✅, profit share attempted ✅. Only failure: QEMU VM MAC authorization OOM (not a backend issue).
 
-5. **Rust backend verified processing payments on localhost.** July 2026 virtual lab test: token parsed ✅, mint verified ✅, payment processed ✅, swap completed ✅, profit share attempted ✅. Only failure: QEMU VM MAC authorization OOM (not a backend issue).
+5. **V2-keyset token verification is untested on Go.** The Go backend starts with V2 keysets (no crash) but V2-keyset token payment verification was not tested with correct format (raw body) because the CDK V2 mint was unavailable during investigation. This is a secondary concern — V4 is the primary driver.
 
 ### Rollback procedure
 
