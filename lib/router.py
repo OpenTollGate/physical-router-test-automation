@@ -377,6 +377,32 @@ class Router:
         ip = ip or self.phone_ip
 
         client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "")
+        is_virtual_lab = bool(os.environ.get("TOLLGATE_VIRTUAL_LAB"))
+
+        # Virtual lab: route payment through the Debian VM (10.99.99.100)
+        # so the backend sees the correct source IP → MAC in ARP/DHCP.
+        # Running curl on the router itself (localhost) fails MAC lookup.
+        if is_virtual_lab and client_ip:
+            ssh_user = os.environ.get("TOLLGATE_CLIENT_USER", "debian")
+            try:
+                result = subprocess.run(
+                    ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+                     f"{ssh_user}@{client_ip}",
+                     f"curl -s --max-time 20 -d @- "
+                     f"-H 'Content-Type: text/plain' "
+                     f"'http://{self.host}:{BACKEND_PORT}/'"],
+                    input=token, capture_output=True, text=True, timeout=30,
+                )
+                resp = result.stdout.strip()
+                if resp:
+                    try:
+                        return json.loads(resp)
+                    except json.JSONDecodeError:
+                        return {"raw": resp[:500]}
+            except Exception:
+                pass
+
+        # Local QEMU provider: same issue (localhost MAC lookup), route via client IP
         if client_ip and os.environ.get("TOLLGATE_VM_PROVIDER") == "local":
             try:
                 result = subprocess.run(

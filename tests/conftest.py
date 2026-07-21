@@ -237,8 +237,8 @@ def pytest_addoption(parser):
                      help="Reboot router after deploy and wait for it to come back")
     parser.addoption("--expected-pr", default=None, type=int,
                      help="PR number being tested. Tests marked @pytest.mark.pr(N) where N != expected_pr are expected to fail/skip.")
-    parser.addoption("--backend", default=None, choices=["go", "rust"],
-                     help="TollGate backend type: 'go' (Go v1) or 'rust' (Rust v1). Default: TOLLGATE_BACKEND env or 'go'")
+    parser.addoption("--backend", default=None, choices=["go", "rust", "rust-basic"],
+                     help="TollGate backend type: 'go' (Go v1), 'rust' (Rust v1 / tollgate-rs), or 'rust-basic' (tollgate-module-basic-rust). Default: TOLLGATE_BACKEND env or 'go'")
     parser.addoption("--lock-phase", default=None,
                      help="Auto-acquire router lock with this phase description. "
                           "Prevents concurrent sessions on the same router.")
@@ -601,6 +601,10 @@ def container_nds_preflight(request):
         return
     router = request.getfixturevalue("router")
     _prepare_container_nds_client(router)
+
+    client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
+    if client_mac:
+        router.ssh(f"ndsctl deauth {client_mac} 2>/dev/null || true", timeout=10)
 
 
 def _get_pay_via_marker(item):
