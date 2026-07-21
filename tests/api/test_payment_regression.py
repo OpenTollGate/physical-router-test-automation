@@ -24,7 +24,7 @@ pytestmark = [pytest.mark.api, pytest.mark.critical]
 def test_ecash_payment_end_to_end(router, cashu):
     """Full ecash payment: mint token → pay → session active (PR #252 + #253 regression)."""
     require_client_identity(router)
-    token = cashu.mint(3)
+    token = cashu.mint(4)
     assert token, "cashu.mint() returned empty token"
 
     resp = router.pay_direct(token)
@@ -37,7 +37,7 @@ def test_ecash_payment_end_to_end(router, cashu):
 def test_ecash_payment_minimum_token(router, cashu):
     """Single-step token payment succeeds (boundary test for allotment calculation)."""
     require_client_identity(router)
-    token = cashu.mint(1)
+    token = cashu.mint(4)
     assert token, "cashu.mint(1) returned empty token"
 
     resp = router.pay_direct(token)
@@ -50,7 +50,7 @@ def test_ecash_payment_minimum_token(router, cashu):
 def test_ecash_payment_verify_allotment(router, cashu):
     """Payment returns correct allotment in session event (PR #252 calculateAllotment regression)."""
     require_client_identity(router)
-    token = cashu.mint(5)
+    token = cashu.mint(4)
     resp = router.pay_direct(token)
     if is_mac_lookup_failure(resp):
         pytest.skip("No client on TollGate AP")

@@ -52,7 +52,7 @@ def test_payment_with_trailing_slash_mismatch(router, cashu):
     if not original_url:
         pytest.skip("Cannot read configured mint URL")
 
-    token = cashu.mint(3)
+    token = cashu.mint(4)
     slashed_url = original_url.rstrip("/") + "/"
     if slashed_url == original_url:
         pytest.skip("URL already has trailing slash")
@@ -77,7 +77,7 @@ def test_payment_with_path_normalization(router, cashu):
     if not original_url:
         pytest.skip("Cannot read configured mint URL")
 
-    token = cashu.mint(3)
+    token = cashu.mint(4)
     path_url = original_url.rstrip("/") + "/"
     if path_url == original_url:
         path_url = original_url + "/"
