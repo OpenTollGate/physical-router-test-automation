@@ -66,7 +66,7 @@ def _poll_until_settled(router, quote, timeout_s=45):
             time.sleep(2)
             continue
 
-        state = (status.get("status") or "").lower()
+        state = str(status.get("status") or "").lower()
         last_status = json.dumps(status)[:200]
         if state in ("settled", "paid", "complete"):
             return status
@@ -133,7 +133,7 @@ def test_cashu_and_lightning_both_accepted(router, cashu):
     discovery = _skip_if_degraded(router)
 
     # Cashu payment
-    token = cashu.mint_token(21)
+    token = cashu.mint(21)
     pay_resp = router.pay_direct(token)
     assert pay_resp, "Cashu payment returned empty response"
     pay_data = json.loads(pay_resp)
