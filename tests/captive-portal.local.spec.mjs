@@ -24,7 +24,7 @@ async function setupAdInterception(page) {
           const cloned = resp.clone();
           const json = await cloned.json();
           if (json.tags && !json.tags.some(t => t[0] === 'price_per_step')) {
-            json.tags.push(['price_per_step', 'cashu', '1', 'sats', 'http://127.0.0.1:3338', '0']);
+            json.tags.push(['price_per_step', 'cashu', '1', 'sat', 'http://127.0.0.1:3338', '0']);
             return new Response(JSON.stringify(json), {
               status: 200,
               headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
@@ -44,7 +44,7 @@ test("S1: valid token → payment via API", async ({ page }) => {
   const input = page.locator("input[placeholder*='cashuxyz']");
   await expect(input).toBeVisible({ timeout: 15000 });
   await input.click();
-  await page.keyboard.type(token);
+  await page.keyboard.insertText(token);
   await expect(page.getByText("Valid Cashu token")).toBeVisible({ timeout: 15000 });
   const resp = await page.request.post(BACKEND, { data: token, headers: { "Content-Type": "text/plain" } });
   const body = await resp.json();
@@ -58,7 +58,7 @@ test("S2: token validation displays amount", async ({ page }) => {
   const input = page.locator("input[placeholder*='cashuxyz']");
   await expect(input).toBeVisible({ timeout: 15000 });
   await input.click();
-  await page.keyboard.type(token);
+  await page.keyboard.insertText(token);
   await expect(page.getByText("Valid Cashu token")).toBeVisible({ timeout: 15000 });
 });
 
