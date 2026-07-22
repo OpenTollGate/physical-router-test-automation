@@ -330,7 +330,11 @@ pub async fn audit_nut07(auditor: &MintAuditor) -> Vec<NutTestResult> {
     // Test: POST /v1/checkstate with a dummy Y value
     // We test that the endpoint exists and returns a valid response structure
     let start = Instant::now();
-    let dummy_y = "02".to_string() + &"0".repeat(64); // 02 + 64 zeros = invalid but well-formed
+    // Use a valid secp256k1 curve point as the dummy Y.
+    // This is hash_to_curve("test") with counter=1 per NUT-00 algorithm.
+    // The previous dummy (02+zeros) was NOT on the curve, causing CDK to
+    // correctly reject it with 422 "malformed public key".
+    let dummy_y = "031ea111bd5ef37a45743c7fa80a15fb1f0b542fd366d1e4d4c4d3d4f2a8bb4475".to_string();
     match auditor.check_proof_state(&[dummy_y]).await {
         Ok(resp) => {
             let states = resp.get("states").and_then(|v| v.as_array());
@@ -735,12 +739,13 @@ pub async fn audit_nut17(auditor: &MintAuditor, mint_info: Option<&MintInfo>) ->
             let upgrade = resp.headers().get("upgrade").is_some();
             let status = match code.as_u16() {
                 101 | 200 | 400 | 426 => TestStatus::Pass,
+                410 => TestStatus::Warn,
                 404 => TestStatus::Fail,
                 _ => TestStatus::Warn,
             };
             results.push(NutTestResult {
                 nut: "NUT-17".into(),
-                name: "GET /v1/subscribe — WebSocket endpoint".into(),
+                name: "GET /v1/ws — WebSocket endpoint".into(),
                 status,
                 detail: format!("status={} upgrade_header={}", code, upgrade),
                 duration_ms: start.elapsed().as_millis() as u64,
@@ -749,7 +754,7 @@ pub async fn audit_nut17(auditor: &MintAuditor, mint_info: Option<&MintInfo>) ->
         Err(e) => {
             results.push(NutTestResult {
                 nut: "NUT-17".into(),
-                name: "GET /v1/subscribe — WebSocket endpoint".into(),
+                name: "GET /v1/ws — WebSocket endpoint".into(),
                 status: TestStatus::Fail,
                 detail: format!("error: {}", e),
                 duration_ms: start.elapsed().as_millis() as u64,
@@ -784,24 +789,36 @@ pub async fn audit_nut20(auditor: &MintAuditor, mint_info: Option<&MintInfo>) ->
         return results;
     }
 
+    let test_pubkey = "03d56ce4e446a85bbdaa547b4ec2b073d40ff802831352b8272b7dd7a4de5a7cac";
     let start = Instant::now();
-    match auditor.create_mint_quote(1, "sat").await {
-        Ok(quote) => {
-            let pubkey = quote.get("pubkey").and_then(|v| v.as_str());
-            let status = match pubkey {
-                Some(pk) => {
-                    let valid_hex = pk.len() == 66 && pk.chars().all(|c| c.is_ascii_hexdigit());
-                    if valid_hex { TestStatus::Pass } else { TestStatus::Warn }
-                }
+    let url = format!("{}/v1/mint/quote/bolt11", auditor.mint_url);
+    let body = serde_json::json!({ "amount": 1, "unit": "sat", "pubkey": test_pubkey });
+    match auditor.client.post(&url).json(&body).send().await {
+        Ok(resp) => {
+            if !resp.status().is_success() {
+                results.push(NutTestResult {
+                    nut: "NUT-20".into(),
+                    name: "Mint quote with pubkey (NUT-20)".into(),
+                    status: TestStatus::Fail,
+                    detail: format!("HTTP {} when sending pubkey", resp.status()),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                });
+                return results;
+            }
+            let quote: serde_json::Value = resp.json().await.unwrap_or_default();
+            let echoed = quote.get("pubkey").and_then(|v| v.as_str());
+            let status = match echoed {
+                Some(pk) if pk == test_pubkey => TestStatus::Pass,
+                Some(pk) => TestStatus::Warn,
                 None => TestStatus::Fail,
             };
             results.push(NutTestResult {
                 nut: "NUT-20".into(),
-                name: "Mint quote pubkey field (NUT-20)".into(),
+                name: "Mint quote pubkey echo (NUT-20)".into(),
                 status,
-                detail: match pubkey {
-                    Some(pk) => format!("pubkey present (len={}, valid_hex_66={})", pk.len(), pk.len() == 66),
-                    None => "NUT-20 claimed but 'pubkey' missing from mint quote response".into(),
+                detail: match echoed {
+                    Some(pk) => format!("pubkey echoed: {} (match={})", &pk[..20], pk == test_pubkey),
+                    None => "pubkey sent but not echoed in response".into(),
                 },
                 duration_ms: start.elapsed().as_millis() as u64,
             });
@@ -809,9 +826,9 @@ pub async fn audit_nut20(auditor: &MintAuditor, mint_info: Option<&MintInfo>) ->
         Err(e) => {
             results.push(NutTestResult {
                 nut: "NUT-20".into(),
-                name: "Mint quote pubkey field (NUT-20)".into(),
+                name: "Mint quote pubkey echo (NUT-20)".into(),
                 status: TestStatus::Fail,
-                detail: format!("error creating quote: {}", e),
+                detail: format!("error: {}", e),
                 duration_ms: start.elapsed().as_millis() as u64,
             });
         }

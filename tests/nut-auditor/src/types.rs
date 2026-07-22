@@ -109,8 +109,8 @@ impl AuditSummary {
 }
 
 pub struct MintAuditor {
-    client: reqwest::Client,
-    mint_url: String,
+    pub client: reqwest::Client,
+    pub mint_url: String,
 }
 
 impl MintAuditor {
@@ -216,7 +216,14 @@ impl MintAuditor {
     }
 
     pub async fn subscribe_check(&self) -> Result<reqwest::Response> {
-        self.get("/v1/subscribe").await
+        let url = format!("{}/v1/ws", self.mint_url);
+        let resp = self.client.get(&url)
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .send().await?;
+        Ok(resp)
     }
 }
 
