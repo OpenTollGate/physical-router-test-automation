@@ -22,6 +22,21 @@ KEEP_RUNNING=false
 echo "=== Local Dry Test Runner ==="
 echo "Repo: $REPO_ROOT"
 
+# ─── 0. Kill stale processes on our ports ─────────────────────────
+free_port() {
+  local port=$1
+  local pids
+  pids=$(lsof -ti:$port 2>/dev/null || true)
+  if [[ -n "$pids" ]]; then
+    echo "Port $port in use by PID(s) $pids — killing..."
+    echo "$pids" | xargs kill -9 2>/dev/null || true
+    sleep 1
+  fi
+}
+free_port $MINT_PORT
+free_port $BACKEND_PORT
+free_port 5173
+
 # ─── 1. Build backend (if needed) ────────────────────────────────
 if [[ ! -f "$BACKEND_BIN" ]] && [[ -d "$BACKEND_SRC" ]]; then
     echo "Building Go backend..."

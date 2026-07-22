@@ -12,7 +12,8 @@ async function freshToken(amount = 256) {
 
 // Inject pricing into the backend advertisement so the portal renders
 // the Cashu input/access options. The backend loses price_per_step
-// from its advertisement over time — this ensures it's always present.
+// from its advertisement over time (mint health tracker issue) — this
+// ensures it's always present.
 async function setupAdInterception(page) {
   await page.addInitScript(() => {
     const origFetch = window.fetch;

@@ -18,10 +18,13 @@ Crypto matches gonuts-tollgate exactly:
 
 import hashlib
 import json
+import os
 import socket
 import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
+
+KEYSET_FILE = os.environ.get("MOCK_MINT_KEYSET_FILE", "/tmp/mock-mint-keyset.json")
 
 
 def _detect_bind_address() -> str:
@@ -87,22 +90,46 @@ def derive_keyset_id_v1(keys: dict[int, str]) -> str:
 
 class MockMint:
     def __init__(self):
-        # Generate 60 keypairs for amounts 2^0 to 2^59
         self.keypairs: dict[int, dict] = {}
+        if os.path.exists(KEYSET_FILE):
+            self._load_keyset()
+        else:
+            self._generate_keyset()
+            self._save_keyset()
+        self.spent_secrets: set[str] = set()
+
+    def _generate_keyset(self):
         for i in range(60):
             amount = 2 ** i
             priv = PrivateKey()
-            pub_hex = priv.public_key.format().hex()
             self.keypairs[amount] = {
                 "priv": priv,
                 "priv_hex": priv.secret.hex(),
-                "pub_hex": pub_hex,
+                "pub_hex": priv.public_key.format().hex(),
             }
-        # Derive keyset ID
         keys_for_id = {amt: kp["pub_hex"] for amt, kp in self.keypairs.items()}
         self.keyset_id = derive_keyset_id_v1(keys_for_id)
-        # Track spent secrets
-        self.spent_secrets: set[str] = set()
+
+    def _save_keyset(self):
+        data = {
+            "keyset_id": self.keyset_id,
+            "keys": {str(amt): kp["priv_hex"] for amt, kp in self.keypairs.items()},
+        }
+        with open(KEYSET_FILE, "w") as f:
+            json.dump(data, f)
+
+    def _load_keyset(self):
+        with open(KEYSET_FILE, "r") as f:
+            data = json.load(f)
+        self.keyset_id = data["keyset_id"]
+        for amt_str, priv_hex in data["keys"].items():
+            amount = int(amt_str)
+            priv = PrivateKey(bytes.fromhex(priv_hex))
+            self.keypairs[amount] = {
+                "priv": priv,
+                "priv_hex": priv_hex,
+                "pub_hex": priv.public_key.format().hex(),
+            }
 
     def public_keys(self) -> dict[str, str]:
         """Return {amount_str: pubkey_hex} for all amounts."""
