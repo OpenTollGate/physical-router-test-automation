@@ -1,5 +1,6 @@
 """Lightning quote monitor backoff and jitter (PR #249/#270)."""
 
+import calendar
 import json
 import os
 import re
@@ -69,7 +70,7 @@ def _extract_log_timestamps(logs, pattern):
         month = months.get(month_str)
         if not month:
             continue
-        ts = time.mktime((current_year, month, int(day), int(hour), int(minute), int(second), 0, 0, -1))
+        ts = calendar.timegm((current_year, month, int(day), int(hour), int(minute), int(second), 0, 0, -1))
         timestamps.append(ts)
     return timestamps
 
