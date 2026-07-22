@@ -166,7 +166,7 @@ async fn audit_mint(mint_url: &str, cli: &Cli) -> AuditReport {
     // NUT-19: Cache headers
     if should_test("19") || should_test("NUT-19") || cli.nuts.is_none() {
         if claimed_nuts.contains(&"19".to_string()) || claimed_nuts.is_empty() {
-            results.extend(audits::audit_nut19(&auditor).await);
+            results.extend(audits::audit_nut19(&auditor, mint_info.as_ref()).await);
         } else {
             results.push(skip_result("NUT-19", "mint does not claim NUT-19"));
         }

@@ -62,7 +62,7 @@ def configure_fake_mint(router, fake_mint_502):
         "payout_interval_seconds": 86400,
         "min_payout_amount": 999999,
         "price_per_step": 1,
-        "price_unit": "sats",
+        "price_unit": "sat",
         "purchase_min_steps": 0,
     }]
 

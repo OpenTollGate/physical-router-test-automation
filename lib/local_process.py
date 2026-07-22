@@ -192,7 +192,7 @@ echo "OK"; exit 0
                 "payout_interval_seconds": 999999,
                 "min_payout_amount": 999999,
                 "price_per_step": 1,
-                "price_unit": "sats",
+                "price_unit": "sat",
                 "purchase_min_steps": 1,
             }],
             "step_size": 22020096,

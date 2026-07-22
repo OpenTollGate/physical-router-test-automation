@@ -67,7 +67,7 @@ PARITY_CONFIG: dict[str, Any] = {
             "payout_interval_seconds": 60,
             "min_payout_amount": 0,
             "price_per_step": 1,
-            "price_unit": "sats",
+            "price_unit": "sat",
             "purchase_min_steps": 0,
         }
     ],

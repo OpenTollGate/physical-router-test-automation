@@ -373,38 +373,107 @@ pub async fn audit_nut07(auditor: &MintAuditor) -> Vec<NutTestResult> {
     results
 }
 
-pub async fn audit_nut19(auditor: &MintAuditor) -> Vec<NutTestResult> {
+pub async fn audit_nut19(auditor: &MintAuditor, mint_info: Option<&MintInfo>) -> Vec<NutTestResult> {
     let mut results = Vec::new();
 
-    // Test: Check for cache headers on mint info endpoint
+    let info = match mint_info {
+        Some(i) => Some(i.clone()),
+        None => auditor.fetch_mint_info().await.ok(),
+    };
+    let claimed = info
+        .as_ref()
+        .and_then(|i| i.nuts.as_ref())
+        .map(|n| n.contains_key("19"))
+        .unwrap_or(false);
+
+    if !claimed {
+        results.push(NutTestResult {
+            nut: "NUT-19".into(),
+            name: "NUT-19 — skipped".into(),
+            status: TestStatus::Skip,
+            detail: "mint does not claim NUT-19".into(),
+            duration_ms: 0,
+        });
+        return results;
+    }
+
+    let nuts19 = info.as_ref().and_then(|i| i.nuts.as_ref()).and_then(|n| n.get("19"));
     let start = Instant::now();
-    match auditor.fetch_text("/v1/info").await {
-        Ok(resp) => {
-            let etag = resp.headers().get("etag").is_some();
-            let last_modified = resp.headers().get("last-modified").is_some();
-            let cache_control = resp.headers().get("cache-control").is_some();
 
-            let status = if etag || last_modified || cache_control {
-                TestStatus::Pass
-            } else {
-                TestStatus::Warn
-            };
+    match nuts19 {
+        Some(n19) => {
+            let ttl = n19.get("ttl").and_then(|v| v.as_u64());
+            let endpoints = n19.get("cached_endpoints").and_then(|v| v.as_array());
+            let mut warnings: Vec<String> = Vec::new();
 
+            if ttl.is_none() { warnings.push("missing ttl".into()); }
+
+            match endpoints {
+                Some(arr) if arr.is_empty() => {
+                    warnings.push("cached_endpoints is empty".into());
+                }
+                Some(arr) => {
+                    let mut valid: Vec<String> = Vec::new();
+                    for ep in arr {
+                        let method = ep.get("method").and_then(|v| v.as_str()).unwrap_or("?");
+                        let path = ep.get("path").and_then(|v| v.as_str()).unwrap_or("?");
+                        if method != "?" && path != "?" { valid.push(format!("{} {}", method, path)); }
+                        else { warnings.push(format!("endpoint missing method/path")); }
+                    }
+                    let detail = format!("ttl={:?}s, {} endpoints: [{}]", ttl, valid.len(), valid.join(", "));
+                    let status = if warnings.is_empty() { TestStatus::Pass } else { TestStatus::Warn };
+                    results.push(NutTestResult {
+                        nut: "NUT-19".into(),
+                        name: "POST response caching (cached_endpoints + ttl)".into(),
+                        status,
+                        detail: format!("{} | warnings: {}", detail, warnings.join("; ")),
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    });
+                }
+                None => {
+                    results.push(NutTestResult {
+                        nut: "NUT-19".into(),
+                        name: "POST response caching (cached_endpoints + ttl)".into(),
+                        status: TestStatus::Fail,
+                        detail: "claims NUT-19 but cached_endpoints missing".into(),
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    });
+                }
+            }
+        }
+        None => {
             results.push(NutTestResult {
                 nut: "NUT-19".into(),
-                name: "Cache headers on GET /v1/info".into(),
-                status,
-                detail: format!("etag={} last_modified={} cache_control={}", etag, last_modified, cache_control),
+                name: "POST response caching (cached_endpoints + ttl)".into(),
+                status: TestStatus::Fail,
+                detail: "claims NUT-19 key but value is null or empty".into(),
                 duration_ms: start.elapsed().as_millis() as u64,
+            });
+        }
+    }
+
+    let http_start = Instant::now();
+    match auditor.fetch_text("/v1/info").await {
+        Ok(resp) => {
+            let cc = resp.headers().get("cache-control").is_some();
+            let etag = resp.headers().get("etag").is_some();
+            let lm = resp.headers().get("last-modified").is_some();
+            let status = if cc || etag || lm { TestStatus::Pass } else { TestStatus::Warn };
+            results.push(NutTestResult {
+                nut: "HTTP".into(),
+                name: "GET /v1/info — HTTP cache headers (bonus, not NUT-19)".into(),
+                status,
+                detail: format!("cache-control={} etag={} last_modified={}", cc, etag, lm),
+                duration_ms: http_start.elapsed().as_millis() as u64,
             });
         }
         Err(e) => {
             results.push(NutTestResult {
-                nut: "NUT-19".into(),
-                name: "Cache headers on GET /v1/info".into(),
-                status: TestStatus::Fail,
+                nut: "HTTP".into(),
+                name: "GET /v1/info — HTTP cache headers (bonus, not NUT-19)".into(),
+                status: TestStatus::Warn,
                 detail: format!("error: {}", e),
-                duration_ms: start.elapsed().as_millis() as u64,
+                duration_ms: http_start.elapsed().as_millis() as u64,
             });
         }
     }

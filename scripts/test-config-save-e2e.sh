@@ -109,7 +109,7 @@ fi
 # =========================================================================
 section "Test 4: Save minimal valid config"
 
-MINIMAL='{"config_version":"v0.0.7","metric":"bytes","step_size":22020096,"accepted_mints":[{"url":"https://testnut-compat.mints.orangesync.tech","min_balance":64,"balance_tolerance_percent":10,"payout_interval_seconds":60,"min_payout_amount":128,"price_per_step":1,"price_unit":"sats","purchase_min_steps":0}],"profit_share":[{"factor":0.8,"identity":"operator"},{"factor":0.2,"identity":"treasury"}]}'
+MINIMAL='{"config_version":"v0.0.7","metric":"bytes","step_size":22020096,"accepted_mints":[{"url":"https://testnut-compat.mints.orangesync.tech","min_balance":64,"balance_tolerance_percent":10,"payout_interval_seconds":60,"min_payout_amount":128,"price_per_step":1,"price_unit":"sat","purchase_min_steps":0}],"profit_share":[{"factor":0.8,"identity":"operator"},{"factor":0.2,"identity":"treasury"}]}'
 OUT=$($SSH "tollgate --json config save '$MINIMAL'" 2>&1) || true
 if echo "$OUT" | grep -qP '"success"\s*:\s*true'; then
     pass "minimal config save succeeds"

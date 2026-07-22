@@ -53,7 +53,7 @@ cat > "$CONFIG_DIR/config.json" << JSONEOF
     "url": "http://$LOOPBACK:${MINT_PORT}",
     "min_balance": 0, "balance_tolerance_percent": 0,
     "payout_interval_seconds": 999999, "min_payout_amount": 999999,
-    "price_per_step": 1, "price_unit": "sats", "purchase_min_steps": 1
+    "price_per_step": 1, "price_unit": "sat", "purchase_min_steps": 1
   }],
   "step_size": 22020096, "margin": 0.1, "metric": "bytes",
   "show_setup": false, "reseller_mode": false, "redirect_url": "",

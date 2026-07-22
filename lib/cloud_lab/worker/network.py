@@ -255,7 +255,7 @@ def configure_two_router_payment(config: WorkerConfig, chosen_mint_url: str) -> 
         "payout_interval_seconds": 60,
         "min_payout_amount": 0,
         "price_per_step": 1,
-        "price_unit": "sats",
+        "price_unit": "sat",
         "purchase_min_steps": 0,
     }]
     beta_config["metric"] = "milliseconds"
@@ -496,7 +496,7 @@ def configure_chain_payment(config: WorkerConfig, chosen_mint_url: str) -> None:
                 "payout_interval_seconds": 60,
                 "min_payout_amount": 0,
                 "price_per_step": 1,
-                "price_unit": "sats",
+                "price_unit": "sat",
                 "purchase_min_steps": 0,
             }]
             router_config["metric"] = "milliseconds"
