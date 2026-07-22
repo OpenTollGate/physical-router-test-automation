@@ -47,6 +47,33 @@ def is_mac_lookup_failure(resp: dict) -> bool:
                and "mac-address-lookup-failed" in t[1] for t in tags)
 
 
+def is_payment_swap_succeeded(resp: dict) -> bool:
+    """Check if the payment SWAP succeeded, even if gate-open failed.
+
+    Distinguishes between:
+    - Token parsing failure (invalid V3 token, NUT02 ID length)
+    - Swap failure at mint (token_already_spent, not accepted)
+    - Payment PROCESSED but MAC auth failed (gate-open: exit status)
+    - Full success (kind=1022 session event)
+
+    Returns True for the last two cases (swap succeeded).
+    """
+    if is_session_event(resp):
+        return True
+    body = json.dumps(resp)
+    gate_open_failures = [
+        "gate", "exit status", "session-error",
+        "failed to open gate", "mac-address-lookup-failed",
+    ]
+    token_failures = [
+        "NUT02", "ID length invalid", "invalid V3 token",
+        "invalid token", "not accepted", "token_already_spent",
+    ]
+    if any(f in body for f in token_failures):
+        return False
+    return any(f in body for f in gate_open_failures)
+
+
 def require_client_identity(router):
     if not router.phone_ip and not router.phone_mac:
         pytest.skip("Set TOLLGATE_CLIENT_IP/TOLLGATE_CLIENT_MAC or run a phone client on the TollGate AP")
