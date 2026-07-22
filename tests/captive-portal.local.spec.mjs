@@ -23,12 +23,11 @@ test.describe("Local e2e — real backend + mock mint", () => {
 
   test("S1: valid token → payment via API", async ({ page }) => {
     const token = await freshToken(256);
-    await page.goto(PORTAL);
+    await page.goto(`${PORTAL}/?token=${token}`);
     await page.waitForTimeout(2000);
     const cashuInput = page.getByRole("textbox", { name: "cashuxyz" });
     const hasInput = await cashuInput.isVisible({ timeout: 5000 }).catch(() => false);
     test.skip(!hasInput, "Cashu textbox not available — portal may be using mock data");
-    await cashuInput.type(token, { timeout: 15000 });
     await expect(page.getByText("Valid Cashu token")).toBeVisible({ timeout: 10000 });
     const resp = await page.request.post(BACKEND, {
       data: token,
