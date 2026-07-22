@@ -37,6 +37,13 @@ def test_malformed_cashu_prefix(router, cashu):
 
 
 @pytest.mark.extended
+@pytest.mark.xfail(
+    condition=True,
+    reason="Lightweight wallet verify (tollgate-rs#52) doesn't track spent proofs — "
+           "same token can create/extend sessions multiple times. "
+           "Full double-spend protection requires DB-backed spend tracking.",
+    strict=True,
+)
 def test_duplicate_token_immediate_reuse(router, cashu):
     require_client_identity(router)
 

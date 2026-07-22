@@ -23,6 +23,11 @@ def _skip_if_no_ln_invoice(router):
         pytest.skip(f"ln-invoice endpoint not available (status={resp})")
 
 
+def _skip_if_no_fakewallet():
+    if not os.environ.get("TOLLGATE_VIRTUAL_LAB"):
+        pytest.skip("Lightning auto-settle requires FakeWallet (virtual lab only)")
+
+
 def _skip_if_degraded(router):
     discovery_raw = router.api_body("/")
     try:
@@ -80,6 +85,7 @@ def _poll_until_settled(router, quote, timeout_s=45):
 @pytest.mark.critical
 def test_ln_invoice_create_and_settle(router):
     """POST /ln-invoice creates a quote, FakeWallet auto-settles, GET confirms settled."""
+    _skip_if_no_fakewallet()
     _skip_if_no_ln_invoice(router)
     _skip_if_degraded(router)
 
@@ -95,6 +101,7 @@ def test_ln_invoice_create_and_settle(router):
 @pytest.mark.critical
 def test_ln_invoice_grants_session(router):
     """After Lightning invoice settles, client should have an active session."""
+    _skip_if_no_fakewallet()
     _skip_if_no_ln_invoice(router)
     _skip_if_degraded(router)
 
@@ -129,6 +136,7 @@ def test_cashu_and_lightning_both_accepted(router, cashu):
     Pays first with Cashu, verifies session, then after the Cashu session
     expires, pays with Lightning and verifies again.
     """
+    _skip_if_no_fakewallet()
     _skip_if_no_ln_invoice(router)
     discovery = _skip_if_degraded(router)
 
