@@ -28,7 +28,7 @@ test.describe("Local e2e — real backend + mock mint", () => {
     const cashuInput = page.getByRole("textbox", { name: "cashuxyz" });
     const hasInput = await cashuInput.isVisible({ timeout: 5000 }).catch(() => false);
     test.skip(!hasInput, "Cashu textbox not available — portal may be using mock data");
-    await cashuInput.fill(token);
+    await cashuInput.type(token, { timeout: 15000 });
     await expect(page.getByText("Valid Cashu token")).toBeVisible({ timeout: 10000 });
     const resp = await page.request.post(BACKEND, {
       data: token,
