@@ -1,0 +1,21 @@
+[package]
+name = "cashu-nut-auditor"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "nut-auditor"
+path = "src/main.rs"
+
+[dependencies]
+cdk = "0.17.3"
+cdk-sqlite = "0.17.3"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"

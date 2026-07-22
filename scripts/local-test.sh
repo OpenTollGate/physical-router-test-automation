@@ -38,7 +38,7 @@ cat > "$STUB_DIR/ndsctl" << 'NDSCTL'
 #!/bin/bash
 if [ "$1" = "auth" ]; then echo "Auth ok"; exit 0; fi
 if [ "$1" = "deauth" ]; then echo "Deauth ok"; exit 0; fi
-if [ "$1" = "json" ]; then echo '{"id":"1a:2b:3c:4d:5e:6f","state":"authenticated"}'; exit 0; fi
+if [ "$1" = "json" ]; then echo '{"id":1,"state":"authenticated","downloaded":1048576,"uploaded":524288}'; exit 0; fi
 echo "OK"; exit 0
 NDSCTL
 chmod +x "$STUB_DIR/ndsctl"

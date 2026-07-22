@@ -171,11 +171,18 @@ Both Go and Rust backends successfully process V3 token payments end-to-end:
 - Rust + V1 keyset (testnut): `Receive completed, amount=3, err=<nil>`
 - Both backends: token parsed, verified, payment processed, MAC authorized, session event returned
 
-The ONLY token format that currently fails is **V4** (CBOR, `cashuB` prefix). The root cause is a **CDK V4 encoding bug** in `ShortKeysetId::from(Id)` ([cashubtc/cdk nut02.rs:410-426](https://github.com/cashubtc/cdk/blob/ca341b9f5464edb76fd0ace3f568600c44ca5534/crates/cashu/src/nuts/nut02.rs#L410-L426)). For V2 keyset IDs (32 bytes), CDK truncates to only the first 7 bytes, creating an 8-byte short ID with `01` prefix that the mint rejects as neither valid V1 (expects `00` prefix) nor valid V2 (expects 33 bytes).
+The ONLY token format that currently fails is **V4** (CBOR, `cashuB` prefix). The root cause is a **gonuts limitation**: gonuts lacks short keyset ID resolution. V4 tokens store keyset IDs as 8-byte short IDs (per NUT-00 V4 spec). CDK's `ShortKeysetId::from(Id)` ([nut02.rs:419](https://github.com/cashubtc/cdk/blob/ca341b9f5464edb76fd0ace3f568600c44ca5534/crates/cashu/src/nuts/nut02.rs#L419)) correctly truncates V2 keyset IDs to 7 bytes. CDK also has `Id::from_short_keyset_id()` ([nut02.rs:263](https://github.com/cashubtc/cdk/blob/ca341b9f5464edb76fd0ace3f568600c44ca5534/crates/cashu/src/nuts/nut02.rs#L263)) which resolves short IDs by matching against known keysets.
 
-Error chain: gonuts `DecodeTokenV4` parses V4 CBOR ✅ → `PurchaseSession` processes payment ✅ → swap request to CDK mint with truncated 8-byte ID → `NUT02: ID length invalid` ❌
+gonuts's `TokenV4.Proofs()` method converts the raw CBOR bytes directly to a hex string (`hex.EncodeToString(tp.Id)`) without resolving the short ID to a full ID. When gonuts sends this 8-byte hex string to the mint's swap endpoint, the mint rejects it: `NUT02: ID length invalid, expected 8 bytes (short/v1) or 33 bytes (v2)`.
 
-This is NOT a gonuts bug. The Go backend correctly parses V4 and forwards proofs to the mint. The fix must be in CDK's `ShortKeysetId::from()` to use the full 32-byte V2 ID. Upgrading cdk-mintd will NOT fix this — the bug is in cdk-cli's encoding. Workaround: use V3 tokens (`cashuA` prefix) which store full keyset IDs as strings. V1, V2, and V3 tokens all work end-to-end on both Go and Rust backends.
+Error chain: gonuts `DecodeTokenV4` parses V4 CBOR ✅ → `TokenV4.Proofs()` converts short ID to hex string without resolution ❌ → swap request to mint with 8-byte ID → `NUT02: ID length invalid`
+
+This IS a gonuts limitation, not a CDK bug. The Rust backend (CDK wallet) has the resolution logic and should handle V4 tokens correctly. Workaround: use V3 tokens (`cashuA` prefix) which store full keyset IDs as strings. V1, V2, and V3 tokens all work end-to-end on both Go and Rust backends.
+
+**A/B test results (July 2026, localhost virtual lab):**
+- V4 + V1 keyset (`008e808b89acc141`): ✅ **Payment PROCESSES** — gonuts decodes V4 CBOR, verifies V1 keyset, swap succeeds (`Amount after swap: 3`), allotment calculated. V1 short ID IS the full V1 ID (8 bytes = `00` + 7 data bytes), so no resolution needed. Only failed at MAC auth (host bridge MAC vs client MAC — infrastructure issue, not token issue).
+- V4 + V2 keyset (`01df97b6fb8a572a...`): ❌ **Payment FAILS at swap** — gonuts decodes V4 CBOR, extracts 8-byte truncated V2 short ID (`01df97b6fb8a572a`), sends to mint swap endpoint. Mint rejects: `NUT02: ID length invalid, expected 8 bytes (short/v1) or 33 bytes (v2)`. The 8-byte ID with `01` prefix is neither valid V1 (expects `00`) nor valid V2 (expects 33 bytes).
+- V3 + V1/V2 keyset: ✅ **Full end-to-end success** — `kind=1022`, allotment granted, MAC authorized.
 
 **Switching backends:**
 
@@ -1354,7 +1361,7 @@ The Go backend (gonuts) only supports V1 and V3 Cashu tokens. V4 tokens are reje
 |---------------|--------|----------|------------|-------|
 | V1 | `cashuA` | Base64 JSON | **Accepted** | Legacy format |
 | V3 | `cashuAeyJ` | Base64 JSON | **Accepted** | Current standard, tested with 378-char testnut tokens |
-| V4 | `cashuB` | Binary CBOR | **CDK encoding bug** | Go parses V4 ✅. CDK `ShortKeysetId::from()` truncates V2 IDs to 7 bytes ([nut02.rs:419](https://github.com/cashubtc/cdk/blob/ca341b9f5464edb76fd0ace3f568600c44ca5534/crates/cashu/src/nuts/nut02.rs#L419)). Mint rejects truncated ID at swap: `NUT02: ID length invalid`. Fix needed in CDK, not gonuts. |
+| V4 | `cashuB` | Binary CBOR | **gonuts lacks resolution** | gonuts parses V4 ✅ but doesn't resolve 8-byte short keyset IDs to full IDs before swapping. Mint rejects: `NUT02: ID length invalid`. CDK has `from_short_keyset_id()` resolution but gonuts never calls it. Rust backend should work (untested — VM crashed). |
 
 Users with modern Cashu wallets (eNuts, cashu.me with latest CDK) may produce V4 tokens that the Go backend cannot process. This is a backend limitation, not a mint-specific issue.
 
@@ -1424,3 +1431,49 @@ The frontend fetches directly from `http://<router-ip>:2121/` in three places:
 **Defense-in-depth fix (not yet implemented)**: move backend to `127.0.0.1:2121`, front with a CGI reverse proxy on nodogsplash's port 2050. Frontend changes to relative URLs (`/api/` instead of `http://<ip>:2121/`). This is a cross-repo refactor (backend + frontend + packaging).
 
 Tracked as: https://github.com/OpenTollGate/tollgate-module-basic-go/issues/213
+
+## Lessons Learned — July 2026 V4 Token Investigation
+
+### What went well
+
+- **Deterministic A/B testing**: Minting V4 tokens with cdk-cli, decoding with `cdk-cli decode-token`, and paying via raw body curl gave clear pass/fail signals
+- **Source code analysis**: Reading gonuts (`TokenV4.Proofs()`), CDK (`ShortKeysetId::from()`, `Id::from_short_keyset_id()`), and the NUT-00 spec in parallel identified the exact root cause
+- **Virtual lab**: Running on localhost (no SHC needed) enabled rapid iteration — mint token, pay, check logs in <30 seconds
+- **pay_direct() fix**: Routing payments through the Debian VM (10.99.99.100) for correct MAC lookup unblocked automated pytest payment tests
+
+### What we struggled with
+
+1. **Token format (JSON vs raw body)** — **BIGGEST TIME SINK**: Spent hours diagnosing "invalid V3 token" errors caused by sending JSON `{"token":"..."}` instead of raw body. `extractCashuToken()` in `main.go` returns the raw body as the token string — JSON wrapper makes prefix `{"toke` instead of `cashuA`. **Lesson**: always use `curl -d "$TOKEN" -H 'Content-Type: text/plain'`, never `curl -d '{"token":"$TOKEN"}'`. Manual tests must match the test framework's `pay_direct()` format.
+
+2. **Dev build mint injection**: The Go binary injects `nofee.testnut.cashu.space` (unreachable) when `GitBranch != "main"`. This caused intermittent mint mismatch errors. **Lesson**: always check backend startup logs for `WARN: dev build detected`. Fix committed: `nofee.testnut.cashu.space` → `testnut.cashu.exchange` in `config_manager_config.go`.
+
+3. **Go module replace directives**: The `replace` in `tollwallet/go.mod` is IGNORED when building from the root module. Only the root `go.mod`'s `replace` block is effective. **Lesson**: always put `replace` directives in the MAIN module's `go.mod`, not in dependency sub-modules.
+
+4. **Static linking**: CGO-enabled binaries crash on OpenWrt (`ash: /usr/bin/tollgate-wrt: not found` despite file existing). **Lesson**: always build with `CGO_ENABLED=0` for OpenWrt targets.
+
+5. **Config caching**: `wallet.db` caches mint URLs from previous runs, overriding `config.json` changes. **Lesson**: always `rm -f /etc/tollgate/wallet.db` when switching mints.
+
+6. **NDS session state**: `ndsctl auth` on an already-authenticated client returns exit status 1. **Lesson**: always `ndsctl deauth <mac>` before each payment test. The `container_nds_preflight` fixture now handles this.
+
+7. **SHC VM lifecycle**: VMs were reaped by the hourly GHA reaper workflow because hostnames matched `nutshell-*` prefix. **Lesson**: name VMs with `tollgate-main-` prefix (matches `KEEP_PATTERNS`) or set `SHC_REAPER_EXTRA_KEEP_PATTERNS` env var.
+
+### Do we have enough logging?
+
+**No.** Critical gaps identified:
+
+1. **Token parsing**: `extractCashuToken()` doesn't log whether it detected a Nostr event vs raw token vs JSON. Add debug log: `"Detected token format: raw|nostr|json, length: N"`
+2. **V4 short keyset ID resolution** (NEW): `resolveShortKeysetIds()` should log when it resolves a short ID: `"Resolved short keyset ID 01df97b6fb8a572a → full ID 01df97b6fb8a572a718d..."` 
+3. **Swap request**: The swap request payload isn't logged. Add debug: `"Swap request to %s: inputs=%d, keyset_ids=%v"`
+4. **MAC lookup**: `getMacAddress(ip)` should log the lookup result: `"MAC lookup for IP %s: %s (source: dhcp|arp|failed)"`
+
+### Why `Origami74/gonuts-tollgate` instead of `OpenTollGate/gonuts-tollgate`?
+
+**Historical artifact.** The go.mod declares `require github.com/Origami74/gonuts-tollgate v0.6.1` (the original active fork) with a `replace` directive overriding it to `OpenTollGate/gonuts-tollgate v0.7.4` (the canonical fork). As of v0.8.0, both forks are synced. The `require` should be changed to `OpenTollGate/gonuts-tollgate v0.8.0` directly to eliminate confusion. The `replace` is only needed during local development.
+
+### Recommended PRTA improvements
+
+1. **Add `test_token_formats.py`**: Automated test that mints V3+V1, V3+V2, V4+V1, V4+V2 tokens and pays via `pay_direct()`. Catches token format regressions before deployment.
+2. **Add `assert_payment_succeeded()` helper**: Checks backend logs for `Receive completed, amount=N, err=<nil>` — distinguishes payment failures from gate-open failures (which are infrastructure issues).
+3. **Virtual lab config management**: Script to switch backend config between testnut and CDK V2 mint without manual SSH + sed + jq chains.
+4. **cdk-cli integration**: Bundle `/tmp/cdk-cli` into the test framework as a standard tool for V4 token minting.
+5. **Build verification**: Add a test that verifies a freshly-built `.ipk` contains expected fix strings (`strings /usr/bin/tollgate-wrt | grep resolveShortKeysetIds`).

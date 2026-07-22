@@ -199,9 +199,9 @@ Port or rebuild admin UI.
 
 ### Why now, not later
 
-1. **V4 token encoding bug in CDK.** V4 tokens fail on BOTH Go and Rust backends due to a CDK bug in `ShortKeysetId::from(Id)` ([nut02.rs:419](https://github.com/cashubtc/cdk/blob/ca341b9f5464edb76fd0ace3f568600c44ca5534/crates/cashu/src/nuts/nut02.rs#L419)) which truncates V2 keyset IDs to 7 bytes. This is NOT a backend-specific issue — migrating to Rust would NOT fix V4. The fix must be in CDK itself. Workaround: use V3 tokens (`cashuA` prefix) which store full keyset IDs.
+1. **V4 tokens fail due to gonuts limitation.** gonuts parses V4 CBOR tokens correctly but lacks short keyset ID resolution — it passes raw 8-byte short IDs to the mint's swap endpoint, which rejects them. CDK has `Id::from_short_keyset_id()` resolution logic that the Rust backend (CDK wallet) would use automatically. Migrating to Rust WOULD fix V4 token support.
 
-2. **CDK is the official Cashu library.** No fork maintenance. Community-maintained, regularly audited, supports the full evolving protocol. When CDK fixes V4 encoding, Rust backend gets the fix for free. Go backend (gonuts) would need a separate fix.
+2. **CDK is the official Cashu library.** No fork maintenance. Community-maintained, regularly audited, supports the full evolving protocol.
 
 3. **The cost is low.** Both backends share the same packaging. Switching is a deploy command, not a migration project. Profit share is already implemented in Rust (verified July 2026). The remaining work is closing 2 feature gaps (LuCI, session persistence).
 

@@ -9,8 +9,8 @@ class BackendConfig:
     def __init__(self, backend_type: str | None = None):
         self.type = (backend_type
                      or os.environ.get("TOLLGATE_BACKEND", "go")).lower()
-        if self.type not in ("go", "go-cdk", "rust"):
-            raise ValueError(f"Unknown backend: {self.type!r}. Must be 'go', 'go-cdk', or 'rust'")
+        if self.type not in ("go", "go-cdk", "rust", "rust-basic"):
+            raise ValueError(f"Unknown backend: {self.type!r}. Must be 'go', 'go-cdk', 'rust', or 'rust-basic'")
 
     @property
     def is_rust(self) -> bool:
@@ -25,6 +25,10 @@ class BackendConfig:
         return self.type == "go-cdk"
 
     @property
+    def is_rust_basic(self) -> bool:
+        return self.type == "rust-basic"
+
+    @property
     def build_tags(self) -> str:
         return "cdk_wallet" if self.is_go_cdk else ""
 
@@ -36,11 +40,13 @@ class BackendConfig:
     def repo(self) -> str:
         if self.is_rust:
             return "Amperstrand/tollgate-rs-ai-research-and-experiments"
+        if self.is_rust_basic:
+            return "felixfelix-bot/tollgate-module-basic-rust"
         return "OpenTollGate/tollgate-module-basic-go"
 
     @property
     def workflow(self) -> str:
-        if self.is_rust:
+        if self.is_rust or self.is_rust_basic:
             return "Build and Package"
         return "Build and Publish"
 

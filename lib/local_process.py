@@ -173,7 +173,7 @@ class LocalProcessTarget:
         stub.write_text(f"""#!/bin/bash
 if [ "$1" = "auth" ]; then echo "Auth ok"; exit 0; fi
 if [ "$1" = "deauth" ]; then echo "Deauth ok"; exit 0; fi
-if [ "$1" = "json" ]; then echo '{{"id":"{MOCK_MAC}","state":"authenticated"}}'; exit 0; fi
+if [ "$1" = "json" ]; then echo '{{"id":1,"state":"authenticated","downloaded":1048576,"uploaded":524288}}'; exit 0; fi
 echo "OK"; exit 0
 """)
         stub.chmod(0o755)

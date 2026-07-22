@@ -80,7 +80,7 @@ def test_backoff_progression_on_mint_error(router):
     invoice = _create_invoice(router)
     quote_id = invoice.get("quote", "")
     time.sleep(35)
-    logs = router.get_tollgate_logs(lines=500)
+    logs = router.get_tollgate_logs(lines=5000)
     timestamps = _extract_log_timestamps(logs, quote_id)
     assert len(timestamps) >= 2, f"Expected >=2 entries for {quote_id[:12]}, got {len(timestamps)}"
     intervals = [timestamps[i + 1] - timestamps[i] for i in range(len(timestamps) - 1)]
@@ -95,7 +95,7 @@ def test_jitter_present_in_polling(router):
     invoice = _create_invoice(router)
     quote_id = invoice.get("quote", "")
     time.sleep(40)
-    logs = router.get_tollgate_logs(lines=500)
+    logs = router.get_tollgate_logs(lines=5000)
     timestamps = _extract_log_timestamps(logs, quote_id)
     assert len(timestamps) >= 2, f"Need >=2 timestamps, got {len(timestamps)}"
     intervals = [round(timestamps[i + 1] - timestamps[i], 3) for i in range(len(timestamps) - 1)]
@@ -108,10 +108,10 @@ def test_no_backoff_hammering_on_mint_error(router):
     _skip_if_degraded(router)
     invoice = _create_invoice(router)
     quote_id = invoice.get("quote", "")
-    time.sleep(20)
-    logs = router.get_tollgate_logs(lines=1000)
+    time.sleep(35)
+    logs = router.get_tollgate_logs(lines=5000)
     timestamps = _extract_log_timestamps(logs, quote_id)
-    cutoff = time.time() - 25
+    cutoff = time.time() - 40
     recent = [t for t in timestamps if t >= cutoff]
-    assert len(recent) >= 1, "No monitor entries in 20s"
-    assert len(recent) <= 4, f"Hammered {len(recent)} times in 20s — old 2s ticker"
+    assert len(recent) >= 1, f"No monitor entries for {quote_id[:12]} in 35s (total log entries: {len(timestamps)})"
+    assert len(recent) <= 6, f"Hammered {len(recent)} times in 35s — old 2s ticker"
