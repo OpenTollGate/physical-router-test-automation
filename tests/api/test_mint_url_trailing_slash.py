@@ -43,7 +43,6 @@ def _wait_backend_healthy(router, timeout=45):
     return False
 
 
-
 def test_backend_survives_trailing_slash_url(router):
     """Backend must not crash when mint URL has a trailing slash."""
     original_url = _get_config_mint_url(router)
@@ -66,7 +65,6 @@ def test_backend_survives_trailing_slash_url(router):
     finally:
         _set_mint_url(router, original_url)
         _wait_backend_healthy(router, timeout=30)
-
 
 
 def test_backend_survives_path_normalization(router):

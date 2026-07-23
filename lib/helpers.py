@@ -58,6 +58,8 @@ def is_payment_swap_succeeded(resp: dict) -> bool:
 
     Returns True for the last two cases (swap succeeded).
     """
+    if not isinstance(resp, dict):
+        return False
     if is_session_event(resp):
         return True
     if is_mac_lookup_failure(resp):
