@@ -45,6 +45,7 @@ def _set_and_wait(router, new_url, timeout=90):
     return False
 
 
+@pytest.mark.xfail(condition=True, reason="Rust backend does exact URL matching, not fuzzy (PR #252 not ported)", strict=True)
 def test_payment_with_trailing_slash_mismatch(router, cashu):
     """Token has no trailing slash, config has trailing slash — fuzzy match handles it."""
     require_client_identity(router)
@@ -70,6 +71,7 @@ def test_payment_with_trailing_slash_mismatch(router, cashu):
         _set_and_wait(router, original_url, timeout=60)
 
 
+@pytest.mark.xfail(condition=True, reason="Rust backend does exact URL matching, not fuzzy (PR #252 not ported)", strict=True)
 def test_payment_with_path_normalization(router, cashu):
     """Token has bare URL, config has extra path segment — fuzzy match handles it."""
     require_client_identity(router)

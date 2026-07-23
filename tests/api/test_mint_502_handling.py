@@ -78,6 +78,13 @@ def local_502_config(router):
 
 @pytest.mark.extended
 def test_local_502_mint_returns_502(router):
+    import socket as _socket
+    parsed = __import__('urllib.parse', fromlist=['urlparse']).urlparse(LOCAL_502_MINT_URL)
+    try:
+        with _socket.create_connection((parsed.hostname, parsed.port or 80), timeout=2):
+            pass
+    except (ConnectionRefusedError, OSError, TimeoutError):
+        pytest.skip(f"Local 502 mint at {LOCAL_502_MINT_URL} not reachable")
     output = router.ssh(
         f"wget --spider --timeout=10 '{LOCAL_502_MINT_URL}/v1/keysets' 2>&1"
     )
