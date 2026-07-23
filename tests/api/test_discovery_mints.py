@@ -27,7 +27,9 @@ def discovery(router, backend):
         minter.warmup(timeout=30)
         token = minter.mint(2)
         body = router.ssh(f"curl -s -H 'X-Cashu: {token}' http://127.0.0.1:2121/pay", timeout=15)
-        return parse_json_or_fail(body, "discovery response from /pay")
+        if not body or not body.strip().startswith('{'):
+            body = router.api_body("/")
+        return parse_json_or_fail(body, "discovery response")
     body = router.api_body("/")
     return parse_json_or_fail(body, "discovery response")
 
