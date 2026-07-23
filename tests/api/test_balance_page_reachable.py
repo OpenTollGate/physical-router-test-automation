@@ -24,6 +24,8 @@ setTimeout before redirect may never fire.
 import pytest
 import re
 
+pytestmark = [pytest.mark.go_only, pytest.mark.api]
+
 
 @pytest.mark.api
 class TestBalancePageReachable:

@@ -20,6 +20,7 @@ without being gated to a specific PR number.
 
 import json
 import logging
+import os
 import re
 import time
 from urllib.parse import urlparse
@@ -185,7 +186,7 @@ def _is_degraded_mode(logs):
 def discovery(router, backend):
     """Fetch the discovery endpoint once per module."""
     if backend.is_rust:
-        from lib.helpers import create_minter
+        from lib.cashu import create_minter
         mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
         minter = create_minter(mint_url)
         minter.ensure_mint_available(timeout=10)

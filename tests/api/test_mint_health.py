@@ -1,3 +1,4 @@
+import os
 import re
 
 import pytest
@@ -15,7 +16,7 @@ def backend_logs(router):
 @pytest.fixture(scope="module")
 def discovery(router, backend):
     if backend.is_rust:
-        from lib.helpers import create_minter
+        from lib.cashu import create_minter
         mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
         minter = create_minter(mint_url)
         minter.ensure_mint_available(timeout=10)

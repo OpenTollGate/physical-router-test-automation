@@ -15,7 +15,7 @@ pytestmark = [pytest.mark.api, pytest.mark.extended]
 def discovery(router, backend):
     if backend.is_rust:
         import base64
-        from lib.helpers import create_minter
+        from lib.cashu import create_minter
         mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
         minter = create_minter(mint_url)
         minter.ensure_mint_available(timeout=10)
