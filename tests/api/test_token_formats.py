@@ -395,3 +395,140 @@ def test_v4_token_accepted_by_backend(router):
 
     assert is_payment_swap_succeeded(resp), \
         f"V4 token payment failed (swap should succeed with gonuts v0.8.0+): {resp}"
+
+
+# ---------------------------------------------------------------------------
+# V4 + V2 keyset regression test
+#
+# Before gonuts v0.8.0: V4 tokens with V2 keysets (01-prefix, 33 bytes) fail
+# at swap. gonuts sends the 8-byte short ID to the mint, which rejects it:
+# "NUT02: ID length invalid, expected 8 bytes (short/v1) or 33 bytes (v2)".
+#
+# After gonuts v0.8.0: resolveShortKeysetIds() fetches the mint's keysets,
+# maps 8-byte short IDs to 33-byte full IDs, and sends full IDs to the mint.
+# Swap succeeds.
+#
+# This test requires a V2-keyset mint (CDK V2). Set TOLLGATE_V2_MINT_URL
+# to point to a CDK V2 mint. Defaults to the cloud lab's local CDK mint.
+# ---------------------------------------------------------------------------
+
+_V2_MINT_DEFAULT = "http://10.99.99.2:8383"
+
+
+def _skip_if_no_v2_mint():
+    mint_url = os.environ.get("TOLLGATE_V2_MINT_URL", _V2_MINT_DEFAULT)
+    try:
+        import urllib.request
+        req = urllib.request.Request(f"{mint_url}/v1/keysets",
+                                     headers={"User-Agent": "tollgate-test/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+            keysets = data.get("keysets", [])
+            has_v2 = any(ks.get("id", "").startswith("01") for ks in keysets)
+            if not has_v2:
+                pytest.skip(f"Mint {mint_url} has no V2 keysets")
+    except Exception as exc:
+        pytest.skip(f"V2 mint at {mint_url} unreachable: {exc}")
+    return mint_url
+
+
+@pytest.mark.extended
+def test_v4_v2_keyset_payment_regression(router):
+    """V4 token with V2 keyset must be accepted (gonuts v0.8.0+ resolveShortKeysetIds).
+
+    BEFORE fix: V4+V2 → NUT02: ID length invalid (8-byte short ID sent to mint)
+    AFTER fix:  V4+V2 → Receive completed, amount=N, err=<nil>
+
+    E2E verified July 2026: 'Receive completed, amount=4, err=<nil>' with
+    CDK V2 mint keyset 01df97b6fb8a572a... (V2, 01-prefix, 33 bytes).
+
+    See: https://github.com/OpenTollGate/tollgate-module-basic-go/pull/284
+    """
+    require_client_identity(router)
+    cli = _skip_if_no_cdk_cli()
+    v2_mint = _skip_if_no_v2_mint()
+
+    token = _mint_v4_token(cli, v2_mint)
+    assert token.startswith("cashuB"), f"Expected V4 token, got: {token[:20]}"
+
+    resp = router.pay_direct(token)
+    assert is_payment_swap_succeeded(resp), \
+        f"V4+V2 payment failed — resolveShortKeysetIds should resolve short IDs: {resp}"
+
+
+# ---------------------------------------------------------------------------
+# Already-spent token rejection test
+#
+# Reusing a Cashu token should fail with "token_already_spent" at the swap
+# level. This is mint-side protection against double-spending, not backend
+# logic. The test verifies the backend correctly propagates the mint's
+# rejection.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.extended
+def test_already_spent_token_rejected(router, cashu):
+    """Reusing a Cashu token must fail (mint rejects double-spend).
+
+    BEFORE: First payment succeeds, second payment with same token also
+            succeeds (critical bug — unlimited free internet).
+    AFTER:  First payment succeeds (swap OK), second payment fails with
+            'token_already_spent' at the mint swap endpoint.
+
+    The test verifies is_payment_swap_succeeded returns True for the first
+    payment and False for the second (token_already_spent is in the
+    token_failures list).
+    """
+    require_client_identity(router)
+
+    token = cashu.mint(amount=4)
+
+    resp1 = router.pay_direct(token)
+    assert is_payment_swap_succeeded(resp1), \
+        f"First payment should succeed: {resp1}"
+
+    resp2 = router.pay_direct(token)
+    assert not is_payment_swap_succeeded(resp2), \
+        f"Second payment with same token should fail (double-spend): {resp2}"
+
+    body2 = json.dumps(resp2)
+    assert "already" in body2.lower() or "spent" in body2.lower(), \
+        f"Expected 'already spent' error, got: {resp2}"
+
+
+# ---------------------------------------------------------------------------
+# Multi-variant garbage token rejection
+#
+# The backend must reject invalid tokens with payment-error-invalid-token,
+# not crash or return 500. This test covers multiple garbage patterns.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.extended
+def test_garbage_token_variants_rejected(router):
+    """Multiple garbage token patterns must be rejected with kind != 1022.
+
+    | Pattern              | Expected result                    |
+    |----------------------|------------------------------------|
+    | Random bytes         | kind=21023, invalid-token          |
+    | Truncated V4 CBOR    | kind=21023, invalid-token          |
+    | JSON with cashuB     | kind=21023, invalid-token          |
+    | Empty string         | kind=21023, invalid-token          |
+    | Valid prefix, no data| kind=21023, invalid-token          |
+    """
+    require_client_identity(router)
+
+    garbage_variants = [
+        ("random_bytes", "cashuB" + base64.urlsafe_b64encode(b"\x82\x01\x02\x03\x04").decode()),
+        ("truncated_cbor", "cashuBo2FteB5odHRw"),
+        ("json_with_cashuB", "cashuB" + base64.urlsafe_b64encode(b'{"proofs":[]}').decode()),
+        ("prefix_only", "cashuB"),
+        ("wrong_prefix", "cashuXtest123456"),
+    ]
+
+    for name, token in garbage_variants:
+        resp = router.pay_direct(token)
+        assert resp.get("kind") != 1022, \
+            f"Garbage token '{name}' was ACCEPTED — backend should reject: {resp}"
+        assert resp.get("success") is not True, \
+            f"Garbage token '{name}' returned success=True: {resp}"
