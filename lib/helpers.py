@@ -60,17 +60,18 @@ def is_payment_swap_succeeded(resp: dict) -> bool:
     """
     if is_session_event(resp):
         return True
+    if is_mac_lookup_failure(resp):
+        return True
     body = json.dumps(resp)
-    gate_open_failures = [
-        "gate", "exit status", "session-error",
-        "failed to open gate", "mac-address-lookup-failed",
-    ]
     token_failures = [
         "NUT02", "ID length invalid", "invalid V3 token",
         "invalid token", "not accepted", "token_already_spent",
     ]
     if any(f in body for f in token_failures):
         return False
+    gate_open_failures = [
+        "failed to open gate", "session-error",
+    ]
     return any(f in body for f in gate_open_failures)
 
 
