@@ -214,6 +214,8 @@ def test_cashuB_token_rejected_by_backend(router):
 
     assert resp.get("kind") != 1022, \
         f"Garbage cashuB token was ACCEPTED — backend should reject invalid CBOR: {resp}"
+    assert resp.get("success") is not True, \
+        f"Garbage cashuB token resulted in success — unexpected: {resp}"
 
 
 @pytest.mark.extended

@@ -88,7 +88,8 @@ def _mint_test_token():
     except ImportError:
         return None
     try:
-        minter = create_minter("https://testnut.cashu.exchange")
+        mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
+        minter = create_minter(mint_url)
         minter.ensure_mint_available(timeout=10)
         return minter.mint(amount=4, timeout=60, retries=2)
     except MintUnavailableError:

@@ -16,14 +16,6 @@ import requests
 
 from lib.constants import BACKEND_PORT
 
-xfail_trailing_slash = pytest.mark.xfail(
-    reason="Backend crashes on trailing-slash mint URL: "
-           "wallet constructs double-slash API path (//v1/keysets) "
-           "which the mint rejects. PR #252 fixed calculateAllotment "
-           "but not wallet initialization.",
-    strict=False,
-)
-
 pytestmark = [pytest.mark.api, pytest.mark.go_only]
 
 
