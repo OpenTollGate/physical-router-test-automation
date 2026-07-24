@@ -1,315 +1,214 @@
-# Plan: Dry Local Testing for physical-router-test-automation
+# Local Testing Architecture
 
-## Goal
+## Overview
 
-Tests run identically on SHC, GCP, or local — no VM required for local.
-Provider selected via env var. Pulumi handles VM lifecycle for cloud providers.
-Local mode runs Go backend + mock mint as local processes.
-
----
+Three layers of local testing, each covering progressively more of the
+TollGate stack. All results stay local (gitignored `results/` directory) —
+`LocalProvider` has `can_publish = False`.
 
 ## Architecture
 
-### Current: All providers are SSH-to-VM
-
 ```
-Test → VMProvider.ssh("pytest ...") → SSH → VM (SHC/GCP/QEMU/Physical)
+┌─────────────────────────────────────────────────────────────────┐
+│  This machine (host)                                            │
+│  10.99.99.2 via tg-poc-br bridge                               │
+│                                                                 │
+│  Layer 1: Process-based (fastest, no NDS/WiFi)                 │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐                      │
+│  │ Mock Mint│←─│ Go Backend│←─│ Vite Dev │                      │
+│  │ (:3338)  │  │ (:2121)   │  │ (:5173)  │                      │
+│  │ Python   │  │ + ndsctl  │  │ React    │                      │
+│  │ coincurve│  │   stub    │  │ Portal   │                      │
+│  └──────────┘  └──────────┘  └──────────┘                      │
+│       ↑                                                         │
+│       │ 6/6 Playwright tests pass in 7.2s                      │
+│       │ 7/7 API tests pass                                      │
+│                                                                 │
+│  Layer 2: OpenWrt VM (real NDS, real firewall)                 │
+│  ┌─────────────────┐    ┌──────────────────┐                   │
+│  │ OpenWrt VM      │    │ Debian Client VM │                   │
+│  │ 10.99.99.1      │    │ 10.99.99.100     │                   │
+│  │                 │    │                  │                   │
+│  │ ✅ Real NDS     │◄──►│ (Playwright)     │                   │
+│  │ ✅ Real ndsctl  │    │                  │                   │
+│  │ ✅ Real iptables│    │                  │                   │
+│  │ ✅ tollgate-wrt │    │                  │                   │
+│  │ ✅ Portal /www/ │    │                  │                   │
+│  └─────────────────┘    └──────────────────┘                   │
+│          ▲                                                      │
+│     CDK Mint (:8383) or Mock Mint (:3338)                     │
+│     or testnut.cashu.exchange (public)                         │
+│                                                                 │
+│  Layer 3: Virtual WiFi (mac80211_hwsim — future)              │
+│  ┌─────────────────┐    ┌──────────────────┐                   │
+│  │ OpenWrt VM      │    │ Client VM        │                   │
+│  │ wlan0 (AP)      │~~→│ wlan1 (station)  │                   │
+│  │ hostapd         │ RF │ wpa_supplicant   │                   │
+│  │ mac80211_hwsim  │    │ mac80211_hwsim  │                   │
+│  └─────────────────┘    └──────────────────┘                   │
+│                                                                 │
+│  CDK Mint (:8383) — already running, V2 keysets               │
+│  Mock Mint (:3338) — our Python mock, V1 keysets              │
+│  testnut.cashu.exchange — public test mint, V1 keysets        │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Proposed: TestTarget abstraction
+## What Each Layer Tests
 
-```
-Test → TestTarget.backend_url → HTTP → Backend (anywhere)
-                                    ↑
-                          Pulumi (cloud VM) | LocalProcess (dev machine)
-```
-
-Tests interact with **HTTP endpoints and browser UIs**, not VMs. The
-TestTarget's job is to make `backend_url` and `frontend_url` available —
-whether backed by a cloud VM or a local process.
-
-### New `TestTarget` interface
-
-```python
-@dataclass
-class TestTarget:
-    backend_url: str        # http://localhost:2121 or http://<vm-ip>:2121
-    frontend_url: str       # http://localhost:5173 or http://<vm-ip>/
-    mint_url: str           # http://localhost:3338 (mock mint)
-    mac_address: str        # device identifier for payment attribution
-
-    def exec(self, cmd: str) -> str:
-        """Run command on the backend host (SSH for VMs, subprocess for local)."""
-
-    def logs(self) -> str:
-        """Get backend stdout/stderr."""
-
-    def restart_backend(self):
-        """Restart the backend process."""
-```
-
-### Two implementations
-
-| Implementation | How backend starts | `exec()` | `logs()` |
+| What | Layer 1 (Process) | Layer 2 (OpenWrt VM) | Layer 3 (Virtual WiFi) |
 |---|---|---|---|
-| **VMTestTarget** | Pulumi creates VM → SCP deploy → SSH start | SSH (via VMProvider) | SSH `journalctl` or `cat log` |
-| **LocalProcessTarget** | Build Go binary → start with `TOLLGATE_TEST_CONFIG_DIR` | `subprocess.run()` | Process stdout/stderr |
+| Token payment (V3/V4) | ✅ Mock mint | ✅ Real CDK/testnut | ✅ Same |
+| Rate limiting | ✅ | ✅ | ✅ |
+| Error sanitization | ✅ | ✅ | ✅ |
+| Degraded mode | ✅ | ✅ | ✅ |
+| Portal UI | ✅ Vite dev | ✅ Production build | ✅ Same |
+| Advertisement | ✅ (with ad interception) | ✅ Real backend | ✅ Same |
+| **NDS firewall gating** | ❌ Stub | ✅ **Real ndsctl** | ✅ Same |
+| **Captive portal redirect** | ❌ No interception | ✅ **Real NDS** | ✅ Same |
+| **WiFi client behavior** | ❌ No radio | ❌ Wired only | ✅ **Virtual radio** |
+| **Double-spend (on-chain)** | ❌ Mock | ✅ Real mint | ✅ Same |
 
-Both produce the same `TestTarget` — tests don't know the difference.
+## Layer 1: Process-Based (Current Default)
 
-### Pulumi's role
+**Files:**
+- `lib/mock_mint.py` — Python mock Cashu mint with real secp256k1 crypto
+- `lib/local_process.py` — Process orchestrator (start/stop backend + mint)
+- `tests/api/test_local_payment.py` — 7 API test scenarios
+- `tests/captive-portal.local.spec.mjs` — 6 Playwright browser tests
+- `scripts/local-test.sh` — One-command runner
 
-Pulumi remains the **infrastructure provisioning layer for cloud VMs** only:
+**Key design decisions:**
+- Mock mint persists keyset to `/tmp/mock-mint-keyset.json` (survives restarts)
+- `keyboard.insertText()` used instead of `fill()` (React onChange workaround)
+- `setupAdInterception()` patches `window.fetch` to inject pricing data
+  (backend advertisement loses `price_per_step` when mints are unreachable)
+- Port conflict detection kills stale processes before starting
+- ndsctl stub returns `{"id":1}` (int, not string — matches Go struct)
 
-- `TOLLGATE_VM_PROVIDER=shc` → Pulumi creates SHC VM → SSH bootstrap → VMTestTarget
-- `TOLLGATE_VM_PROVIDER=gcloud` → GCP snapshot VM → SSH bootstrap → VMTestTarget
-- `TOLLGATE_VM_PROVIDER=local` → No Pulumi. Direct process management → LocalProcessTarget
+**Results:** 6/6 browser tests (7.2s), 7/7 API tests
 
-Pulumi does NOT manage local processes. That's overkill — a Python process
-manager (start/stop/restart) is simpler and more reliable for dev machines.
+## Layer 2: OpenWrt VM (Real NDS)
 
----
+**Already running on this machine:**
+- OpenWrt VM at `10.99.99.1` (SSH as root, KVM-accelerated)
+- Debian client VM at `10.99.99.100`
+- CDK mint at `10.99.99.2:8383` (V2 keysets, `cdk-mintd/0.16.0`)
+- `tg-poc-br` bridge connecting all three
 
-## Deliverables
+**What this enables:**
+- **NDS firewall gating**: `ndsctl auth <mac>` creates real iptables rules.
+  Traffic is actually blocked/unblocked. Verify with `iptables -L` on the VM.
+- **Captive portal redirect**: NDS intercepts HTTP requests from the client VM
+  and redirects to `http://10.99.99.1:2121/`. After payment, redirect stops.
+- **Real token verification**: Backend talks to real CDK mint, verifies real
+  proofs, performs real swaps.
 
-### 1. `lib/test_target.py` — TestTarget abstraction (NEW)
+**Empirically proven (July 2026):**
+- V4+V2 (CDK token) → `NUT02: ID length invalid` — proves issue #282
+- Advertisement shows `unit=sat` after sat fix deployment
+- NDS returns real client list via `ndsctl json`
+- Whoami resolves MAC via ARP table
 
-```python
-@dataclass
-class TestTarget:
-    backend_url: str
-    frontend_url: str
-    mint_url: str
-    mac_address: str
-    _provider: VMProvider | None  # None for local
-
-    def exec(self, cmd: str) -> str: ...
-    def logs(self) -> str: ...
-    def restart_backend(self) -> None: ...
+**Test runner:**
+```bash
+TOLLGATE_VM_PROVIDER=local \
+TOLLGATE_SSH_HOST=10.99.99.1 \
+    pytest tests/api -m virtual_lab
 ```
 
-### 2. `lib/local_process.py` — Local process orchestrator (NEW)
+## Layer 3: Virtual WiFi (Future)
 
-Manages lifecycle of:
-- Go backend (`tollgate` binary with `TOLLGATE_TEST_CONFIG_DIR`)
-- Mock Cashu mint (Python HTTP server)
-- Vite dev server (optional, for browser tests)
-
-```python
-class LocalProcessTarget:
-    def start(self) -> TestTarget:
-        # 1. mkdir -p /tmp/tollgate-test-config
-        # 2. Start mock mint on :3338
-        # 3. Build + start Go backend with TOLLGATE_TEST_CONFIG_DIR
-        # 4. Wait for backend health (GET / whoami)
-        # 5. Return TestTarget(backend_url="http://localhost:2121", ...)
-
-    def stop(self):
-        # Kill all child processes
-```
-
-### 3. `lib/mock_mint.py` — Mock Cashu mint server (NEW or extend existing)
-
-Check if prta's `lib/fake_mint.py` can be reused. If not, create a minimal
-HTTP server implementing the critical Cashu endpoints:
-
-| Endpoint | Purpose |
-|---|---|
-| `GET /v1/info` | Return keysets, mint info |
-| `GET /v1/keys` | Return active keyset public keys |
-| `GET /v1/keysets` | Return all keysets |
-| `POST /v1/swap` | Accept proofs, return blinded signatures |
-| `POST /v1/checkstate` | Return proof states (UNSPENT/PENDING/SPENT) |
-| `POST /v1/mint/quote/bolt11` | Create mint quote (for Lightning flow) |
-| `POST /v1/mint/bolt11` | Mint tokens (return signatures) |
-
-The mock mint needs:
-- A fixed keyset with known private keys (for token generation)
-- Ability to mint valid tokens on demand (for test fixtures)
-- Ability to verify and swap tokens (for payment flow)
-- Configurable error responses (429 rate limit, 500 errors)
-
-### 4. `conftest.py` — pytest fixture that creates the right target (MODIFY)
-
-```python
-@pytest.fixture(scope="session")
-def test_target():
-    provider = os.environ.get("TOLLGATE_VM_PROVIDER", "shc")
-
-    if provider == "local":
-        target = LocalProcessTarget()
-        target.start()
-        yield target.test_target
-        target.stop()
-    else:
-        vm_provider = get_provider(provider)
-        vm = vm_provider.create_vm(name="test-runner")
-        vm_provider.wait_for_ready(vm)
-        # ... deploy backend, start it ...
-        yield TestTarget(
-            backend_url=f"http://{vm.ip}:2121",
-            ...
-        )
-        vm_provider.destroy_vm(vm)
-```
-
-### 5. `tests/api/test_local_*.py` — Provider-agnostic API tests (NEW)
-
-Tests that interact only with HTTP endpoints:
-
-```python
-def test_raw_token_payment(test_target):
-    """POST a raw Cashu token to the backend → should return success."""
-    token = generate_test_token(test_target.mint_url, amount=210)
-    resp = requests.post(
-        f"{test_target.backend_url}/",
-        data=token,
-        headers={"Content-Type": "text/plain"},
-    )
-    assert resp.status_code == 200
-
-def test_v4_token_payment(test_target):
-    """POST a V4 (cashuB) token → backend decodes natively."""
-    token = generate_v4_test_token(test_target.mint_url, amount=210)
-    resp = requests.post(
-        f"{test_target.backend_url}/",
-        data=token,
-        headers={"Content-Type": "text/plain"},
-    )
-    assert resp.status_code == 200
-
-def test_rate_limiting(test_target):
-    """Hit POST / 11 times rapidly → 11th should be rate-limited."""
-    for i in range(10):
-        requests.post(f"{test_target.backend_url}/", data="invalid")
-    resp = requests.post(f"{test_target.backend_url}/", data="invalid")
-    assert resp.status_code == 429
-```
-
-### 6. `tests/captive-portal.local.spec.mjs` — Playwright tests (NEW)
-
-Browser tests that run against Vite dev server + local backend:
-
-```javascript
-test.describe('Captive portal — local dry mode', () => {
-  test.beforeAll(async () => {
-    // Verify backend is running on localhost:2121
-  });
-
-  test('V4 token validation + submission', async ({ page }) => {
-    await page.goto('http://localhost:5173');
-    // ... type V4 token, verify amount, submit
-  });
-
-  test('prehydrate via URL param', async ({ page }) => {
-    await page.goto('http://localhost:5173/?token=cashuA...');
-    // ... verify auto-fill
-  });
-
-  test('error response handling', async ({ page }) => {
-    // ... mock 402, 500, network error
-  });
-});
-```
-
-### 7. `scripts/local-test.sh` — One-command local test runner (NEW)
+**mac80211_hwsim** creates software-only 802.11 radios in the kernel:
 
 ```bash
-#!/bin/bash
-# Start Go backend + mock mint + Vite, run tests, stop everything.
-export TOLLGATE_VM_PROVIDER=local
-export TOLLGATE_TEST_CONFIG_DIR=$(mktemp -d)
+# On host (requires root):
+modprobe mac80211_hwsim radios=2
+# Creates phy0 (for AP) and phy1 (for client)
 
-# Start mock mint
-python3 lib/mock_mint.py --port 3338 &
-MINT_PID=$!
+# In OpenWrt VM:
+# - Pass hwsim radios via QEMU USB passthrough or virtio-wifi
+# - Run hostapd on wlan0 (AP mode)
+# - Create wireless interface in /etc/config/wireless
 
-# Build + start Go backend
-(cd ../tollgate-module-basic-go && go build -o /tmp/tollgate src/main.go)
-TOLLGATE_TEST_CONFIG_DIR=$TOLLGATE_TEST_CONFIG_DIR /tmp/tollgate &
-BACKEND_PID=$!
-
-# Wait for backend health
-until curl -s http://localhost:2121/ > /dev/null 2>&1; do sleep 0.5; done
-
-# Run tests
-pytest tests/api/ -m "local or api" --tb=short
-npx playwright test tests/captive-portal.local.spec.mjs
-
-# Cleanup
-kill $BACKEND_PID $MINT_PID
-rm -rf $TOLLGATE_TEST_CONFIG_DIR
+# In client VM:
+# - wpa_supplicant on wlan1 (station mode)
+# - Associate with OpenWrt AP
+# - Traffic goes through NDS → real captive portal UX
 ```
 
-### 8. `pyproject.toml` / `requirements.txt` — Dependencies (MODIFY)
+**Current status:**
+- `mac80211_hwsim.ko.zst` EXISTS on the host kernel (`/lib/modules/6.17.0-35-generic/`)
+- Module is NOT loaded
+- OpenWrt VM does NOT have hwsim loaded
+- `iw list` shows `phy0` on host (real wireless card, not hwsim)
+- `vwifi` and `BlossomFS` binaries documented in prta AGENTS.md
 
-Add:
-- `psutil` (process management for local mode)
-- Ensure `requests` already present
+**What it would enable:**
+- Full WiFi association/authentication/encryption
+- Real captive portal detection (OS-level popup)
+- Bandwidth metering through WiFi interface
+- Client roaming between virtual APs (reseller mode)
 
-### 9. `AGENTS.md` — Document the new test tier (MODIFY)
+**Limitations:**
+- Requires kernel module pass-through to OpenWrt VM (complex QEMU config)
+- Or: run hwsim on host and bridge to VMs (different architecture)
+- OpenWrt kernel must have mac80211_hwsim compiled in
 
-Add `local` as a first-class test tier alongside api/phone/web/unit.
+## Privacy Guarantees
 
----
+All local testing providers have `can_publish = False`:
 
-## Migration Path
+```python
+# lib/cloud_lab/provider.py
+class LocalProvider(VMProvider):
+    can_publish = False  # ← Results NEVER leave the machine
 
-### Phase 1: Local API tests (this session)
-- Create `lib/mock_mint.py`
-- Create `lib/local_process.py`
-- Create `tests/api/test_local_payment.py`
-- Run: `TOLLGATE_VM_PROVIDER=local pytest tests/api/`
-- Tests: raw token POST, V4 token POST, rate limiting, error codes
+class PhysicalProvider(VMProvider):
+    can_publish = False  # ← Same for physical routers
+```
 
-### Phase 2: Local browser tests (next session)
-- Start Vite dev server alongside backend
-- Create `tests/captive-portal.local.spec.mjs`
-- Tests: token input, V4 validation, prehydrate, error handling, QR upload
+This means:
+- Test results stored in gitignored `results/` directory only
+- No Nostr event publishing
+- No Blossom/uploads
+- No screenshots or logs sent to external services
+- Only `SHCProvider` and `GCPProvider` (ephemeral cloud VMs) have `can_publish = True`
 
-### Phase 3: Unify with existing infrastructure (later)
-- Refactor existing SHC/GCP tests to use TestTarget abstraction
-- Migrate from direct SSH calls to TestTarget.exec()
-- Existing tests keep working — just route through the new abstraction
+The `test-pr.sh` script checks `can_publish` before calling `publish-report.sh`
+(line ~323). This is a hard gate — not configurable per-test.
 
-### Phase 4: Pulumi integration (future)
-- When Pulumi is ready for local QEMU, add `PulumiLocalProvider`
-- For now, local process management is simpler and sufficient
+## Provider Abstraction
 
----
+All three layers use the same provider abstraction:
 
-## What We Can Test Locally (Layer 4)
+```
+TOLLGATE_VM_PROVIDER=local      → LocalProvider (QEMU on this machine)
+TOLLGATE_VM_PROVIDER=shc        → SHCProvider (SHC cloud API)
+TOLLGATE_VM_PROVIDER=gcloud     → GCPProvider (GCP nested-KVM)
+TOLLGATE_VM_PROVIDER=pulumi     → PulumiSHCProvider (Pulumi Automation API)
+TOLLGATE_VM_PROVIDER=physical   → PhysicalProvider (real router via SSH)
+```
 
-| Scenario | Testable? | How |
-|---|---|---|
-| Raw token POST (V3) | ✅ | Generate valid token with mock mint, POST to backend |
-| Raw token POST (V4) | ✅ | Generate V4 token, POST to backend (proven) |
-| Rate limiting (10/min) | ✅ | Hit POST / 11 times, verify 429 |
-| Error code mapping | ✅ | Submit spent token → verify error code |
-| Token validation | ✅ | Submit malformed tokens → verify CU100-CU104 |
-| Mint swap flow | ✅ | Submit token from untrusted mint → verify swap |
-| 429 backoff | ✅ | Configure mock mint to return 429 → verify retry |
-| Lightning payment | ❌ | Needs real Lightning node (skip or mock) |
-| NDS captive portal redirect | ❌ | Needs real OpenWrt (skip) |
-| WiFi client behavior | ❌ | Needs physical WiFi (skip) |
-| Browser UI flows | ✅ | Vite + Playwright |
-| Prehydrate | ✅ | Vite + Playwright |
-| Error response UX | ✅ | Vite + Playwright with mock backend |
+The test code (`tests/api/*.py`, `tests/captive-portal*.spec.mjs`) is
+provider-agnostic. The provider only affects how the test target (router
+IP, SSH access) is provisioned. The tests themselves are identical
+regardless of provider.
 
-~80% of testable scenarios work locally. Only NDS/WiFi/Lightning need hardware.
+## Sat vs Sats Standardization
 
----
+All components now use `"sat"` (NUT-00 standard, singular):
+- Backend config defaults: `"sat"` (was `"sats"` — fixed)
+- Mock mint tokens: `"sat"`
+- Test config templates: `"sat"`
+- gonuts-tollgate `Unit.String()`: `"sat"`
+- @cashu/cashu-ts tokens: `"sat"`
 
-## File Summary
+The mismatch caused CU109 (unit mismatch) in the portal when validating
+real Cashu tokens against backend-configured access options.
 
-| File | Action | Purpose |
-|---|---|---|
-| `lib/test_target.py` | NEW | TestTarget dataclass + factory |
-| `lib/local_process.py` | NEW | LocalProcessTarget (start/stop Go backend + mock mint) |
-| `lib/mock_mint.py` | NEW or EXTEND | Mock Cashu mint HTTP server |
-| `conftest.py` | MODIFY | Add test_target fixture |
-| `tests/api/test_local_payment.py` | NEW | Provider-agnostic payment API tests |
-| `tests/captive-portal.local.spec.mjs` | NEW | Browser tests for local mode |
-| `scripts/local-test.sh` | NEW | One-command test runner |
-| `pyproject.toml` | MODIFY | Add psutil dependency |
-| `AGENTS.md` | MODIFY | Document local test tier |
+## Known Issues
+
+See `docs/known-issues.md` for:
+- IPv4 loopback stale state (fix: `ip link set lo down/up`)
+- Backend advertisement losing `price_per_step` (fixed: `GetAllConfiguredMintConfigs`)
+- Playwright `fill()` not triggering React onChange (workaround: `keyboard.insertText()`)
