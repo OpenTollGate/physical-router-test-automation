@@ -136,23 +136,27 @@ modprobe mac80211_hwsim radios=2
 # - Traffic goes through NDS → real captive portal UX
 ```
 
-**Current status:**
-- `mac80211_hwsim.ko.zst` EXISTS on the host kernel (`/lib/modules/6.17.0-35-generic/`)
-- Module is NOT loaded
-- OpenWrt VM does NOT have hwsim loaded
-- `iw list` shows `phy0` on host (real wireless card, not hwsim)
-- `vwifi` and `BlossomFS` binaries documented in prta AGENTS.md
+**Status: WORKING — radios created, AP enabled, station associates.**
 
-**What it would enable:**
+Verified on OpenWrt VM (July 2026):
+- `opkg install kmod-mac80211-hwsim` — installs the kernel module
+- `modprobe mac80211_hwsim radios=2` — creates `phy0` + `phy1`
+- `iw phy phy0 interface add wlan0 type __ap` — AP interface
+- `hostapd -B /tmp/hapd.conf` — AP enabled, SSID "TollGate-Test"
+- `wpa_supplicant -B -i wlan1 -c /tmp/wpa.conf` — station associates
+- AP sees station: `iw dev wlan0 station dump` shows rx/tx packets
+
+**Limitation:** When AP and station are on the SAME machine (same kernel),
+layer 2 association works but IP-level data flow (ping) doesn't. This is a
+known mac80211_hwsim limitation — the virtual radios share the same network
+stack. For full data flow, the station interface should be on a SEPARATE VM
+(pass phy1 to the Debian client VM via QEMU USB or virtio-wifi passthrough).
+
+**What it would enable (with separate VMs):**
 - Full WiFi association/authentication/encryption
 - Real captive portal detection (OS-level popup)
 - Bandwidth metering through WiFi interface
 - Client roaming between virtual APs (reseller mode)
-
-**Limitations:**
-- Requires kernel module pass-through to OpenWrt VM (complex QEMU config)
-- Or: run hwsim on host and bridge to VMs (different architecture)
-- OpenWrt kernel must have mac80211_hwsim compiled in
 
 ## Privacy Guarantees
 
