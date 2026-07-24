@@ -64,7 +64,7 @@ class BackendConfig:
 
     @property
     def has_sessions_json(self) -> bool:
-        return self.is_go
+        return self.is_go or self.is_rust_basic
 
     @property
     def has_config_json(self) -> bool:
