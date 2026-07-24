@@ -17,7 +17,7 @@ def _reset_nds_and_trigger(router):
 
     router_arp = ""
     try:
-        router_arp = router.ssh("cat /proc/net/arp 2>/dev/null | grep '10.99.99.100' | awk '{print $4}' || true", timeout=5).strip()
+        router_arp = router.ssh(f"cat /proc/net/arp 2>/dev/null | grep '{client_ip} ' | awk '{{print $4}}' || true", timeout=5).strip()
     except Exception:
         pass
     if router_arp:

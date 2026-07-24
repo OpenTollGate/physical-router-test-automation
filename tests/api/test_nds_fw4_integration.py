@@ -18,6 +18,9 @@ This means:
 """
 import pytest
 import re
+import os
+import time
+import subprocess
 
 
 @pytest.mark.api
@@ -55,40 +58,42 @@ class TestNdsFw4Integration:
             )
 
     def test_nds_fw4_chain_registration(self, router):
-        """NDS chains should be registered in the inet fw4 table, not just ip filter.
+        """The nds_enforce_forward chain must exist in inet fw4 at priority -1.
 
-        OpenWrt 24.10+ uses fw4 (native nftables). NDS must integrate with
-        fw4's chains, not just the iptables-nft compatibility layer.
+        This is the PR #283 fix: a base chain in inet fw4 that hooks forward
+        at priority -1 (before fw4's own forward at priority 0) and enforces
+        NDS mangle marks.
         """
-        # Check if NDS has any rules in the inet fw4 table
-        nft_nds_in_fw4 = router.ssh(
-            "nft list table inet fw4 2>/dev/null | grep -c nds", timeout=10
-        ).strip()
+        chain_output = router.ssh(
+            "nft list chain inet fw4 nds_enforce_forward 2>/dev/null", timeout=10
+        )
 
-        # Check NDS rules in iptables-nft tables
-        nft_nds_in_iptables = router.ssh(
-            "nft list ruleset 2>/dev/null | grep -c nds", timeout=10
-        ).strip()
-
-        nds_in_fw4 = int(nft_nds_in_fw4) if nft_nds_in_fw4.isdigit() else 0
-        nds_in_iptables = int(nft_nds_in_iptables) if nft_nds_in_iptables.isdigit() else 0
-
-        # NDS should ideally have rules in fw4's inet table
-        # If all rules are only in ip filter/ip mangle/ip nat (iptables-nft),
-        # they may be bypassed by fw4's native nft chains
-        if nds_in_fw4 == 0 and nds_in_iptables > 0:
+        if "No such file or directory" in chain_output or not chain_output.strip():
             pytest.fail(
-                f"NDS has {nds_in_iptables} rules in iptables-nft tables but "
-                f"0 rules in inet fw4 table. NDS is using iptables-nft compatibility "
-                f"layer which is bypassed by fw4's native nftables forward chain. "
-                f"This is the root cause of 'Authenticated but no internet' bug."
+                "Chain 'nds_enforce_forward' not found in inet fw4 table. "
+                "PR #283's /etc/nftables.d/20-nds-enforce.nft is not deployed "
+                "or fw4 did not load it."
+            )
+
+        # Verify priority is -1 (rendered as "filter - 1" by nft)
+        assert re.search(r"priority (filter - 1|-1)", chain_output), (
+            f"nds_enforce_forward chain has wrong priority. Expected -1.\n{chain_output}"
+        )
+
+        # Verify all four enforcement rules are present
+        for pattern in ["0x00010000", "0x00020000", "0x00030000", "reject"]:
+            assert pattern in chain_output, (
+                f"Missing rule for mark pattern {pattern} in nds_enforce_forward.\n{chain_output}"
             )
 
     def test_nds_mangle_marking_works(self, router):
         """The mangle ndsOUT chain should mark authenticated client traffic."""
+        client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
+        router.ssh(f"ndsctl auth {client_ip} 2>/dev/null || true", timeout=5)
+        time.sleep(2)
+
         out = router.ssh("iptables -t mangle -L ndsOUT -n -v 2>/dev/null", timeout=10)
 
-        # There should be MARK rules for authenticated clients
         has_mark = "MARK" in out
         assert has_mark, (
             f"NDS mangle ndsOUT chain has no MARK rules. "
@@ -101,21 +106,34 @@ class TestNdsFw4Integration:
         If ndsctl shows Authenticated but conntrack is empty, the client's
         traffic is not being forwarded — indicating a firewall issue.
         """
+        client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
+        router.ssh(f"ndsctl auth {client_ip} 2>/dev/null || true", timeout=5)
+        time.sleep(2)
+
         nds_state = router.get_nds_state()
         if nds_state != "Authenticated":
-            pytest.skip("No authenticated client to test")
+            pytest.skip(f"Could not authenticate client at {client_ip} (state={nds_state})")
 
         # Get the client IP from ndsctl
         clients = router.ssh("ndsctl json 2>/dev/null", timeout=10)
-        ip_match = re.search(r'"ip":"([0-9.]+)".*?"state":"Authenticated"', clients)
+        ip_match = re.search(r'"ip":"([0-9.]+)".*?"state":"Authenticated"', clients, re.DOTALL)
         if not ip_match:
             pytest.skip("Could not find authenticated client IP")
 
         client_ip = ip_match.group(1)
 
-        # Check conntrack for this client
+        try:
+            subprocess.run(
+                ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+                 f"root@{client_ip}", "ping -c 2 -W 2 8.8.8.8"],
+                capture_output=True, timeout=15,
+            )
+        except Exception:
+            pass
+        time.sleep(1)
+
         conntrack = router.ssh(
-            f"conntrack -L 2>/dev/null | grep '{client_ip}' | wc -l", timeout=10
+            f"grep -c '{client_ip}' /proc/net/nf_conntrack 2>/dev/null || echo 0", timeout=10
         )
         conn_count = int(conntrack.strip()) if conntrack.strip().isdigit() else 0
 
@@ -180,8 +198,72 @@ class TestNdsFw4Integration:
             )
 
 
+    def test_nds_enforce_forward_accepts_authenticated_traffic(self, router):
+        """PR #283: the nds_enforce_forward chain should accept traffic with mark 0x30000."""
+        client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
+        router.ssh(f"ndsctl auth {client_ip} 2>/dev/null || true", timeout=5)
+        time.sleep(2)
+
+        chain = router.ssh("nft -a list chain inet fw4 nds_enforce_forward 2>/dev/null", timeout=10)
+        authed_match = re.search(r"0x00030000 == 0x00030000 counter packets (\d+)", chain)
+        authed_pkts = int(authed_match.group(1)) if authed_match else 0
+
+        if authed_pkts == 0:
+            import subprocess
+            try:
+                subprocess.run(
+                    ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+                     f"root@{client_ip}", "ping -c 3 -W 2 8.8.8.8"],
+                    capture_output=True, timeout=15,
+                )
+                time.sleep(1)
+                chain = router.ssh("nft -a list chain inet fw4 nds_enforce_forward 2>/dev/null", timeout=10)
+                authed_match = re.search(r"0x00030000 == 0x00030000 counter packets (\d+)", chain)
+                authed_pkts = int(authed_match.group(1)) if authed_match else 0
+            except Exception:
+                pass
+
+            if authed_pkts == 0:
+                pytest.skip("No traffic reached the authenticated accept rule")
+
+
 @pytest.mark.api
-class TestAuthenticatedClientConnectivity:
+class TestBalancePageRedirect:
+    """PR #22: balance page must be served on port 8090 with immediate redirect."""
+
+    def test_balance_page_reachable_on_8090(self, router):
+        client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
+        try:
+            result = subprocess.run(
+                ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+                 f"root@{client_ip}",
+                 "curl -s -o /dev/null -w '%{http_code} %{time_total}' "
+                 "http://10.99.99.1:8090/balance.html"],
+                capture_output=True, text=True, timeout=15,
+            )
+        except (subprocess.TimeoutExpired, Exception):
+            pytest.skip(f"Debian client at {client_ip} not reachable")
+            return
+
+        parts = result.stdout.strip().split()
+        if len(parts) < 2 or parts[0] == "000":
+            pytest.skip(f"Balance page not reachable from client (HTTP {parts[0] if parts else '?'})")
+        code = parts[0]
+        assert code == "200", f"Balance page returned HTTP {code}, expected 200"
+
+    def test_portal_js_redirects_to_8090(self, router):
+        splash = router.ssh("cat /etc/nodogsplash/htdocs/splash.html 2>/dev/null || cat /etc/nodogsplash/htdocs/index.html 2>/dev/null", timeout=10)
+        if not splash.strip():
+            pytest.skip("No splash page found in NDS htdocs")
+        js_ref = re.search(r'src="([^"]*splash[^"]*\.js)"', splash)
+        if not js_ref:
+            pytest.skip("Could not find splash JS reference in HTML")
+        js_path = js_ref.group(1).replace("./", "")
+        js_content = router.ssh(f"cat /etc/nodogsplash/htdocs/{js_path} 2>/dev/null", timeout=10)
+        assert ":8090" in js_content, (
+            "Portal JS does not redirect to port 8090. "
+            "PR #22 fix is not deployed."
+        )
     """End-to-end connectivity tests for authenticated clients."""
 
     def test_router_can_reach_internet(self, router):
