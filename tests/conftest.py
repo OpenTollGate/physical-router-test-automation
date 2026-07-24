@@ -26,6 +26,13 @@ from lib.clients.container import ContainerClient
 from lib.constants import DEFAULT_STEP_SIZE_MS, NDS_PORTAL_PORT
 from lib.backend import BackendConfig
 
+# --- Mock mode support ---
+# When TOLLGATE_MOCK=1 is set, tests run against a MockRouter that returns
+# canned responses and serves a local HTTP backend. No router hardware needed.
+IS_MOCK_MODE = os.environ.get("TOLLGATE_MOCK", "").lower() in ("1", "true", "yes")
+if IS_MOCK_MODE:
+    from lib.mock_router import MockRouter, stop_mock_server, get_mock_server
+
 # Register the auto-minting Cashu fixture module so its `minted_token` fixture
 # (lib/cashu_fixture.py, Part A of WD6) is discoverable by any test by name.
 # Fixtures defined in a non-conftest module are otherwise invisible to pytest.
@@ -275,6 +282,18 @@ def backend(request):
 
 @pytest.fixture(scope="session")
 def router(request, backend):
+    if IS_MOCK_MODE:
+        log.info("TOLLGATE_MOCK=1 — using MockRouter (no physical router needed)")
+        phone_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.0.0.100")
+        phone_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "00:11:22:33:44:55")
+        mock = MockRouter(
+            host="127.0.0.1",
+            phone_ip=phone_ip,
+            phone_mac=phone_mac,
+            backend=backend,
+        )
+        return mock
+
     host = os.environ.get("TOLLGATE_SSH_HOST") or os.environ.get("ROUTER_IP")
     identity_file = os.environ.get("TOLLGATE_SSH_KEY", "")
     jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", "")
@@ -401,6 +420,12 @@ def chain_routers(backend):
 
 @pytest.fixture(scope="session", autouse=True)
 def deploy_session(request, router, backend):
+    if IS_MOCK_MODE:
+        log.info("TOLLGATE_MOCK=1 — skipping deployment and health checks")
+        yield
+        stop_mock_server()
+        return
+
     from lib import deploy as deploy_lib
 
     if router is None:
@@ -534,6 +559,8 @@ def adb(request, router):
 
 @pytest.fixture(scope="session")
 def cashu():
+    if IS_MOCK_MODE:
+        pytest.skip("cashu fixture not available in mock mode (no real mint)")
     mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
     minter = create_minter(mint_url)
     for attempt in range(5):
@@ -1183,6 +1210,9 @@ def pytest_sessionstart(session):
 
 def pytest_sessionfinish(session, exitstatus):
     _save_test_metadata(session)
+
+    if IS_MOCK_MODE:
+        return
 
     global _session_lock, _hardware_lock_acquired
     if _hardware_lock_acquired:
