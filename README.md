@@ -1,8 +1,94 @@
 # physical-router-test-automation
 
-Multi-tier test framework for [tollgate-module-basic-go](https://github.com/OpenTollGate/tollgate-module-basic-go) running against physical OpenWrt routers. Combines Playwright LuCI UI tests, pytest API tests (no phone needed), and pytest phone tests (physical Android device via ADB).
+Multi-tier test framework for TollGate backends running against physical OpenWrt routers, local QEMU VMs, or cloud labs. Supports the Go backend ([tollgate-module-basic-go](https://github.com/OpenTollGate/tollgate-module-basic-go)), the Rust 1:1 clone ([tollgate-module-basic-rust](https://github.com/felixfelix-bot/tollgate-module-basic-rust)), and the experimental Rust backend ([tollgate-rs](https://github.com/Amperstrand/tollgate-rs-ai-research-and-experiments)).
 
-These tests cannot run in GitHub CI. They require real routers on the local network with TollGate installed and LuCI accessible.
+## Testing Venues
+
+Three ways to run tests, depending on what you have available:
+
+| Venue | What you need | Best for | Setup time |
+|---|---|---|---|
+| **Local QEMU VM** | Linux host with KVM | Fast iteration, debugging | 2 min (after first setup) |
+| **SHC (cloud VM)** | SHC API key | Fire-and-forget CI-style runs | ~25 min autonomous |
+| **Physical router** | GL-MT3000 on LAN | Real hardware validation | Manual setup |
+
+All venues support all backends via `--backend go|rust-basic|rust`.
+
+### Local QEMU VM (fastest iteration)
+
+Run tests against a local OpenWrt 24.10.1 QEMU VM with a fakewallet Cashu mint (free tokens, no Lightning needed). No physical router or cloud account required.
+
+```bash
+# Start VMs (OpenWrt + Debian client)
+python3 scripts/virtual-lab.py start-poc --host localhost
+
+# Run tests (fakewallet mint starts automatically)
+./scripts/run-local-tests.sh tests/api/test_nds_fw4_integration.py
+
+# Clean up
+python3 scripts/virtual-lab.py stop-poc --host localhost
+```
+
+See [LOCAL-VM-TESTING.md](LOCAL-VM-TESTING.md) for the full guide including troubleshooting, deploying captive portal changes, and NDS/fw4 enforcement testing.
+
+### SHC — Sovereign Hybrid Compute (cloud VM)
+
+Fire-and-forget testing on an SHC cloud VM. Identical to GCP but uses the SHC provider (no GCP credentials needed, uses SHC API key instead).
+
+```bash
+# Submit a PR for autonomous testing
+./scripts/cloud-lab.py submit --pr 42 --publish
+
+# Use a specific backend
+./scripts/cloud-lab.py submit --pr 42 --backend rust-basic --publish
+
+# Test a fork branch
+./scripts/cloud-lab.py submit --pr 42 --repo Amperstrand/tollgate-module-basic-go
+
+# Check run status
+./scripts/cloud-lab.py status-run --run-id <run-id>
+
+# Clean up stale VMs
+./scripts/cloud-lab.py cleanup-stale
+```
+
+**Provider selection:** Set `TOLLGATE_VM_PROVIDER` env var: `shc` (default), `gcloud`, `local`, or `physical`.
+
+### GCP Cloud Lab (alternative cloud)
+
+Same workflow as SHC but uses Google Cloud Platform. Requires `gcloud` CLI authenticated and a GCP runner snapshot.
+
+```bash
+# Identical commands — just set the provider
+TOLLGATE_VM_PROVIDER=gcloud ./scripts/cloud-lab.py submit --pr 42 --publish
+```
+
+See the [detailed GCP section](#cloud-lab-gcp-fire-and-forget) below for snapshot baking and architecture.
+
+### Physical Router (real hardware)
+
+For testing against real GL-MT3000 routers on your LAN:
+
+```bash
+# Test a PR against your physical router
+./scripts/test-pr.sh --pr 42
+
+# Specify backend and router
+./scripts/test-pr.sh --pr 42 --backend go --router lab-router-a
+```
+
+### Backend Selection
+
+All venues support testing different TollGate implementations:
+
+| Backend | `--backend` flag | Repository |
+|---|---|---|
+| Go (production) | `go` (default) | `OpenTollGate/tollgate-module-basic-go` |
+| Go with CDK | `go-cdk` | `OpenTollGate/tollgate-module-basic-go` |
+| Rust 1:1 clone | `rust-basic` | `felixfelix-bot/tollgate-module-basic-rust` |
+| Experimental Rust | `rust` | `Amperstrand/tollgate-rs-ai-research-and-experiments` |
+
+Backend types are defined in [`lib/backend.py`](lib/backend.py) (`BACKEND_TYPES` / `BACKEND_CHOICES_CLI`) — the single source of truth used by all scripts.
 
 ## Prerequisites
 
@@ -421,9 +507,11 @@ All 26 scripts in `scripts/`:
 
 | Script | Purpose |
 |---|---|
-| `cloud-lab.py` | GCP nested-virt cloud lab — `submit` (fire-and-forget PR/commit tests), `status-run`, `cleanup-stale` |
-| `cloud-lab-worker.sh` | Autonomous worker entrypoint (runs on GCP VM via startup script) |
-| `virtual-lab.py` | Manage local TollGate virtual lab — diagnostics, bootstrap, and lifecycle commands for Ubuntu VM test environments |
+| `cloud-lab.py` | GCP/SHC cloud lab — `submit` (fire-and-forget PR/commit tests), `status-run`, `cleanup-stale`. Supports `--backend go\|rust-basic\|rust` |
+| `cloud-lab-worker.sh` | Autonomous worker entrypoint (runs on GCP/SHC VM via startup script) |
+| `virtual-lab.py` | Manage local TollGate virtual lab — `start-poc`, `stop-poc`, `doctor`, `debug-poc`. Supports `--backend go\|rust-basic\|rust` |
+| `run-local-tests.sh` | Local QEMU test runner — starts fakewallet CDK mint, configures OpenWrt, runs pytest. Results stay local |
+| `deploy-local-vm.sh` | Deploy TollGate + NDS + captive portal to a local QEMU OpenWrt VM (idempotent) |
 
 ## Test Directories
 
@@ -527,7 +615,7 @@ Session-scoped fixtures: `router` (SSH), `adb` (phone or desktop client), `cashu
 | `TOLLGATE_ROUTER_INVENTORY` | No | `config/routers.json` | Path to router inventory file |
 | `TOLLGATE_ROUTER_MODEL` | No | `unknown` | Router model identifier |
 | `TOLLGATE_ROUTER_ARCH` | No | `aarch64_cortex-a53` | Router architecture for ipk builds |
-| `TOLLGATE_BACKEND` | No | `go` | Backend type: `go` (Go v1) or `rust` (Rust v1) |
+| `TOLLGATE_BACKEND` | No | `go` | Backend type: `go`, `go-cdk`, `rust-basic`, or `rust`. See [Backend Selection](#backend-selection) |
 | `TOLLGATE_CLIENT_TYPE` | No | `adb` | Client type for metadata: `adb`, `mac`, `linux`, or `container` |
 | `TOLLGATE_VIEWPORT` | No | `desktop` | Viewport: `desktop` or `mobile` |
 | `TOLLGATE_SSID` | No | `TollGate` | TollGate WiFi SSID |
