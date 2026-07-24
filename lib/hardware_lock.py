@@ -71,3 +71,22 @@ except ImportError:
     def release_hardware_lock():
         if HARDWARE_LOCK.exists():
             HARDWARE_LOCK.unlink()
+
+# Ensure HARDWARE_LOCK and _is_stale are always available, even when
+# tollgate_lab is installed (it doesn't export these names).
+import tempfile as _tempfile
+from pathlib import Path as _Path
+from datetime import datetime, timezone as _tz, timedelta as _td
+
+try:
+    HARDWARE_LOCK
+except NameError:
+    HARDWARE_LOCK = _Path(_tempfile.gettempdir()) / "tollgate_hardware.lock"
+
+try:
+    _is_stale
+except NameError:
+    def _is_stale(data):
+        from lib.router_lock import _STALE_THRESHOLD
+        ts = datetime.fromisoformat(data.get("timestamp", "2000-01-01T00:00:00+00:00"))
+        return datetime.now(_tz.utc) - ts > _STALE_THRESHOLD

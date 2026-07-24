@@ -237,7 +237,7 @@ def pytest_addoption(parser):
                      help="Reboot router after deploy and wait for it to come back")
     parser.addoption("--expected-pr", default=None, type=int,
                      help="PR number being tested. Tests marked @pytest.mark.pr(N) where N != expected_pr are expected to fail/skip.")
-    parser.addoption("--backend", default=None, choices=["go", "rust", "rust-basic"],
+    parser.addoption("--backend", default=None, choices=list(__import__("lib.backend", fromlist=["BACKEND_CHOICES_CLI"]).BACKEND_CHOICES_CLI),
                      help="TollGate backend type: 'go' (Go v1), 'rust' (Rust v1 / tollgate-rs), or 'rust-basic' (tollgate-module-basic-rust). Default: TOLLGATE_BACKEND env or 'go'")
     parser.addoption("--lock-phase", default=None,
                      help="Auto-acquire router lock with this phase description. "

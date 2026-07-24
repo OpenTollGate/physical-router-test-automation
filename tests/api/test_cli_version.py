@@ -42,9 +42,10 @@ def test_version_has_message(version):
 
 
 @pytest.mark.smoke
-def test_version_message_has_fields(version):
+def test_version_message_has_fields(version, router):
     msg = version.get("message", "")
-    for field in ("version:", "commit:", "build_time:", "go_version:"):
+    runtime_field = "rust_version:" if router.backend.is_rust_basic else "go_version:"
+    for field in ("version:", "commit:", "build_time:", runtime_field):
         assert field in msg, f"Missing '{field}' in version message: {msg}"
 
 

@@ -1,4 +1,9 @@
-"""Unit tests for lib/hardware_lock.py — file-based hardware mutex."""
+"""Unit tests for lib/hardware_lock.py — file-based hardware mutex.
+
+These tests exercise the standalone fallback implementation. When
+tollgate_lab is installed, the canonical implementation from
+tollgate_lab.hardware.lock is used instead, and these tests skip.
+"""
 from __future__ import annotations
 
 import os
@@ -6,6 +11,15 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import pytest
+
+try:
+    import tollgate_lab
+    _HAS_TOLLGATE_LAB = True
+except ImportError:
+    _HAS_TOLLGATE_LAB = False
+
+pytestmark = pytest.mark.skipif(_HAS_TOLLGATE_LAB,
+    reason="tollgate_lab installed — standalone fallback not active")
 
 from lib.hardware_lock import (
     HARDWARE_LOCK,

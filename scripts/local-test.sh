@@ -58,6 +58,32 @@ echo "OK"; exit 0
 NDSCTL
 chmod +x "$STUB_DIR/ndsctl"
 
+# ─── 2.5. Create uci stub ─────────────────────────────────────────
+cat > "$STUB_DIR/uci" << 'UCI'
+#!/bin/bash
+# Simulate OpenWrt's uci config tool for testing on Ubuntu
+if [ "$1" = "-q" ] && [ "$2" = "get" ]; then
+    # uci -q get: simulate "not found" on Ubuntu
+    exit 1
+fi
+if [ "$1" = "get" ]; then
+    # uci get: simulate "not found" on Ubuntu
+    exit 1
+fi
+if [ "$1" = "show" ]; then
+    # uci show: return empty string
+    echo ""
+    exit 0
+fi
+# uci set, commit, add_list, delete, add: no-ops, succeed
+if [ "$1" = "set" ] || [ "$1" = "commit" ] || [ "$1" = "add_list" ] || [ "$1" = "delete" ] || [ "$1" = "add" ]; then
+    exit 0
+fi
+# Default: no-op success
+exit 0
+UCI
+chmod +x "$STUB_DIR/uci"
+
 # ─── 3. Create config ────────────────────────────────────────────
 CONFIG_DIR=$(mktemp -d /tmp/tollgate-test-config.XXXXXX)
 cat > "$CONFIG_DIR/config.json" << JSONEOF
