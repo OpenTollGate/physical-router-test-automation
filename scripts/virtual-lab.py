@@ -1213,7 +1213,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _ = reseller_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = reseller_parser.add_argument("--results-dir", default="results/virtual-reseller-scenarios")
-    _ = reseller_parser.add_argument("--backend", default="go", choices=["go", "rust"])
+    _ = reseller_parser.add_argument("--backend", default="go", choices=["go", "rust", "rust-basic"])
     _ = reseller_parser.add_argument("--secondary-router-host", default=None)
     _ = reseller_parser.add_argument("--secondary-router-port", default=None)
     reseller_parser.set_defaults(func=run_reseller_scenarios)
