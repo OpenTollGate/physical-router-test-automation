@@ -1164,6 +1164,76 @@ def run_reseller_scenarios(args: argparse.Namespace) -> int:
     return _print_result(run_local(["bash", "-lc", command], timeout=600))
 
 
+def _poc_disk_path(workdir: str) -> str:
+    return os.path.join(workdir, "overlays", "tollgate-poc.qcow2")
+
+
+def _vm_running() -> bool:
+    result = subprocess.run(
+        ["pgrep", "-f", "tollgate-poc.qcow2"],
+        capture_output=True, text=True,
+    )
+    return result.returncode == 0
+
+
+def snapshot_create(args: argparse.Namespace) -> int:
+    disk = _poc_disk_path(args.workdir)
+    if not os.path.isfile(disk):
+        print(f"ERROR: POC disk not found at {disk}")
+        return 1
+    if _vm_running():
+        print("ERROR: POC VM is running. Stop it first: python3 scripts/virtual-lab.py stop-poc")
+        return 1
+    r = subprocess.run(["qemu-img", "snapshot", "-c", args.name, disk], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"ERROR: {r.stderr.strip()}")
+        return 1
+    print(f"Snapshot '{args.name}' created.")
+    return 0
+
+
+def snapshot_list(args: argparse.Namespace) -> int:
+    disk = _poc_disk_path(args.workdir)
+    if not os.path.isfile(disk):
+        print(f"ERROR: POC disk not found at {disk}")
+        return 1
+    r = subprocess.run(["qemu-img", "snapshot", "-l", disk], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"ERROR: {r.stderr.strip()}")
+        return 1
+    print(r.stdout.strip() if r.stdout.strip() else "No snapshots.")
+    return 0
+
+
+def snapshot_restore(args: argparse.Namespace) -> int:
+    disk = _poc_disk_path(args.workdir)
+    if not os.path.isfile(disk):
+        print(f"ERROR: POC disk not found at {disk}")
+        return 1
+    if _vm_running():
+        print("ERROR: POC VM is running. Stop it first.")
+        return 1
+    r = subprocess.run(["qemu-img", "snapshot", "-a", args.name, disk], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"ERROR: {r.stderr.strip()}")
+        return 1
+    print(f"Restored to snapshot '{args.name}'. Start VM with: start-poc")
+    return 0
+
+
+def snapshot_delete(args: argparse.Namespace) -> int:
+    disk = _poc_disk_path(args.workdir)
+    if not os.path.isfile(disk):
+        print(f"ERROR: POC disk not found at {disk}")
+        return 1
+    r = subprocess.run(["qemu-img", "snapshot", "-d", args.name, disk], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"ERROR: {r.stderr.strip()}")
+        return 1
+    print(f"Snapshot '{args.name}' deleted.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage the TollGate virtual lab")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1234,6 +1304,28 @@ def build_parser() -> argparse.ArgumentParser:
     _ = poc_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
     _ = poc_parser.add_argument("--timeout", type=int, default=120)
     poc_parser.set_defaults(func=run_poc)
+
+    snap_parser = subparsers.add_parser("snapshot", help="QEMU snapshot management for the POC VM")
+    snap_sub = snap_parser.add_subparsers(dest="snapshot_command", required=True)
+    snap_create = snap_sub.add_parser("create", help="Create a snapshot (VM must be stopped)")
+    _ = snap_create.add_argument("name", help="Snapshot name")
+    _ = snap_create.add_argument("--host", default="218")
+    _ = snap_create.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    snap_create.set_defaults(func=snapshot_create)
+    snap_list = snap_sub.add_parser("list", help="List snapshots")
+    _ = snap_list.add_argument("--host", default="218")
+    _ = snap_list.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    snap_list.set_defaults(func=snapshot_list)
+    snap_restore = snap_sub.add_parser("restore", help="Restore VM to snapshot (VM must be stopped)")
+    _ = snap_restore.add_argument("name", help="Snapshot name")
+    _ = snap_restore.add_argument("--host", default="218")
+    _ = snap_restore.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    snap_restore.set_defaults(func=snapshot_restore)
+    snap_delete = snap_sub.add_parser("delete", help="Delete a snapshot")
+    _ = snap_delete.add_argument("name", help="Snapshot name")
+    _ = snap_delete.add_argument("--host", default="218")
+    _ = snap_delete.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    snap_delete.set_defaults(func=snapshot_delete)
 
     return parser
 
