@@ -3,14 +3,17 @@ import logging
 
 log = logging.getLogger("tollgate.backend")
 
+BACKEND_TYPES = ("go", "go-cdk", "rust", "rust-basic")
+BACKEND_CHOICES_CLI = ("go", "rust", "rust-basic")
+
 
 class BackendConfig:
 
     def __init__(self, backend_type: str | None = None):
         self.type = (backend_type
                      or os.environ.get("TOLLGATE_BACKEND", "go")).lower()
-        if self.type not in ("go", "go-cdk", "rust", "rust-basic"):
-            raise ValueError(f"Unknown backend: {self.type!r}. Must be 'go', 'go-cdk', 'rust', or 'rust-basic'")
+        if self.type not in BACKEND_TYPES:
+            raise ValueError(f"Unknown backend: {self.type!r}. Must be one of: {', '.join(BACKEND_TYPES)}")
 
     @property
     def is_rust(self) -> bool:

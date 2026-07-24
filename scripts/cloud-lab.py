@@ -19,6 +19,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from lib.backend import BACKEND_CHOICES_CLI
 from lib.cloud_lab.constants import (
     DEFAULT_DISK_SIZE_GB,
     DEFAULT_MACHINE_TYPE,
@@ -619,7 +620,7 @@ def build_parser() -> argparse.ArgumentParser:
         g.add_argument("--pr", default=None)
         g.add_argument("--branch", default=None)
         p.add_argument("--commit", default=None)
-        p.add_argument("--backend", default="go", choices=["go", "rust", "rust-basic"])
+        p.add_argument("--backend", default="go", choices=list(BACKEND_CHOICES_CLI))
         p.add_argument("--repo", default=None,
                         help="Override the artifact repo (e.g. Amperstrand/tollgate-module-basic-go for fork branches)")
 
