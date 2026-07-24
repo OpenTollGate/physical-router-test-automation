@@ -1,0 +1,79 @@
+# TollGate Relay Valve Simulation - Phase 1 (plain networking)
+# Proves a middle node can gatekeep internet access based on "payment" status.
+
+services:
+  internet-target:
+    build:
+      context: .
+      dockerfile: Dockerfile.sim
+    networks:
+      public:
+        ipv4_address: 203.0.113.100
+    command: >
+      bash -c "
+        python3 -m http.server 80 --bind 0.0.0.0 &
+        echo 'internet-target ready'
+        sleep infinity"
+
+  exit-node:
+    build:
+      context: .
+      dockerfile: Dockerfile.sim
+    privileged: true
+    networks:
+      mesh:
+        ipv4_address: 10.203.0.20
+      public:
+        ipv4_address: 203.0.113.20
+    command: >
+      bash -c "
+        sysctl -w net.ipv4.ip_forward=1
+        iptables -P FORWARD ACCEPT
+        iptables -t nat -A POSTROUTING -s 10.203.0.0/24 -j MASQUERADE
+        echo 'exit-node ready'
+        sleep infinity"
+
+  tollgate-phone:
+    build:
+      context: .
+      dockerfile: Dockerfile.sim
+    privileged: true
+    networks:
+      mesh:
+        ipv4_address: 10.203.0.10
+    command: >
+      bash -c "
+        sysctl -w net.ipv4.ip_forward=1
+        iptables -P FORWARD ACCEPT
+        ip route del default 2>/dev/null || true
+        ip route add default via 10.203.0.20
+        iptables -A FORWARD -s 10.203.0.11 -j DROP
+        echo 'tollgate ready - valve CLOSED'
+        sleep infinity"
+
+  customer-phone:
+    build:
+      context: .
+      dockerfile: Dockerfile.sim
+    privileged: true
+    networks:
+      mesh:
+        ipv4_address: 10.203.0.11
+    command: >
+      bash -c "
+        ip route del default 2>/dev/null || true
+        ip route add default via 10.203.0.10
+        echo 'customer ready'
+        sleep infinity"
+
+networks:
+  mesh:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.203.0.0/24
+  public:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 203.0.113.0/24
