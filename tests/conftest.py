@@ -258,11 +258,18 @@ def pytest_configure(config):
     lab_type_opt = config.getoption("--lab-type", default=None)
     if lab_type_opt:
         os.environ["TOLLGATE_LAB_TYPE"] = lab_type_opt
+    elif IS_MOCK_MODE:
+        os.environ["TOLLGATE_LAB_TYPE"] = "mock"
     elif not os.environ.get("TOLLGATE_LAB_TYPE"):
         if os.environ.get("TOLLGATE_VIRTUAL_LAB"):
             os.environ["TOLLGATE_LAB_TYPE"] = "virtual-lab"
         else:
             os.environ["TOLLGATE_LAB_TYPE"] = "physical"
+
+    if IS_MOCK_MODE:
+        from lib.mock_router import get_mock_server as _gms
+        _srv = _gms()
+        os.environ["TOLLGATE_BACKEND_URL"] = _srv.url
 
 
 @pytest.fixture(scope="session")
@@ -619,6 +626,26 @@ def attach_results(request, results_dir):
 
 
 @pytest.fixture(autouse=True)
+def _mock_fast_sleep():
+    """In mock mode, patch time.sleep to be near-instant for long sleeps.
+
+    Tests with hardcoded time.sleep(15) or time.sleep(35) would exceed
+    pytest --timeout=10 and hang the suite. In mock mode there is no real
+    hardware timing to wait for, so we cap long sleeps at 0.01s.
+    """
+    if not IS_MOCK_MODE:
+        yield
+        return
+    import time as _time
+    import unittest.mock as _mock
+    orig_sleep = _time.sleep
+    def _fast_sleep(secs):
+        orig_sleep(0.01 if secs > 1 else secs)
+    with _mock.patch("time.sleep", side_effect=_fast_sleep):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def container_nds_preflight(request):
     if not _is_container_client(request.config):
         return
@@ -801,6 +828,20 @@ def pytest_collection_modifyitems(config, items):
     phone = [t for t in items if "phone" in t.keywords]
     other = [t for t in items if "api" not in t.keywords and "phone" not in t.keywords]
     items[:] = api + other + phone
+
+    if IS_MOCK_MODE:
+        _mock_skip = pytest.mark.skip(
+            reason="skipped in mock mode (requires external binaries or real hardware state)"
+        )
+        _mock_skip_fnames = {
+            "test_go_rust_basic_parity.py",
+            "test_mint_wallet_compat.py",
+            "test_nds_gating.py",
+        }
+        for item in items:
+            fname = os.path.basename(str(item.fspath))
+            if fname in _mock_skip_fnames:
+                item.add_marker(_mock_skip)
 
     metadata = {}
     for item in items:

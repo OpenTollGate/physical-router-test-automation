@@ -23,7 +23,7 @@ import os
 import re
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
@@ -78,7 +78,10 @@ MOCK_PAYMENT_INVALID = {
     "kind": 21023,
     "pubkey": "a" * 64,
     "content": "error: invalid token",
-    "tags": [["code", "invalid-token"]],
+    "tags": [
+        ["code", "invalid-token"],
+        ["level", "error"],
+    ],
 }
 
 # Mock config.json content
@@ -130,6 +133,12 @@ MOCK_CLI_STATUS = {
         "mints": [{"url": "https://testnut.cashu.exchange", "status": "reachable"}],
         "degraded": False,
     }),
+    "data": {
+        "running": True,
+        "mode": "full_merchant",
+        "mints": [{"url": "https://testnut.cashu.exchange", "status": "reachable"}],
+        "degraded": False,
+    },
 }
 
 # Mock wallet info
@@ -138,12 +147,24 @@ MOCK_WALLET_INFO = {
     "message": json.dumps({
         "balance": 100,
         "unit": "sat",
+        "mint_count": 1,
+        "mint_urls": ["https://testnut.cashu.exchange"],
     }),
+    "data": {
+        "balance": 100,
+        "unit": "sat",
+        "balance_sats": 100,
+        "mint_count": 1,
+        "mint_urls": ["https://testnut.cashu.exchange"],
+        "mint_balances": {"https://testnut.cashu.exchange": 100},
+        "total_balance": 100,
+    },
 }
 
 MOCK_WALLET_BALANCE = {
     "success": True,
     "message": json.dumps({"balance": 100, "unit": "sat"}),
+    "data": {"balance": 100, "unit": "sat", "balance_sats": 100},
 }
 
 MOCK_CLI_VERSION = {
@@ -228,8 +249,8 @@ class MockBackendHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(content_length).decode("utf-8", errors="replace") if content_length else ""
 
         if path == "/" or path == "/pay":
-            # Check if the body looks like a valid Cashu token (starts with "cashu")
-            if body.strip().lower().startswith("cashu") or body.strip().startswith("{") and "token" in body.lower():
+            token = self._extract_token(body)
+            if self._is_valid_mock_token(token):
                 self._send_json(MOCK_PAYMENT_SUCCESS)
             else:
                 self._send_json(MOCK_PAYMENT_INVALID)
@@ -239,6 +260,59 @@ class MockBackendHandler(BaseHTTPRequestHandler):
             self._send_json({"success": True})
         else:
             self._send_json({"error": "not found"}, status=404)
+
+    @staticmethod
+    def _extract_token(body: str) -> str:
+        """Extract the Cashu token from a raw body or JSON wrapper."""
+        body = body.strip()
+        if not body:
+            return ""
+        if body.lower().startswith("cashu"):
+            return body
+        if body.startswith("{"):
+            try:
+                data = json.loads(body)
+                if isinstance(data.get("content"), str):
+                    return data["content"].strip()
+                if isinstance(data.get("token"), str):
+                    return data["token"].strip()
+            except (json.JSONDecodeError, KeyError):
+                pass
+        return body
+
+    @staticmethod
+    def _is_valid_mock_token(token: str) -> bool:
+        """Heuristic token validator for mock mode.
+
+        Accepts both cashuA (V3) and cashuB (V4) tokens of sufficient
+        length. Rejects empty, short, and garbage tokens. Also rejects
+        V2-keyset tokens (matching the Rust backend's lightweight wallet
+        which lacks V2 keyset support — tollgate-rs#52).
+        """
+        if not token:
+            return False
+        token = token.strip()
+        if not (token.startswith("cashuA") or token.startswith("cashuB")):
+            return False
+        if len(token) < 50:
+            return False
+        if token.startswith("cashuA"):
+            try:
+                import base64 as _b64
+                payload = token[len("cashuA"):]
+                padded = payload + "=" * (-len(payload) % 4)
+                decoded = json.loads(_b64.urlsafe_b64decode(padded))
+                proofs = []
+                entries = decoded.get("token", []) if isinstance(decoded, dict) else decoded
+                for entry in entries:
+                    proofs.extend(entry.get("proofs", []))
+                for proof in proofs:
+                    kid = proof.get("id", "")
+                    if kid.startswith("01") and len(kid) >= 64:
+                        return False
+            except Exception:
+                pass
+        return True
 
 
 class MockBackendServer:
@@ -254,15 +328,12 @@ class MockBackendServer:
         if self._server is not None:
             return  # already running
         try:
-            self._server = HTTPServer((self.host, self.port), MockBackendHandler)
+            self._server = ThreadingHTTPServer((self.host, self.port), MockBackendHandler)
         except OSError as exc:
             # Port already in use — try a random port
             log.warning("Port %d in use (%s), using random port", self.port, exc)
-            self._server = HTTPServer((self.host, 0), MockBackendHandler)
+            self._server = ThreadingHTTPServer((self.host, 0), MockBackendHandler)
             self.port = self._server.server_address[1]
-            log.info("Mock backend started on port %d", self.port)
-            os.environ["TOLLGATE_MOCK_PORT"] = str(self.port)
-            return
 
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
@@ -414,6 +485,51 @@ class MockRouter(Router):
         if "cat" in cmd_lower and "nodogsplash/htdocs/manifest.json" in cmd_lower:
             return json.dumps({"name": "TollGate Portal", "short_name": "TollGate"})
 
+        # --- file existence checks ---
+        if cmd_lower.startswith("test -f") or cmd_lower.startswith("test -d"):
+            if "tollgate-captive-portal-site" in cmd_lower:
+                return ""  # Portal site not installed in mock
+            if "splash.html" in cmd_lower:
+                return ""
+            return "EXISTS"
+
+        # --- portal file reads ---
+        if "tollgate-captive-portal-site" in cmd_lower and "cat" in cmd_lower:
+            return "MISSING"
+        if "cat" in cmd_lower and "locales/en.json" in cmd_lower:
+            return "MISSING"
+
+        # --- wget/curl to external URLs (not localhost) ---
+        if ("wget" in cmd_lower or "curl" in cmd_lower) and \
+           "127.0.0.1" not in cmd_lower and "[::1]" not in cmd_lower and "localhost" not in cmd_lower:
+            return "WGET_FAILED"
+
+        # --- nft (nftables) commands ---
+        if cmd_lower.startswith("nft"):
+            if "nds_enforce_forward" in cmd_lower:
+                return (
+                    "table inet fw4 {\n"
+                    "  chain nds_enforce_forward {\n"
+                    "    type filter hook forward priority filter - 1; policy accept;\n"
+                    "    meta mark & 0x00010000 == 0x00010000 counter packets 15 drop\n"
+                    "    meta mark & 0x00020000 == 0x00020000 counter packets 8 reject\n"
+                    "    meta mark & 0x00030000 == 0x00030000 counter packets 42 accept\n"
+                    "    counter packets 3 reject\n"
+                    "  }\n"
+                    "}"
+                )
+            return ""
+
+        # --- uci show firewall ---
+        if "uci show firewall" in cmd_lower or "uci -q show firewall" in cmd_lower:
+            if "grep" in cmd_lower:
+                return "NOT_FOUND"
+            return ""
+
+        # --- nft list ruleset ---
+        if "nft list ruleset" in cmd_lower:
+            return ""
+
         # --- find commands (file scanning) ---
         if cmd_lower.startswith("find /etc/tollgate/"):
             return ""  # No world-readable files
@@ -452,14 +568,28 @@ class MockRouter(Router):
                 return "tcp        0      0 0.0.0.0:8080                   0.0.0.0:*               LISTEN"
             return ""
 
-        # --- iptables (return empty for clean state) ---
+        # --- iptables ---
         if cmd_lower.startswith("iptables"):
+            if "-t mangle" in cmd_lower and "ndsout" in cmd_lower:
+                return (
+                    "Chain ndsOUT\n"
+                    "  pkts bytes target     prot opt in     out     source               destination\n"
+                    "    42  3360 MARK       all  --  *      *       0.0.0.0/0            0.0.0.0/0            MARK xset 0x30000 0x30000"
+                )
+            if "-t nat" in cmd_lower and "ndsout" in cmd_lower:
+                return (
+                    "Chain ndsOUT\n"
+                    "  pkts bytes target     prot opt in     out     source               destination\n"
+                    "    18  1080 DNAT       tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:80 to:10.0.0.1:2050"
+                )
             return ""
 
         # --- UCI commands ---
         if "uci -q get nodogsplash" in cmd_lower and "gatewayport" in cmd_lower:
             return "2050"
         if "uci" in cmd_lower and "get" in cmd_lower:
+            if "firewall.tollgate_rules" in cmd_lower:
+                return "NOT_SET"
             if "network.lan.ipaddr" in cmd_lower:
                 return "10.0.0.1"
             if "system" in cmd_lower and "hostname" in cmd_lower:
@@ -467,6 +597,10 @@ class MockRouter(Router):
             if "uhttpd" in cmd_lower:
                 return "uhttpd.main.listen_http='0.0.0.0:80'"
             return ""
+
+        # --- ping ---
+        if cmd_lower.startswith("ping"):
+            return "PING 8.8.8.8 56(84) bytes of data.\n64 bytes from 8.8.8.8: seq=0 ttl=117 time=1.234 ms\n\n--- 8.8.8.8 ping statistics ---\n1 packets transmitted, 1 packets received, 0% packet loss"
 
         # --- nslookup ---
         if "nslookup" in cmd_lower:
@@ -478,6 +612,10 @@ class MockRouter(Router):
 
         # --- which ---
         if cmd_lower.startswith("which"):
+            parts = cmd_lower.split()
+            tool = parts[1] if len(parts) > 1 else ""
+            if "tollgate" in tool and "ssl" in tool:
+                return "MISSING"
             return "/usr/bin/curl"
 
         # --- jq ---
@@ -502,7 +640,7 @@ class MockRouter(Router):
         if "tollgate status" in cmd_lower or "tollgate --json status" in cmd_lower:
             return json.dumps(MOCK_CLI_STATUS)
         if "tollgate" in cmd_lower and "ssl" in cmd_lower:
-            return "SSL not configured"
+            return "tollgate: 'ssl': unknown command"
         if "tollgate" in cmd_lower and "wallet" in cmd_lower:
             return json.dumps(MOCK_WALLET_INFO)
 
@@ -539,7 +677,12 @@ class MockRouter(Router):
 
         # --- UCI defaults ---
         if "cat /etc/uci-defaults/99-tollgate-setup" in cmd_lower:
-            return "#!/bin/sh\nexit 0"
+            return (
+                "#!/bin/sh\n"
+                "# uhttpd listen_https configuration\n"
+                "uci set uhttpd.main.listen_https='0.0.0.0:443'\n"
+                "exit 0"
+            )
 
         return None  # Let ssh() return "" for unhandled commands
 
@@ -588,7 +731,7 @@ class MockRouter(Router):
                 if post_data:
                     args.extend(["-d", post_data])
 
-            r = sp.run(args, capture_output=True, text=True, timeout=10)
+            r = sp.run(args, capture_output=True, text=True, timeout=5)
             return r.stdout.strip()
         except Exception:
             return ""
@@ -617,8 +760,8 @@ class MockRouter(Router):
         url = self.backend_url(path)
         try:
             r = sp.run(
-                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", url],
-                capture_output=True, text=True, timeout=10,
+                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", url],
+                capture_output=True, text=True, timeout=8,
             )
             code = r.stdout.strip()
             return int(code) if code.isdigit() else 0
@@ -630,8 +773,8 @@ class MockRouter(Router):
         url = self.backend_url(path)
         try:
             r = sp.run(
-                ["curl", "-s", url],
-                capture_output=True, text=True, timeout=10,
+                ["curl", "-s", "--max-time", "5", url],
+                capture_output=True, text=True, timeout=8,
             )
             return r.stdout.strip()
         except Exception:
@@ -642,9 +785,9 @@ class MockRouter(Router):
         url = self.backend_url("/")
         try:
             r = sp.run(
-                ["curl", "-s", "--max-time", "10", "-d", "@-",
+                ["curl", "-s", "--max-time", "5", "-d", "@-",
                  "-H", "Content-Type: text/plain", url],
-                input=token, capture_output=True, text=True, timeout=15,
+                input=token, capture_output=True, text=True, timeout=8,
             )
             resp = r.stdout.strip()
             try:
@@ -660,8 +803,8 @@ class MockRouter(Router):
         url = path if path.startswith("http") else self.backend_url(path)
         try:
             r = sp.run(
-                ["curl", "-s", "--max-time", "10", url],
-                capture_output=True, text=True, timeout=15,
+                ["curl", "-s", "--max-time", "5", url],
+                capture_output=True, text=True, timeout=8,
             )
             return r.stdout.strip()
         except Exception:
@@ -678,7 +821,7 @@ class MockRouter(Router):
         return 20000
 
     def get_nds_state(self, mac: str | None = None) -> str:
-        return "Authenticated"
+        return ""  # No real NDS in mock mode — tests that need it should skip
 
     def wait_for_auth(self, timeout: int = 30, mac: str | None = None) -> bool:
         return True
