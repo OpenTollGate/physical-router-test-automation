@@ -85,10 +85,6 @@ def test_v1_mint_payment_accepted(router, cashu):
 
 
 @pytest.mark.extended
-@pytest.mark.skip(reason="V2 keyset support requires multi-mint CDK wallet architecture. "
-         "CDK wallet is single-mint (testnut.cashu.exchange = V1). "
-         "testnut.cashu.space uses V2 keysets (66 hex IDs). "
-         "Swap fails: 'Short keyset id does not match any of the provided IDv2s'.")
 def test_v2_mint_payment_accepted(router):
     require_client_identity(router)
     v2_url = os.environ.get("TOLLGATE_V2_MINT_URL", V2_MINT_URL)
