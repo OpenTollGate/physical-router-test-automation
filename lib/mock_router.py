@@ -330,15 +330,32 @@ class MockBackendServer:
         try:
             self._server = ThreadingHTTPServer((self.host, self.port), MockBackendHandler)
         except OSError as exc:
-            # Port already in use — try a random port
-            log.warning("Port %d in use (%s), using random port", self.port, exc)
+            import subprocess
+            holder = ""
+            try:
+                holder = subprocess.run(
+                    ["lsof", "-i", f":{self.port}", "-t", "-sTCP:LISTEN"],
+                    capture_output=True, text=True, timeout=2,
+                ).stdout.strip()
+            except Exception:
+                pass
+            log.warning(
+                "Port %d in use (%s), using random port. Holder PID: %s",
+                self.port, exc, holder or "unknown",
+            )
             self._server = ThreadingHTTPServer((self.host, 0), MockBackendHandler)
             self.port = self._server.server_address[1]
 
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
-        log.info("Mock backend started on %s:%d", self.host, self.port)
         os.environ["TOLLGATE_MOCK_PORT"] = str(self.port)
+
+        if not self._health_check():
+            raise RuntimeError(
+                f"Mock backend bound to {self.host}:{self.port} but failed to "
+                f"respond within 2s — serve_forever thread may not be running"
+            )
+        log.info("Mock backend started on %s:%d", self.host, self.port)
 
     def stop(self):
         if self._server is not None:
@@ -353,6 +370,18 @@ class MockBackendServer:
     @property
     def url(self) -> str:
         return f"http://{self.host}:{self.port}"
+
+    def _health_check(self, timeout: float = 2.0) -> bool:
+        import urllib.request
+        deadline = time.monotonic() + timeout
+        url = f"http://{self.host}:{self.port}/"
+        while time.monotonic() < deadline:
+            try:
+                urllib.request.urlopen(url, timeout=0.5)
+                return True
+            except Exception:
+                time.sleep(0.05)
+        return False
 
 
 # Singleton server instance
