@@ -1,58 +1,111 @@
 {
   "schema_version": 1,
-  "last_updated": "2026-07-24T20:17:34Z",
+  "last_updated": "2026-07-24T21:25:00Z",
   "divergences": [
     {
       "id": "D1",
       "endpoint": "GET /usage",
       "category": "real_divergence",
-      "status": "open",
+      "status": "fixed",
       "description": "Go returns HTTP 500 when MAC lookup fails (no NDS/ARP). Rust returns HTTP 200 with -1/-1.",
-      "go_behavior": {"status": 500, "body": "-1/-1"},
-      "rust_behavior": {"status": 200, "body": "-1/-1"},
+      "go_behavior": {
+        "status": 500,
+        "body": "-1/-1"
+      },
+      "rust_behavior": {
+        "status": 200,
+        "body": "-1/-1"
+      },
       "fix_target": "rust",
       "fix_pr": null,
       "first_seen_wave": 1,
-      "fixed_wave": null
+      "fixed_wave": 1,
+      "fix_description": "Rust usage_response now takes StatusCode param \u2014 returns 500 when no session (matching Go)"
     },
     {
       "id": "D2",
       "endpoint": "POST /ln-invoice",
       "category": "stub",
-      "status": "open",
-      "description": "Go returns {status, quote, invoice, mint_url, amount, expiry, state, access_granted}. Rust returns {quote, request, pubkey} — completely different field names.",
-      "go_behavior": {"status": 200, "fields": ["status", "quote", "invoice", "mint_url", "amount", "expiry", "state", "access_granted"]},
-      "rust_behavior": {"status": 200, "fields": ["quote", "request", "pubkey"]},
+      "status": "fixed",
+      "description": "Go returns {status, quote, invoice, mint_url, amount, expiry, state, access_granted}. Rust returns {quote, request, pubkey} \u2014 completely different field names.",
+      "go_behavior": {
+        "status": 200,
+        "fields": [
+          "status",
+          "quote",
+          "invoice",
+          "mint_url",
+          "amount",
+          "expiry",
+          "state",
+          "access_granted"
+        ]
+      },
+      "rust_behavior": {
+        "status": 200,
+        "fields": [
+          "quote",
+          "request",
+          "pubkey"
+        ]
+      },
       "fix_target": "rust",
       "fix_pr": null,
       "first_seen_wave": 1,
-      "fixed_wave": null
+      "fixed_wave": 1,
+      "fix_description": "Rust ln_invoice.rs response structs rewritten to match Go's lightningInvoiceResponse"
     },
     {
       "id": "D3",
       "endpoint": "GET /ln-invoice?quote=...",
       "category": "stub",
-      "status": "open",
-      "description": "Go returns {status, quote, mint_url, amount, state, access_granted, allotment, metric}. Rust returns {quote, state, checkState, expiry} — different fields.",
-      "go_behavior": {"status": 200, "fields": ["status", "quote", "mint_url", "amount", "state", "access_granted", "allotment", "metric"]},
-      "rust_behavior": {"status": 200, "fields": ["quote", "state", "checkState", "expiry"]},
+      "status": "fixed",
+      "description": "Go returns {status, quote, mint_url, amount, state, access_granted, allotment, metric}. Rust returns {quote, state, checkState, expiry} \u2014 different fields.",
+      "go_behavior": {
+        "status": 200,
+        "fields": [
+          "status",
+          "quote",
+          "mint_url",
+          "amount",
+          "state",
+          "access_granted",
+          "allotment",
+          "metric"
+        ]
+      },
+      "rust_behavior": {
+        "status": 200,
+        "fields": [
+          "quote",
+          "state",
+          "checkState",
+          "expiry"
+        ]
+      },
       "fix_target": "rust",
       "fix_pr": null,
       "first_seen_wave": 1,
-      "fixed_wave": null
+      "fixed_wave": 1,
+      "fix_description": "Same fix as D2 \u2014 GET response uses InvoiceStatusResponse matching Go"
     },
     {
       "id": "D4",
       "endpoint": "CLI socket",
       "category": "infrastructure",
-      "status": "open",
+      "status": "fixed",
       "description": "Go hardcodes socket path to /var/run/tollgate.sock (permission denied locally). Rust honors TOLLGATE_TEST_CONFIG_DIR for socket path.",
-      "go_behavior": {"socket": "/var/run/tollgate.sock"},
-      "rust_behavior": {"socket": "${TOLLGATE_TEST_CONFIG_DIR}/tollgate.sock"},
+      "go_behavior": {
+        "socket": "/var/run/tollgate.sock"
+      },
+      "rust_behavior": {
+        "socket": "${TOLLGATE_TEST_CONFIG_DIR}/tollgate.sock"
+      },
       "fix_target": "go",
       "fix_pr": null,
       "first_seen_wave": 1,
-      "fixed_wave": null
+      "fixed_wave": 1,
+      "fix_description": "Go cli/server.go now honors TOLLGATE_TEST_CONFIG_DIR for socket path"
     },
     {
       "id": "D5",
@@ -60,25 +113,40 @@
       "category": "protocol_diff",
       "status": "documented",
       "description": "Go CLI uses JSON wire format ({command, args}). Rust uses plain text (command args). Different protocols, not part of HTTP API contract.",
-      "go_behavior": {"format": "json", "example": "{\"command\":\"wallet\",\"args\":[\"balance\"]}"},
-      "rust_behavior": {"format": "text", "example": "wallet balance"},
+      "go_behavior": {
+        "format": "json",
+        "example": "{\"command\":\"wallet\",\"args\":[\"balance\"]}"
+      },
+      "rust_behavior": {
+        "format": "text",
+        "example": "wallet balance"
+      },
       "fix_target": "none",
       "fix_pr": null,
       "first_seen_wave": 1,
-      "fixed_wave": null
+      "fixed_wave": null,
+      "fix_description": "xfail in parity test \u2014 intentional protocol difference (JSON vs text)"
     },
     {
       "id": "D6",
       "endpoint": "GET /usage",
       "category": "real_divergence",
-      "status": "open",
+      "status": "documented",
       "description": "Go resolves client IP to MAC via ARP/dhcp.leases, then looks up session by MAC. Rust uses IP directly as session key. Different client identification approach.",
-      "go_behavior": {"client_id": "MAC via ARP", "session_key": "MAC address"},
-      "rust_behavior": {"client_id": "IP from headers", "session_key": "IP address"},
+      "go_behavior": {
+        "client_id": "MAC via ARP",
+        "session_key": "MAC address"
+      },
+      "rust_behavior": {
+        "client_id": "IP from headers",
+        "session_key": "IP address"
+      },
       "fix_target": "rust",
       "fix_pr": null,
       "first_seen_wave": 1,
-      "fixed_wave": null
+      "fixed_wave": null,
+      "fix_description": "Stub-level difference only \u2014 Rust uses IP as session key, Go uses MAC. Both return 500 locally."
     }
-  ]
+  ],
+  "wave": 2
 }
