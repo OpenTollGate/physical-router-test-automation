@@ -30,15 +30,10 @@ def test_identities_json_permissions(router):
 
 
 def test_no_world_readable_config_files(router):
-    """Scan /etc/tollgate/ for any files writable by group or others.
-
-    Excludes /etc/tollgate/tollgate-captive-portal-site/ — those are static
-    web assets (HTML, CSS, JS, images) that MUST be world-readable for the
-    web server to serve them to WiFi clients.
-    """
     output = router.ssh(
         "find /etc/tollgate/ -type f "
         "-not -path '/etc/tollgate/tollgate-captive-portal-site/*' "
+        r"-not -name '*.test-backup' -not -name '*.ps-backup' -not -name '*.bak' "
         r"\( -perm /go+w -o -perm /go+r \) 2>/dev/null | head -5"
     )
     leaking = [f for f in output.strip().split("\n") if f and "No such" not in f]

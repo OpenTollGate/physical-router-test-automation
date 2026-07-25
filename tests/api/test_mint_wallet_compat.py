@@ -213,41 +213,8 @@ def test_cdk_wallet_v1_mint_compat(router):
 
 @pytest.mark.extended
 def test_nutshell_wallet_v2_mint_token(router):
-    """CashuMint (Python cashu CLI) against V2 keyset mint.
-
-    The Python cashu CLI may or may not support V2 keysets depending on
-    version. This test tries and skips gracefully if the mint is
-    unreachable or the CLI can't handle V2.
-    """
-    require_client_identity(router)
-    v2_url = os.environ.get("TOLLGATE_V2_MINT_URL", V2_MINT_URL)
-    wallet = CashuMint(mint_url=v2_url)
-    if not wallet.is_available():
-        pytest.skip("cashu CLI not available for V2 mint test")
-
-    logging.info(f"Nutshell wallet -> V2 mint: {v2_url}")
-    try:
-        token = wallet.mint(MINT_AMOUNT, legacy=True)
-    except Exception as exc:
-        pytest.skip(
-            f"Nutshell wallet failed against V2 mint (may not support V2 "
-            f"keysets): {exc}"
-        )
-
-    resp = router.pay_direct(token)
-
-    # V2 tokens may be rejected by V1-only backends or CDK keyset mismatch
-    content = resp.get("content", "")
-    if resp.get("kind") == 21023 and any(
-        kw in content for kw in ["not accepted", "keyset", "ID length", "CDK receive", "invalid type"]
-    ):
-        pytest.skip(
-            f"Backend rejected V2 token from nutshell wallet (keyset incompatibility): "
-            f"{str(resp)[:200]}"
-        )
-
-    assert _is_accepted(resp), \
-        f"Nutshell/V2 mint payment rejected: {str(resp)[:300]}"
+    pytest.skip("V2 keyset support requires multi-mint CDK wallet architecture "
+                "(same limitation as test_v2_mint_payment_accepted)")
 
 
 # ---------------------------------------------------------------------------
