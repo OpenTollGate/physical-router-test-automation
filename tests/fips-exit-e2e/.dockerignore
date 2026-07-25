@@ -1,0 +1,11 @@
+# Binaries are built externally and copied at build time.
+# Never commit them to the repo.
+/fips
+/fipsctl
+/fipstop
+*.ipk
+*.exe
+__pycache__/
+*.pyc
+.git/
+results/
