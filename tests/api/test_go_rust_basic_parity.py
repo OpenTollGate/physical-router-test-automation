@@ -75,7 +75,8 @@ PARITY_CONFIG: dict[str, Any] = {
 }
 
 # Endpoints to probe — each test function compares the pre-collected pair.
-ENDPOINTS = ["GET /", "GET /balance", "GET /usage", "GET /whoami", "POST /"]
+ENDPOINTS = ["GET /", "GET /balance", "GET /usage", "GET /whoami", "POST /",
+             "POST /ln-invoice", "GET /ln-invoice"]
 
 # CLI commands sent to the Unix socket for parity comparison.
 # Each command is mapped to the backend-specific wire format inside
@@ -303,6 +304,21 @@ def _collect_responses(
                     f"{base_url}/",
                     data="garbage-invalid-token",
                     headers={"Content-Type": "text/plain"},
+                    timeout=5,
+                ),
+            ),
+            (
+                "POST /ln-invoice",
+                lambda: requests.post(
+                    f"{base_url}/ln-invoice",
+                    json={"amount": 21, "mint_url": "https://testnut.cashu.exchange"},
+                    timeout=5,
+                ),
+            ),
+            (
+                "GET /ln-invoice",
+                lambda: requests.get(
+                    f"{base_url}/ln-invoice?quote=parity-test-quote",
                     timeout=5,
                 ),
             ),
@@ -772,6 +788,68 @@ def test_parity_invalid_token_field_set(go_responses, rust_responses):
     go_keys = set(go_data.keys()) if isinstance(go_data, dict) else set()
     rust_keys = set(rust_data.keys()) if isinstance(rust_data, dict) else set()
     _assert_parity("POST /", go_responses, rust_responses, "field_set", go_keys, rust_keys)
+
+
+# ---------------------------------------------------------------------------
+# Tests: Lightning invoice (POST + GET /ln-invoice) parity
+# ---------------------------------------------------------------------------
+
+_xfail_mac = pytest.mark.xfail(
+    reason="Go requires MAC resolution for /ln-invoice — not available locally without NDS/DHCP",
+    strict=False,
+)
+
+
+@_xfail_mac
+def test_parity_ln_invoice_post_status(go_responses, rust_responses):
+    """POST /ln-invoice returns HTTP 200 on both backends."""
+    go_code = go_responses["POST /ln-invoice"][0]
+    rust_code = rust_responses["POST /ln-invoice"][0]
+    _assert_parity("POST /ln-invoice", go_responses, rust_responses, "status_code", go_code, rust_code)
+
+
+@_xfail_mac
+def test_parity_ln_invoice_post_field_set(go_responses, rust_responses):
+    """POST /ln-invoice response has matching JSON field names."""
+    go_body = go_responses["POST /ln-invoice"][1]
+    rust_body = rust_responses["POST /ln-invoice"][1]
+    try:
+        go_data = json.loads(go_body)
+        go_keys = set(go_data.keys())
+    except (json.JSONDecodeError, TypeError):
+        go_keys = set()
+    try:
+        rust_data = json.loads(rust_body)
+        rust_keys = set(rust_data.keys())
+    except (json.JSONDecodeError, TypeError):
+        rust_keys = set()
+    _assert_parity("POST /ln-invoice", go_responses, rust_responses, "field_set", go_keys, rust_keys)
+
+
+@_xfail_mac
+def test_parity_ln_invoice_get_status(go_responses, rust_responses):
+    """GET /ln-invoice returns the same HTTP status on both backends."""
+    go_code = go_responses["GET /ln-invoice"][0]
+    rust_code = rust_responses["GET /ln-invoice"][0]
+    _assert_parity("GET /ln-invoice", go_responses, rust_responses, "status_code", go_code, rust_code)
+
+
+@_xfail_mac
+def test_parity_ln_invoice_get_field_set(go_responses, rust_responses):
+    """GET /ln-invoice response has matching JSON field names."""
+    go_body = go_responses["GET /ln-invoice"][1]
+    rust_body = rust_responses["GET /ln-invoice"][1]
+    try:
+        go_data = json.loads(go_body)
+        go_keys = set(go_data.keys())
+    except (json.JSONDecodeError, TypeError):
+        go_keys = set()
+    try:
+        rust_data = json.loads(rust_body)
+        rust_keys = set(rust_data.keys())
+    except (json.JSONDecodeError, TypeError):
+        rust_keys = set()
+    _assert_parity("GET /ln-invoice", go_responses, rust_responses, "field_set", go_keys, rust_keys)
 
 
 # ---------------------------------------------------------------------------
