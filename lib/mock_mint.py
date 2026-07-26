@@ -57,6 +57,13 @@ from coincurve import PublicKey, PrivateKey
 
 DOMAIN_SEPARATOR = b"Secp256k1_HashToCurve_Cashu_"
 
+VERBOSE = os.environ.get("MOCK_MINT_VERBOSE", "1") != "0"
+
+def log(msg: str):
+    if VERBOSE:
+        sys.stderr.write(f"[mock-mint] {msg}\n")
+        sys.stderr.flush()
+
 # ─── Crypto helpers ──────────────────────────────────────────────
 
 def hash_to_curve(secret: bytes) -> bytes:
@@ -97,6 +104,7 @@ class MockMint:
             self._generate_keyset()
             self._save_keyset()
         self.spent_secrets: set[str] = set()
+        self.spent_ys: set[str] = set()
 
     def _generate_keyset(self):
         for i in range(60):
@@ -226,15 +234,21 @@ class MockMint:
         """Handle POST /v1/swap."""
         inputs = body.get("inputs", [])
         outputs = body.get("outputs", [])
-        # Verify input proofs
+        log(f"SWAP inputs={len(inputs)} outputs={len(outputs)}")
         total_in = 0
-        for inp in inputs:
+        for idx, inp in enumerate(inputs):
             if not self.verify_proof(inp):
+                log(f"SWAP REJECT input[{idx}] invalid proof secret={inp.get('secret','?')[:16]}")
                 return {"code": 0, "error": "Invalid proof"}, 400
-            if inp["secret"] in self.spent_secrets:
+            secret = inp["secret"]
+            Y_hex = hash_to_curve(secret.encode()).hex()
+            if secret in self.spent_secrets:
+                log(f"SWAP REJECT input[{idx}] double-spend secret={secret[:16]} Y={Y_hex[:16]}")
                 return {"code": 0, "error": "Token already spent"}, 400
+            self.spent_secrets.add(secret)
+            self.spent_ys.add(Y_hex)
+            log(f"SWAP MARK spent input[{idx}] amount={inp['amount']} secret={secret[:16]} Y={Y_hex[:16]}")
             total_in += inp["amount"]
-            self.spent_secrets.add(inp["secret"])
         # Sign output blinded messages
         total_out = 0
         signatures = []
@@ -257,11 +271,13 @@ class MockMint:
         ys = body.get("Ys", [])
         states = []
         for y in ys:
+            is_spent = y in self.spent_ys
             states.append({
                 "Y": y,
-                "state": "SPENT" if y in self.spent_secrets else "UNSPENT",
+                "state": "SPENT" if is_spent else "UNSPENT",
                 "witness": None,
             })
+            log(f"CHECKSTATE Y={y[:16]} → {'SPENT' if is_spent else 'UNSPENT'}")
         return {"states": states}
 
 
@@ -297,6 +313,8 @@ class MintHandler(BaseHTTPRequestHandler):
         path = parsed.path
         query = parsed.query
 
+        log(f"GET {path}" + (f"?{query}" if query else ""))
+
         if path == "/v1/info":
             self._json(200, MINT.info_response())
         elif path == "/v1/keys":
@@ -310,18 +328,29 @@ class MintHandler(BaseHTTPRequestHandler):
             params = parse_qs(query)
             amount = int(params.get("amount", ["1"])[0])
             token = MINT.create_token_v3(amount)
+            log(f"CREATE-TOKEN amount={amount} keyset={MINT.keyset_id}")
             self._json(200, {"token": token, "amount": amount, "keyset_id": MINT.keyset_id})
+        elif path == "/test/spent":
+            self._json(200, {
+                "spent_secrets": list(MINT.spent_secrets),
+                "spent_ys": list(MINT.spent_ys),
+                "count": len(MINT.spent_secrets),
+            })
         else:
+            log(f"404 NOT FOUND: {path}")
             self._json(404, {"error": "not found"})
 
     def do_POST(self):
         path = urlparse(self.path).path
         body = self._read_body()
+        log(f"POST {path} body_keys={list(body.keys())}")
         if path == "/v1/swap":
             resp, code = MINT.handle_swap(body)
+            log(f"SWAP → {code} signatures={len(resp.get('signatures', []))}")
             self._json(code, resp)
         elif path == "/v1/checkstate":
-            self._json(200, MINT.handle_checkstate(body))
+            resp = MINT.handle_checkstate(body)
+            self._json(200, resp)
         elif path == "/v1/mint/quote/bolt11":
             # Auto-approve mint quote (FakeWallet behavior)
             import secrets
@@ -364,8 +393,7 @@ class MintHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format, *args):
-        # Minimal logging
-        sys.stderr.write(f"[mock-mint] {args[0]}\n")
+        log(f"HTTP {self.client_address[0]} {format % args}")
 
 
 def main():
