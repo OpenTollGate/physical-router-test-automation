@@ -24,7 +24,7 @@ from lib.clients.wifi import WiFi
 from lib.clients.desktop import MacWiFiClient, MacAdapter, LinuxWiFiClient, LinuxAdapter
 from lib.clients.container import ContainerClient
 from lib.constants import DEFAULT_STEP_SIZE_MS, NDS_PORTAL_PORT
-from lib.backend import BackendConfig
+from lib.backend import BackendConfig, BACKEND_CHOICES_CLI
 
 # --- Mock mode support ---
 # When TOLLGATE_MOCK=1 is set, tests run against a MockRouter that returns
@@ -244,7 +244,7 @@ def pytest_addoption(parser):
                      help="Reboot router after deploy and wait for it to come back")
     parser.addoption("--expected-pr", default=None, type=int,
                      help="PR number being tested. Tests marked @pytest.mark.pr(N) where N != expected_pr are expected to fail/skip.")
-    parser.addoption("--backend", default=None, choices=list(__import__("lib.backend", fromlist=["BACKEND_CHOICES_CLI"]).BACKEND_CHOICES_CLI),
+    parser.addoption("--backend", default=None, choices=list(BACKEND_CHOICES_CLI),
                      help="TollGate backend type: 'go' (Go v1), 'rust' (Rust v1 / tollgate-rs), or 'rust-basic' (tollgate-module-basic-rust). Default: TOLLGATE_BACKEND env or 'go'")
     parser.addoption("--lock-phase", default=None,
                      help="Auto-acquire router lock with this phase description. "

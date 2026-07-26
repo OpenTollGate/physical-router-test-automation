@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import secrets
 import shlex
 import subprocess
@@ -19,6 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 from collections.abc import Callable
+
+from lib.backend import BACKEND_CHOICES_CLI
 
 
 REQUIRED_COMMANDS = [
@@ -1283,7 +1288,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _ = reseller_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = reseller_parser.add_argument("--results-dir", default="results/virtual-reseller-scenarios")
-    _ = reseller_parser.add_argument("--backend", default="go", choices=list(__import__("lib.backend", fromlist=["BACKEND_CHOICES_CLI"]).BACKEND_CHOICES_CLI))
+    _ = reseller_parser.add_argument("--backend", default="go", choices=list(BACKEND_CHOICES_CLI))
     _ = reseller_parser.add_argument("--secondary-router-host", default=None)
     _ = reseller_parser.add_argument("--secondary-router-port", default=None)
     reseller_parser.set_defaults(func=run_reseller_scenarios)
