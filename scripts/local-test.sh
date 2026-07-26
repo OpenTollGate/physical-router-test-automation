@@ -6,6 +6,7 @@ set -euo pipefail
 # Usage:
 #   ./scripts/local-test.sh                    # run all local tests
 #   ./scripts/local-test.sh --keep-running     # don't stop services after tests
+#   ./scripts/local-test.sh --debug            # verbose mint/backend logs + keep running
 #   TOLLGATE_BACKEND_BINARY=/tmp/my-tollgate ./scripts/local-test.sh  # custom binary
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -16,11 +17,20 @@ MINT_PORT=3338
 BACKEND_PORT=2121
 LOOPBACK="${TOLLGATE_LOOPBACK:-127.0.0.1}"
 KEEP_RUNNING=false
+DEBUG=false
 
-[[ "${1:-}" == "--keep-running" ]] && KEEP_RUNNING=true
+for arg in "$@"; do
+  case "$arg" in
+    --keep-running) KEEP_RUNNING=true ;;
+    --debug)        DEBUG=true; KEEP_RUNNING=true ;;
+  esac
+done
 
 echo "=== Local Dry Test Runner ==="
 echo "Repo: $REPO_ROOT"
+echo "Backend: $BACKEND_BIN"
+echo "Mint: ${LOOPBACK}:${MINT_PORT}  Backend: ${LOOPBACK}:${BACKEND_PORT}"
+[[ "$DEBUG" == "true" ]] && export MOCK_MINT_VERBOSE=1
 
 # ─── 0. Kill stale processes on our ports ─────────────────────────
 free_port() {
@@ -88,7 +98,7 @@ chmod +x "$STUB_DIR/uci"
 CONFIG_DIR=$(mktemp -d /tmp/tollgate-test-config.XXXXXX)
 cat > "$CONFIG_DIR/config.json" << JSONEOF
 {
-  "config_version": "1",
+  "config_version": "v0.0.8",
   "log_level": "info",
   "accepted_mints": [{
     "url": "http://$LOOPBACK:${MINT_PORT}",
@@ -99,19 +109,26 @@ cat > "$CONFIG_DIR/config.json" << JSONEOF
   "step_size": 22020096, "margin": 0.1, "metric": "bytes",
   "show_setup": false, "reseller_mode": false, "redirect_url": "",
   "auth_delay_seconds": 0,
+  "profit_share": [{"factor": 1.0, "identity": "owner"}],
   "upstream_detector": {"enabled": false},
   "upstream_session_manager": {"enabled": false},
   "upstream_wifi": {"enabled": false}
 }
 JSONEOF
 
-echo "1700000000 1a:2b:3c:4d:5e:6f ::1 test-client *" > /tmp/dhcp.leases
+echo "1700000000 1a:2b:3c:4d:5e:6f 127.0.0.1 test-client *" > /tmp/dhcp.leases
 
 # ─── 4. Start mock mint ──────────────────────────────────────────
 echo "Starting mock mint on $LOOPBACK:${MINT_PORT}..."
 PYTHONUNBUFFERED=1 python3 "${REPO_ROOT}/lib/mock_mint.py" --port "$MINT_PORT" \
     > /tmp/mock-mint.log 2>&1 &
 MINT_PID=$!
+
+echo "Waiting for mock mint..."
+for i in $(seq 1 10); do
+    curl -sf --max-time 1 "http://$LOOPBACK:${MINT_PORT}/v1/info" > /dev/null 2>&1 && break
+    sleep 0.5
+done
 
 # ─── 5. Start backend ────────────────────────────────────────────
 echo "Starting backend on $LOOPBACK:${BACKEND_PORT}..."
@@ -121,33 +138,47 @@ PATH="$STUB_DIR:$PATH" \
 BACKEND_PID=$!
 
 # ─── 6. Wait for health ──────────────────────────────────────────
+# Backend serves HTTP 200 immediately, but returns kind=21023 (notice/degraded)
+# until mint health probe completes. Must poll for kind=10021 (advertisement).
 echo "Waiting for services..."
-for i in $(seq 1 20); do
-    if curl -sf --max-time 2 "http://$LOOPBACK:${MINT_PORT}/v1/info" > /dev/null 2>&1 && \
-       curl -sf --max-time 2 "http://$LOOPBACK:${BACKEND_PORT}/" > /dev/null 2>&1; then
-        echo "Services ready!"
+for i in $(seq 1 30); do
+    curl -sf --max-time 2 "http://$LOOPBACK:${MINT_PORT}/v1/info" > /dev/null 2>&1 || { sleep 1; continue; }
+    KIND=$(curl -sf --max-time 2 "http://$LOOPBACK:${BACKEND_PORT}/" 2>/dev/null \
+        | python3 -c "import json,sys;print(json.load(sys.stdin).get('kind',0))" 2>/dev/null || echo "0")
+    if [[ "$KIND" == "10021" ]]; then
+        echo "Services ready! (kind=10021 advertisement)"
         break
     fi
     sleep 1
-    [[ $i -eq 20 ]] && { echo "ERROR: Services didn't start in time"; exit 1; }
+    [[ $i -eq 30 ]] && {
+        echo "ERROR: Backend not ready after 30s (kind=$KIND)"
+        cat /tmp/tollgate-backend.log | tail -10
+        exit 1
+    }
 done
-
-# Verify merchant is ready
-KIND=$(curl -sf --max-time 3 "http://$LOOPBACK:${BACKEND_PORT}/" | python3 -c "import json,sys;print(json.load(sys.stdin).get('kind',0))" 2>/dev/null || echo "0")
-if [[ "$KIND" != "10021" ]]; then
-    echo "ERROR: Backend not ready (kind=$KIND)"
-    cat /tmp/tollgate-backend.log | tail -10
-    exit 1
-fi
 
 # ─── 7. Run tests ────────────────────────────────────────────────
 echo ""
 echo "=== Running tests ==="
 cd "$REPO_ROOT"
+TOLLGATE_SSH_HOST="" \
+ROUTER_IP="" \
 TOLLGATE_BACKEND_URL="http://$LOOPBACK:${BACKEND_PORT}" \
 TOLLGATE_MINT_URL="http://$LOOPBACK:${MINT_PORT}" \
     python3 -m pytest tests/api/test_local_payment.py -v --tb=short 2>&1
 TEST_EXIT=$?
+
+if [[ $TEST_EXIT -ne 0 ]] || [[ "$DEBUG" == "true" ]]; then
+    echo ""
+    echo "=== Mock mint log (last 20 lines) ==="
+    tail -20 /tmp/mock-mint.log 2>/dev/null || echo "(no log)"
+    echo ""
+    echo "=== Backend log (last 20 lines) ==="
+    tail -20 /tmp/tollgate-backend.log 2>/dev/null || echo "(no log)"
+    echo ""
+    echo "=== Spent tokens ==="
+    curl -sf "http://$LOOPBACK:${MINT_PORT}/test/spent" 2>/dev/null | python3 -m json.tool 2>/dev/null || echo "(unavailable)"
+fi
 
 # ─── 8. Cleanup ──────────────────────────────────────────────────
 echo ""
