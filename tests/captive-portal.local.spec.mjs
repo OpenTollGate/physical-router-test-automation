@@ -66,10 +66,22 @@ test("S2: token validation displays amount", async ({ page }) => {
 test("S3: double-spend → error message", async ({ page }) => {
   await setupAdInterception(page);
   const token = await freshToken(256);
-  await page.request.post(BACKEND, { data: token, headers: { "Content-Type": "text/plain" } });
-  await page.goto(`${PORTAL}/?token=${token}`);
-  await expect(page.locator("input[placeholder*='cashuxyz']")).toBeVisible({ timeout: 15000 });
+  const spent = await page.request.post(BACKEND, { data: token, headers: { "Content-Type": "text/plain" } });
+  const spentBody = await spent.json();
+  expect(spentBody.kind).toBe(1022);
+
+  await page.goto(PORTAL);
+  const input = page.locator("input[placeholder*='cashuxyz']");
+  await expect(input).toBeVisible({ timeout: 15000 });
+  await input.click();
+  await page.keyboard.insertText(token);
   await expect(page.getByText("Valid Cashu token")).toBeVisible({ timeout: 10000 });
+
+  const purchaseBtn = page.getByRole("button", { name: "Purchase Internet Access" });
+  if (await purchaseBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await purchaseBtn.click();
+    await expect(page.getByText(/spent|already|error|invalid|failed/i).first()).toBeVisible({ timeout: 10000 });
+  }
 });
 
 test("S4: malformed token → validation error", async ({ page }) => {
