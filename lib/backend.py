@@ -3,8 +3,8 @@ import logging
 
 log = logging.getLogger("tollgate.backend")
 
-BACKEND_TYPES = ("go", "go-cdk", "rust", "rust-basic")
-BACKEND_CHOICES_CLI = ("go", "rust", "rust-basic")
+BACKEND_TYPES = ("go", "go-cdk", "rust", "rust-basic", "rust-embedded")
+BACKEND_CHOICES_CLI = ("go", "rust", "rust-basic", "rust-embedded")
 
 
 class BackendConfig:
@@ -32,6 +32,10 @@ class BackendConfig:
         return self.type == "rust-basic"
 
     @property
+    def is_rust_embedded(self) -> bool:
+        return self.type == "rust-embedded"
+
+    @property
     def build_tags(self) -> str:
         return "cdk_wallet" if self.is_go_cdk else ""
 
@@ -43,13 +47,13 @@ class BackendConfig:
     def repo(self) -> str:
         if self.is_rust:
             return "Amperstrand/tollgate-rs-ai-research-and-experiments"
-        if self.is_rust_basic:
+        if self.is_rust_basic or self.is_rust_embedded:
             return "felixfelix-bot/tollgate-module-basic-rust"
         return "OpenTollGate/tollgate-module-basic-go"
 
     @property
     def workflow(self) -> str:
-        if self.is_rust or self.is_rust_basic:
+        if self.is_rust or self.is_rust_basic or self.is_rust_embedded:
             return "Build and Package"
         return "Build and Publish"
 
@@ -67,7 +71,15 @@ class BackendConfig:
 
     @property
     def has_sessions_json(self) -> bool:
-        return self.is_go or self.is_rust_basic
+        return self.is_go or self.is_rust_basic or self.is_rust_embedded
+
+    @property
+    def has_embedded_portal(self) -> bool:
+        return self.is_rust_embedded
+
+    @property
+    def cargo_features(self) -> str:
+        return "embedded-portal" if self.is_rust_embedded else ""
 
     @property
     def has_config_json(self) -> bool:

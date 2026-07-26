@@ -62,8 +62,8 @@ DEFAULT_RUST_BASIC_HTTP_PORT = 2121
 
 @pytest.fixture(scope="module")
 def rust_basic_server():
-    if os.environ.get("TOLLGATE_BACKEND") != "rust-basic":
-        pytest.skip("rust_basic_server requires TOLLGATE_BACKEND=rust-basic")
+    if os.environ.get("TOLLGATE_BACKEND") not in ("rust-basic", "rust-embedded"):
+        pytest.skip("rust_basic_server requires TOLLGATE_BACKEND=rust-basic or rust-embedded")
 
     binary_path = os.environ.get("TOLLGATE_BINARY_PATH", DEFAULT_RUST_BASIC_BINARY)
     if not os.path.exists(binary_path):
