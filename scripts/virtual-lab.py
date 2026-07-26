@@ -731,7 +731,7 @@ fi
 # Start QEMU with serial/monitor Unix sockets
 nohup qemu-system-x86_64 \
   -enable-kvm \
-  -m 256 \
+  -m 512 \
   -smp 1 \
   -nographic \
   -serial unix:"$workdir/run/serial.sock",server,nowait \
