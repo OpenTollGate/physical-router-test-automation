@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -490,7 +491,220 @@ class PhysicalProvider(VMProvider):
 
 
 _PROVIDERS["local"] = LocalProvider
+_PROVIDERS["local-kvm"] = None  # populated below
 _PROVIDERS["physical"] = PhysicalProvider
+
+
+class LocalKVMProvider(LocalProvider):
+    """Active local KVM/QEMU provider — creates and destroys VMs on this machine.
+
+    Unlike LocalProvider (which connects to pre-existing VMs), this provider
+    manages the full QEMU lifecycle: creates an OpenWrt VM + Debian client
+    VM from local disk images, waits for SSH, and tears everything down
+    when tests complete.
+
+    Uses the same VMProvider interface as GCPProvider and SHCProvider, so
+    all test code runs identically regardless of provider.
+
+    Privacy: can_publish=False — local VMs may contain real configs.
+    """
+
+    provider_name = "local-kvm"
+    can_publish = False
+
+    VLAB_DIR = os.environ.get(
+        "TOLLGATE_VLAB_DIR",
+        os.path.expanduser("~/tollgate-virtual-lab"),
+    )
+    OPENWRT_OVERLAY = "overlays/tollgate-poc.qcow2"
+    DEBIAN_OVERLAY = "overlays/debian-client.qcow2"
+    BRIDGE_NAME = "tg-poc-br"
+    OPENWRT_TAP = "tg-poc-tap"
+    DEBIAN_TAP = "tg-poc-tap2"
+    OPENWRT_IP = "10.99.99.1"
+    DEBIAN_IP = "10.99.99.100"
+    HOST_IP = "10.99.99.2"
+    OPENWRT_MAC = "52:54:00:12:34:56"
+    DEBIAN_MAC = "de:54:4e:91:49:da"
+
+    def __init__(self):
+        super().__init__()
+        self._openwrt_pid: int | None = None
+        self._debian_pid: int | None = None
+        self._bridge_created = False
+
+    def create_vm(self, name="local-kvm", **kwargs):
+        import subprocess
+
+        vlab = self.VLAB_DIR
+        overlay = os.path.join(vlab, self.OPENWRT_OVERLAY)
+        debian_overlay = os.path.join(vlab, self.DEBIAN_OVERLAY)
+        seed_iso = os.path.join(vlab, "images", "seed-local.iso")
+
+        if not os.path.exists(overlay):
+            raise FileNotFoundError(
+                f"OpenWrt overlay not found at {overlay}. "
+                f"Run scripts/virtual-lab.py bootstrap first."
+            )
+
+        self._setup_bridge()
+        self._setup_tap(self.OPENWRT_TAP)
+        self._setup_tap(self.DEBIAN_TAP)
+
+        serial_sock = os.path.join(vlab, "run", "serial.sock")
+        monitor_sock = os.path.join(vlab, "run", "monitor.sock")
+        os.makedirs(os.path.dirname(serial_sock), exist_ok=True)
+
+        self._openwrt_pid = self._start_openwrt(
+            overlay, serial_sock, monitor_sock
+        )
+
+        if os.path.exists(debian_overlay) and os.path.exists(seed_iso):
+            boot_log = os.path.join(vlab, "run", "debian-boot.log")
+            self._debian_pid = self._start_debian(
+                debian_overlay, seed_iso, boot_log
+            )
+
+        log.info(
+            "LocalKVM VMs started: openwrt PID=%s, debian PID=%s",
+            self._openwrt_pid, self._debian_pid,
+        )
+
+        return VMInfo(
+            name=name,
+            service_id="local-kvm",
+            ip=self.OPENWRT_IP,
+            provider="local-kvm",
+            raw={"openwrt_pid": self._openwrt_pid, "debian_pid": self._debian_pid},
+        )
+
+    def _setup_bridge(self):
+        import subprocess
+        try:
+            subprocess.run(
+                ["sudo", "ip", "addr", "show", self.BRIDGE_NAME],
+                capture_output=True, check=True, timeout=5,
+            )
+            log.info("Bridge %s already exists", self.BRIDGE_NAME)
+        except subprocess.CalledProcessError:
+            subprocess.run(
+                ["sudo", "ip", "link", "add", self.BRIDGE_NAME, "type", "bridge"],
+                check=True, timeout=5,
+            )
+            self._bridge_created = True
+
+        subprocess.run(
+            ["sudo", "ip", "addr", "add", f"{self.HOST_IP}/24", "dev", self.BRIDGE_NAME],
+            capture_output=True, timeout=5,
+        )
+        subprocess.run(
+            ["sudo", "ip", "link", "set", self.BRIDGE_NAME, "up"],
+            check=True, timeout=5,
+        )
+
+    def _setup_tap(self, tap_name):
+        import subprocess
+        try:
+            subprocess.run(
+                ["sudo", "ip", "tuntap", "add", "dev", tap_name, "mode", "tap"],
+                capture_output=True, check=True, timeout=5,
+            )
+        except subprocess.CalledProcessError:
+            pass
+
+        subprocess.run(
+            ["sudo", "ip", "link", "set", tap_name, "master", self.BRIDGE_NAME],
+            capture_output=True, timeout=5,
+        )
+        subprocess.run(
+            ["sudo", "ip", "link", "set", tap_name, "up"],
+            check=True, timeout=5,
+        )
+
+    def _start_openwrt(self, overlay, serial_sock, monitor_sock):
+        import subprocess
+        cmd = [
+            "qemu-system-x86_64",
+            "-enable-kvm",
+            "-m", "256",
+            "-smp", "1",
+            "-nographic",
+            f"-serial", f"unix:{serial_sock},server,nowait",
+            f"-monitor", f"unix:{monitor_sock},server,nowait",
+            "-drive", f"file={overlay},if=virtio,format=qcow2",
+            "-netdev", f"tap,id=lan,ifname={self.OPENWRT_TAP},script=no,downscript=no",
+            "-device", f"virtio-net-pci,netdev=lan,mac={self.OPENWRT_MAC}",
+        ]
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return proc.pid
+
+    def _start_debian(self, overlay, seed_iso, boot_log):
+        import subprocess
+        cmd = [
+            "qemu-system-x86_64",
+            "-enable-kvm",
+            "-m", "1024",
+            "-smp", "2",
+            "-drive", f"file={overlay},if=virtio",
+            "-drive", f"file={seed_iso},media=cdrom",
+            "-netdev", f"tap,id=net0,ifname={self.DEBIAN_TAP},script=no,downscript=no",
+            "-device", f"virtio-net-pci,netdev=net0,mac={self.DEBIAN_MAC}",
+            "-nographic",
+            f"-serial", f"file:{boot_log}",
+        ]
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return proc.pid
+
+    def wait_for_ready(self, vm, timeout=120):
+        return super().wait_for_ready(vm, timeout=timeout)
+
+    def destroy_vm(self, vm, immediate=True):
+        import subprocess
+        for pid_attr in ("_openwrt_pid", "_debian_pid"):
+            pid = getattr(self, pid_attr, None)
+            if pid:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    time.sleep(1)
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                setattr(self, pid_attr, None)
+
+        for tap in (self.OPENWRT_TAP, self.DEBIAN_TAP):
+            subprocess.run(
+                ["sudo", "ip", "link", "set", tap, "down"],
+                capture_output=True, timeout=5,
+            )
+            subprocess.run(
+                ["sudo", "ip", "tuntap", "del", "dev", tap, "mode", "tap"],
+                capture_output=True, timeout=5,
+            )
+
+        if self._bridge_created:
+            subprocess.run(
+                ["sudo", "ip", "link", "set", self.BRIDGE_NAME, "down"],
+                capture_output=True, timeout=5,
+            )
+            subprocess.run(
+                ["sudo", "ip", "link", "del", self.BRIDGE_NAME],
+                capture_output=True, timeout=5,
+            )
+
+        log.info("LocalKVM VMs destroyed and interfaces cleaned up")
+
+    def list_vms(self):
+        return [
+            VMInfo(
+                name="local-kvm-openwrt",
+                service_id="local-kvm",
+                ip=self.OPENWRT_IP,
+                provider="local-kvm",
+            )
+        ]
+
+
+_PROVIDERS["local-kvm"] = LocalKVMProvider
 
 
 def get_provider(provider_name: str | None = None) -> VMProvider:
@@ -500,7 +714,8 @@ def get_provider(provider_name: str | None = None) -> VMProvider:
 
     - ``shc`` — Sovereign Hybrid Compute (ephemeral cloud VM, can_publish=True)
     - ``gcloud`` — Google Cloud Platform (ephemeral cloud VM, can_publish=True)
-    - ``local`` — Local QEMU/KVM VM (privacy: results local only)
+    - ``local`` — Pre-existing local VM (passive, no lifecycle)
+    - ``local-kvm`` — Local KVM/QEMU VM (active create/destroy lifecycle)
     - ``physical`` — Physical router via SSH (privacy: results local only)
 
     Default: ``shc`` (cheapest, proven in testing).
