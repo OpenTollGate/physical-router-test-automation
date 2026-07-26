@@ -70,7 +70,38 @@ def _generate_password():
     env_pw = os.environ.get("TOLLGATE_FIRMWARE_PASSWORD") or os.environ.get("TOLLGATE_VIRTUAL_LAB_PASSWORD")
     if env_pw:
         return env_pw
+    env_path = Path(__file__).parent.parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if line.startswith("TOLLGATE_SSH_PASSWORD="):
+                existing = line.split("=", 1)[1].strip()
+                if existing:
+                    return existing
     return ''.join(secrets.choice('abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789') for _ in range(24))
+
+
+def _ensure_ssh_key():
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(exist_ok=True, mode=0o700)
+
+    key_path = ssh_dir / "id_ed25519"
+    if key_path.exists():
+        return
+
+    gcloud_key = ssh_dir / "google_compute_engine"
+    if gcloud_key.exists():
+        os.symlink(gcloud_key, key_path)
+        gcloud_pub = ssh_dir / "google_compute_engine.pub"
+        if gcloud_pub.exists():
+            os.symlink(gcloud_pub, ssh_dir / "id_ed25519.pub")
+        print(f"Linked gcloud SSH key to {key_path}")
+        return
+
+    print(f"Generating new SSH keypair at {key_path}")
+    subprocess.run([
+        "ssh-keygen", "-t", "ed25519", "-f", str(key_path),
+        "-N", "", "-C", "tollgate-virtual-lab",
+    ], check=True)
 
 
 def _save_credentials(password):
@@ -115,6 +146,7 @@ def _update_env_file(password):
 POC_PASSWORD = _generate_password()
 _save_credentials(POC_PASSWORD)
 _update_env_file(POC_PASSWORD)
+_ensure_ssh_key()
 
 POC_SUBNET = "10.99.99.0/24"
 
