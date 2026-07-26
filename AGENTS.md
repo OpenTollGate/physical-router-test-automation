@@ -18,16 +18,19 @@ This is a **multi-tier test framework** for [tollgate-module-basic-go](https://g
 
 ### VM Provider Abstraction
 
-Tests run on any of four providers via `TOLLGATE_VM_PROVIDER` env var (default: `shc`):
+Tests run on any of five providers via `TOLLGATE_VM_PROVIDER` env var (default: `shc`):
 
 | Provider | Cost | Publishes results? | Use case |
 |----------|------|-------------------|----------|
 | `shc` | $0.01/run | ✅ Yes | Default cloud testing — cheapest, nested KVM |
 | `gcloud` | ~$0.10/run | ✅ Yes | GCP nested-KVM with baked snapshot |
-| `local` | Free | ❌ Never | Local QEMU development — privacy: local results only |
+| `local-kvm` | Free | ❌ Never | Local KVM/QEMU — active VM lifecycle (create/destroy) |
+| `local` | Free | ❌ Never | Pre-existing local VM (passive — no create/destroy) |
 | `physical` | Free | ❌ Never | Physical router — privacy: never publish real SSIDs/MACs/IPs |
 
-**Privacy control**: `can_publish` flag on `VMProvider`. Cloud providers (SHC, GCP) use ephemeral VMs with no real user data — safe to publish to tests.tollgate.me. Local/physical providers may contain real SSIDs, MACs, IPs, SSH keys — results stored in gitignored `results/` directory only. The privacy check is in `test-pr.sh` (line ~323) and gates `publish-report.sh`.
+**Privacy control**: `can_publish` flag on `VMProvider`. Cloud providers (SHC, GCP) use ephemeral VMs with no real user data — safe to publish to tests.tollgate.me. Local providers (`local-kvm`, `local`, `physical`) may contain real SSIDs, MACs, IPs, SSH keys — results stored in gitignored `results/` directory only. The privacy check is in `test-pr.sh` (line ~323) and gates `publish-report.sh`.
+
+**Local testing never publishes.** All three local providers (`local-kvm`, `local`, `physical`) have `can_publish = False`. No logs, screenshots, or test results leave the machine. The `test-pr.sh` gate enforces this — it checks `can_publish` before calling `publish-report.sh`.
 
 ```bash
 # Check if current provider allows publishing
@@ -39,7 +42,7 @@ python3 scripts/provider.py create -p shc --name my-test
 python3 scripts/provider.py destroy -p shc --service-id 690
 ```
 
-Provider implementations: `lib/cloud_lab/provider.py` (SHCProvider, GCPProvider, LocalProvider, PhysicalProvider).
+Provider implementations: `lib/cloud_lab/provider.py` (SHCProvider, GCPProvider, LocalKVMProvider, LocalProvider, PhysicalProvider).
 
 ## Architecture Overview
 

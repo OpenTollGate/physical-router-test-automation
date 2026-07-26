@@ -164,11 +164,14 @@ All local testing providers have `can_publish = False`:
 
 ```python
 # lib/cloud_lab/provider.py
+class LocalKVMProvider(LocalProvider):
+    can_publish = False  # Active QEMU lifecycle — results NEVER leave
+
 class LocalProvider(VMProvider):
-    can_publish = False  # ← Results NEVER leave the machine
+    can_publish = False  # Passive — same
 
 class PhysicalProvider(VMProvider):
-    can_publish = False  # ← Same for physical routers
+    can_publish = False  # Physical routers — same
 ```
 
 This means:
@@ -181,12 +184,15 @@ This means:
 The `test-pr.sh` script checks `can_publish` before calling `publish-report.sh`
 (line ~323). This is a hard gate — not configurable per-test.
 
+**Local testing never publishes. No logs, screenshots, or results leave the machine.**
+
 ## Provider Abstraction
 
 All three layers use the same provider abstraction:
 
 ```
-TOLLGATE_VM_PROVIDER=local      → LocalProvider (QEMU on this machine)
+TOLLGATE_VM_PROVIDER=local-kvm  → LocalKVMProvider (active QEMU create/destroy on this machine)
+TOLLGATE_VM_PROVIDER=local      → LocalProvider (passive — connects to pre-existing VM)
 TOLLGATE_VM_PROVIDER=shc        → SHCProvider (SHC cloud API)
 TOLLGATE_VM_PROVIDER=gcloud     → GCPProvider (GCP nested-KVM)
 TOLLGATE_VM_PROVIDER=pulumi     → PulumiSHCProvider (Pulumi Automation API)
@@ -197,6 +203,28 @@ The test code (`tests/api/*.py`, `tests/captive-portal*.spec.mjs`) is
 provider-agnostic. The provider only affects how the test target (router
 IP, SSH access) is provisioned. The tests themselves are identical
 regardless of provider.
+
+### LocalKVMProvider
+
+`local-kvm` is the active local provider — it creates and destroys QEMU
+VMs using the same `VMProvider` interface as GCP and SHC. This means the
+exact same test code runs on local hardware, GCP, or SHC without changes.
+
+```bash
+# Full lifecycle in one command
+TOLLGATE_VM_PROVIDER=local-kvm python3 -c "
+from lib.cloud_lab.provider import get_provider
+p = get_provider()
+vm = p.create_vm()
+p.wait_for_ready(vm)
+print(p.ssh(vm, 'ndsctl json'))
+p.destroy_vm(vm)
+"
+```
+
+Lifecycle: ~30s (create → ready → destroy).
+Cost: Free (uses local KVM + existing disk images).
+Privacy: `can_publish = False` — results NEVER leave the machine.
 
 ## Sat vs Sats Standardization
 
