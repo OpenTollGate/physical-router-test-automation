@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -537,36 +538,43 @@ class LocalKVMProvider(LocalProvider):
         import subprocess
 
         vlab = self.VLAB_DIR
-        overlay = os.path.join(vlab, self.OPENWRT_OVERLAY)
-        debian_overlay = os.path.join(vlab, self.DEBIAN_OVERLAY)
-        seed_iso = os.path.join(vlab, "images", "seed-local.iso")
-
-        if not os.path.exists(overlay):
-            raise FileNotFoundError(
-                f"OpenWrt overlay not found at {overlay}. "
-                f"Run scripts/virtual-lab.py bootstrap first."
-            )
-
-        self._setup_bridge()
-        self._setup_tap(self.OPENWRT_TAP)
-        self._setup_tap(self.DEBIAN_TAP)
-
-        serial_sock = os.path.join(vlab, "run", "serial.sock")
-        monitor_sock = os.path.join(vlab, "run", "monitor.sock")
-        os.makedirs(os.path.dirname(serial_sock), exist_ok=True)
-
-        self._openwrt_pid = self._start_openwrt(
-            overlay, serial_sock, monitor_sock
+        script = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "scripts", "virtual-lab.py",
         )
 
-        if os.path.exists(debian_overlay) and os.path.exists(seed_iso):
-            boot_log = os.path.join(vlab, "run", "debian-boot.log")
-            self._debian_pid = self._start_debian(
-                debian_overlay, seed_iso, boot_log
+        if not os.path.exists(script):
+            raise FileNotFoundError(
+                f"virtual-lab.py not found at {script}. "
+                f"LocalKVMProvider delegates VM lifecycle to it."
             )
 
+        log.info("Starting POC via virtual-lab.py start-poc")
+        env = {**os.environ, "PYTHONPATH": os.path.dirname(os.path.dirname(os.path.dirname(__file__)))}
+        r = subprocess.run(
+            [sys.executable, script, "start-poc",
+             "--host", "localhost",
+             "--workdir", vlab],
+            capture_output=True, text=True, timeout=300,
+            env=env,
+        )
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"virtual-lab.py start-poc failed (exit {r.returncode}):\n{r.stderr[:500]}"
+            )
+
+        pidfile = os.path.join(vlab, "run", "openwrt.pid")
+        if os.path.exists(pidfile):
+            with open(pidfile) as f:
+                self._openwrt_pid = int(f.read().strip())
+
+        client_pidfile = os.path.join(vlab, "run", "debian-client.pid")
+        if os.path.exists(client_pidfile):
+            with open(client_pidfile) as f:
+                self._debian_pid = int(f.read().strip())
+
         log.info(
-            "LocalKVM VMs started: openwrt PID=%s, debian PID=%s",
+            "LocalKVM VMs started via virtual-lab.py: openwrt PID=%s, debian PID=%s",
             self._openwrt_pid, self._debian_pid,
         )
 
@@ -578,120 +586,34 @@ class LocalKVMProvider(LocalProvider):
             raw={"openwrt_pid": self._openwrt_pid, "debian_pid": self._debian_pid},
         )
 
-    def _setup_bridge(self):
-        import subprocess
-        try:
-            subprocess.run(
-                ["sudo", "ip", "addr", "show", self.BRIDGE_NAME],
-                capture_output=True, check=True, timeout=5,
-            )
-            log.info("Bridge %s already exists", self.BRIDGE_NAME)
-        except subprocess.CalledProcessError:
-            subprocess.run(
-                ["sudo", "ip", "link", "add", self.BRIDGE_NAME, "type", "bridge"],
-                check=True, timeout=5,
-            )
-            self._bridge_created = True
-
-        subprocess.run(
-            ["sudo", "ip", "addr", "add", f"{self.HOST_IP}/24", "dev", self.BRIDGE_NAME],
-            capture_output=True, timeout=5,
-        )
-        subprocess.run(
-            ["sudo", "ip", "link", "set", self.BRIDGE_NAME, "up"],
-            check=True, timeout=5,
-        )
-
-    def _setup_tap(self, tap_name):
-        import subprocess
-        try:
-            subprocess.run(
-                ["sudo", "ip", "tuntap", "add", "dev", tap_name, "mode", "tap"],
-                capture_output=True, check=True, timeout=5,
-            )
-        except subprocess.CalledProcessError:
-            pass
-
-        subprocess.run(
-            ["sudo", "ip", "link", "set", tap_name, "master", self.BRIDGE_NAME],
-            capture_output=True, timeout=5,
-        )
-        subprocess.run(
-            ["sudo", "ip", "link", "set", tap_name, "up"],
-            check=True, timeout=5,
-        )
-
-    def _start_openwrt(self, overlay, serial_sock, monitor_sock):
-        import subprocess
-        cmd = [
-            "qemu-system-x86_64",
-            "-enable-kvm",
-            "-m", "256",
-            "-smp", "1",
-            "-nographic",
-            f"-serial", f"unix:{serial_sock},server,nowait",
-            f"-monitor", f"unix:{monitor_sock},server,nowait",
-            "-drive", f"file={overlay},if=virtio,format=qcow2",
-            "-netdev", f"tap,id=lan,ifname={self.OPENWRT_TAP},script=no,downscript=no",
-            "-device", f"virtio-net-pci,netdev=lan,mac={self.OPENWRT_MAC}",
-        ]
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return proc.pid
-
-    def _start_debian(self, overlay, seed_iso, boot_log):
-        import subprocess
-        cmd = [
-            "qemu-system-x86_64",
-            "-enable-kvm",
-            "-m", "1024",
-            "-smp", "2",
-            "-drive", f"file={overlay},if=virtio",
-            "-drive", f"file={seed_iso},media=cdrom",
-            "-netdev", f"tap,id=net0,ifname={self.DEBIAN_TAP},script=no,downscript=no",
-            "-device", f"virtio-net-pci,netdev=net0,mac={self.DEBIAN_MAC}",
-            "-nographic",
-            f"-serial", f"file:{boot_log}",
-        ]
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return proc.pid
-
     def wait_for_ready(self, vm, timeout=120):
         return super().wait_for_ready(vm, timeout=timeout)
 
     def destroy_vm(self, vm, immediate=True):
         import subprocess
-        for pid_attr in ("_openwrt_pid", "_debian_pid"):
-            pid = getattr(self, pid_attr, None)
-            if pid:
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                    time.sleep(1)
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                setattr(self, pid_attr, None)
 
-        for tap in (self.OPENWRT_TAP, self.DEBIAN_TAP):
-            subprocess.run(
-                ["sudo", "ip", "link", "set", tap, "down"],
-                capture_output=True, timeout=5,
-            )
-            subprocess.run(
-                ["sudo", "ip", "tuntap", "del", "dev", tap, "mode", "tap"],
-                capture_output=True, timeout=5,
-            )
+        vlab = self.VLAB_DIR
+        script = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "scripts", "virtual-lab.py",
+        )
 
-        if self._bridge_created:
-            subprocess.run(
-                ["sudo", "ip", "link", "set", self.BRIDGE_NAME, "down"],
-                capture_output=True, timeout=5,
-            )
-            subprocess.run(
-                ["sudo", "ip", "link", "del", self.BRIDGE_NAME],
-                capture_output=True, timeout=5,
-            )
+        log.info("Stopping POC via virtual-lab.py stop-poc")
+        env = {**os.environ, "PYTHONPATH": os.path.dirname(os.path.dirname(os.path.dirname(__file__)))}
+        r = subprocess.run(
+            [sys.executable, script, "stop-poc",
+             "--host", "localhost",
+             "--workdir", vlab],
+            capture_output=True, text=True, timeout=60,
+            env=env,
+        )
+        if r.returncode != 0:
+            log.warning("virtual-lab.py stop-poc returned %d: %s", r.returncode, r.stderr[:200])
 
-        log.info("LocalKVM VMs destroyed and interfaces cleaned up")
+        self._openwrt_pid = None
+        self._debian_pid = None
+        self._bridge_created = False
+        log.info("LocalKVM VMs destroyed via virtual-lab.py")
 
     def list_vms(self):
         return [
