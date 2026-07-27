@@ -777,7 +777,24 @@ This script creates the cheapest possible VM, runs tests, and shuts down automat
 
 ### Snapshot management
 
-Current snapshot: `tollgate-runner-v17` (Go 1.23, Node 20, Playwright, all repos cloned, 15/15 tests passing).
+Current snapshot: **none** (v17 was lost during cleanup). To re-bake from a fresh e2-medium VM:
+
+```bash
+# 1. Create VM from scratch
+gcloud compute instances create tollgate-bake --zone=us-east1-b --machine-type=e2-medium --image-family=ubuntu-2204-lts
+
+# 2. Bootstrap (SSH in and run):
+#    - Install Go 1.23, Node.js 20, Python venv with pytest+coincurve
+#    - Clone repos, npm install, playwright install chromium
+#    - sudo pip install requests httpx into venv
+
+# 3. Create snapshot
+gcloud compute snapshots create tollgate-runner-v18 \
+  --source-disk=tollgate-bake --source-disk-zone=us-east1-b
+
+# 4. Delete bake VM
+gcloud compute instances delete tollgate-bake --zone=us-east1-b --delete-disks=all
+```
 
 Clean up old snapshots before creating new ones — each snapshot is ~50GB and incurs ~$1/month storage:
 
