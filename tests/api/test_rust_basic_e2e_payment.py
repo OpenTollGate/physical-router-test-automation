@@ -121,7 +121,7 @@ def _pay_token(base_url: str, token: str) -> dict:
     resp = requests.post(
         f"{base_url}/",
         data=token,
-        headers={"Content-Type": "text/plain"},
+        headers={"Content-Type": "text/plain", "X-Forwarded-For": _TEST_IP},
         timeout=15,
     )
     if resp.status_code == 400:

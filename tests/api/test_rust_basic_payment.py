@@ -1,3 +1,5 @@
+import os
+
 import pytest
 import requests
 
@@ -41,10 +43,11 @@ def test_pay_valid_token_returns_1022(rust_basic_server):
     token = _mint_test_token()
     if not token:
         pytest.skip("Cashu mint unavailable — cannot mint a test token (S2 happy path)")
+    client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.0.0.42")
     resp = requests.post(
         f"{rust_basic_server['http_url']}/",
         data=token,
-        headers={"Content-Type": "text/plain"},
+        headers={"Content-Type": "text/plain", "X-Forwarded-For": client_ip},
         timeout=15,
     )
     if resp.status_code == 400:
