@@ -433,6 +433,17 @@ def deploy_session(request, router, backend):
         stop_mock_server()
         return
 
+    # Parity tests manage their own Go+Rust backends on port 2121.
+    # Skip the session-level health check so the parity fixtures can bind.
+    _args = getattr(request.config, "args", []) or []
+    _parity_only = bool(_args) and all(
+        "parity" in str(a).replace(os.sep, "/") for a in _args
+    )
+    if _parity_only:
+        log.info("Parity tests only — skipping session deployment and health checks")
+        yield
+        return
+
     from lib import deploy as deploy_lib
 
     if router is None:
