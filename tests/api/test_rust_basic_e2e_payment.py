@@ -240,41 +240,21 @@ def test_e2e_payment_full_flow(rust_basic_server):
 # Test 2: Auto-expiry -- session with small allotment expires via monitor
 # ---------------------------------------------------------------------------
 
-# The background usage Monitor (src/monitor.rs) revokes sessions when
-# elapsed time exceeds the allotment.  However, as of the current build
-# the Monitor is NOT wired into main.rs -- it exists only as unit-tested
-# code.  Until it is spawned in production, this test is expected to fail
-# (the session remains active because ``used`` is never incremented and
-# the wall-clock ``expiry`` is 1 hour).
-#
-# When the Monitor is connected in main.rs, this test will XPASS and the
-# marker should be removed.
-_expiry_xfail = pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "Background Monitor (monitor.rs) is not started in main.rs -- "
-        "sessions are not auto-revoked. Remove xfail once the monitor "
-        "is wired into the runtime."
-    ),
-)
 
-
-@_expiry_xfail
 def test_e2e_auto_expiry(rust_basic_server):
     """Session with a small allotment auto-expires via the background monitor.
 
-    Mints a 1-sat token (allotment = 5 000 ms = 5 s), pays, confirms the
+    Mints a 2-sat token (allotment = 10 000 ms = 10 s), pays, confirms the
     session is active, then polls /balance until the monitor revokes it
-    (expected within ~10 s: 5 s allotment + 2 s monitor tick + buffer).
+    (expected within ~15 s: 10 s allotment + 2 s monitor tick + buffer).
 
     Requires the background Monitor to be running (src/monitor.rs started
-    from main.rs).  See the xfail marker above for the current status.
+    from main.rs).
     """
     dhcp_backup = _inject_dhcp_leases()
 
     try:
-        # Mint 1 sat -> allotment = (1 / 1) * 5000 = 5000 ms (5 s)
-        token = _mint_test_token(amount=1)
+        token = _mint_test_token(amount=2)
         if not token:
             pytest.skip(
                 "Cashu mint unavailable -- cannot mint a test token "
