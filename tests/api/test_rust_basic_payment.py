@@ -44,17 +44,39 @@ def test_pay_valid_token_returns_1022(rust_basic_server):
     if not token:
         pytest.skip("Cashu mint unavailable — cannot mint a test token (S2 happy path)")
     client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.0.0.42")
-    resp = requests.post(
-        f"{rust_basic_server['http_url']}/",
-        data=token,
-        headers={"Content-Type": "text/plain", "X-Forwarded-For": client_ip},
-        timeout=15,
-    )
-    if resp.status_code == 400:
-        pytest.skip(f"Token verification rejected (mint/keyset drift): {resp.text[:200]}")
-    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:200]}"
-    data = resp.json()
-    assert data["kind"] == 1022, f"Expected kind 1022, got {data.get('kind')}: {resp.text[:200]}"
+    client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "02:00:00:00:00:01")
+
+    original_leases = None
+    try:
+        with open("/tmp/dhcp.leases", "rb") as f:
+            original_leases = f.read()
+    except FileNotFoundError:
+        pass
+    try:
+        with open("/tmp/dhcp.leases", "w") as f:
+            f.write(f"9999999999 {client_mac} {client_ip} test *\n")
+    except OSError:
+        pass
+
+    try:
+        resp = requests.post(
+            f"{rust_basic_server['http_url']}/",
+            data=token,
+            headers={"Content-Type": "text/plain", "X-Forwarded-For": client_ip},
+            timeout=15,
+        )
+        if resp.status_code == 400:
+            pytest.skip(f"Token verification rejected (mint/keyset drift): {resp.text[:200]}")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text[:200]}"
+        data = resp.json()
+        assert data["kind"] == 1022, f"Expected kind 1022, got {data.get('kind')}: {resp.text[:200]}"
+    finally:
+        try:
+            if original_leases is not None:
+                with open("/tmp/dhcp.leases", "wb") as f:
+                    f.write(original_leases)
+        except OSError:
+            pass
 
 
 def _mint_test_token():
