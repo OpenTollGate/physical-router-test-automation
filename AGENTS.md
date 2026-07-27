@@ -710,25 +710,84 @@ After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check tha
 
 ### Cost Policy
 
-**Always use the cheapest machine types and regions.** Our workload is light (~2.5GB RAM total for QEMU VMs). Do not use expensive machine types (c2, custom, anything >2 vCPU) without explicit user approval.
+**Match the machine type to the workload.** Most local dry tests (API, Playwright) do NOT need nested KVM and run fine on cheap E2 instances. Only OpenWrt QEMU VM tests (NDS gating, virtual lab) require nested KVM (N2 series).
 
-| Machine Type | $/hr | RAM | CPU Platform | Notes |
+| Workload | Needs nested KVM? | Machine Type | $/hr | $/day |
 |---|---|---|---|---|
-| `n1-standard-2` | $0.0950 | 7.5 GB | Intel Skylake | **Default. Cheapest.** |
-| `n2-standard-2` | $0.0971 | 8 GB | Intel Cascade Lake | Fallback. 2% more. |
+| Local dry tests (`local-test.sh`) | No | `e2-medium` | $0.033 | $0.80 |
+| API + Playwright via `gcp-dry-test.sh` | No | `e2-medium` | $0.033 | $0.80 |
+| OpenWrt VM tests (NDS gating, `start-poc`) | Yes | `n2-standard-2` | $0.097 | $2.33 |
+| Full cloud lab (`cloud-lab.py submit`) | Yes | `n2-standard-2` | $0.097 | $2.33 |
 
-**Forbidden without user approval:** `c2-standard-4` ($0.1942/hr, 2x price), `n2-standard-4` ($0.1942/hr), any E2/N2D/T2A (no nested virt).
+**Forbidden without explicit user approval:** any machine type >2 vCPU (n2-standard-4+ at $0.19+/hr). The 2-vCPU types are sufficient for all test workloads observed.
+
+**E2 vs N2:** E2 (AMD Rome) does not support nested KVM. N2 (Intel Cascade Lake) does. If a test fails with "could not access /dev/kvm" on E2, switch to n2-standard-2 — the test needs nested virtualization.
 
 **Region priority (cheapest first):**
 
-| Tier | Regions | $/hr (N1) | Use When |
-|---|---|---|---|
-| Tier 1 (cheapest) | `us-central1`, `us-east1`, `us-east5`, `us-west1` | $0.0950 | Default |
-| Tier 2 (+10%) | `northamerica-northeast1/2`, `europe-west1`, `europe-west4` | $0.1045 | Tier 1 exhausted |
+| Tier | Regions | Use When |
+|---|---|---|
+| Tier 1 (cheapest) | `us-central1`, `us-east1`, `us-east5`, `us-west1` | Default |
+| Tier 2 (+10%) | `northamerica-northeast1/2`, `europe-west1`, `europe-west4` | Tier 1 exhausted |
 
-The fallback logic in `_create_vm_with_fallback()` tries all Tier 1 zones, then Tier 2, then alternates machine type (N1 → N2). **Never fall back to regions >20% more expensive** without asking the user first.
+The fallback logic in `_create_vm_with_fallback()` tries all Tier 1 zones, then Tier 2. **Never fall back to regions >20% more expensive** without asking the user first.
 
-`scripts/cloud-lab.py submit` runs TollGate tests in nested KVM on a GCP VM (`n1-standard-2` + the `SNAPSHOT_NAME` configured in `lib/cloud_lab/constants.py`). The current snapshot is `tollgate-runner-baked-v16`; newer baked snapshots must be verified before becoming the default.
+### Auto-Shutdown (MANDATORY)
+
+**Never leave a GCP VM running unattended.** Every VM must have a shutdown plan:
+
+1. **Fire-and-forget workers** (`cloud-lab.py submit`): The startup script self-deletes the VM after tests complete. A 90-minute hard timeout in the script ensures no runaway costs.
+
+2. **Manual/interactive sessions**: Always stop the VM when done:
+   ```bash
+   gcloud compute instances stop <vm-name> --zone=<zone>
+   ```
+
+3. **Safety net — cron-based auto-shutdown**: On any GCP VM used for interactive testing, install a 2-hour auto-shutdown timer at boot:
+   ```bash
+   echo "shutdown -P now" | at now + 2 hours
+   ```
+   This prevents runaway costs if you forget to stop the VM.
+
+4. **Stale VM cleanup**: Before starting work, check for orphaned VMs:
+   ```bash
+   gcloud compute instances list
+   # Stop or delete any VMs you don't recognize
+   ```
+
+### Quick GCP dry test runner
+
+For API + Playwright tests (no nested KVM needed), use `scripts/gcp-dry-test.sh`:
+
+```bash
+# Spin up e2-medium from snapshot, run tests, auto-shutdown
+./scripts/gcp-dry-test.sh
+
+# With Playwright (starts Vite + runs browser tests too)
+./scripts/gcp-dry-test.sh --playwright
+
+# Use n2-standard-2 for nested KVM tests (OpenWrt VM)
+./scripts/gcp-dry-test.sh --nested-kvm
+
+# Keep VM running after tests (for debugging)
+./scripts/gcp-dry-test.sh --keep-running
+```
+
+This script creates the cheapest possible VM, runs tests, and shuts down automatically. The 2-hour safety net ensures no runaway costs even if the script itself crashes.
+
+### Snapshot management
+
+Current snapshot: `tollgate-runner-v17` (Go 1.23, Node 20, Playwright, all repos cloned, 15/15 tests passing).
+
+Clean up old snapshots before creating new ones — each snapshot is ~50GB and incurs ~$1/month storage:
+
+```bash
+gcloud compute snapshots list
+# Delete old snapshots
+gcloud compute snapshots delete <old-snapshot-name> --quiet
+```
+
+Update `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py` after verifying a new snapshot works end-to-end.
 
 ### Architecture
 
