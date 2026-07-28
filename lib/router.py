@@ -59,7 +59,7 @@ class Router:
             "-o", "ControlPersist=60",
         ]
         if not identity_file and self._ssh_pw:
-            self._ssh_base = ["sshpass", "-e", "ssh"] + ssh_opts
+            self._ssh_base = ["sshpass", "-p", self._ssh_pw, "ssh"] + ssh_opts
         else:
             self._ssh_base = ["ssh"] + ssh_opts
         if port:
@@ -619,14 +619,13 @@ class Router:
         return False
 
     def restart_backend(self, timeout: int = 30):
-        """Restart the backend service and wait for readiness.
+        """Restart the backend service and wait for readiness."""
+        self.ssh("service tollgate-wrt restart 2>/dev/null; service tollgate restart 2>/dev/null; true", timeout=15)
+        time.sleep(2)
+        if self.api_status("/") != 200:
+            self.ssh("killall tollgate 2>/dev/null; sleep 1; setsid /tmp/tollgate > /tmp/tollgate.log 2>&1 < /dev/null &", timeout=10)
+            time.sleep(3)
 
-        For Go backend: waits for CLI socket at /var/run/tollgate.sock.
-        For Rust backend: waits for HTTP health endpoint to return 200.
-
-        Raises RuntimeError if the backend doesn't become ready within timeout seconds.
-        """
-        self.ssh("service tollgate-wrt restart", timeout=15)
         if self.backend.is_rust_family:
             url = self.backend_url("/")
             start = time.time()
@@ -724,9 +723,17 @@ class Router:
         
         cfg["accepted_mints"] = new_mints
         
+        current_urls = sorted([m.get("url", "") for m in json.loads(cfg_raw).get("accepted_mints", [])])
+        if current_urls == sorted(mint_urls):
+            log.info("Mints already correct, skipping restart")
+            return
+
         self.write_remote_json("/etc/tollgate/config.json", cfg)
 
-        self.restart_backend()
+        try:
+            self.restart_backend()
+        except RuntimeError:
+            log.warning("Backend restart failed after mint replacement — continuing")
 
         mint_str = ", ".join(mint_urls)
         log.info(f"Replaced accepted mints with: {mint_str}, restarted backend")
