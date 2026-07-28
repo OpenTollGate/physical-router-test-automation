@@ -747,13 +747,33 @@ The fallback logic in `_create_vm_with_fallback()` tries all Tier 1 zones, then 
    ```bash
    echo "shutdown -P now" | at now + 2 hours
    ```
-   This prevents runaway costs if you forget to stop the VM.
 
-4. **Stale VM cleanup**: Before starting work, check for orphaned VMs:
+4. **VM sweeper cron job** (host-side safety net): Install `scripts/gcp-vm-sweeper.sh` as a cron job on your local machine. It checks GCP every 15 minutes and stops any VM running longer than the threshold (default: 2 hours):
+   ```bash
+   # Install (one-time)
+   ./scripts/gcp-install-sweeper-cron.sh
+
+   # Dry-run first to see what it would do
+   ./scripts/gcp-vm-sweeper.sh --dry-run
+
+   # Custom threshold
+   TOLLGATE_SWEEPER_HOURS=4 ./scripts/gcp-install-sweeper-cron.sh
+   ```
+
+5. **Stale VM cleanup**: Before starting work, check for orphaned VMs:
    ```bash
    gcloud compute instances list
    # Stop or delete any VMs you don't recognize
    ```
+
+### Budget alerts (manual setup)
+
+The GCP service account (`tollgate-ci-runner`) cannot access the Billing API. Set up budget alerts manually:
+
+1. Go to [GCP Console → Billing → Budgets & alerts](https://console.cloud.google.com/billing/_/budgets)
+2. Create a budget for project `tollgate-test-lab`
+3. Set threshold: **$10/month** (alert at 50%, 90%, 100%)
+4. Connect to email/Slack notification channel
 
 ### Quick GCP dry test runner
 
