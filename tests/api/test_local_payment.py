@@ -217,3 +217,42 @@ def test_s11_mint_429_retry():
     resp = _post_token(token)
     kind = resp.get("kind")
     assert kind in (1022, 21023), f"Expected session or notice after 429 retry, got kind={kind}: {json.dumps(resp)[:200]}"
+
+
+# ─── S12: P2PK-locked tokens rejected (regression for #330/#324) ─
+
+def test_s12_reject_locked_tokens():
+    if not _local_mint_available():
+        pytest.skip("Local mock mint not available (port 3338)")
+    import base64
+    locked_proof = {
+        "amount": 1,
+        "id": "00" + "0" * 14,
+        "secret": '["P2PK",{"nonce":"abc123","data":"","tags":[["pubkeys","02abcdef"]]}]',
+        "C": "02" + "0" * 62,
+    }
+    payload = {
+        "token": [{
+            "mint": MINT_URL,
+            "proofs": [locked_proof],
+        }],
+        "unit": "sat",
+        "memo": "locked token test",
+    }
+    json_bytes = json.dumps(payload, separators=(',', ':')).encode()
+    b64 = base64.urlsafe_b64encode(json_bytes).decode().rstrip('=')
+    token = f"cashuA{b64}"
+    try:
+        r = requests.post(
+            f"{BACKEND_URL}/",
+            data=token,
+            headers={"Content-Type": "text/plain"},
+            timeout=15,
+        )
+    except requests.exceptions.ConnectionError:
+        return
+    if r.status_code == 429:
+        pytest.skip("Rate limited — run test in isolation")
+    resp = r.json() if r.headers.get("Content-Type", "").startswith("application/json") else {}
+    kind = resp.get("kind")
+    assert kind == 21023, f"Expected rejection (21023) for P2PK-locked token, got kind={kind}: {json.dumps(resp)[:200]}"
