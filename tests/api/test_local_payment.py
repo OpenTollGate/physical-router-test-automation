@@ -166,3 +166,54 @@ def test_s7_usage():
     r = requests.get(f"{BACKEND_URL}/usage", timeout=5)
     body = r.text.strip()
     assert len(body) > 0, f"/usage returned empty: status={r.status_code}"
+
+
+# ─── S8: /usage returns 200 not 500 (regression for #316) ────────
+
+def test_s8_usage_status_code():
+    r = requests.get(f"{BACKEND_URL}/usage", timeout=5)
+    assert r.status_code == 200, f"/usage should return 200, got {r.status_code}"
+
+
+# ─── S9: Advertisement unit is "sat" not "sats" (regression #310) ─
+
+def test_s9_advertisement_unit():
+    r = requests.get(f"{BACKEND_URL}/", timeout=5)
+    d = r.json()
+    tags = {t[0]: t[1:] for t in d.get("tags", [])}
+    pps = tags.get("price_per_step", [])
+    if len(pps) >= 3:
+        unit = pps[2]
+        assert unit == "sat", f"Expected unit='sat' (NUT-00), got '{unit}'"
+
+
+# ─── S10: Large POST body rejected (regression for #321) ─────────
+
+def test_s10_body_size_limit():
+    large_body = "x" * (2 * 1024 * 1024)
+    try:
+        r = requests.post(
+            f"{BACKEND_URL}/",
+            data=large_body,
+            headers={"Content-Type": "text/plain"},
+            timeout=10,
+        )
+        assert r.status_code >= 400, f"Expected rejection of 2MB body, got {r.status_code}"
+    except requests.exceptions.ConnectionError:
+        pass
+
+
+# ─── S11: Payment survives mint 429 (regression for #314) ────────
+
+@pytest.mark.xfail(reason="#314 not merged — 429 retry not yet implemented on main")
+def test_s11_mint_429_retry():
+    if not _local_mint_available():
+        pytest.skip("Local mock mint not available (port 3338)")
+    try:
+        requests.get(f"{MINT_URL}/test/set-swap-error?count=1&code=429", timeout=3)
+    except Exception:
+        pytest.skip("Mock mint does not support /test/set-swap-error")
+    token = _create_token(amount=1)
+    resp = _post_token(token)
+    kind = resp.get("kind")
+    assert kind in (1022, 21023), f"Expected session or notice after 429 retry, got kind={kind}: {json.dumps(resp)[:200]}"

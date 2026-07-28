@@ -105,6 +105,8 @@ class MockMint:
             self._save_keyset()
         self.spent_secrets: set[str] = set()
         self.spent_ys: set[str] = set()
+        self.swap_error_count = 0
+        self.swap_error_code = 0
 
     def _generate_keyset(self):
         for i in range(60):
@@ -232,6 +234,12 @@ class MockMint:
 
     def handle_swap(self, body: dict) -> tuple[dict, int]:
         """Handle POST /v1/swap."""
+        if self.swap_error_count > 0:
+            self.swap_error_count -= 1
+            code = self.swap_error_code or 429
+            log(f"SWAP INJECT ERROR remaining={self.swap_error_count} code={code}")
+            return {"code": 0, "error": "Simulated mint error"}, code
+
         inputs = body.get("inputs", [])
         outputs = body.get("outputs", [])
         log(f"SWAP inputs={len(inputs)} outputs={len(outputs)}")
@@ -336,6 +344,13 @@ class MintHandler(BaseHTTPRequestHandler):
                 "spent_ys": list(MINT.spent_ys),
                 "count": len(MINT.spent_secrets),
             })
+        elif path == "/test/set-swap-error":
+            from urllib.parse import parse_qs
+            params = parse_qs(query)
+            MINT.swap_error_count = int(params.get("count", ["1"])[0])
+            MINT.swap_error_code = int(params.get("code", ["429"])[0])
+            log(f"SET SWAP ERROR count={MINT.swap_error_count} code={MINT.swap_error_code}")
+            self._json(200, {"ok": True, "count": MINT.swap_error_count, "code": MINT.swap_error_code})
         else:
             log(f"404 NOT FOUND: {path}")
             self._json(404, {"error": "not found"})
