@@ -794,13 +794,7 @@ def test_parity_invalid_token_field_set(go_responses, rust_responses):
 # Tests: Lightning invoice (POST + GET /ln-invoice) parity
 # ---------------------------------------------------------------------------
 
-_xfail_mac = pytest.mark.xfail(
-    reason="Go requires MAC resolution for /ln-invoice — not available locally without NDS/DHCP",
-    strict=False,
-)
 
-
-@_xfail_mac
 def test_parity_ln_invoice_post_status(go_responses, rust_responses):
     """POST /ln-invoice returns HTTP 200 on both backends."""
     go_code = go_responses["POST /ln-invoice"][0]
@@ -808,7 +802,6 @@ def test_parity_ln_invoice_post_status(go_responses, rust_responses):
     _assert_parity("POST /ln-invoice", go_responses, rust_responses, "status_code", go_code, rust_code)
 
 
-@_xfail_mac
 def test_parity_ln_invoice_post_field_set(go_responses, rust_responses):
     """POST /ln-invoice response has matching JSON field names."""
     go_body = go_responses["POST /ln-invoice"][1]
@@ -826,7 +819,6 @@ def test_parity_ln_invoice_post_field_set(go_responses, rust_responses):
     _assert_parity("POST /ln-invoice", go_responses, rust_responses, "field_set", go_keys, rust_keys)
 
 
-@_xfail_mac
 def test_parity_ln_invoice_get_status(go_responses, rust_responses):
     """GET /ln-invoice returns the same HTTP status on both backends."""
     go_code = go_responses["GET /ln-invoice"][0]
@@ -834,7 +826,6 @@ def test_parity_ln_invoice_get_status(go_responses, rust_responses):
     _assert_parity("GET /ln-invoice", go_responses, rust_responses, "status_code", go_code, rust_code)
 
 
-@_xfail_mac
 def test_parity_ln_invoice_get_field_set(go_responses, rust_responses):
     """GET /ln-invoice response has matching JSON field names."""
     go_body = go_responses["GET /ln-invoice"][1]
