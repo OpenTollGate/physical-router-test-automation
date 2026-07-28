@@ -7,6 +7,12 @@ from lib.helpers import parse_json_or_fail, require_client_identity
 
 pytestmark = [pytest.mark.rust_only, pytest.mark.api, pytest.mark.smoke]
 
+if os.environ.get("TOLLGATE_BACKEND") in ("rust-basic", "rust-embedded"):
+    pytest.skip(
+        "V1 API tests are for tollgate-rs, not tollgate-module-basic-rust",
+        allow_module_level=True,
+    )
+
 
 def _client_ip(router):
     """Get client IP, skipping if unavailable."""
