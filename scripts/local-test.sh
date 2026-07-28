@@ -134,6 +134,7 @@ done
 echo "Starting backend on $LOOPBACK:${BACKEND_PORT}..."
 TOLLGATE_TEST_CONFIG_DIR="$CONFIG_DIR" \
 PATH="$STUB_DIR:$PATH" \
+TOLLGATE_RATE_LIMIT_RPM=1000 \
     "$BACKEND_BIN" > /tmp/tollgate-backend.log 2>&1 &
 BACKEND_PID=$!
 
