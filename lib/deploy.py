@@ -910,13 +910,13 @@ def deploy(router, ipk_path: Path, reboot: bool = False, backend=None) -> dict[s
         timeout=10,
     )
 
-    health_timeout = 120 if backend and backend.is_rust else 60
+    health_timeout = 120 if backend and backend.is_rust_family else 60
     log.info("Waiting for backend health on port 2121 (timeout=%ds)", health_timeout)
     healthy = _wait_for_health(router, timeout=health_timeout)
     installed_version = _parse_version(version_out)
     health_code = 200 if healthy else router.api_status("/")
 
-    if backend and backend.is_rust and health_code == 200:
+    if backend and backend.is_rust_family and health_code == 200:
         _write_rust_compat_config(router)
 
     return {

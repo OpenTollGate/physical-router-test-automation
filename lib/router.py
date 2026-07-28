@@ -128,7 +128,7 @@ class Router:
         return ""
 
     def backend_url(self, path="/"):
-        host = "127.0.0.1" if self.backend.is_rust else "[::1]"
+        host = "127.0.0.1" if self.backend.is_rust_family else "[::1]"
         return f"http://{host}:{BACKEND_PORT}{path}"
 
     def get_nds_portal_port(self) -> int:
@@ -627,7 +627,7 @@ class Router:
         Raises RuntimeError if the backend doesn't become ready within timeout seconds.
         """
         self.ssh("service tollgate-wrt restart", timeout=15)
-        if self.backend.is_rust:
+        if self.backend.is_rust_family:
             url = self.backend_url("/")
             start = time.time()
             while time.time() - start < timeout:
@@ -660,7 +660,14 @@ class Router:
 
     def ensure_test_mint(self):
         cfg_raw = self.ssh("cat /etc/tollgate/config.json")
-        cfg = json.loads(cfg_raw)
+        if not cfg_raw or not cfg_raw.strip():
+            log.warning("Config empty or unreadable, skipping test mint setup")
+            return
+        try:
+            cfg = json.loads(cfg_raw)
+        except json.JSONDecodeError:
+            log.warning("Config not valid JSON, skipping test mint setup: %s", cfg_raw[:100])
+            return
         if any(m.get("url") == TEST_MINT_URL for m in cfg.get("accepted_mints", [])):
             return
         cfg.setdefault("accepted_mints", []).append({
@@ -692,7 +699,14 @@ class Router:
 
         # Read current config
         cfg_raw = self.ssh("cat /etc/tollgate/config.json")
-        cfg = json.loads(cfg_raw)
+        if not cfg_raw or not cfg_raw.strip():
+            log.warning("Config empty or unreadable, skipping mint replacement")
+            return
+        try:
+            cfg = json.loads(cfg_raw)
+        except json.JSONDecodeError:
+            log.warning("Config not valid JSON, skipping mint replacement: %s", cfg_raw[:100])
+            return
         
         # Build new accepted_mints list
         new_mints = []

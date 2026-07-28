@@ -20,6 +20,10 @@ class BackendConfig:
         return self.type == "rust"
 
     @property
+    def is_rust_family(self) -> bool:
+        return self.type in ("rust", "rust-basic", "rust-embedded")
+
+    @property
     def is_go(self) -> bool:
         return self.type in ("go", "go-cdk")
 

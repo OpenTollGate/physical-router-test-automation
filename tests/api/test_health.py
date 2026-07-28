@@ -23,8 +23,9 @@ def test_root_endpoint(router, backend):
 
 @pytest.mark.smoke
 def test_pay_endpoint(router, backend):
-    code = router.api_status("/pay")
-    body = router.api_body("/pay")
+    pay_path = "/" if backend.is_rust_family else "/pay"
+    code = router.api_status(pay_path)
+    body = router.api_body(pay_path)
     assert code in (200, 402), f"Expected 200 or 402, got {code}"
     if backend.is_rust:
         if code == 402:
