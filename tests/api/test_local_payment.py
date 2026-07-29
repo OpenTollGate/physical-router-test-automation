@@ -205,7 +205,6 @@ def test_s10_body_size_limit():
 
 # ─── S11: Payment survives mint 429 (regression for #314) ────────
 
-@pytest.mark.xfail(reason="#314 not merged — 429 retry not yet implemented on main")
 def test_s11_mint_429_retry():
     if not _local_mint_available():
         pytest.skip("Local mock mint not available (port 3338)")
