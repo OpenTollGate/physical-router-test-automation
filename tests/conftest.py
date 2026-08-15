@@ -24,7 +24,14 @@ from lib.clients.wifi import WiFi
 from lib.clients.desktop import MacWiFiClient, MacAdapter, LinuxWiFiClient, LinuxAdapter
 from lib.clients.container import ContainerClient
 from lib.constants import DEFAULT_STEP_SIZE_MS, NDS_PORTAL_PORT
-from lib.backend import BackendConfig
+from lib.backend import BackendConfig, BACKEND_CHOICES_CLI
+
+# --- Mock mode support ---
+# When TOLLGATE_MOCK=1 is set, tests run against a MockRouter that returns
+# canned responses and serves a local HTTP backend. No router hardware needed.
+IS_MOCK_MODE = os.environ.get("TOLLGATE_MOCK", "").lower() in ("1", "true", "yes")
+if IS_MOCK_MODE:
+    from lib.mock_router import MockRouter, stop_mock_server, get_mock_server
 
 # Register the auto-minting Cashu fixture module so its `minted_token` fixture
 # (lib/cashu_fixture.py, Part A of WD6) is discoverable by any test by name.
@@ -237,8 +244,8 @@ def pytest_addoption(parser):
                      help="Reboot router after deploy and wait for it to come back")
     parser.addoption("--expected-pr", default=None, type=int,
                      help="PR number being tested. Tests marked @pytest.mark.pr(N) where N != expected_pr are expected to fail/skip.")
-    parser.addoption("--backend", default=None, choices=["go", "rust"],
-                     help="TollGate backend type: 'go' (Go v1) or 'rust' (Rust v1). Default: TOLLGATE_BACKEND env or 'go'")
+    parser.addoption("--backend", default=None, choices=list(BACKEND_CHOICES_CLI),
+                     help="TollGate backend type: 'go' (Go v1), 'rust' (Rust v1 / tollgate-rs), or 'rust-basic' (tollgate-module-basic-rust). Default: TOLLGATE_BACKEND env or 'go'")
     parser.addoption("--lock-phase", default=None,
                      help="Auto-acquire router lock with this phase description. "
                           "Prevents concurrent sessions on the same router.")
@@ -251,11 +258,18 @@ def pytest_configure(config):
     lab_type_opt = config.getoption("--lab-type", default=None)
     if lab_type_opt:
         os.environ["TOLLGATE_LAB_TYPE"] = lab_type_opt
+    elif IS_MOCK_MODE:
+        os.environ["TOLLGATE_LAB_TYPE"] = "mock"
     elif not os.environ.get("TOLLGATE_LAB_TYPE"):
         if os.environ.get("TOLLGATE_VIRTUAL_LAB"):
             os.environ["TOLLGATE_LAB_TYPE"] = "virtual-lab"
         else:
             os.environ["TOLLGATE_LAB_TYPE"] = "physical"
+
+    if IS_MOCK_MODE:
+        from lib.mock_router import get_mock_server as _gms
+        _srv = _gms()
+        os.environ["TOLLGATE_BACKEND_URL"] = _srv.url
 
 
 @pytest.fixture(scope="session")
@@ -275,6 +289,18 @@ def backend(request):
 
 @pytest.fixture(scope="session")
 def router(request, backend):
+    if IS_MOCK_MODE:
+        log.info("TOLLGATE_MOCK=1 — using MockRouter (no physical router needed)")
+        phone_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.0.0.100")
+        phone_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "00:11:22:33:44:55")
+        mock = MockRouter(
+            host="127.0.0.1",
+            phone_ip=phone_ip,
+            phone_mac=phone_mac,
+            backend=backend,
+        )
+        return mock
+
     host = os.environ.get("TOLLGATE_SSH_HOST") or os.environ.get("ROUTER_IP")
     identity_file = os.environ.get("TOLLGATE_SSH_KEY", "")
     jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", "")
@@ -401,6 +427,23 @@ def chain_routers(backend):
 
 @pytest.fixture(scope="session", autouse=True)
 def deploy_session(request, router, backend):
+    if IS_MOCK_MODE:
+        log.info("TOLLGATE_MOCK=1 — skipping deployment and health checks")
+        yield
+        stop_mock_server()
+        return
+
+    # Parity tests manage their own Go+Rust backends on port 2121.
+    # Skip the session-level health check so the parity fixtures can bind.
+    _args = getattr(request.config, "args", []) or []
+    _parity_only = bool(_args) and all(
+        "parity" in str(a).replace(os.sep, "/") for a in _args
+    )
+    if _parity_only:
+        log.info("Parity tests only — skipping session deployment and health checks")
+        yield
+        return
+
     from lib import deploy as deploy_lib
 
     if router is None:
@@ -534,6 +577,8 @@ def adb(request, router):
 
 @pytest.fixture(scope="session")
 def cashu():
+    if IS_MOCK_MODE:
+        pytest.skip("cashu fixture not available in mock mode (no real mint)")
     mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
     minter = create_minter(mint_url)
     for attempt in range(5):
@@ -592,6 +637,26 @@ def attach_results(request, results_dir):
 
 
 @pytest.fixture(autouse=True)
+def _mock_fast_sleep():
+    """In mock mode, patch time.sleep to be near-instant for long sleeps.
+
+    Tests with hardcoded time.sleep(15) or time.sleep(35) would exceed
+    pytest --timeout=10 and hang the suite. In mock mode there is no real
+    hardware timing to wait for, so we cap long sleeps at 0.01s.
+    """
+    if not IS_MOCK_MODE:
+        yield
+        return
+    import time as _time
+    import unittest.mock as _mock
+    orig_sleep = _time.sleep
+    def _fast_sleep(secs):
+        orig_sleep(0.01 if secs > 1 else secs)
+    with _mock.patch("time.sleep", side_effect=_fast_sleep):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def container_nds_preflight(request):
     if not _is_container_client(request.config):
         return
@@ -601,6 +666,10 @@ def container_nds_preflight(request):
         return
     router = request.getfixturevalue("router")
     _prepare_container_nds_client(router)
+
+    client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
+    if client_mac:
+        router.ssh(f"ndsctl deauth {client_mac} 2>/dev/null || true", timeout=10)
 
 
 def _get_pay_via_marker(item):
@@ -770,6 +839,20 @@ def pytest_collection_modifyitems(config, items):
     phone = [t for t in items if "phone" in t.keywords]
     other = [t for t in items if "api" not in t.keywords and "phone" not in t.keywords]
     items[:] = api + other + phone
+
+    if IS_MOCK_MODE:
+        _mock_skip = pytest.mark.skip(
+            reason="skipped in mock mode (requires external binaries or real hardware state)"
+        )
+        _mock_skip_fnames = {
+            "test_go_rust_basic_parity.py",
+            "test_mint_wallet_compat.py",
+            "test_nds_gating.py",
+        }
+        for item in items:
+            fname = os.path.basename(str(item.fspath))
+            if fname in _mock_skip_fnames:
+                item.add_marker(_mock_skip)
 
     metadata = {}
     for item in items:
@@ -1179,6 +1262,9 @@ def pytest_sessionstart(session):
 
 def pytest_sessionfinish(session, exitstatus):
     _save_test_metadata(session)
+
+    if IS_MOCK_MODE:
+        return
 
     global _session_lock, _hardware_lock_acquired
     if _hardware_lock_acquired:

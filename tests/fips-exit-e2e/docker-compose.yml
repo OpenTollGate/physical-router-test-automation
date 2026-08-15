@@ -1,0 +1,54 @@
+# FIPS exit-node e2e topology — local Docker test harness
+#
+# Spins up:
+#   fips-node  — raw FIPS daemon that peers with VPS1
+#   probe      — utility container for running smoke tests
+#
+# Usage:
+#   docker compose build fips-node
+#   docker compose run --rm fips-node
+#
+# Or run with env overrides:
+#   FIPS_PEER_NPUB=npub1... docker compose up
+
+services:
+  fips-node:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.fips-node
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      FIPS_NSEC: "${FIPS_NSEC}"
+      FIPS_NPUB: "${FIPS_NPUB}"
+      FIPS_PEER_NPUB: "${FIPS_PEER_NPUB}"
+      FIPS_PEER_ADDR: "${FIPS_PEER_ADDR:-66.92.204.38:2121}"
+      FIPS_UDP_BIND: "${FIPS_UDP_BIND:-0.0.0.0:2121}"
+      FIPS_TCP_BIND: "${FIPS_TCP_BIND:-0.0.0.0:8443}"
+      FIPS_EXTERNAL_ADDR: "${FIPS_EXTERNAL_ADDR:-}"
+      FIPS_TUN_MTU: "${FIPS_TUN_MTU:-1280}"
+    networks:
+      e2e:
+        ipv4_address: 10.203.0.10
+
+  probe:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.fips-node
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    entrypoint: ["sleep", "infinity"]
+    networks:
+      e2e:
+        ipv4_address: 10.203.0.20
+
+networks:
+  e2e:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.203.0.0/24

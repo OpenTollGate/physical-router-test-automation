@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -490,7 +492,141 @@ class PhysicalProvider(VMProvider):
 
 
 _PROVIDERS["local"] = LocalProvider
+_PROVIDERS["local-kvm"] = None  # populated below
 _PROVIDERS["physical"] = PhysicalProvider
+
+
+class LocalKVMProvider(LocalProvider):
+    """Active local KVM/QEMU provider — creates and destroys VMs on this machine.
+
+    Unlike LocalProvider (which connects to pre-existing VMs), this provider
+    manages the full QEMU lifecycle: creates an OpenWrt VM + Debian client
+    VM from local disk images, waits for SSH, and tears everything down
+    when tests complete.
+
+    Uses the same VMProvider interface as GCPProvider and SHCProvider, so
+    all test code runs identically regardless of provider.
+
+    Privacy: can_publish=False — local VMs may contain real configs.
+    """
+
+    provider_name = "local-kvm"
+    can_publish = False
+
+    VLAB_DIR = os.environ.get(
+        "TOLLGATE_VLAB_DIR",
+        os.path.expanduser("~/tollgate-virtual-lab"),
+    )
+    OPENWRT_OVERLAY = "overlays/tollgate-poc.qcow2"
+    DEBIAN_OVERLAY = "overlays/debian-client.qcow2"
+    BRIDGE_NAME = "tg-poc-br"
+    OPENWRT_TAP = "tg-poc-tap"
+    DEBIAN_TAP = "tg-poc-tap2"
+    OPENWRT_IP = "10.99.99.1"
+    DEBIAN_IP = "10.99.99.100"
+    HOST_IP = "10.99.99.2"
+    OPENWRT_MAC = "52:54:00:12:34:56"
+    DEBIAN_MAC = "de:54:4e:91:49:da"
+
+    def __init__(self):
+        super().__init__()
+        self._openwrt_pid: int | None = None
+        self._debian_pid: int | None = None
+        self._bridge_created = False
+
+    def create_vm(self, name="local-kvm", **kwargs):
+        import subprocess
+
+        vlab = self.VLAB_DIR
+        script = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "scripts", "virtual-lab.py",
+        )
+
+        if not os.path.exists(script):
+            raise FileNotFoundError(
+                f"virtual-lab.py not found at {script}. "
+                f"LocalKVMProvider delegates VM lifecycle to it."
+            )
+
+        log.info("Starting POC via virtual-lab.py start-poc")
+        env = {**os.environ, "PYTHONPATH": os.path.dirname(os.path.dirname(os.path.dirname(__file__)))}
+        r = subprocess.run(
+            [sys.executable, script, "start-poc",
+             "--host", "localhost",
+             "--workdir", vlab],
+            capture_output=True, text=True, timeout=300,
+            env=env,
+        )
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"virtual-lab.py start-poc failed (exit {r.returncode}):\n{r.stderr[:500]}"
+            )
+
+        pidfile = os.path.join(vlab, "run", "openwrt.pid")
+        if os.path.exists(pidfile):
+            with open(pidfile) as f:
+                self._openwrt_pid = int(f.read().strip())
+
+        client_pidfile = os.path.join(vlab, "run", "debian-client.pid")
+        if os.path.exists(client_pidfile):
+            with open(client_pidfile) as f:
+                self._debian_pid = int(f.read().strip())
+
+        log.info(
+            "LocalKVM VMs started via virtual-lab.py: openwrt PID=%s, debian PID=%s",
+            self._openwrt_pid, self._debian_pid,
+        )
+
+        return VMInfo(
+            name=name,
+            service_id="local-kvm",
+            ip=self.OPENWRT_IP,
+            provider="local-kvm",
+            raw={"openwrt_pid": self._openwrt_pid, "debian_pid": self._debian_pid},
+        )
+
+    def wait_for_ready(self, vm, timeout=120):
+        return super().wait_for_ready(vm, timeout=timeout)
+
+    def destroy_vm(self, vm, immediate=True):
+        import subprocess
+
+        vlab = self.VLAB_DIR
+        script = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "scripts", "virtual-lab.py",
+        )
+
+        log.info("Stopping POC via virtual-lab.py stop-poc")
+        env = {**os.environ, "PYTHONPATH": os.path.dirname(os.path.dirname(os.path.dirname(__file__)))}
+        r = subprocess.run(
+            [sys.executable, script, "stop-poc",
+             "--host", "localhost",
+             "--workdir", vlab],
+            capture_output=True, text=True, timeout=60,
+            env=env,
+        )
+        if r.returncode != 0:
+            log.warning("virtual-lab.py stop-poc returned %d: %s", r.returncode, r.stderr[:200])
+
+        self._openwrt_pid = None
+        self._debian_pid = None
+        self._bridge_created = False
+        log.info("LocalKVM VMs destroyed via virtual-lab.py")
+
+    def list_vms(self):
+        return [
+            VMInfo(
+                name="local-kvm-openwrt",
+                service_id="local-kvm",
+                ip=self.OPENWRT_IP,
+                provider="local-kvm",
+            )
+        ]
+
+
+_PROVIDERS["local-kvm"] = LocalKVMProvider
 
 
 def get_provider(provider_name: str | None = None) -> VMProvider:
@@ -500,7 +636,8 @@ def get_provider(provider_name: str | None = None) -> VMProvider:
 
     - ``shc`` — Sovereign Hybrid Compute (ephemeral cloud VM, can_publish=True)
     - ``gcloud`` — Google Cloud Platform (ephemeral cloud VM, can_publish=True)
-    - ``local`` — Local QEMU/KVM VM (privacy: results local only)
+    - ``local`` — Pre-existing local VM (passive, no lifecycle)
+    - ``local-kvm`` — Local KVM/QEMU VM (active create/destroy lifecycle)
     - ``physical`` — Physical router via SSH (privacy: results local only)
 
     Default: ``shc`` (cheapest, proven in testing).

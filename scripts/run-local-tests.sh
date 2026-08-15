@@ -95,14 +95,14 @@ check_vms() {
 configure_mint() {
   log "Configuring OpenWrt to use local mint..."
   sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no "root@${OPENWRT_IP}" "
-    jq '.accepted_mints[0].url = \"${MINT_URL}\"' /etc/tollgate/config.json > /tmp/cfg.json
+    jq '.accepted_mints = [{\"url\": \"${MINT_URL}\", \"min_balance\": 0, \"balance_tolerance_percent\": 0, \"price_per_step\": 1, \"price_unit\": \"sats\", \"purchase_min_steps\": 0}]' /etc/tollgate/config.json > /tmp/cfg.json
     mv /tmp/cfg.json /etc/tollgate/config.json
     /etc/init.d/tollgate-wrt restart
   " 2>&1 | tail -3
 
-  for i in $(seq 1 15); do
+  for i in $(seq 1 20); do
     if sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no "root@${OPENWRT_IP}" \
-      "wget -qO- --timeout=3 http://[::1]:2121/ 2>/dev/null | head -c 20" 2>/dev/null | grep -q "10021"; then
+      "wget -qO- --timeout=3 http://127.0.0.1:2121/ 2>/dev/null | head -c 20" 2>/dev/null | grep -q "10021\|21023"; then
       log "Backend healthy with local mint"
       return
     fi
@@ -127,7 +127,7 @@ run_tests() {
   export TOLLGATE_BACKEND=go
   export TOLLGATE_CLIENT_TYPE=container
   export TOLLGATE_VM_PROVIDER=local
-  export TOLLGATE_NO_DEPLOY=1
+  export 
   export TOLLGATE_CASHU_VENV=/opt/cashu-venv
   export TOLLGATE_CLIENT_IP="${DEBIAN_IP}"
   export TOLLGATE_CLIENT_MAC="de:54:4e:91:49:da"

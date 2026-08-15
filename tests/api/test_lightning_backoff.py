@@ -1,19 +1,6 @@
-"""Lightning quote monitor backoff and jitter (PR #249/#270).
+"""Lightning quote monitor backoff and jitter (PR #249/#270)."""
 
-Validates that the lightning quote monitor uses adaptive polling:
-- Base interval is 5s (not the old 2s)
-- On ndsctl failures, backoff doubles up to 30s cap
-- Jitter is present (inter-poll intervals are not uniform)
-
-In the cloud lab, the FakeWallet settles instantly, so the monitor sees
-"Paid" and tries ensureLightningAccessGranted. ndsctl auth fails because
-there's no real WiFi client — this triggers backoff via the
-ensureLightningAccessGranted failure path (the fix from PR #249/#270).
-
-No mint blocking or chaos proxy needed — the ndsctl failures are the
-natural backoff trigger in this environment.
-"""
-
+import calendar
 import json
 import os
 import re
@@ -38,7 +25,7 @@ def _skip_if_degraded(router):
     try:
         discovery = json.loads(discovery_raw)
     except json.JSONDecodeError:
-        pytest.skip(f"Backend / did not return valid JSON: {discovery_raw[:200]}")
+        pytest.skip(f"Backend not returning JSON: {discovery_raw[:200]}")
     if discovery.get("kind") == 21023:
         pytest.skip("Backend in degraded mode")
     return discovery
@@ -48,27 +35,24 @@ def _create_invoice(router, amount=21, retries=3):
     mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "")
     if not mint_url:
         discovery = _skip_if_degraded(router)
-        tags = discovery.get("tags", [])
-        for tag in tags:
+        for tag in discovery.get("tags", []):
             if isinstance(tag, list) and len(tag) >= 5 and tag[0] == "price_per_step":
                 mint_url = tag[4]
                 break
     if not mint_url:
-        pytest.skip("Cannot determine mint URL from backend or env")
+        pytest.skip("Cannot determine mint URL")
 
     backend_ip = os.environ.get("TOLLGATE_SSH_HOST", "10.99.99.1")
     url = f"http://{backend_ip}:{BACKEND_PORT}/ln-invoice"
-    payload = {"amount": amount, "mint_url": mint_url}
     for attempt in range(retries):
         try:
-            resp = requests.post(url, json=payload, timeout=15)
+            resp = requests.post(url, json={"amount": amount, "mint_url": mint_url}, timeout=15)
             if resp.status_code == 200:
                 return resp.json()
         except Exception:
             pass
         time.sleep(5)
-    last = resp.status_code if "resp" in dir() else "?"
-    pytest.fail(f"POST /ln-invoice failed after {retries} attempts (last status: {last})")
+    pytest.fail(f"POST /ln-invoice failed after {retries} attempts")
 
 
 def _extract_log_timestamps(logs, pattern):
@@ -86,72 +70,49 @@ def _extract_log_timestamps(logs, pattern):
         month = months.get(month_str)
         if not month:
             continue
-        ts = time.mktime((current_year, month, int(day), int(hour), int(minute), int(second), 0, 0, -1))
+        ts = calendar.timegm((current_year, month, int(day), int(hour), int(minute), int(second), 0, 0, -1))
         timestamps.append(ts)
     return timestamps
 
 
 def test_backoff_progression_on_mint_error(router):
-    """On ndsctl failures, poll intervals for ensureLightningAccessGranted increase via backoff."""
     _skip_if_no_ln_invoice(router)
     _skip_if_degraded(router)
-
     invoice = _create_invoice(router)
     quote_id = invoice.get("quote", "")
     time.sleep(35)
-
-    logs = router.get_tollgate_logs(lines=500)
+    logs = router.get_tollgate_logs(lines=5000)
     timestamps = _extract_log_timestamps(logs, quote_id)
-    assert len(timestamps) >= 2, (
-        f"Expected >=2 monitor entries for quote {quote_id[:12]}, got {len(timestamps)}"
-    )
-
+    assert len(timestamps) >= 2, f"Expected >=2 entries for {quote_id[:12]}, got {len(timestamps)}"
     intervals = [timestamps[i + 1] - timestamps[i] for i in range(len(timestamps) - 1)]
-    assert intervals[0] >= 4.0, (
-        f"First interval {intervals[0]:.1f}s < 4s (base 5s minus jitter slack)"
-    )
+    assert intervals[0] >= 4.0, f"First interval {intervals[0]:.1f}s < 4s"
     if len(intervals) >= 2:
-        assert intervals[1] >= 8.0, (
-            f"Second interval {intervals[1]:.1f}s < 8s (doubled 10s minus jitter slack)"
-        )
+        assert intervals[1] >= 8.0, f"Second interval {intervals[1]:.1f}s < 8s"
 
 
 def test_jitter_present_in_polling(router):
-    """Inter-poll intervals are not uniform (jitter is applied each cycle)."""
     _skip_if_no_ln_invoice(router)
     _skip_if_degraded(router)
-
     invoice = _create_invoice(router)
     quote_id = invoice.get("quote", "")
     time.sleep(40)
-
-    logs = router.get_tollgate_logs(lines=500)
+    logs = router.get_tollgate_logs(lines=5000)
     timestamps = _extract_log_timestamps(logs, quote_id)
-    assert len(timestamps) >= 2, (
-        f"Need >=2 timestamps to detect jitter, got {len(timestamps)}"
-    )
-
+    assert len(timestamps) >= 2, f"Need >=2 timestamps, got {len(timestamps)}"
     intervals = [round(timestamps[i + 1] - timestamps[i], 3) for i in range(len(timestamps) - 1)]
     identical = sum(1 for i in range(1, len(intervals)) if intervals[i] == intervals[i - 1])
-    assert identical <= max(1, len(intervals) // 4), (
-        f"{identical}/{len(intervals)} identical consecutive intervals — no jitter"
-    )
+    assert identical <= max(1, len(intervals) // 4), f"{identical}/{len(intervals)} identical — no jitter"
 
 
 def test_no_backoff_hammering_on_mint_error(router):
-    """Monitor does not poll every 2s (old fixed-ticker regression guard)."""
     _skip_if_no_ln_invoice(router)
     _skip_if_degraded(router)
-
     invoice = _create_invoice(router)
     quote_id = invoice.get("quote", "")
-    time.sleep(15)
-
-    logs = router.get_tollgate_logs(lines=1000)
+    time.sleep(35)
+    logs = router.get_tollgate_logs(lines=5000)
     timestamps = _extract_log_timestamps(logs, quote_id)
-    cutoff = time.time() - 18
+    cutoff = time.time() - 40
     recent = [t for t in timestamps if t >= cutoff]
-    assert len(recent) >= 1, "Monitor produced no entries in 15s (not running?)"
-    assert len(recent) <= 3, (
-        f"Monitor hammered {len(recent)} times in 15s — old 2s fixed ticker present"
-    )
+    assert len(recent) >= 1, f"No monitor entries for {quote_id[:12]} in 35s (total log entries: {len(timestamps)})"
+    assert len(recent) <= 6, f"Hammered {len(recent)} times in 35s — old 2s ticker"

@@ -1025,6 +1025,7 @@ arch-test-full: ## Run all arch E2E tests (~4min)
         pytest-smoke-mac pytest-critical-mac pytest-api-mac pytest-test-mac \
         pytest-smoke-linux pytest-api-linux pytest-test-linux \
         pytest-smoke-rust pytest-api-rust pytest-test-rust pytest-critical-rust \
+        pytest-smoke-rust-basic pytest-api-rust-basic \
         luci deploy-ci deploy-ci-rust setup-python \
         run-api run-api-quick run-phone run-captive-portal run-luci run-all run-profile \
         collect render-report sanitize publish pr-smoke clean
@@ -1098,6 +1099,14 @@ pytest-test-rust:
 
 pytest-critical-rust:
 	TOLLGATE_BACKEND=rust pytest -m critical --backend=rust
+
+# --- Rust basic backend ---
+
+pytest-smoke-rust-basic:
+	TOLLGATE_BACKEND=rust-basic pytest -m smoke --backend=rust-basic
+
+pytest-api-rust-basic:
+	TOLLGATE_BACKEND=rust-basic pytest -m api --backend=rust-basic
 
 # --- Canonical run dir targets ---
 

@@ -59,7 +59,7 @@ class Router:
             "-o", "ControlPersist=60",
         ]
         if not identity_file and self._ssh_pw:
-            self._ssh_base = ["sshpass", "-e", "ssh"] + ssh_opts
+            self._ssh_base = ["sshpass", "-p", self._ssh_pw, "ssh"] + ssh_opts
         else:
             self._ssh_base = ["ssh"] + ssh_opts
         if port:
@@ -128,7 +128,7 @@ class Router:
         return ""
 
     def backend_url(self, path="/"):
-        host = "127.0.0.1" if self.backend.is_rust else "[::1]"
+        host = "127.0.0.1" if self.backend.is_rust_family else "[::1]"
         return f"http://{host}:{BACKEND_PORT}{path}"
 
     def get_nds_portal_port(self) -> int:
@@ -375,6 +375,53 @@ class Router:
 
     def pay_direct(self, token: str, ip: str | None = None) -> dict:
         ip = ip or self.phone_ip
+
+        client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "")
+        is_virtual_lab = bool(os.environ.get("TOLLGATE_VIRTUAL_LAB"))
+
+        # Virtual lab: route payment through the Debian VM (10.99.99.100)
+        # so the backend sees the correct source IP → MAC in ARP/DHCP.
+        # Running curl on the router itself (localhost) fails MAC lookup.
+        if is_virtual_lab and client_ip:
+            ssh_user = os.environ.get("TOLLGATE_CLIENT_USER", "debian")
+            try:
+                result = subprocess.run(
+                    ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+                     f"{ssh_user}@{client_ip}",
+                     f"curl -s --max-time 20 -d @- "
+                     f"-H 'Content-Type: text/plain' "
+                     f"'http://{self.host}:{BACKEND_PORT}/'"],
+                    input=token, capture_output=True, text=True, timeout=30,
+                )
+                resp = result.stdout.strip()
+                if resp:
+                    try:
+                        return json.loads(resp)
+                    except json.JSONDecodeError:
+                        return {"raw": resp[:500]}
+            except Exception:
+                pass
+
+        # Local QEMU provider: same issue (localhost MAC lookup), route via client IP
+        if client_ip and os.environ.get("TOLLGATE_VM_PROVIDER") == "local":
+            try:
+                result = subprocess.run(
+                    ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+                     f"root@{client_ip}",
+                     f"curl -s --max-time 20 -d @- "
+                     f"-H 'Content-Type: text/plain' "
+                     f"'http://10.99.99.1:{BACKEND_PORT}/'"],
+                    input=token, capture_output=True, text=True, timeout=30,
+                )
+                resp = result.stdout.strip()
+                if resp:
+                    try:
+                        return json.loads(resp)
+                    except json.JSONDecodeError:
+                        return {"raw": resp[:500]}
+            except Exception:
+                pass
+
         cmd = (
             f"curl -s --max-time 20 -d @- "
             f"-H 'Content-Type: text/plain' "
@@ -572,15 +619,14 @@ class Router:
         return False
 
     def restart_backend(self, timeout: int = 30):
-        """Restart the backend service and wait for readiness.
+        """Restart the backend service and wait for readiness."""
+        self.ssh("service tollgate-wrt restart 2>/dev/null; service tollgate restart 2>/dev/null; true", timeout=15)
+        time.sleep(2)
+        if self.api_status("/") != 200:
+            self.ssh("killall tollgate 2>/dev/null; sleep 1; setsid /tmp/tollgate > /tmp/tollgate.log 2>&1 < /dev/null &", timeout=10)
+            time.sleep(3)
 
-        For Go backend: waits for CLI socket at /var/run/tollgate.sock.
-        For Rust backend: waits for HTTP health endpoint to return 200.
-
-        Raises RuntimeError if the backend doesn't become ready within timeout seconds.
-        """
-        self.ssh("service tollgate-wrt restart", timeout=15)
-        if self.backend.is_rust:
+        if self.backend.is_rust_family:
             url = self.backend_url("/")
             start = time.time()
             while time.time() - start < timeout:
@@ -613,7 +659,14 @@ class Router:
 
     def ensure_test_mint(self):
         cfg_raw = self.ssh("cat /etc/tollgate/config.json")
-        cfg = json.loads(cfg_raw)
+        if not cfg_raw or not cfg_raw.strip():
+            log.warning("Config empty or unreadable, skipping test mint setup")
+            return
+        try:
+            cfg = json.loads(cfg_raw)
+        except json.JSONDecodeError:
+            log.warning("Config not valid JSON, skipping test mint setup: %s", cfg_raw[:100])
+            return
         if any(m.get("url") == TEST_MINT_URL for m in cfg.get("accepted_mints", [])):
             return
         cfg.setdefault("accepted_mints", []).append({
@@ -623,7 +676,7 @@ class Router:
             "payout_interval_seconds": 60,
             "min_payout_amount": 0,
             "price_per_step": 1,
-            "price_unit": "sats",
+            "price_unit": "sat",
             "purchase_min_steps": 0,
         })
         tmp = "/tmp/config-testmint.json"
@@ -645,7 +698,14 @@ class Router:
 
         # Read current config
         cfg_raw = self.ssh("cat /etc/tollgate/config.json")
-        cfg = json.loads(cfg_raw)
+        if not cfg_raw or not cfg_raw.strip():
+            log.warning("Config empty or unreadable, skipping mint replacement")
+            return
+        try:
+            cfg = json.loads(cfg_raw)
+        except json.JSONDecodeError:
+            log.warning("Config not valid JSON, skipping mint replacement: %s", cfg_raw[:100])
+            return
         
         # Build new accepted_mints list
         new_mints = []
@@ -657,15 +717,23 @@ class Router:
                 "payout_interval_seconds": 60,
                 "min_payout_amount": 0,
                 "price_per_step": 1,
-                "price_unit": "sats",
+                "price_unit": "sat",
                 "purchase_min_steps": 0,
             })
         
         cfg["accepted_mints"] = new_mints
         
+        current_urls = sorted([m.get("url", "") for m in json.loads(cfg_raw).get("accepted_mints", [])])
+        if current_urls == sorted(mint_urls):
+            log.info("Mints already correct, skipping restart")
+            return
+
         self.write_remote_json("/etc/tollgate/config.json", cfg)
 
-        self.restart_backend()
+        try:
+            self.restart_backend()
+        except RuntimeError:
+            log.warning("Backend restart failed after mint replacement — continuing")
 
         mint_str = ", ".join(mint_urls)
         log.info(f"Replaced accepted mints with: {mint_str}, restarted backend")

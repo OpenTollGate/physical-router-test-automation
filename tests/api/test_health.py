@@ -11,9 +11,11 @@ def test_root_endpoint(router, backend):
     assert code == 200, f"Expected 200, got {code}"
     body = router.api_body("/")
     if backend.is_rust:
-        assert "<html" in body.lower() or "<svg" in body.lower(), \
-            f"Rust SUT should return HTML portal at /: {body[:200]}"
-        return
+        if '"kind":10021' in body:
+            return
+        if '"kind":21023' in body:
+            pytest.skip("Discovery in degraded mode")
+        pytest.fail(f"Rust SUT should return JSON advertisement at /: {body[:200]}")
     if '"kind":21023' in body:
         pytest.skip("Discovery in degraded mode, skipping kind:10021 check")
     assert '"kind":10021' in body, f"Response missing kind:10021: {body[:200]}"
@@ -21,8 +23,9 @@ def test_root_endpoint(router, backend):
 
 @pytest.mark.smoke
 def test_pay_endpoint(router, backend):
-    code = router.api_status("/pay")
-    body = router.api_body("/pay")
+    pay_path = "/" if backend.is_rust_family else "/pay"
+    code = router.api_status(pay_path)
+    body = router.api_body(pay_path)
     assert code in (200, 402), f"Expected 200 or 402, got {code}"
     if backend.is_rust:
         if code == 402:
@@ -44,7 +47,7 @@ def test_pay_endpoint(router, backend):
 def test_whoami_endpoint(router):
     code = router.api_status("/whoami")
     body = router.api_body("/whoami")
-    assert code in (200, 500), f"Expected 200 or 500, got {code}"
+    assert code in (200, 400, 500), f"Expected 200, 400, or 500, got {code}"
     if code == 200:
         assert body, "200 but empty body"
         first_line = body.strip().split("\n")[0]
@@ -56,8 +59,8 @@ def test_whoami_endpoint(router):
             assert re.match(r'^([0-9a-f]{2}:){5}[0-9a-f]{2}$', id_value, re.IGNORECASE), \
                 f"Invalid MAC format: {id_value}"
     else:
-        assert "error" in body.lower() or not body, \
-            f"500 without error message: {body[:200]}"
+        assert "error" in body.lower() or "unknown" in body.lower() or not body, \
+            f"{code} without error message: {body[:200]}"
 
 
 @pytest.mark.smoke

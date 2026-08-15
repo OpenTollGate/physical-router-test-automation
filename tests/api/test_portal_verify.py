@@ -14,6 +14,13 @@ pytestmark = [pytest.mark.api, pytest.mark.smoke, pytest.mark.virtual_lab]
 
 PORTAL_TYPE = os.environ.get("TOLLGATE_PORTAL", "builtin").lower()
 
+_backend = os.environ.get("TOLLGATE_BACKEND", "go")
+if _backend in ("rust", "rust-basic", "rust-embedded"):
+    pytest.skip(
+        "Portal verify tests require NDS portal assets (not available with Rust backends)",
+        allow_module_level=True,
+    )
+
 
 def _nds_gateway_responsive(router):
     """Check if NDS is running via multiple detection methods.

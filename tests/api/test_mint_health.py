@@ -1,3 +1,4 @@
+import os
 import re
 
 import pytest
@@ -15,13 +16,16 @@ def backend_logs(router):
 @pytest.fixture(scope="module")
 def discovery(router, backend):
     if backend.is_rust:
-        from lib.helpers import create_minter
+        from lib.cashu import create_minter
         mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
         minter = create_minter(mint_url)
         minter.ensure_mint_available(timeout=10)
         minter.warmup(timeout=30)
         token = minter.mint(2)
-        return parse_json_or_fail(router.ssh(f"curl -s -H 'X-Cashu: {token}' http://127.0.0.1:2121/pay", timeout=15), "discovery response from /pay")
+        raw = router.ssh(f"curl -s -H 'X-Cashu: {token}' http://127.0.0.1:2121/pay", timeout=15)
+        if not raw or not raw.strip().startswith('{'):
+            raw = router.api_body("/")
+        return parse_json_or_fail(raw, "discovery response")
     return parse_json_or_fail(router.api_body("/"), "discovery response")
 
 

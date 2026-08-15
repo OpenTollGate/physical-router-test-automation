@@ -13,6 +13,7 @@ import pytest
 from lib.helpers import (
     is_session_event,
     is_mac_lookup_failure,
+    is_payment_swap_succeeded,
     parse_json_or_fail,
     gate_bug_fix,
     is_full_merchant,
@@ -191,3 +192,68 @@ class TestIsDegraded:
 
     def test_invalid_json(self):
         assert is_degraded(MockRouter(200, "not json")) is False
+
+
+# --------------------------------------------------------------------------- #
+# is_payment_swap_succeeded
+# --------------------------------------------------------------------------- #
+
+
+class TestIsPaymentSwapSucceeded:
+    def test_session_event_kind_1022(self):
+        assert is_payment_swap_succeeded(
+            {"kind": 1022, "tags": [["allotment", "66060288"]]}
+        ) is True
+
+    def test_session_event_allotment_only(self):
+        assert is_payment_swap_succeeded(
+            {"kind": 10021, "tags": [["allotment", "100"]]}
+        ) is True
+
+    def test_mac_lookup_failure_structural(self):
+        assert is_payment_swap_succeeded(
+            {"kind": 21023, "tags": [["code", "mac-address-lookup-failed"]]}
+        ) is True
+
+    def test_nut02_id_length_invalid(self):
+        assert is_payment_swap_succeeded(
+            {"kind": 21023, "tags": [["code", "NUT02: ID length invalid"]]}
+        ) is False
+
+    def test_invalid_v3_token(self):
+        assert is_payment_swap_succeeded(
+            {"kind": 21023, "content": "invalid V3 token"}
+        ) is False
+
+    def test_token_already_spent(self):
+        assert is_payment_swap_succeeded(
+            {"kind": 21023, "content": "token_already_spent"}
+        ) is False
+
+    def test_failed_to_open_gate(self):
+        assert is_payment_swap_succeeded(
+            {"kind": 21023, "content": "failed to open gate: exit status 1"}
+        ) is True
+
+    def test_gateway_ip_no_false_positive(self):
+        assert is_payment_swap_succeeded(
+            {"kind": 21023, "tags": [["gateway_ip", "10.99.99.1"]]}
+        ) is False
+
+    def test_empty_dict(self):
+        assert is_payment_swap_succeeded({}) is False
+
+    def test_non_dict(self):
+        assert is_payment_swap_succeeded(None) is False
+        assert is_payment_swap_succeeded("not a dict") is False
+
+    def test_unknown_error_returns_false(self):
+        assert is_payment_swap_succeeded(
+            {"kind": 21023, "tags": [["code", "some-unknown-error"]]}
+        ) is False
+
+    def test_token_failure_takes_precedence_over_gate(self):
+        body = "NUT02: ID length invalid and failed to open gate"
+        assert is_payment_swap_succeeded(
+            {"kind": 21023, "content": body}
+        ) is False

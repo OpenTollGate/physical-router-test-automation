@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import secrets
 import shlex
 import subprocess
@@ -19,6 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 from collections.abc import Callable
+
+from lib.backend import BACKEND_CHOICES_CLI
 
 
 REQUIRED_COMMANDS = [
@@ -65,7 +70,38 @@ def _generate_password():
     env_pw = os.environ.get("TOLLGATE_FIRMWARE_PASSWORD") or os.environ.get("TOLLGATE_VIRTUAL_LAB_PASSWORD")
     if env_pw:
         return env_pw
+    env_path = Path(__file__).parent.parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if line.startswith("TOLLGATE_SSH_PASSWORD="):
+                existing = line.split("=", 1)[1].strip()
+                if existing:
+                    return existing
     return ''.join(secrets.choice('abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789') for _ in range(24))
+
+
+def _ensure_ssh_key():
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(exist_ok=True, mode=0o700)
+
+    key_path = ssh_dir / "id_ed25519"
+    if key_path.exists():
+        return
+
+    gcloud_key = ssh_dir / "google_compute_engine"
+    if gcloud_key.exists():
+        os.symlink(gcloud_key, key_path)
+        gcloud_pub = ssh_dir / "google_compute_engine.pub"
+        if gcloud_pub.exists():
+            os.symlink(gcloud_pub, ssh_dir / "id_ed25519.pub")
+        print(f"Linked gcloud SSH key to {key_path}")
+        return
+
+    print(f"Generating new SSH keypair at {key_path}")
+    subprocess.run([
+        "ssh-keygen", "-t", "ed25519", "-f", str(key_path),
+        "-N", "", "-C", "tollgate-virtual-lab",
+    ], check=True)
 
 
 def _save_credentials(password):
@@ -110,6 +146,7 @@ def _update_env_file(password):
 POC_PASSWORD = _generate_password()
 _save_credentials(POC_PASSWORD)
 _update_env_file(POC_PASSWORD)
+_ensure_ssh_key()
 
 POC_SUBNET = "10.99.99.0/24"
 
@@ -731,7 +768,7 @@ fi
 # Start QEMU with serial/monitor Unix sockets
 nohup qemu-system-x86_64 \
   -enable-kvm \
-  -m 256 \
+  -m 512 \
   -smp 1 \
   -nographic \
   -serial unix:"$workdir/run/serial.sock",server,nowait \
@@ -1164,6 +1201,76 @@ def run_reseller_scenarios(args: argparse.Namespace) -> int:
     return _print_result(run_local(["bash", "-lc", command], timeout=600))
 
 
+def _poc_disk_path(workdir: str) -> str:
+    return os.path.join(workdir, "overlays", "tollgate-poc.qcow2")
+
+
+def _vm_running() -> bool:
+    result = subprocess.run(
+        ["pgrep", "-f", "tollgate-poc.qcow2"],
+        capture_output=True, text=True,
+    )
+    return result.returncode == 0
+
+
+def snapshot_create(args: argparse.Namespace) -> int:
+    disk = _poc_disk_path(args.workdir)
+    if not os.path.isfile(disk):
+        print(f"ERROR: POC disk not found at {disk}")
+        return 1
+    if _vm_running():
+        print("ERROR: POC VM is running. Stop it first: python3 scripts/virtual-lab.py stop-poc")
+        return 1
+    r = subprocess.run(["qemu-img", "snapshot", "-c", args.name, disk], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"ERROR: {r.stderr.strip()}")
+        return 1
+    print(f"Snapshot '{args.name}' created.")
+    return 0
+
+
+def snapshot_list(args: argparse.Namespace) -> int:
+    disk = _poc_disk_path(args.workdir)
+    if not os.path.isfile(disk):
+        print(f"ERROR: POC disk not found at {disk}")
+        return 1
+    r = subprocess.run(["qemu-img", "snapshot", "-l", disk], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"ERROR: {r.stderr.strip()}")
+        return 1
+    print(r.stdout.strip() if r.stdout.strip() else "No snapshots.")
+    return 0
+
+
+def snapshot_restore(args: argparse.Namespace) -> int:
+    disk = _poc_disk_path(args.workdir)
+    if not os.path.isfile(disk):
+        print(f"ERROR: POC disk not found at {disk}")
+        return 1
+    if _vm_running():
+        print("ERROR: POC VM is running. Stop it first.")
+        return 1
+    r = subprocess.run(["qemu-img", "snapshot", "-a", args.name, disk], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"ERROR: {r.stderr.strip()}")
+        return 1
+    print(f"Restored to snapshot '{args.name}'. Start VM with: start-poc")
+    return 0
+
+
+def snapshot_delete(args: argparse.Namespace) -> int:
+    disk = _poc_disk_path(args.workdir)
+    if not os.path.isfile(disk):
+        print(f"ERROR: POC disk not found at {disk}")
+        return 1
+    r = subprocess.run(["qemu-img", "snapshot", "-d", args.name, disk], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"ERROR: {r.stderr.strip()}")
+        return 1
+    print(f"Snapshot '{args.name}' deleted.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage the TollGate virtual lab")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1213,7 +1320,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _ = reseller_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = reseller_parser.add_argument("--results-dir", default="results/virtual-reseller-scenarios")
-    _ = reseller_parser.add_argument("--backend", default="go", choices=["go", "rust"])
+    _ = reseller_parser.add_argument("--backend", default="go", choices=list(BACKEND_CHOICES_CLI))
     _ = reseller_parser.add_argument("--secondary-router-host", default=None)
     _ = reseller_parser.add_argument("--secondary-router-port", default=None)
     reseller_parser.set_defaults(func=run_reseller_scenarios)
@@ -1234,6 +1341,28 @@ def build_parser() -> argparse.ArgumentParser:
     _ = poc_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
     _ = poc_parser.add_argument("--timeout", type=int, default=120)
     poc_parser.set_defaults(func=run_poc)
+
+    snap_parser = subparsers.add_parser("snapshot", help="QEMU snapshot management for the POC VM")
+    snap_sub = snap_parser.add_subparsers(dest="snapshot_command", required=True)
+    snap_create = snap_sub.add_parser("create", help="Create a snapshot (VM must be stopped)")
+    _ = snap_create.add_argument("name", help="Snapshot name")
+    _ = snap_create.add_argument("--host", default="218")
+    _ = snap_create.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    snap_create.set_defaults(func=snapshot_create)
+    snap_list = snap_sub.add_parser("list", help="List snapshots")
+    _ = snap_list.add_argument("--host", default="218")
+    _ = snap_list.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    snap_list.set_defaults(func=snapshot_list)
+    snap_restore = snap_sub.add_parser("restore", help="Restore VM to snapshot (VM must be stopped)")
+    _ = snap_restore.add_argument("name", help="Snapshot name")
+    _ = snap_restore.add_argument("--host", default="218")
+    _ = snap_restore.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    snap_restore.set_defaults(func=snapshot_restore)
+    snap_delete = snap_sub.add_parser("delete", help="Delete a snapshot")
+    _ = snap_delete.add_argument("name", help="Snapshot name")
+    _ = snap_delete.add_argument("--host", default="218")
+    _ = snap_delete.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    snap_delete.set_defaults(func=snapshot_delete)
 
     return parser
 

@@ -128,7 +128,7 @@ class ReadinessReport:
                 time.sleep(5)
             elif check.name == "test_mint":
                 _ssh(self.router_ip,
-                     """jq '.accepted_mints += [{"url":"https://testnut.cashu.exchange","min_balance":0,"balance_tolerance_percent":0,"payout_interval_seconds":999999,"min_payout_amount":999999,"price_per_step":1,"price_unit":"sats","purchase_min_steps":0}]' /etc/tollgate/config.json > /tmp/cfg.json && cp /tmp/cfg.json /etc/tollgate/config.json; /etc/init.d/tollgate-wrt restart""",
+                     """jq '.accepted_mints += [{"url":"https://testnut.cashu.exchange","min_balance":0,"balance_tolerance_percent":0,"payout_interval_seconds":999999,"min_payout_amount":999999,"price_per_step":1,"price_unit":"sat","purchase_min_steps":0}]' /etc/tollgate/config.json > /tmp/cfg.json && cp /tmp/cfg.json /etc/tollgate/config.json; /etc/init.d/tollgate-wrt restart""",
                      self.password)
                 time.sleep(15)
 

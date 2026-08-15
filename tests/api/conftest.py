@@ -1,102 +1,51 @@
 import os
 import shutil
+import socket as _socket
 import subprocess
+import tempfile as _tempfile
 import time
-import uuid
+
+import json as _json
 
 import pytest
 
 
 @pytest.fixture(autouse=True)
-def _reset_nds_client_state(router, request):
-    """Reset NDS client state + CDK mint state before each test (local lab only).
-
-    Three problems this solves:
-    1. NDS 5.0.2: ndsctl auth fails (exit 1) when client already Authenticated.
-       Fix: deauth + re-trigger interception.
-    2. CDK mint: "Duplicate outputs" when cashu CLI reuses wallet counter.
-       Fix: restart CDK mint to clear in-memory swap state.
-    3. Cashu CLI: fresh wallet directory per test to avoid counter collisions.
-    """
+def _reset_nds_and_trigger(router):
     provider = os.environ.get("TOLLGATE_VM_PROVIDER", "")
-    is_local = provider == "local" or os.environ.get("TOLLGATE_VIRTUAL_LAB")
-
-    if not is_local:
+    if provider != "local" and not os.environ.get("TOLLGATE_VIRTUAL_LAB"):
         yield
         return
 
     client_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.99.99.100")
     client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
-    mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "http://10.99.99.2:8383")
 
-    fresh_cashu_dir = f"/tmp/cashu-test-{uuid.uuid4().hex[:8]}"
-    os.makedirs(fresh_cashu_dir, exist_ok=True)
-    old_cashu_dir = os.environ.get("CASHU_DIR")
-    os.environ["CASHU_DIR"] = fresh_cashu_dir
+    router_arp = ""
+    try:
+        router_arp = router.ssh(f"cat /proc/net/arp 2>/dev/null | grep '{client_ip} ' | awk '{{print $4}}' || true", timeout=5).strip()
+    except Exception:
+        pass
+    if router_arp:
+        client_mac = router_arp
 
-    # Restart CDK mint to clear swap state (prevents "Duplicate outputs")
-    cdk_pid_file = "/tmp/cdk-mintd-local.pid"
-    if os.path.exists(cdk_pid_file):
+    if client_mac:
         try:
-            with open(cdk_pid_file) as f:
-                old_pid = int(f.read().strip())
-            os.kill(old_pid, 15)
+            router.ssh(f"ndsctl deauth {client_mac} 2>/dev/null || true", timeout=5)
             time.sleep(2)
         except Exception:
             pass
 
-    import pathlib
-    config_path = "/tmp/cdk-mintd-local/config.toml"
-    pathlib.Path(config_path).parent.mkdir(parents=True, exist_ok=True)
-    pathlib.Path(config_path).write_text(f"""\
-[info]
-url = "{mint_url}/"
-listen_host = "0.0.0.0"
-listen_port = 8383
-mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-
-[database]
-engine = "sqlite"
-
-[ln]
-ln_backend = "fakewallet"
-
-[fake_wallet]
-supported_units = ["sat"]
-fee_percent = 0
-reserve_fee_min = 0
-min_delay_time = 0
-max_delay_time = 0
-""")
-
-    cdk_bin = "/opt/cdk-mintd/cdk-mintd"
-    if os.path.exists(cdk_bin):
-        subprocess.Popen(
-            ["setsid", "bash", "-c", f"exec {cdk_bin} -c {config_path}"],
-            stdout=open("/tmp/cdk-mintd-local.log", "w"),
-            stderr=subprocess.STDOUT,
+    try:
+        subprocess.run(
+            ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
+             f"root@{client_ip}",
+             "curl -s -o /dev/null --max-time 5 http://10.99.99.1:2050/ && "
+             "curl -s -o /dev/null --max-time 5 http://connectivitycheck.gstatic.com/generate_204"],
+            capture_output=True, timeout=15,
         )
-        for _ in range(10):
-            try:
-                import urllib.request
-                urllib.request.urlopen(f"{mint_url}/v1/info", timeout=2)
-                break
-            except Exception:
-                time.sleep(1)
-
-    # Reset NDS client
-    if client_mac:
-        try:
-            router.ssh(f"ndsctl deauth {client_mac} 2>/dev/null || true", timeout=5)
-            time.sleep(1)
-            subprocess.run(
-                ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
-                 f"root@{client_ip}", "curl -s -o /dev/null --max-time 5 http://example.com"],
-                capture_output=True, timeout=10,
-            )
-            time.sleep(1)
-        except Exception:
-            pass
+        time.sleep(2)
+    except Exception:
+        pass
 
     yield
 
@@ -106,8 +55,116 @@ max_delay_time = 0
         except Exception:
             pass
 
-    shutil.rmtree(fresh_cashu_dir, ignore_errors=True)
-    if old_cashu_dir:
-        os.environ["CASHU_DIR"] = old_cashu_dir
-    elif "CASHU_DIR" in os.environ:
-        del os.environ["CASHU_DIR"]
+
+DEFAULT_RUST_BASIC_BINARY = "/home/ubuntu/src/tollgate-module-basic-rust/target/release/tollgate-module-basic-rust"
+DEFAULT_RUST_BASIC_HTTP_PORT = 2121
+
+
+@pytest.fixture(scope="module")
+def rust_basic_server():
+    if os.environ.get("TOLLGATE_BACKEND") not in ("rust-basic", "rust-embedded"):
+        pytest.skip("rust_basic_server requires TOLLGATE_BACKEND=rust-basic or rust-embedded")
+
+    binary_path = os.environ.get("TOLLGATE_BINARY_PATH", DEFAULT_RUST_BASIC_BINARY)
+    if not os.path.exists(binary_path):
+        pytest.skip(
+            f"Binary not found at {binary_path}. Build it first: "
+            f"cd /home/ubuntu/src/tollgate-module-basic-rust && cargo build --release"
+        )
+
+    http_port = int(os.environ.get("TOLLGATE_HTTP_PORT", DEFAULT_RUST_BASIC_HTTP_PORT))
+
+    try:
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+            s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+            s.bind(("127.0.0.1", http_port))
+    except OSError as exc:
+        pytest.fail(
+            f"Port {http_port} already in use — another tollgate binary running? "
+            f"Run `ss -tlnp | grep {http_port}` and kill the squatter. ({exc})"
+        )
+
+    owns_config_dir = False
+    config_dir = os.environ.get("TOLLGATE_TEST_CONFIG_DIR")
+    if not config_dir:
+        config_dir = _tempfile.mkdtemp(prefix="tollgate-rust-basic-")
+        owns_config_dir = True
+    os.makedirs(config_dir, exist_ok=True)
+
+    config = {
+        "config_version": "v0.0.7",
+        "log_level": "info",
+        "metric": "milliseconds",
+        "step_size": 5000,
+        "margin": 0.1,
+        "accepted_mints": [
+            {
+                "url": "https://testnut.cashu.exchange",
+                "min_balance": 0,
+                "balance_tolerance_percent": 0,
+                "payout_interval_seconds": 60,
+                "min_payout_amount": 0,
+                "price_per_step": 1,
+                "price_unit": "sat",
+                "purchase_min_steps": 0,
+            }
+        ],
+        "profit_share": [{"factor": 1.0, "identity": "owner"}],
+    }
+    with open(os.path.join(config_dir, "config.json"), "w") as f:
+        _json.dump(config, f)
+
+    env = {**os.environ, "TOLLGATE_TEST_CONFIG_DIR": config_dir}
+    proc = subprocess.Popen(
+        [binary_path],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+
+    socket_path = os.path.join(config_dir, "tollgate.sock")
+
+    try:
+        for _ in range(50):
+            if proc.poll() is not None:
+                output = proc.stdout.read().decode(errors="replace") if proc.stdout else ""
+                pytest.fail(
+                    f"Binary exited early with code {proc.returncode}.\nOutput:\n{output}"
+                )
+            try:
+                with _socket.create_connection(("127.0.0.1", http_port), timeout=0.1):
+                    break
+            except (ConnectionRefusedError, OSError):
+                time.sleep(0.1)
+        else:
+            output = proc.stdout.read().decode(errors="replace") if proc.stdout else ""
+            pytest.fail(
+                f"Binary did not bind 127.0.0.1:{http_port} within 5s.\nOutput:\n{output}"
+            )
+
+        for _ in range(30):
+            if os.path.exists(socket_path):
+                break
+            time.sleep(0.1)
+
+        yield {
+            "proc": proc,
+            "config_dir": config_dir,
+            "binary_path": binary_path,
+            "http_url": f"http://127.0.0.1:{http_port}",
+            "socket_path": socket_path,
+        }
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+        if os.path.exists(socket_path):
+            try:
+                os.unlink(socket_path)
+            except OSError:
+                pass
+        if owns_config_dir:
+            shutil.rmtree(config_dir, ignore_errors=True)

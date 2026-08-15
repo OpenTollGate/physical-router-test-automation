@@ -7,6 +7,12 @@ from lib.helpers import parse_json_or_fail, require_client_identity
 
 pytestmark = [pytest.mark.rust_only, pytest.mark.api, pytest.mark.smoke]
 
+if os.environ.get("TOLLGATE_BACKEND") in ("rust-basic", "rust-embedded"):
+    pytest.skip(
+        "V1 API tests are for tollgate-rs, not tollgate-module-basic-rust",
+        allow_module_level=True,
+    )
+
 
 def _client_ip(router):
     """Get client IP, skipping if unavailable."""
@@ -24,8 +30,6 @@ def _ensure_lease(router):
 
 @pytest.mark.smoke
 def test_rust_advertisement(router):
-    if router.backend.is_rust:
-        pytest.skip("Rust v1 advertisement format differs from test expectations (Amperstrand/tollgate-rs#42)")
     body = router.api_body("/")
     if '"kind":21023' in body:
         pytest.skip("Discovery in degraded mode, skipping kind:10021 check")
@@ -33,7 +37,7 @@ def test_rust_advertisement(router):
     data = parse_json_or_fail(body, "advertisement")
     tags = {t[0]: t[1] for t in data.get("tags", []) if isinstance(t, list) and len(t) >= 2}
     assert "metric" in tags, f"Missing metric tag: {body[:200]}"
-    assert "step" in tags, f"Missing step tag: {body[:200]}"
+    assert "step" in tags or "step_size" in tags, f"Missing step/step_size tag: {body[:200]}"
 
 
 @pytest.mark.smoke
@@ -54,8 +58,6 @@ def test_rust_pay_token(router, cashu):
 
 @pytest.mark.smoke
 def test_rust_usage(router, cashu):
-    if router.backend.is_rust:
-        pytest.skip("Rust v1 usage API format differs from Go (Amperstrand/tollgate-rs#42)")
     ip = _client_ip(router)
     _ensure_lease(router)
 
@@ -66,8 +68,6 @@ def test_rust_usage(router, cashu):
 
 @pytest.mark.smoke
 def test_rust_balance(router, cashu):
-    if router.backend.is_rust:
-        pytest.skip("Rust v1 balance API format differs from Go (Amperstrand/tollgate-rs#42)")
     ip = _client_ip(router)
     _ensure_lease(router)
 
@@ -156,15 +156,14 @@ def test_rust_full_payment_cycle(router, cashu):
 
     assert bal.get("remaining", 0) > 0, f"No remaining allotment: {bal_resp[:200]}"
 
-    # Step 4: Usage returns used/allotment text
+    # Step 4: Usage returns JSON with allotment/remaining
     usage_resp = router.backend_curl_xff(
         router.backend_url("/usage"),
         ip=router.phone_ip,
     )
     assert usage_resp, "Empty usage response"
-    parts = usage_resp.split("/")
-    assert len(parts) == 2, f"Usage not in used/allotment format: {usage_resp[:200]}"
-    assert int(parts[1]) > 0, f"Allotment is 0 or negative: {usage_resp[:200]}"
+    usage_data = parse_json_or_fail(usage_resp, "usage")
+    assert usage_data.get("allotment", 0) > 0, f"Allotment is 0 or negative: {usage_resp[:200]}"
 
     # Step 5: Whoami returns MAC address
     whoami = router.ssh(

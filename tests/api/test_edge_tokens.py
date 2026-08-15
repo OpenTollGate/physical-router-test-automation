@@ -47,7 +47,7 @@ def test_duplicate_token_immediate_reuse(router, cashu):
         pytest.skip("backend in degraded mode (mint unreachable), cannot test double-spend")
 
     # Mint token
-    token = cashu.mint(1)
+    token = cashu.mint(4)
 
     # First payment should succeed
     resp1 = router.pay_direct(token)

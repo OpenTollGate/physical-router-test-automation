@@ -564,7 +564,7 @@ def submit_run_shc(
                 vm = client.get_vm(service_id)
             except Exception as exc:
                 if "not_found" in str(exc).lower():
-                    print(f"  VM not yet in hypervisor (404), retrying...")
+                    print("  VM not yet in hypervisor (404), retrying...")
                     time.sleep(15)
                     continue
                 raise

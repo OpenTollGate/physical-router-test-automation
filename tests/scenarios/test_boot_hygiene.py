@@ -511,8 +511,8 @@ def test_wallet_preserved_through_degraded_cycle(router, cashu):
 
         # The balance should be preserved (not zeroed)
         # We compare the raw dicts since balance structure may vary
-        before_sats = balance_before.get("balance", balance_before.get("sats", None))
-        after_sats = balance_after.get("balance", balance_after.get("sats", None))
+        before_sats = balance_before.get("balance", balance_before.get("sat", None))
+        after_sats = balance_after.get("balance", balance_after.get("sat", None))
 
         if before_sats is not None and after_sats is not None:
             assert after_sats >= before_sats, (

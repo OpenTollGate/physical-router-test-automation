@@ -1,0 +1,39 @@
+# Raw FIPS daemon container — standalone FIPS exit-node test peer
+#
+# Build:
+#   docker build -t fips-node -f docker/Dockerfile.fips-node .
+#
+# Run:
+#   docker run --rm -it --cap-add NET_ADMIN --device /dev/net/tun \
+#     -e FIPS_NSEC="nsec1..." \
+#     -e FIPS_PEER_NPUB="npub1..." \
+#     -e FIPS_PEER_ADDR="66.92.204.38:2121" \
+#     fips-node
+
+FROM debian:trixie-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        iproute2 iputils-ping dnsutils \
+        iptables nftables conntrack \
+        curl iperf3 ca-certificates \
+        wireguard-tools \
+        tcpdump netcat-openbsd \
+        && \
+    rm -rf /var/lib/apt/lists/*
+
+# FIPS daemon and control tools
+COPY fips /usr/local/bin/fips
+COPY fipsctl /usr/local/bin/fipsctl
+COPY fipstop /usr/local/bin/fipstop
+
+RUN chmod +x /usr/local/bin/fips /usr/local/bin/fipsctl /usr/local/bin/fipstop
+
+# Runtime directory (mirrors production layout)
+RUN mkdir -p /run/fips /etc/fips
+
+# Generate config from env vars and start FIPS daemon
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

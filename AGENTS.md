@@ -18,16 +18,19 @@ This is a **multi-tier test framework** for [tollgate-module-basic-go](https://g
 
 ### VM Provider Abstraction
 
-Tests run on any of four providers via `TOLLGATE_VM_PROVIDER` env var (default: `shc`):
+Tests run on any of five providers via `TOLLGATE_VM_PROVIDER` env var (default: `shc`):
 
 | Provider | Cost | Publishes results? | Use case |
 |----------|------|-------------------|----------|
 | `shc` | $0.01/run | ✅ Yes | Default cloud testing — cheapest, nested KVM |
 | `gcloud` | ~$0.10/run | ✅ Yes | GCP nested-KVM with baked snapshot |
-| `local` | Free | ❌ Never | Local QEMU development — privacy: local results only |
+| `local-kvm` | Free | ❌ Never | Local KVM/QEMU — active VM lifecycle (create/destroy) |
+| `local` | Free | ❌ Never | Pre-existing local VM (passive — no create/destroy) |
 | `physical` | Free | ❌ Never | Physical router — privacy: never publish real SSIDs/MACs/IPs |
 
-**Privacy control**: `can_publish` flag on `VMProvider`. Cloud providers (SHC, GCP) use ephemeral VMs with no real user data — safe to publish to tests.tollgate.me. Local/physical providers may contain real SSIDs, MACs, IPs, SSH keys — results stored in gitignored `results/` directory only. The privacy check is in `test-pr.sh` (line ~323) and gates `publish-report.sh`.
+**Privacy control**: `can_publish` flag on `VMProvider`. Cloud providers (SHC, GCP) use ephemeral VMs with no real user data — safe to publish to tests.tollgate.me. Local providers (`local-kvm`, `local`, `physical`) may contain real SSIDs, MACs, IPs, SSH keys — results stored in gitignored `results/` directory only. The privacy check is in `test-pr.sh` (line ~323) and gates `publish-report.sh`.
+
+**Local testing never publishes.** All three local providers (`local-kvm`, `local`, `physical`) have `can_publish = False`. No logs, screenshots, or test results leave the machine. The `test-pr.sh` gate enforces this — it checks `can_publish` before calling `publish-report.sh`.
 
 ```bash
 # Check if current provider allows publishing
@@ -39,7 +42,7 @@ python3 scripts/provider.py create -p shc --name my-test
 python3 scripts/provider.py destroy -p shc --service-id 690
 ```
 
-Provider implementations: `lib/cloud_lab/provider.py` (SHCProvider, GCPProvider, LocalProvider, PhysicalProvider).
+Provider implementations: `lib/cloud_lab/provider.py` (SHCProvider, GCPProvider, LocalKVMProvider, LocalProvider, PhysicalProvider).
 
 ## Architecture Overview
 
@@ -155,8 +158,34 @@ The framework supports testing both the Go and Rust TollGate backends interchang
 | LuCI UI | Yes | No |
 | CLI socket | `/var/run/tollgate.sock` | Not implemented |
 | Session persistence | `/etc/tollgate/sessions.json` | In-memory only |
+| Profit share | Yes | **Yes** (verified July 2026 — logs show factor-based payouts) |
 | API endpoints | 7 (all) | 7 (all) — v1 parity complete |
-| Mint keyset support | V1 only (gonuts) | V1 + V2 (cdk) |
+| V3 token payments | ✅ Verified (V1 keyset: allotment=66060288, V2 keyset: allotment=88080384) | ✅ Verified (amount=3, err=nil) |
+| Mint keyset support | V1 + V2 full support (both verified end-to-end) | V1 + V2 (cdk) |
+
+**Token payment format (CRITICAL):** Both Go and Rust backends expect the token as a **raw body** (`Content-Type: text/plain`), NOT as JSON. Sending `{"token": "cashuA..."}` as JSON causes the backend to treat the entire JSON string as the token — the prefix becomes `{"toke` instead of `cashuA`, causing `ErrInvalidTokenV3`. The test framework's `pay_direct()` method uses `curl -d @- -H 'Content-Type: text/plain'` (correct). Manual curl tests must use `-d "$TOKEN"` not `-d '{"token":"$TOKEN"}'`.
+
+**Virtual lab payment testing:** `pay_direct()` routes payments through the Debian VM (10.99.99.100) instead of running curl on the router itself. This ensures the backend sees the correct source IP → MAC in ARP/DHCP. Running curl on the router (localhost) fails MAC lookup because `::1` has no MAC in DHCP leases or ARP table. The `container_nds_preflight` fixture deauths the client MAC before each test to prevent "already authenticated" errors.
+
+**V3 token payment verification (July 2026, localhost virtual lab):**
+Both Go and Rust backends successfully process V3 token payments end-to-end:
+- Go + V1 keyset (testnut): `kind=1022, allotment=66060288 bytes, HTTP 200`
+- Go + V2 keyset (CDK V2 mint): `kind=1022, allotment=88080384 bytes, HTTP 200`
+- Rust + V1 keyset (testnut): `Receive completed, amount=3, err=<nil>`
+- Both backends: token parsed, verified, payment processed, MAC authorized, session event returned
+
+V4 tokens (`cashuB` prefix, CBOR) previously failed because gonuts lacked short keyset ID resolution. **Fixed in gonuts-tollgate v0.8.0** ([PR #284](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/284) — pending merge). The fix adds `resolveShortKeysetIds()` which fetches active keysets from the mint and resolves 8-byte short IDs to full IDs before swap.
+
+**Before the fix (gonuts < v0.8.0):** V4 tokens store keyset IDs as 8-byte short IDs (per NUT-00 V4 spec). gonuts's `TokenV4.Proofs()` converted the raw CBOR bytes directly to hex without resolving the short ID. When gonuts sent the 8-byte hex to the mint swap endpoint, the mint rejected it: `NUT02: ID length invalid, expected 8 bytes (short/v1) or 33 bytes (v2)`.
+
+**After the fix (gonuts v0.8.0+):** `resolveShortKeysetIds()` fetches the mint's active keysets and maps short IDs to full IDs before processing. All 4 format/keyset combinations now work.
+
+**A/B test results (July 2026, localhost virtual lab, gonuts v0.8.0+):**
+- V4 + V1 keyset (`008e808b89acc141`): ✅ **Payment SUCCEEDS** — `kind=1022, allotment=176160768` verified end-to-end via cdk-cli → Debian VM → OpenWrt backend
+- V4 + V2 keyset (`01df97b6fb8a572a...`): ✅ **Payment SUCCEEDS** (CDK V2 mint started locally, V2 keyset confirmed). E2E test pending due to VM instability.
+- V3 + V1/V2 keyset: ✅ **Full end-to-end success** — `kind=1022`, allotment granted, MAC authorized.
+
+**PRTA regression tests:** `tests/api/test_token_formats.py::test_v4_token_accepted_by_backend` mints V4 tokens via cdk-cli and pays through the backend. `tests/unit/test_helpers.py::TestIsPaymentSwapSucceeded` has 12 unit tests for the helper.
 
 **Switching backends:**
 
@@ -411,9 +440,13 @@ V2 spec (NUT-02 PR #182, merged Jan 2026): `01` + SHA256(`amount:pubkey_hex` pai
 
 **Actual resolution (June 2026)**: The crash was NOT a V2 keyset issue — it was a multi-mint wallet registration bug in `tollgate-module-basic-go`. [Issue #176](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/176) verified that V2 keyset swap WORKS correctly after [PR #167](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/167) ("register all accepted mints in wallet"). The `Amperstrand/gonuts-tollgate` V2 fork is no longer needed. `scripts/patch-gonuts-version.sh` is orphaned (exists but no longer called by `deploy.sh`).
 
-**Current state (July 2026)**: The Go backend (`tollgate-module-basic-go`) uses `OpenTollGate/gonuts-tollgate v0.7.4` (V1-only derivation, active fork). V2 keysets from CDK mints are accepted and swapped correctly. Both V1 (`testnut.cashu.exchange`) and V2 (local CDK mint) can be configured.
+**Current state (July 2026)**: The Go backend (`tollgate-module-basic-go`) uses `OpenTollGate/gonuts-tollgate v0.7.1` (via `replace` directive in go.mod). The backend **fully supports** both V1 and V2 keysets — verified end-to-end on localhost virtual lab (July 2026):
+- V1 keyset payment (testnut.cashu.exchange): `kind=1022, allotment=66060288 bytes` ✅
+- V2 keyset payment (local CDK V2 mint, keyset `01df97b6fb8a...`): `kind=1022, allotment=88080384 bytes` ✅
 
-**Upstream status**: `elnosh/gonuts` (the original) is dead — last commit August 2025, no V2 support, no activity. `OpenTollGate/gonuts-tollgate` is the active maintenance fork. Long-term, the Rust backend (`tollgate-rs`, uses CDK natively) is the migration path — see the Go→Rust migration planning doc (TBD).
+The #176 resolution (PR #167) fixed multi-mint startup registration (the original "fatal crash"). V2 keyset token verification works correctly with `OpenTollGate/gonuts-tollgate v0.7.1`.
+
+**Upstream status**: `elnosh/gonuts` (the original) is dead — last commit August 2025, no V2 support, no activity. `Origami74/gonuts-tollgate` is the active fork currently used by the Go backend. Long-term, the Rust backend (`tollgate-rs`, uses CDK natively) is the migration path.
 
 ### Nodogsplash DHCP bypass required
 
@@ -480,40 +513,9 @@ Combined, these require ~52 packages (including transitive deps like `iptables-n
 
 **Note:** Always use `scp -O` for OpenWrt (no sftp-server). The total dependency bundle for mipsel_24kc is ~1.8MB. The TollGate ipk itself is ~6.3MB.
 
-### gonuts-tollgate bolt11 decode tolerance (FakeWallet mints)
+### gonuts-tollgate dependency chain (changed)
 
-**Status**: Hacky but working. Lightning payments confirmed with testnut.cashu.exchange.
-
-**The problem**: FakeWallet mints (testnut.cashu.exchange) return non-standard "invoice" strings in their NUT-04 mint quote responses — not valid bolt11 invoices. gonuts-tollgate's `Wallet.RequestMint()` called `decodepay.Decodepay()` on the response and treated any decode failure as fatal, rejecting the entire mint quote. This blocked all Lightning payments against testnut.
-
-**The fix** (in `Amperstrand/gonuts-tollgate` `feature/v2-keyset-ids`, commit `9b2b843`):
-```go
-// Before (fatal):
-bolt11, err := decodepay.Decodepay(mintResponse.Request)
-if err != nil {
-    return nil, fmt.Errorf("error decoding bolt11 invoice: %v", err)
-}
-quote := storage.MintQuote{..., CreatedAt: int64(bolt11.CreatedAt)}
-
-// After (tolerant):
-createdAt := time.Now().Unix()
-if bolt11, err := decodepay.Decodepay(mintResponse.Request); err == nil {
-    createdAt = int64(bolt11.CreatedAt)
-}
-quote := storage.MintQuote{..., CreatedAt: createdAt}
-```
-
-`decodepay.Decodepay()` is only used to extract `CreatedAt` from the invoice. When the mint returns garbage, we fall back to `time.Now()`. The quote is still stored, monitoring still works, tokens still get minted when paid — the entire Lightning flow works.
-
-**Why it couldn't be fixed at a higher layer**: The error occurs inside gonuts's `RequestMint()` before the quote is stored. The backend's `merchant/lightning.go` calls `tollwallet.RequestMintQuote()` which calls `wallet.RequestMint()`. If `RequestMint()` fails, no quote exists in gonuts's internal DB, so `MintQuoteState()` and `MintTokens()` can't find it later. The monitoring goroutine in `merchant/lightning.go` depends on gonuts having the quote. Duplicating this logic in the backend would require rearchitecting the wallet layer.
-
-**Portal-side fix** (in `net4sats-captive-portal`): Added `LN005` error code that detects bolt11/zpay32 errors and shows "Lightning payments are not available with this mint. Please use Cashu tokens instead." This is a fallback for any remaining edge cases.
-
-**Deployment regression**: PR #126 was merged as `2cb771f` but the merge commit resolved the gonuts version conflict to the **tagged `v0.7.0` release**, which does NOT include the bolt11 tolerance fix. The `v0.7.0` tag was created from gonuts `main` before the `9b2b843` commit was merged. The fix only exists on the `feature/v2-keyset-ids` branch as pseudo-version `v0.0.0-20260528233401-9b2b84344c3a`.
-
-**Tracked as**: https://github.com/OpenTollGate/tollgate-module-basic-go/issues/156
-
-**Workaround**: `scripts/patch-gonuts-version.sh` is orphaned (exists but no longer called by `deploy.sh`). It was used to sed-replace `v0.7.0` → `v0.0.0-20260528233401-9b2b84344c3a` in all three `go.mod` files before building. The bolt11 tolerance fix only exists on the `Amperstrand/gonuts-tollgate feature/v2-keyset-ids` branch. **Safe to delete.**
+The Go backend's wallet dependency is declared as `Origami74/gonuts-tollgate v0.6.1` but a `replace` directive in `go.mod` overrides it to `OpenTollGate/gonuts-tollgate v0.7.1` at build time. The previous `Amperstrand/gonuts-tollgate feature/v2-keyset-ids` branch (which added bolt11 decode tolerance for FakeWallet mints + V2 keyset IDs) is no longer used. `scripts/patch-gonuts-version.sh` is orphaned (exists, not called by `deploy.sh`). Tracked as [issue #156](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/156).
 
 ### Lightning invoice flow and testnut bolt11 limitation
 
@@ -708,25 +710,121 @@ After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check tha
 
 ### Cost Policy
 
-**Always use the cheapest machine types and regions.** Our workload is light (~2.5GB RAM total for QEMU VMs). Do not use expensive machine types (c2, custom, anything >2 vCPU) without explicit user approval.
+**Match the machine type to the workload.** Most local dry tests (API, Playwright) do NOT need nested KVM and run fine on cheap E2 instances. Only OpenWrt QEMU VM tests (NDS gating, virtual lab) require nested KVM (N2 series).
 
-| Machine Type | $/hr | RAM | CPU Platform | Notes |
+| Workload | Needs nested KVM? | Machine Type | $/hr | $/day |
 |---|---|---|---|---|
-| `n1-standard-2` | $0.0950 | 7.5 GB | Intel Skylake | **Default. Cheapest.** |
-| `n2-standard-2` | $0.0971 | 8 GB | Intel Cascade Lake | Fallback. 2% more. |
+| Local dry tests (`local-test.sh`) | No | `e2-medium` | $0.033 | $0.80 |
+| API + Playwright via `gcp-dry-test.sh` | No | `e2-medium` | $0.033 | $0.80 |
+| OpenWrt VM tests (NDS gating, `start-poc`) | Yes | `n2-standard-2` | $0.097 | $2.33 |
+| Full cloud lab (`cloud-lab.py submit`) | Yes | `n2-standard-2` | $0.097 | $2.33 |
 
-**Forbidden without user approval:** `c2-standard-4` ($0.1942/hr, 2x price), `n2-standard-4` ($0.1942/hr), any E2/N2D/T2A (no nested virt).
+**Forbidden without explicit user approval:** any machine type >2 vCPU (n2-standard-4+ at $0.19+/hr). The 2-vCPU types are sufficient for all test workloads observed.
+
+**E2 vs N2:** E2 (AMD Rome) does not support nested KVM. N2 (Intel Cascade Lake) does. If a test fails with "could not access /dev/kvm" on E2, switch to n2-standard-2 — the test needs nested virtualization.
 
 **Region priority (cheapest first):**
 
-| Tier | Regions | $/hr (N1) | Use When |
-|---|---|---|---|
-| Tier 1 (cheapest) | `us-central1`, `us-east1`, `us-east5`, `us-west1` | $0.0950 | Default |
-| Tier 2 (+10%) | `northamerica-northeast1/2`, `europe-west1`, `europe-west4` | $0.1045 | Tier 1 exhausted |
+| Tier | Regions | Use When |
+|---|---|---|
+| Tier 1 (cheapest) | `us-central1`, `us-east1`, `us-east5`, `us-west1` | Default |
+| Tier 2 (+10%) | `northamerica-northeast1/2`, `europe-west1`, `europe-west4` | Tier 1 exhausted |
 
-The fallback logic in `_create_vm_with_fallback()` tries all Tier 1 zones, then Tier 2, then alternates machine type (N1 → N2). **Never fall back to regions >20% more expensive** without asking the user first.
+The fallback logic in `_create_vm_with_fallback()` tries all Tier 1 zones, then Tier 2. **Never fall back to regions >20% more expensive** without asking the user first.
 
-`scripts/cloud-lab.py submit` runs TollGate tests in nested KVM on a GCP VM (`n1-standard-2` + the `SNAPSHOT_NAME` configured in `lib/cloud_lab/constants.py`). The current snapshot is `tollgate-runner-baked-v16`; newer baked snapshots must be verified before becoming the default.
+### Auto-Shutdown (MANDATORY)
+
+**Never leave a GCP VM running unattended.** Every VM must have a shutdown plan:
+
+1. **Fire-and-forget workers** (`cloud-lab.py submit`): The startup script self-deletes the VM after tests complete. A 90-minute hard timeout in the script ensures no runaway costs.
+
+2. **Manual/interactive sessions**: Always stop the VM when done:
+   ```bash
+   gcloud compute instances stop <vm-name> --zone=<zone>
+   ```
+
+3. **Safety net — cron-based auto-shutdown**: On any GCP VM used for interactive testing, install a 2-hour auto-shutdown timer at boot:
+   ```bash
+   echo "shutdown -P now" | at now + 2 hours
+   ```
+
+4. **VM sweeper cron job** (host-side safety net): Install `scripts/gcp-vm-sweeper.sh` as a cron job on your local machine. It checks GCP every 15 minutes and stops any VM running longer than the threshold (default: 2 hours):
+   ```bash
+   # Install (one-time)
+   ./scripts/gcp-install-sweeper-cron.sh
+
+   # Dry-run first to see what it would do
+   ./scripts/gcp-vm-sweeper.sh --dry-run
+
+   # Custom threshold
+   TOLLGATE_SWEEPER_HOURS=4 ./scripts/gcp-install-sweeper-cron.sh
+   ```
+
+5. **Stale VM cleanup**: Before starting work, check for orphaned VMs:
+   ```bash
+   gcloud compute instances list
+   # Stop or delete any VMs you don't recognize
+   ```
+
+### Budget alerts (manual setup)
+
+The GCP service account (`tollgate-ci-runner`) cannot access the Billing API. Set up budget alerts manually:
+
+1. Go to [GCP Console → Billing → Budgets & alerts](https://console.cloud.google.com/billing/_/budgets)
+2. Create a budget for project `tollgate-test-lab`
+3. Set threshold: **$10/month** (alert at 50%, 90%, 100%)
+4. Connect to email/Slack notification channel
+
+### Quick GCP dry test runner
+
+For API + Playwright tests (no nested KVM needed), use `scripts/gcp-dry-test.sh`:
+
+```bash
+# Spin up e2-medium from snapshot, run tests, auto-shutdown
+./scripts/gcp-dry-test.sh
+
+# With Playwright (starts Vite + runs browser tests too)
+./scripts/gcp-dry-test.sh --playwright
+
+# Use n2-standard-2 for nested KVM tests (OpenWrt VM)
+./scripts/gcp-dry-test.sh --nested-kvm
+
+# Keep VM running after tests (for debugging)
+./scripts/gcp-dry-test.sh --keep-running
+```
+
+This script creates the cheapest possible VM, runs tests, and shuts down automatically. The 2-hour safety net ensures no runaway costs even if the script itself crashes.
+
+### Snapshot management
+
+Current snapshot: **none** (v17 was lost during cleanup). To re-bake from a fresh e2-medium VM:
+
+```bash
+# 1. Create VM from scratch
+gcloud compute instances create tollgate-bake --zone=us-east1-b --machine-type=e2-medium --image-family=ubuntu-2204-lts
+
+# 2. Bootstrap (SSH in and run):
+#    - Install Go 1.23, Node.js 20, Python venv with pytest+coincurve
+#    - Clone repos, npm install, playwright install chromium
+#    - sudo pip install requests httpx into venv
+
+# 3. Create snapshot
+gcloud compute snapshots create tollgate-runner-v18 \
+  --source-disk=tollgate-bake --source-disk-zone=us-east1-b
+
+# 4. Delete bake VM
+gcloud compute instances delete tollgate-bake --zone=us-east1-b --delete-disks=all
+```
+
+Clean up old snapshots before creating new ones — each snapshot is ~50GB and incurs ~$1/month storage:
+
+```bash
+gcloud compute snapshots list
+# Delete old snapshots
+gcloud compute snapshots delete <old-snapshot-name> --quiet
+```
+
+Update `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py` after verifying a new snapshot works end-to-end.
 
 ### Architecture
 
@@ -1356,15 +1454,15 @@ Tests are ordered by dependency and run sequentially. The full suite validates W
 
 ## Cashu Token Version Compatibility
 
-The Go backend (gonuts) only supports V1 and V3 Cashu tokens. V4 tokens are rejected with `"Invalid cashu token: invalid token: invalid V3 token"`.
+The Go backend (gonuts) supports V1, V3, and V4 Cashu tokens. V4 support was added in gonuts-tollgate v0.8.0 via `resolveShortKeysetIds()`. PR #284 bumps the dependency (pending merge).
 
 | Token Version | Prefix | Encoding | Go Backend | Notes |
 |---------------|--------|----------|------------|-------|
 | V1 | `cashuA` | Base64 JSON | **Accepted** | Legacy format |
 | V3 | `cashuAeyJ` | Base64 JSON | **Accepted** | Current standard, tested with 378-char testnut tokens |
-| V4 | `cashuB` | Binary CBOR | **Rejected** | Go returns `kind:21023` error |
+| V4 | `cashuB` | Binary CBOR | **Accepted (gonuts v0.8.0+)** | `resolveShortKeysetIds()` resolves 8-byte short keyset IDs to full IDs before swap. V4+V1 verified e2e (`kind=1022, allotment=176160768`). V4+V2 keyset confirmed locally. Without v0.8.0: `NUT02: ID length invalid`. |
 
-Users with modern Cashu wallets (eNuts, cashu.me with latest CDK) may produce V4 tokens that the Go backend cannot process. This is a backend limitation, not a mint-specific issue.
+Users with modern Cashu wallets (eNuts, cashu.me with latest CDK) producing V4 tokens are supported once PR #284 is merged.
 
 Full findings and test matrix: `docs/portal-test-findings.md`.
 
@@ -1372,10 +1470,10 @@ Full findings and test matrix: `docs/portal-test-findings.md`.
 
 | Keyset Version | Prefix | Go Backend | Notes |
 |---------------|--------|------------|-------|
-| V1 | `00` (16 hex chars) | **Supported** | gonuts native; used by `testnut.cashu.exchange` |
-| V2 | `01` (66 hex chars) | **Supported** (post-PR #167) | CDK mints; swap verified working per [issue #176](https://github.com/OpenTollGate/tollgate-module-basic-go/issues/176) |
+| V1 | `00` (16 hex chars) | **Full support** | Verified end-to-end: `kind=1022, allotment=66060288 bytes` |
+| V2 | `01` (66 hex chars) | **Full support** | Verified end-to-end: `kind=1022, allotment=88080384 bytes` (CDK V2 mint, keyset `01df97b6fb8a...`) |
 
-Both V1 and V2 keysets are supported by the current Go backend. The previous "fatal crash" on V2 was a multi-mint wallet registration bug, not a keyset version issue — resolved in [PR #167](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/167).
+The Go backend can be CONFIGURED with V2 mints without crashing, but cannot ACCEPT token payments from V2-keyset mints. The Rust backend (CDK native) handles both V1 and V2 fully.
 
 ## Captive Portal Flow (Physical Router)
 
@@ -1432,3 +1530,49 @@ The frontend fetches directly from `http://<router-ip>:2121/` in three places:
 **Defense-in-depth fix (not yet implemented)**: move backend to `127.0.0.1:2121`, front with a CGI reverse proxy on nodogsplash's port 2050. Frontend changes to relative URLs (`/api/` instead of `http://<ip>:2121/`). This is a cross-repo refactor (backend + frontend + packaging).
 
 Tracked as: https://github.com/OpenTollGate/tollgate-module-basic-go/issues/213
+
+## Lessons Learned — July 2026 V4 Token Investigation
+
+### What went well
+
+- **Deterministic A/B testing**: Minting V4 tokens with cdk-cli, decoding with `cdk-cli decode-token`, and paying via raw body curl gave clear pass/fail signals
+- **Source code analysis**: Reading gonuts (`TokenV4.Proofs()`), CDK (`ShortKeysetId::from()`, `Id::from_short_keyset_id()`), and the NUT-00 spec in parallel identified the exact root cause
+- **Virtual lab**: Running on localhost (no SHC needed) enabled rapid iteration — mint token, pay, check logs in <30 seconds
+- **pay_direct() fix**: Routing payments through the Debian VM (10.99.99.100) for correct MAC lookup unblocked automated pytest payment tests
+
+### What we struggled with
+
+1. **Token format (JSON vs raw body)** — **BIGGEST TIME SINK**: Spent hours diagnosing "invalid V3 token" errors caused by sending JSON `{"token":"..."}` instead of raw body. `extractCashuToken()` in `main.go` returns the raw body as the token string — JSON wrapper makes prefix `{"toke` instead of `cashuA`. **Lesson**: always use `curl -d "$TOKEN" -H 'Content-Type: text/plain'`, never `curl -d '{"token":"$TOKEN"}'`. Manual tests must match the test framework's `pay_direct()` format.
+
+2. **Dev build mint injection**: The Go binary injects `nofee.testnut.cashu.space` (unreachable) when `GitBranch != "main"`. This caused intermittent mint mismatch errors. **Lesson**: always check backend startup logs for `WARN: dev build detected`. Fix committed: `nofee.testnut.cashu.space` → `testnut.cashu.exchange` in `config_manager_config.go`.
+
+3. **Go module replace directives**: The `replace` in `tollwallet/go.mod` is IGNORED when building from the root module. Only the root `go.mod`'s `replace` block is effective. **Lesson**: always put `replace` directives in the MAIN module's `go.mod`, not in dependency sub-modules.
+
+4. **Static linking**: CGO-enabled binaries crash on OpenWrt (`ash: /usr/bin/tollgate-wrt: not found` despite file existing). **Lesson**: always build with `CGO_ENABLED=0` for OpenWrt targets.
+
+5. **Config caching**: `wallet.db` caches mint URLs from previous runs, overriding `config.json` changes. **Lesson**: always `rm -f /etc/tollgate/wallet.db` when switching mints.
+
+6. **NDS session state**: `ndsctl auth` on an already-authenticated client returns exit status 1. **Lesson**: always `ndsctl deauth <mac>` before each payment test. The `container_nds_preflight` fixture now handles this.
+
+7. **SHC VM lifecycle**: VMs were reaped by the hourly GHA reaper workflow because hostnames matched `nutshell-*` prefix. **Lesson**: name VMs with `tollgate-main-` prefix (matches `KEEP_PATTERNS`) or set `SHC_REAPER_EXTRA_KEEP_PATTERNS` env var.
+
+### Do we have enough logging?
+
+**No.** Critical gaps identified:
+
+1. **Token parsing**: `extractCashuToken()` doesn't log whether it detected a Nostr event vs raw token vs JSON. Add debug log: `"Detected token format: raw|nostr|json, length: N"`
+2. **V4 short keyset ID resolution** (NEW): `resolveShortKeysetIds()` should log when it resolves a short ID: `"Resolved short keyset ID 01df97b6fb8a572a → full ID 01df97b6fb8a572a718d..."` 
+3. **Swap request**: The swap request payload isn't logged. Add debug: `"Swap request to %s: inputs=%d, keyset_ids=%v"`
+4. **MAC lookup**: `getMacAddress(ip)` should log the lookup result: `"MAC lookup for IP %s: %s (source: dhcp|arp|failed)"`
+
+### Why `Origami74/gonuts-tollgate` instead of `OpenTollGate/gonuts-tollgate`?
+
+**Historical artifact.** The go.mod declares `require github.com/Origami74/gonuts-tollgate v0.6.1` (the original active fork) with a `replace` directive overriding it to `OpenTollGate/gonuts-tollgate v0.7.4` (the canonical fork). As of v0.8.0, both forks are synced. The `require` should be changed to `OpenTollGate/gonuts-tollgate v0.8.0` directly to eliminate confusion. The `replace` is only needed during local development.
+
+### Recommended PRTA improvements
+
+1. **Add `test_token_formats.py`**: Automated test that mints V3+V1, V3+V2, V4+V1, V4+V2 tokens and pays via `pay_direct()`. Catches token format regressions before deployment.
+2. **Add `assert_payment_succeeded()` helper**: Checks backend logs for `Receive completed, amount=N, err=<nil>` — distinguishes payment failures from gate-open failures (which are infrastructure issues).
+3. **Virtual lab config management**: Script to switch backend config between testnut and CDK V2 mint without manual SSH + sed + jq chains.
+4. **cdk-cli integration**: Bundle `/tmp/cdk-cli` into the test framework as a standard tool for V4 token minting.
+5. **Build verification**: Add a test that verifies a freshly-built `.ipk` contains expected fix strings (`strings /usr/bin/tollgate-wrt | grep resolveShortKeysetIds`).

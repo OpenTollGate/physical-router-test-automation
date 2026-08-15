@@ -1,6 +1,8 @@
 import json
+import os
 import pytest
 from lib.helpers import parse_json_or_fail
+from lib.cashu import create_minter
 
 pytestmark = [pytest.mark.api, pytest.mark.smoke]
 
@@ -8,7 +10,6 @@ pytestmark = [pytest.mark.api, pytest.mark.smoke]
 @pytest.fixture(scope="module")
 def discovery(router, backend):
     if backend.is_rust:
-        from lib.helpers import create_minter
         mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
         minter = create_minter(mint_url)
         minter.ensure_mint_available(timeout=10)
@@ -61,8 +62,6 @@ def test_info_has_price_per_step(discovery):
 
 @pytest.mark.smoke
 def test_info_has_tips_tag(discovery, router):
-    if router.backend.is_rust:
-        pytest.skip("Rust v1 discovery event missing 'tips' tag (Amperstrand/tollgate-rs#43)")
     tags = discovery.get("tags", [])
     tips_tags = [t for t in tags if isinstance(t, list) and len(t) >= 2 and t[0] == "tips"]
     assert len(tips_tags) > 0, f"Missing 'tips' tag in discovery event: {tags}"
