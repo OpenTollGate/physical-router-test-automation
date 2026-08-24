@@ -16,7 +16,10 @@ set -euo pipefail
 
 ROUTER="${1:?Usage: $0 <router_ip> [password] [tarball_url]}"
 PW="${2:-tollgate}"
-URL="${3:-https://github.com/net4sats/configurationwizzard/releases/download/v1.0.0/net4sats-configwiz-1.0.0.tar.gz}"
+URL="${3:-https://github.com/felixfelix-bot/configurationwizzard/releases/download/v1.0.2/net4sats-configwiz-1.0.2.tar.gz}"
+# v1.0.2 tag points at ac84f33 = latest upstream net4sats/configurationwizzard
+# main HEAD (verified 2026-08-24). Upstream org's v1.0.0 release tarball is stale
+# (predates PRs #20-#23). Pass a different URL as arg 3 to override.
 TARBALL="/tmp/cw-release.tar.gz"
 
 SSH="sshpass -p $PW ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive root@$ROUTER"
