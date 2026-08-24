@@ -22,18 +22,18 @@ URL="${3:-https://github.com/felixfelix-bot/configurationwizzard/releases/downlo
 # Pass a different URL as arg 3 to override.
 TARBALL="/tmp/cw-release.tar.gz"
 
-SSH="sshpass -p $PW ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive root@$ROUTER"
+rssh() { sshpass -p "$PW" ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive "root@$ROUTER" "$@"; }
 
 echo "[1/4] Downloading release tarball (workstation)..."
 curl -fsSL "$URL" -o "$TARBALL"
 echo "     $(du -h "$TARBALL" | cut -f1) downloaded"
 
 echo "[2/4] Transferring to router..."
-"$SSH" 'cat > /tmp/cw-release.tar.gz' < "$TARBALL"
+rssh 'cat > /tmp/cw-release.tar.gz' < "$TARBALL"
 
 echo "[3/4] Deploying on router..."
 # Router-side deploy script (BusyBox ash safe, no command substitution)
-cat << 'DEPLOY_EOF' | "$SSH" 'cat > /tmp/cw-deploy.sh && sh /tmp/cw-deploy.sh'
+cat << 'DEPLOY_EOF' | rssh 'cat > /tmp/cw-deploy.sh && sh /tmp/cw-deploy.sh'
 set -e
 cd /tmp
 rm -rf cw-rel && mkdir cw-rel
@@ -123,7 +123,7 @@ echo "ROUTER_DEPLOY_OK"
 DEPLOY_EOF
 
 echo "[4/4] Verifying..."
-"$SSH" 'ls /www/net4sats/index.html && ls /usr/libexec/rpcd/tollgate && uci -q get uhttpd.net4sats.home' || {
+rssh 'ls /www/net4sats/index.html && ls /usr/libexec/rpcd/tollgate && uci -q get uhttpd.net4sats.home' || {
   echo "VERIFY FAILED - check output above"
   exit 1
 }
