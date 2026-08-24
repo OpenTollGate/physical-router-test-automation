@@ -14,9 +14,9 @@ set -euo pipefail
 # Usage:  ./scripts/deploy-configwizzard-release.sh <router_ip> [password]
 # ---------------------------------------------------------------------------
 
-ROUTER="${1:?Usage: $0 <router_ip> [password]}"
+ROUTER="${1:?Usage: $0 <router_ip> [password] [tarball_url]}"
 PW="${2:-tollgate}"
-URL="https://github.com/felixfelix-bot/configurationwizzard/releases/download/v1.0.2/net4sats-configwiz-1.0.2.tar.gz"
+URL="${3:-https://github.com/net4sats/configurationwizzard/releases/download/v1.0.0/net4sats-configwiz-1.0.0.tar.gz}"
 TARBALL="/tmp/cw-release.tar.gz"
 
 SSH="sshpass -p $PW ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive root@$ROUTER"
@@ -36,17 +36,28 @@ cd /tmp
 rm -rf cw-rel && mkdir cw-rel
 tar xzf cw-release.tar.gz -C cw-rel
 
+# --- Layout auto-detection: upstream v1.0.0 (admin/, portal/) vs fork v1.0.2 (dist/admin/, dist/portal/) ---
+if [ -d cw-rel/dist/admin ]; then
+  ADMIN_SRC=cw-rel/dist/admin
+  PORTAL_SRC=cw-rel/dist/portal
+  BAL_SRC=cw-rel/dist/balance
+else
+  ADMIN_SRC=cw-rel/admin
+  PORTAL_SRC=cw-rel/portal
+  BAL_SRC=""
+fi
+
 # --- Admin SPA -> /www/net4sats ---
 mkdir -p /www/net4sats
-cp -r cw-rel/dist/admin/* /www/net4sats/
+cp -r "$ADMIN_SRC"/* /www/net4sats/
 
-# --- Balance page into admin ---
-if [ -f cw-rel/dist/balance/balance.html ]; then
-  cp cw-rel/dist/balance/balance.html /www/net4sats/balance.html
+# --- Balance page into admin (fork builds only; upstream v1.0.0 lacks it) ---
+if [ -n "$BAL_SRC" ] && [ -f "$BAL_SRC/balance.html" ]; then
+  cp "$BAL_SRC/balance.html" /www/net4sats/balance.html
 fi
-if [ -d cw-rel/dist/balance/assets ]; then
+if [ -n "$BAL_SRC" ] && [ -d "$BAL_SRC/assets" ]; then
   mkdir -p /www/net4sats/assets
-  cp -r cw-rel/dist/balance/assets/. /www/net4sats/assets/ 2>/dev/null || true
+  cp -r "$BAL_SRC"/assets/. /www/net4sats/assets/ 2>/dev/null || true
 fi
 
 # --- rpcd plugin ---
@@ -62,7 +73,7 @@ done
 
 # --- Captive portal SPA -> nodogsplash htdocs ---
 mkdir -p /etc/nodogsplash/htdocs
-cp -r cw-rel/dist/portal/* /etc/nodogsplash/htdocs/
+cp -r "$PORTAL_SRC"/* /etc/nodogsplash/htdocs/
 
 # --- uhttpd UCI: main :80, luci :8080, net4sats :8090 (wizard Step 7c) ---
 uci -q del_list uhttpd.main.listen_http='0.0.0.0:80' 2>/dev/null; true
