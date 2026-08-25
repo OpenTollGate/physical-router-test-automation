@@ -1087,6 +1087,8 @@ enforce 1 in practice. Delete old snapshots before creating new ones:
 
 ### SHC Zone Reachability + Reaper Gotchas
 
+**Paid-resource audits: `scripts/cost-status.py`.** Lists everything billing across SHC (services, snapshots, backups) and GCP (instances, disks, snapshots, images, addresses, machine-images). Resources are classified against `config/approved-resources.yaml` (regex on name, or GCP label match): anything not matching is UNAPPROVED → exit 1. VMs that exist but are powered off are flagged **STOPPED-BUT-BILLABLE** — SHC bills by service existence, not power state (incident: `lightning-playground` sat stopped for 9 days accruing $0.26/day unnoticed). Spend per 24h/7d/30d is reconstructed (Σ price/day × days-existed) because SHC's transaction ledger only records credits/refunds — renewals draw down credit silently and `list_invoices` stays empty. `--export-reaper-env` emits the allowlist as `SHC_REAPER_EXTRA_KEEP_PATTERNS` so the reaper and the audit share one approval source.
+
 **Zone 7 (Cherryvale, Kansas / Dev VPS tier) is unreachable from Europe.**
 The `66.92.204.0/24` subnet (Cherryvale) has no working BGP route from at
 least Telenor Norway → Arelion/Telia backbone. ICMP, TCP, and SSH all return

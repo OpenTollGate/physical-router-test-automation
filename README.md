@@ -509,6 +509,7 @@ All 26 scripts in `scripts/`:
 |---|---|
 | `cloud-lab.py` | GCP/SHC cloud lab — `submit` (fire-and-forget PR/commit tests), `status-run`, `cleanup-stale`. Supports `--backend go\|rust-basic\|rust` |
 | `cloud-lab-worker.sh` | Autonomous worker entrypoint (runs on GCP/SHC VM via startup script) |
+| `cost-status.py` | Audit all billable resources (SHC + GCP VMs, snapshots, backups, images, disks, IPs). Classifies APPROVED vs UNAPPROVED against `config/approved-resources.yaml`, warns on stopped-but-billable VMs, shows spend over 24h/7d/30d + burn rate. Exit 1 = unapproved resources. `--export-reaper-env` feeds the allowlist to the VM reaper |
 | `virtual-lab.py` | Manage local TollGate virtual lab — `start-poc`, `stop-poc`, `doctor`, `debug-poc`. Supports `--backend go\|rust-basic\|rust` |
 | `run-local-tests.sh` | Local QEMU test runner — starts fakewallet CDK mint, configures OpenWrt, runs pytest. Results stay local |
 | `deploy-local-vm.sh` | Deploy TollGate + NDS + captive portal to a local QEMU OpenWrt VM (idempotent) |
