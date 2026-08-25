@@ -45,8 +45,8 @@ const DEPLOY_MODE        = process.env.DEPLOY_MODE        || 'wan';
 const DEV_SPLIT          = parseInt(process.env.DEV_SPLIT || '10', 10);
 const MARGIN             = parseFloat(process.env.MARGIN  || '0');
 
-const WIZARD_BIN_PATH    = resolve('tests/browser/net4sats-wizard');
-const SCREENSHOT_PATH    = resolve('tests/browser/wizard-deploy-e2e-screenshot.png');
+const WIZARD_BIN_PATH    = resolve(new URL('.', import.meta.url).pathname, 'net4sats-wizard');
+const SCREENSHOT_PATH    = resolve(new URL('.', import.meta.url).pathname, 'wizard-deploy-e2e-screenshot.png');
 
 // SSH helper
 function sshRouter(cmd) {
