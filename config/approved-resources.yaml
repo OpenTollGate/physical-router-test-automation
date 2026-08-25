@@ -1,0 +1,27 @@
+# Approved paid resources — allowlist for scripts/cost-status.py
+#
+# Any billable resource (VM, snapshot, backup, image, disk, address) whose
+# name/hostname does NOT match an entry below is reported as UNAPPROVED and
+# makes cost-status.py exit 1. Anything that matches is APPROVED (reason is
+# shown in the status output).
+#
+# Matching rules:
+#   pattern: regex (re.search) against the resource name/hostname
+#   labels:  exact-match map against GCP resource labels (SHC has no labels)
+#   A resource is approved if ANY entry matches (pattern OR all label pairs).
+#
+# Reaper integration: these patterns extend the VM reaper's keep-list. Emit
+# the env var with:
+#     scripts/cost-status.py --export-reaper-env
+# then export it before running cleanup-stale / the reaper workflows.
+# NOTE: the reaper matches by substring, not regex — keep patterns simple
+# (anchors like ^ and $ are stripped when exporting).
+#
+# stopped-but-billable VMs are ALWAYS shown as a warning (SHC bills by
+# service existence, not power state) even when approved.
+
+approved:
+  - pattern: '^tollgate-main-'
+    reason: persistent main runner (default reaper keep-pattern)
+  - pattern: '^europa-vpn-vps$'
+    reason: explicitly excluded from reaping (infra, not test VM)
