@@ -154,6 +154,8 @@ def run_pytest(wave: int, verbose: bool = False) -> tuple[dict | None, str, int]
         cmd += ["--json-report", f"--json-report-file={json_path}"]
     else:
         print("[test] pytest-json-report not installed — falling back to stdout parsing")
+        # parse_stdout needs per-test verbose lines; -q emits dots only.
+        cmd += ["-v"]
 
     env = {
         **os.environ,
@@ -459,7 +461,12 @@ def update_divergences(report: dict[str, Any]) -> dict[str, Any]:
     - Previously-open divergences absent from this wave are marked ``fixed``.
     """
     data = load_divergences()
-    existing = {d["test"]: d for d in data.get("divergences", [])}
+    # Legacy divergence entries (schema <2) are keyed by id/endpoint, not test.
+    existing: dict[str, Any] = {}
+    for d in data.get("divergences", []):
+        key = d.get("test") or d.get("id") or d.get("endpoint")
+        if key:
+            existing[key] = d
     current_failures = {f["test"]: f for f in report.get("failures", [])}
 
     # Mark fixed: were open before, not failing now.
@@ -493,7 +500,10 @@ def update_divergences(report: dict[str, Any]) -> dict[str, Any]:
                 "last_seen": now,
             }
 
-    data["divergences"] = sorted(existing.values(), key=lambda d: d["test"])
+    data["divergences"] = sorted(
+        existing.values(), key=lambda d: d.get("test") or d.get("id") or d.get("endpoint") or ""
+    )
+    data.setdefault("history", [])
     data["history"].append({
         "wave": report["wave"],
         "timestamp": now,
