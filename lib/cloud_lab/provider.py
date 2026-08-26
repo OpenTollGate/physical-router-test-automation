@@ -284,6 +284,7 @@ class SHCProvider(VMProvider):
         "ci-",
         "fips-cloud-",
         "fips-test-",
+        "devprobe-",
     )
 
     _EXCLUDE_HOSTNAMES = frozenset({"europa-vpn-vps"})
