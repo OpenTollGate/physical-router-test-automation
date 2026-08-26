@@ -97,6 +97,24 @@ jobs:
 
           echo "=== Reaper complete ==="
 
+      - name: Billing audit (fail on unapproved resources)
+        env:
+          SHC_API_KEY: ${{ secrets.SHC_API_KEY }}
+          GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+        run: |
+          echo "=== Billing audit — $(date -u) ==="
+          if [ -n "$GCP_SERVICE_ACCOUNT_KEY" ]; then
+            echo "$GCP_SERVICE_ACCOUNT_KEY" > /tmp/gcp-sa.json
+            gcloud auth activate-service-account --key-file=/tmp/gcp-sa.json >/dev/null 2>&1 || true
+            gcloud config set project tollgate-test-lab >/dev/null 2>&1 || true
+          fi
+          # cost-status exits 1 when any billable resource is unapproved —
+          # this makes leaked VMs visible as a red X within 30 minutes
+          # instead of at the next manual audit. Fix path: register the
+          # resource in config/approved-resources.yaml (intentional) or
+          # cancel it (leaked).
+          python3 scripts/cost-status.py --provider shc,gcp
+
       - name: Cleanup
         if: always()
         run: rm -f /tmp/gcp-sa.json
