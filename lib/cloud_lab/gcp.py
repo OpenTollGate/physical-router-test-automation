@@ -144,6 +144,27 @@ def _validate_machine_type(machine_type: str) -> None:
         )
 
 
+def ensure_runner_snapshot(project: str) -> None:
+    """Fail fast when the GCP runner snapshot is missing.
+
+    The GCP cloud lab is deprecated in favor of SHC (~$0.01/run vs ~$0.10/run).
+    A missing snapshot would otherwise only surface minutes later, after the
+    upstream CI artifact wait.
+    """
+    r = _run_gcloud(
+        ["compute", "snapshots", "describe", SNAPSHOT_NAME, f"--project={project}"],
+        timeout=60,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"GCP runner snapshot '{SNAPSHOT_NAME}' not found in project {project}. "
+            "The GCP cloud lab is DEPRECATED — use the SHC provider instead "
+            "(default: TOLLGATE_VM_PROVIDER=shc). To restore GCP: run "
+            "scripts/bake-snapshot.py, then update SNAPSHOT_NAME in "
+            "lib/cloud_lab/constants.py."
+        )
+
+
 def _create_vm_with_fallback(
     vm_name: str,
     project: str,
@@ -154,6 +175,7 @@ def _create_vm_with_fallback(
     timeout: int = 300,
 ) -> tuple[subprocess.CompletedProcess[str], str, str]:
     """Try creating a VM, falling back through zones and machine types on RESOURCE_POOL_EXHAUSTED."""
+    ensure_runner_snapshot(project)
     zones_to_try = [zone] + [z for z in _ZONE_FALLBACKS if z != zone]
     types_to_try = [machine_type] + [t for t in _MACHINE_TYPE_FALLBACKS if t != machine_type]
 
@@ -212,6 +234,7 @@ def vm_up(vm_name: str, zone: str = DEFAULT_ZONE, machine_type: str = DEFAULT_MA
         print(f"VM {vm_name} exists ({status}), starting...")
         r = _run_gcloud(["compute", "instances", "start", vm_name, f"--project={project}", f"--zone={zone}"], timeout=120)
         return 0 if r.returncode == 0 else 1
+    ensure_runner_snapshot(project)
     print(f"Creating VM from snapshot {SNAPSHOT_NAME}...")
     cpu_platform = _MIN_CPU_PLATFORM.get(machine_type.split("-")[0], "Intel Skylake")
     r = _run_gcloud([
