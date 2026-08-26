@@ -8,6 +8,7 @@ test-run-*
 scripts/mint-token/mint-token
 .env
 .env.bak
+reports/
 
 # Python
 __pycache__/
