@@ -54,7 +54,9 @@ Fire-and-forget testing on an SHC cloud VM. Identical to GCP but uses the SHC pr
 
 **Provider selection:** Set `TOLLGATE_VM_PROVIDER` env var: `shc` (default), `gcloud`, `local`, or `physical`.
 
-### GCP Cloud Lab (alternative cloud)
+### GCP Cloud Lab (DEPRECATED — use SHC)
+
+> **Deprecated.** The GCP provider costs ~$0.10/run vs ~$0.01/run on SHC and its runner snapshot is no longer baked (the last one was deleted). Submit paths fail fast with a "snapshot not found" error pointing at SHC. Everything below is kept for reference; to revive it, run `scripts/bake-snapshot.py`, update `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py`, and remove the `ensure_runner_snapshot` guard notes.
 
 Same workflow as SHC but uses Google Cloud Platform. Requires `gcloud` CLI authenticated and a GCP runner snapshot.
 
@@ -145,7 +147,9 @@ source ~/.tollgate-test-venv/bin/activate
 
 `test-pr.sh` handles the full workflow: resolve PR to branch/commit, verify router connectivity, factory reset (if `--reset`), deploy, run tests, parse JUnit results, generate HTML report, and optionally publish.
 
-## Cloud lab (GCP, fire-and-forget)
+## Cloud lab (GCP, fire-and-forget) — DEPRECATED
+
+> Superseded by the [SHC provider](#shc--sovereign-hybrid-compute-cloud-vm) (~10x cheaper, ~$0.01/run). The GCP runner snapshot was deleted; `submit`/`up` now fail fast via `ensure_runner_snapshot()` in `lib/cloud_lab/gcp.py`. Content below is reference for a future re-bake.
 
 Run API + container E2E + virtual WiFi tests in a nested-virt GCP VM (OpenWrt + Debian client). No physical router required.
 

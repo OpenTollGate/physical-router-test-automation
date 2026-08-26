@@ -706,7 +706,11 @@ If `99-asu-defaults` is still there, it failed partway through. Read it, fix the
 
 After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check that the upstream network is providing DHCP. Verify with `ping 192.168.13.1` from the router.
 
-## GCP cloud lab (fire-and-forget)
+## GCP cloud lab (fire-and-forget) — DEPRECATED
+
+> **Superseded by SHC** (default provider, ~$0.01/run vs ~$0.10/run, Zone 4 reachable from Europe; note Zone 7/Dev VPS is still unreachable). No GCP runner snapshot is baked — `submit`/`up` fail fast via `ensure_runner_snapshot()` in `lib/cloud_lab/gcp.py`. To revive: `scripts/bake-snapshot.py` + update `SNAPSHOT_NAME`. Reaped-VM cost-hygiene notes below still apply in spirit to SHC (`scripts/cost-status.py` audits it).
+
+**Deprecated section kept for reference.** To revive GCP: run `scripts/bake-snapshot.py`, update `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py`, and remove the guard.
 
 ### Cost Policy
 
