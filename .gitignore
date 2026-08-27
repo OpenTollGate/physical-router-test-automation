@@ -71,3 +71,6 @@ infra/pulumi-shc-spike/__pycache__/
 
 # auto-generated opencode session handover (do not commit)
 HANDOVER.md
+tests/browser/happy-path-report/
+tests/browser/kanbanstr-test-results/
+tests/report/
