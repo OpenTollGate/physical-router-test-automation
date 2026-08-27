@@ -555,12 +555,13 @@ def submit_run_shc(
     else:
         tier_specs = {"starter": "1C/4GB/8GB", "standard": "2C/8GB/16GB"}
         print(f"Ordering SHC VM '{hostname}' ({tier_label} {tier_specs[tier]})...")
+        order_pubkey = client.augment_key_comment(pubkey, f"prta:cloud-lab:{run_id}") if pubkey else None
         result = client.submit_order(
             hostname=hostname,
             package_id=package_id,
             pricing_id=pricing_id,
             idempotency_key=f"tollgate-{run_id}",
-            ssh_key=pubkey or None,
+            ssh_key=order_pubkey,
         )
         sids = result.get("service_ids", [])
         if not sids:
