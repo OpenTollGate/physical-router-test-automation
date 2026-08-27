@@ -9,13 +9,15 @@
  *   - "Get Access" link on balance page points to :2050 (NDS gateway port)
  *   - Link href does NOT point to relative splash.html
  *
- * TEST 2: Cashu tab UX
- *   - Portal renders with tab structure (Lightning + Cashu tabs)
- *   - Cashu tab is clickable and switches to Cashu view
- *   - Cashu tab: no size-selection buttons (class "size-btn" inside ".size-choices")
- *   - Cashu tab: no selectedSats/amount text display ("X sats")
- *   - Cashu tab: token input field is present (placeholder="cashuxyz…")
- *   - Lightning tab: size buttons ARE visible (class "size-btn")
+ * TEST 2: Cashu tab UX — FULL MODE (upstream online, mints reachable)
+ *   - Backend gate: GET :2121 must return kind:10021 with price_per_step tags
+ *     (kind:21023 "No reachable mints" FAILS the test — no degraded mode)
+ *   - Portal must load pricing (size-choices renders on default Lightning tab)
+ *   - Lightning tab MUST show size-selection buttons (.size-btn visible > 0)
+ *   - Cashu tab MUST show NO size buttons (.size-choices removed from DOM)
+ *   - Cashu tab: no selectedSats/amount text (no "X sats", no "How much…")
+ *   - Cashu tab: token input field present (placeholder="cashuxyz…")
+ *   - Switch back to Lightning: size buttons visible again
  *
  * Browser: Chrome (channel:'chrome'), headless: false, video recording enabled.
  */
@@ -158,12 +160,24 @@ test('session expiry: portal loads and balance page Get Access link points to :2
   console.log('\n[TEST1] ✅ TEST 1 PASSED — Session expiry redirect verified');
 });
 
-// ─── TEST 2: Cashu tab UX ─────────────────────────────────────────────────────
+// ─── TEST 2: Cashu tab UX (FULL MODE) ─────────────────────────────────────────
 
 test('cashu tab UX: no size buttons, no amount display, token input present; Lightning shows size buttons', async ({ page }) => {
   console.log('\n═══════════════════════════════════════════════════════════════');
-  console.log('  TEST 2: Cashu tab UX — verify UI structure');
+  console.log('  TEST 2: Cashu tab UX — FULL MODE (mints reachable, pricing loaded)');
   console.log('═══════════════════════════════════════════════════════════════\n');
+
+  // Step 0: FULL-MODE GATE — backend must advertise live mint pricing.
+  // kind:21023 ("No reachable mints detected") = degraded mode => HARD FAIL.
+  console.log('[TEST2] Backend full-mode gate: probing http://' + ROUTER_IP + ':2121/ ...');
+  const backendResp = await fetch(`http://${ROUTER_IP}:2121/`, { signal: AbortSignal.timeout(15000) });
+  const backendEvent = await backendResp.json();
+  const priceTags = (backendEvent.tags || []).filter(t => t[0] === 'price_per_step');
+  console.log(`[TEST2] Backend kind=${backendEvent.kind}, price_per_step tags=${priceTags.length}`);
+  console.log('[TEST2] Reachable mints:', priceTags.map(t => t[4]).join(', '));
+  expect(backendEvent.kind, 'Backend must be kind:10021 (10021 event with pricing) — got kind:' + backendEvent.kind + ' (21023 = degraded/no mints)').toBe(10021);
+  expect(priceTags.length, 'Backend must advertise price_per_step tags for reachable mints').toBeGreaterThan(0);
+  console.log('[TEST2] ✅ Backend in FULL MODE — kind:10021 with ' + priceTags.length + ' reachable mint(s)');
 
   // Step 1: Navigate to portal splash page at :2051
   console.log(`[TEST2] Navigating to portal: ${PORTAL_URL}`);
@@ -176,228 +190,129 @@ test('cashu tab UX: no size buttons, no amount display, token input present; Lig
     return app && app.children.length > 0;
   }, { timeout: 60000 });
 
-  // Wait for portal content to appear (tabs, loading, or error state)
-  console.log('[TEST2] Waiting for portal content...');
+  // Step 2: FULL MODE — pricing must load. On the default Lightning tab,
+  // .size-choices renders once pricing arrives. Waiting for it proves we are
+  // NOT in degraded mode (kind:21023 renders "No reachable mints" instead).
+  console.log('[TEST2] Waiting for pricing to load (size-choices to render on default Lightning tab)...');
   await page.waitForFunction(() => {
     const body = document.body.innerText || '';
-    return body.includes('Lightning') || body.includes('Cashu') || body.includes('TollGate') || body.includes('Loading') || body.includes('initializing') || body.includes('No reachable');
+    if (body.includes('No reachable')) return true; // let the assertion below fail loudly
+    return document.querySelectorAll('.size-btn').length > 0;
   }, { timeout: 60000 });
 
-  // Wait for the tab buttons to appear in the DOM
-  console.log('[TEST2] Waiting for tab buttons...');
-  await page.waitForFunction(() => {
-    const cashuTab = document.querySelector('.tollgate-captive-portal-tabs-tab-cashu');
-    const lightningTab = document.querySelector('.tollgate-captive-portal-tabs-tab-lightning');
-    return cashuTab && lightningTab;
-  }, { timeout: 30000 });
+  const earlyBody = await page.evaluate(() => document.body.innerText.substring(0, 400));
+  expect(earlyBody.includes('No reachable'), 'Portal must NOT show "No reachable mints" (full mode required)').toBe(false);
+  console.log('[TEST2] ✅ Pricing loaded — portal is in full payment mode');
 
-  // Get initial state
-  const initialState = await page.evaluate(() => {
-    const cashuTab = document.querySelector('.tollgate-captive-portal-tabs-tab-cashu');
-    const lightningTab = document.querySelector('.tollgate-captive-portal-tabs-tab-lightning');
-    return {
-      cashuTabText: cashuTab?.textContent?.trim(),
-      cashuTabActive: cashuTab?.getAttribute('data-active'),
-      lightningTabText: lightningTab?.textContent?.trim(),
-      lightningTabActive: lightningTab?.getAttribute('data-active'),
-      hasSizeChoices: !!document.querySelector('.size-choices'),
-      sizeButtonsCount: document.querySelectorAll('.size-btn').length,
-      bodyText: document.body.innerText.substring(0, 500),
-    };
-  });
-  console.log('[TEST2] Initial state:', JSON.stringify(initialState, null, 2));
-
-  // Check if the portal is in a degraded state (loading/setup with non-interactive tabs)
-  // If the backend returns kind 21023 (no reachable mints), the portal enters setup state
-  // where tabs don't have onClick handlers. We need to test with whatever state is available.
-
-  // Try clicking the Cashu tab
-  console.log('[TEST2] Clicking Cashu tab...');
-  const cashuTab = page.locator('.tollgate-captive-portal-tabs-tab-cashu');
-  await cashuTab.click({ timeout: 10000 }).catch(() => {
-    console.log('[TEST2] Click failed, trying to activate tab via JS...');
-  });
-
-  // Wait for any tab switch
-  await page.waitForTimeout(1000);
-
-  // Try to force-activate the Cashu tab via JS if click didn't work (degraded mode)
-  const cashuActivated = await page.evaluate(() => {
-    const cashuTab = document.querySelector('.tollgate-captive-portal-tabs-tab-cashu');
-    if (cashuTab) {
-      // Check if it has onClick handler (interactive mode)
-      const hasOnClick = cashuTab.onclick !== null || cashuTab.getAttribute('onClick');
-      if (!hasOnClick) {
-        // In degraded mode, tabs don't have onClick. We need to check the React/Preact state.
-        // Let's look at what the current DOM shows.
-        console.log('Cashu tab has no onClick handler (degraded mode)');
-      }
-      // Try clicking anyway
-      cashuTab.click();
-      return { clicked: true, hasOnClick };
-    }
-    return { clicked: false };
-  });
-  console.log('[TEST2] Cashu tab activation:', JSON.stringify(cashuActivated));
-
-  await page.waitForTimeout(1000);
-
-  // Check the current state of the portal — what's visible in the view area
-  const portalState = await page.evaluate(() => {
-    const view = document.querySelector('.tollgate-captive-portal-view');
-    const viewHTML = view ? view.innerHTML.substring(0, 2000) : '(no view element)';
-
-    // Check for size buttons (shared across both tabs, rendered before tabs)
-    const sizeChoices = document.querySelector('.size-choices');
+  // Step 3: LIGHTNING TAB (default) — size-selection buttons MUST be visible
+  const lightningInitial = await page.evaluate(() => {
     const sizeButtons = document.querySelectorAll('.size-btn');
     const visibleSizeButtons = Array.from(sizeButtons).filter(btn => btn.offsetParent !== null);
-
-    // Check for Cashu-specific elements
-    const cashuInput = document.querySelector('input[placeholder*="cashu" i]');
-    const methodInputs = document.querySelectorAll('.tollgate-captive-portal-method-input');
-    const visibleMethodInputs = Array.from(methodInputs).filter(el => el.offsetParent !== null);
-
-    // Check for amount display ("X sats" in method-input with textAlign center)
-    const amountDisplays = Array.from(document.querySelectorAll('.tollgate-captive-portal-method-input')).filter(el => {
-      const style = el.getAttribute('style') || '';
-      return style.includes('textAlign') && style.includes('center') && style.includes('border:none');
-    });
-
-    // Check for "sats" text in the view area (indicates amount display)
-    const viewText = view ? view.innerText : '';
-    const hasSatsDisplay = /\d+\s*sats/i.test(viewText) && !viewText.includes('Cashu tokens should start');
-
-    // Check for loading state
-    const isLoading = viewText.includes('Loading') || viewText.includes('Setting up') || viewText.includes('initializing');
-
     return {
-      viewText: viewText.substring(0, 500),
-      hasSizeChoices: !!sizeChoices,
+      lightningTabActive: document.querySelector('.tollgate-captive-portal-tabs-tab-lightning')?.getAttribute('data-active'),
       sizeButtonsTotal: sizeButtons.length,
       sizeButtonsVisible: visibleSizeButtons.length,
       sizeButtonTexts: visibleSizeButtons.map(b => b.textContent?.trim()),
-      cashuInputPresent: !!cashuInput,
-      cashuInputVisible: cashuInput ? cashuInput.offsetParent !== null : false,
-      methodInputsTotal: methodInputs.length,
-      methodInputsVisible: visibleMethodInputs.length,
-      amountDisplayCount: amountDisplays.length,
-      hasSatsDisplay,
-      isLoading,
-      cashuTabActive: document.querySelector('.tollgate-captive-portal-tabs-tab-cashu')?.getAttribute('data-active'),
-      lightningTabActive: document.querySelector('.tollgate-captive-portal-tabs-tab-lightning')?.getAttribute('data-active'),
+      hasHowMuchHeading: (document.querySelector('.tollgate-captive-portal-view')?.innerText || '').includes('How much Internet would you like to buy?'),
     };
   });
+  console.log('[TEST2] Lightning tab initial state:', JSON.stringify(lightningInitial, null, 2));
 
-  console.log('[TEST2] Portal state after Cashu tab click:', JSON.stringify(portalState, null, 2));
+  expect(lightningInitial.lightningTabActive, 'Lightning tab must be the default active tab').toBe('true');
+  expect(lightningInitial.sizeButtonsVisible,
+    'Lightning tab MUST show size-selection buttons (pricing loaded, full mode)').toBeGreaterThan(0);
+  console.log(`[TEST2] ✅ Lightning tab shows ${lightningInitial.sizeButtonsVisible} size-selection buttons: ${lightningInitial.sizeButtonTexts.join(', ')}`);
 
-  // Take screenshot of current state
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/test2-portal-initial-screenshot.png`, fullPage: true });
-  console.log(`[TEST2] Initial screenshot saved to ${SCREENSHOT_DIR}/test2-portal-initial-screenshot.png`);
-
-  // If the portal is in degraded/loading mode, the size buttons won't be rendered at all
-  // (they're only rendered when pricing info is loaded: !b && i)
-  // In that case, we verify the structure based on what IS available.
-
-  if (portalState.isLoading) {
-    console.log('[TEST2] ⚠️ Portal is in degraded/loading mode (no reachable mints)');
-    console.log('[TEST2] Verifying tab structure and checking that size buttons are NOT present...');
-
-    // In degraded mode, size buttons should NOT be present (pricing not loaded)
-    expect(portalState.sizeButtonsTotal,
-      'In degraded mode, size-selection buttons should not be rendered (no pricing data)').toBe(0);
-    console.log('[TEST2] ✅ Size-selection buttons are NOT present (no pricing loaded in degraded mode)');
-
-    // No amount display should be visible
-    expect(portalState.hasSatsDisplay,
-      'No sats amount display should be present in degraded mode').toBe(false);
-    console.log('[TEST2] ✅ No sats/amount display in degraded mode');
-
-    // Both tabs should be present in the DOM
-    expect(portalState.cashuTabActive !== null,
-      'Cashu tab should be present in DOM').toBeTruthy();
-    expect(portalState.lightningTabActive !== null,
-      'Lightning tab should be present in DOM').toBeTruthy();
-    console.log('[TEST2] ✅ Both Lightning and Cashu tabs are present in DOM');
-  } else {
-    console.log('[TEST2] Portal is in normal/payment mode');
-
-    // In normal mode, we can test the full Cashu tab UX
-
-    // Verify size buttons are NOT visible in Cashu tab
-    // Size buttons (class "size-btn") are shared — they're rendered before the tabs
-    // but they should only be relevant for Lightning. In Cashu tab, they should not be visible.
-    // Actually, the size-choices div is always rendered when pricing is loaded,
-    // regardless of active tab. The fix was about NOT showing size buttons for Cashu.
-    // Let's check if size buttons are visible...
-    expect(portalState.sizeButtonsVisible,
-      'Cashu tab should NOT show visible size-selection buttons').toBe(0);
-    console.log('[TEST2] ✅ Size-selection buttons are HIDDEN in Cashu tab');
-
-    // Verify no amount/selectedSats display in Cashu tab
-    expect(portalState.hasSatsDisplay,
-      'Cashu tab should NOT show selectedSats/amount display').toBe(false);
-    console.log('[TEST2] ✅ No selectedSats/amount display in Cashu tab');
-
-    // Verify token input field is present
-    expect(portalState.cashuInputPresent,
-      'Cashu tab should have a token input field').toBeTruthy();
-    console.log('[TEST2] ✅ Token input field is present in Cashu tab');
-  }
-
-  // Take screenshot of Cashu tab state
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/test2-cashu-tab-screenshot.png`, fullPage: true });
-  console.log(`[TEST2] Cashu tab screenshot saved to ${SCREENSHOT_DIR}/test2-cashu-tab-screenshot.png`);
-
-  // Step: Switch to Lightning tab and verify size buttons
-  console.log('[TEST2] Switching to Lightning tab...');
-
-  const lightningTab = page.locator('.tollgate-captive-portal-tabs-tab-lightning');
-  await lightningTab.click({ timeout: 10000 }).catch(() => {
-    console.log('[TEST2] Click failed, trying JS click...');
-  });
-
-  // Force click via JS if needed
-  await page.evaluate(() => {
-    const tab = document.querySelector('.tollgate-captive-portal-tabs-tab-lightning');
-    if (tab) tab.click();
-  });
-
-  await page.waitForTimeout(1000);
-
-  const lightningState = await page.evaluate(() => {
-    const sizeButtons = document.querySelectorAll('.size-btn');
-    const visibleSizeButtons = Array.from(sizeButtons).filter(btn => btn.offsetParent !== null);
-    const view = document.querySelector('.tollgate-captive-portal-view');
-    const viewText = view ? view.innerText : '';
-    const isLoading = viewText.includes('Loading') || viewText.includes('Setting up') || viewText.includes('initializing');
-
-    return {
-      sizeButtonsTotal: sizeButtons.length,
-      sizeButtonsVisible: visibleSizeButtons.length,
-      sizeButtonTexts: visibleSizeButtons.map(b => b.textContent?.trim()),
-      viewText: viewText.substring(0, 500),
-      isLoading,
-      lightningTabActive: document.querySelector('.tollgate-captive-portal-tabs-tab-lightning')?.getAttribute('data-active'),
-    };
-  });
-
-  console.log('[TEST2] Lightning tab state:', JSON.stringify(lightningState, null, 2));
-
-  if (lightningState.isLoading) {
-    console.log('[TEST2] ⚠️ Portal still in degraded mode — size buttons not available');
-    // In degraded mode, size buttons aren't rendered at all (no pricing data)
-    expect(lightningState.sizeButtonsTotal,
-      'In degraded mode, size buttons should not be rendered').toBe(0);
-    console.log('[TEST2] ✅ Confirmed: no size buttons in degraded mode (pricing not loaded)');
-  } else {
-    expect(lightningState.sizeButtonsVisible,
-      'Lightning tab SHOULD show visible size-selection buttons').toBeGreaterThan(0);
-    console.log(`[TEST2] ✅ Size-selection buttons ARE visible in Lightning tab (${lightningState.sizeButtonsVisible} buttons: ${lightningState.sizeButtonTexts.join(', ')})`);
-  }
-
-  // Take screenshot of Lightning tab
+  // Take screenshot of Lightning tab (default view)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/test2-lightning-tab-screenshot.png`, fullPage: true });
   console.log(`[TEST2] Lightning tab screenshot saved to ${SCREENSHOT_DIR}/test2-lightning-tab-screenshot.png`);
 
-  console.log('\n[TEST2] ✅ TEST 2 PASSED — Cashu tab UX verified');
+  // Step 4: Click the Cashu tab (real click — tabs are interactive in full mode)
+  console.log('[TEST2] Clicking Cashu tab...');
+  const cashuTab = page.locator('.tollgate-captive-portal-tabs-tab-cashu');
+  await cashuTab.click({ timeout: 10000 });
+  await page.waitForFunction(() => {
+    return document.querySelector('.tollgate-captive-portal-tabs-tab-cashu')?.getAttribute('data-active') === 'true';
+  }, { timeout: 10000 });
+  console.log('[TEST2] ✅ Cashu tab is now active (interactive tab click worked)');
+
+  // Step 5: CASHU TAB — strict assertions
+  const cashuState = await page.evaluate(() => {
+    const view = document.querySelector('.tollgate-captive-portal-view');
+    const viewText = view ? view.innerText : '';
+    const sizeButtons = document.querySelectorAll('.size-btn');
+    const visibleSizeButtons = Array.from(sizeButtons).filter(btn => btn.offsetParent !== null);
+    const tokenInput = document.querySelector('input[placeholder^="cashuxyz"]');
+
+    return {
+      cashuTabActive: document.querySelector('.tollgate-captive-portal-tabs-tab-cashu')?.getAttribute('data-active'),
+      lightningTabActive: document.querySelector('.tollgate-captive-portal-tabs-tab-lightning')?.getAttribute('data-active'),
+      sizeChoicesInDom: !!document.querySelector('.size-choices'),
+      sizeButtonsTotal: sizeButtons.length,
+      sizeButtonsVisible: visibleSizeButtons.length,
+      hasHowMuchHeading: viewText.includes('How much Internet would you like to buy?'),
+      hasSatsAmount: /\d+\s*sats/i.test(viewText),
+      viewText: viewText.substring(0, 400),
+      tokenInputPresent: !!tokenInput,
+      tokenInputVisible: tokenInput ? tokenInput.offsetParent !== null : false,
+      tokenInputPlaceholder: tokenInput?.getAttribute('placeholder'),
+    };
+  });
+  console.log('[TEST2] Cashu tab state:', JSON.stringify(cashuState, null, 2));
+
+  // 5a. NO size-selection buttons — .size-choices must be REMOVED from the DOM
+  expect(cashuState.sizeChoicesInDom,
+    'Cashu tab must NOT contain .size-choices in the DOM (fix removes it entirely on cashu tab)').toBe(false);
+  expect(cashuState.sizeButtonsTotal,
+    'Cashu tab must have ZERO .size-btn elements in DOM').toBe(0);
+  expect(cashuState.sizeButtonsVisible,
+    'Cashu tab must show zero visible size-selection buttons').toBe(0);
+  console.log('[TEST2] ✅ Cashu tab shows NO size-selection buttons (removed from DOM)');
+
+  // 5b. NO selectedSats / amount display
+  expect(cashuState.hasHowMuchHeading,
+    'Cashu tab must NOT show the "How much Internet would you like to buy?" sizing prompt').toBe(false);
+  expect(cashuState.hasSatsAmount,
+    `Cashu tab must NOT show selectedSats/amount text ("X sats") — view text was: ${cashuState.viewText}`).toBe(false);
+  console.log('[TEST2] ✅ Cashu tab has NO selectedSats/amount display');
+
+  // 5c. Token input field MUST be present and visible
+  expect(cashuState.tokenInputPresent,
+    'Cashu tab must have a token input field (placeholder="cashuxyz…")').toBeTruthy();
+  expect(cashuState.tokenInputVisible,
+    'Cashu tab token input must be visible').toBeTruthy();
+  console.log(`[TEST2] ✅ Token input field present (placeholder="${cashuState.tokenInputPlaceholder}")`);
+
+  // Take screenshot of Cashu tab
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/test2-cashu-tab-screenshot.png`, fullPage: true });
+  console.log(`[TEST2] Cashu tab screenshot saved to ${SCREENSHOT_DIR}/test2-cashu-tab-screenshot.png`);
+
+  // Step 6: Switch BACK to Lightning — size buttons must return (fix did not break Lightning UX)
+  console.log('[TEST2] Switching back to Lightning tab...');
+  const lightningTab = page.locator('.tollgate-captive-portal-tabs-tab-lightning');
+  await lightningTab.click({ timeout: 10000 });
+  await page.waitForFunction(() => {
+    return document.querySelector('.tollgate-captive-portal-tabs-tab-lightning')?.getAttribute('data-active') === 'true';
+  }, { timeout: 10000 });
+  await page.waitForFunction(() => document.querySelectorAll('.size-btn').length > 0, { timeout: 10000 });
+
+  const lightningFinal = await page.evaluate(() => {
+    const sizeButtons = document.querySelectorAll('.size-btn');
+    const visibleSizeButtons = Array.from(sizeButtons).filter(btn => btn.offsetParent !== null);
+    return {
+      lightningTabActive: document.querySelector('.tollgate-captive-portal-tabs-tab-lightning')?.getAttribute('data-active'),
+      sizeButtonsVisible: visibleSizeButtons.length,
+      sizeButtonTexts: visibleSizeButtons.map(b => b.textContent?.trim()),
+    };
+  });
+  console.log('[TEST2] Lightning tab final state:', JSON.stringify(lightningFinal, null, 2));
+
+  expect(lightningFinal.sizeButtonsVisible,
+    'After switching back from Cashu, Lightning tab MUST show size-selection buttons again').toBeGreaterThan(0);
+  console.log(`[TEST2] ✅ Lightning tab size buttons restored after tab switch (${lightningFinal.sizeButtonTexts.join(', ')})`);
+
+  // Initial portal screenshot (Lightning default) for the evidence set
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/test2-portal-initial-screenshot.png`, fullPage: true });
+
+  console.log('\n[TEST2] ✅ TEST 2 PASSED — Cashu tab UX verified in FULL MODE (mints reachable)');
 });
