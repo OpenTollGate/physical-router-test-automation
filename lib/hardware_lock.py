@@ -48,10 +48,15 @@ except ImportError:
         data = read_hardware_lock()
         if not data:
             return False
+        if str(data.get("locked", "true")).lower() == "false":
+            return False
         return not _is_stale(data)
 
     def _is_stale(data):
-        ts = datetime.fromisoformat(data.get("timestamp", "2000-01-01T00:00:00+00:00"))
+        try:
+            ts = datetime.fromisoformat(data.get("timestamp", "2000-01-01T00:00:00+00:00"))
+        except (TypeError, ValueError):
+            return True
         return datetime.now(timezone.utc) - ts > _STALE_THRESHOLD
 
     def require_hardware_lock():
@@ -88,5 +93,8 @@ try:
 except NameError:
     def _is_stale(data):
         from lib.router_lock import _STALE_THRESHOLD
-        ts = datetime.fromisoformat(data.get("timestamp", "2000-01-01T00:00:00+00:00"))
+        try:
+            ts = datetime.fromisoformat(data.get("timestamp", "2000-01-01T00:00:00+00:00"))
+        except (TypeError, ValueError):
+            return True
         return datetime.now(_tz.utc) - ts > _STALE_THRESHOLD
