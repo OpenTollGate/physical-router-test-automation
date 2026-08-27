@@ -24,6 +24,11 @@
 name: CI
 
 on:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
   # Trigger on push to main branch
   push:
     branches: [main]
