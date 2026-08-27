@@ -86,7 +86,10 @@ check_vms() {
     log "Run: python3 scripts/virtual-lab.py start-poc --host localhost"
     exit 1
   fi
-  if ! ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${DEBIAN_IP}" "echo ok" >/dev/null 2>&1; then
+  DEBIAN_VM_UP=false
+  if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${DEBIAN_IP}" "echo ok" >/dev/null 2>&1; then
+    DEBIAN_VM_UP=true
+  else
     log "WARNING: Debian VM not reachable at ${DEBIAN_IP} (payment tests will skip)"
   fi
   log "VMs OK"
@@ -139,8 +142,23 @@ run_tests() {
   ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${DEBIAN_IP}" \
     "curl -s -o /dev/null --max-time 5 http://example.com" 2>/dev/null || true
 
+  # Portal e2e only runs with --client=container; default it on when the
+  # client VM is up and the caller passed no --client (no change if VM absent).
+  local client_default=""
+  local arg
+  local client_seen=false
+  for arg in "$@"; do
+    case "$arg" in
+      --client|--client=*) client_seen=true ;;
+    esac
+  done
+  if [ "${DEBIAN_VM_UP:-false}" = true ] && [ "${client_seen}" = false ]; then
+    client_default="--client=container"
+    log "Debian client VM up and no --client given: defaulting to --client=container"
+  fi
+
   log "Running pytest: ${test_files}"
-  python3 -m pytest ${test_files} -v --no-deploy --timeout=180 --tb=short -rs "$@"
+  python3 -m pytest ${test_files} -v --no-deploy --timeout=180 --tb=short -rs ${client_default} "$@"
 }
 
 cleanup() {
