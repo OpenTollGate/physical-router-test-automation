@@ -78,6 +78,7 @@ class Billable:
     cost_basis: str          # "exact" | "estimate:<detail>" | "unknown"
     region: str = ""
     created: str = ""        # ISO-ish, display only
+    renews: str = ""         # next renewal (SHC); crossing it while stopped = waste
     labels: dict[str, str] = field(default_factory=dict)
     extra: str = ""          # free-form annotation shown in output
 
@@ -141,19 +142,31 @@ APPROVED = "APPROVED"
 UNAPPROVED = "UNAPPROVED"
 STOPPED_WARN = "STOPPED-BUT-BILLABLE"   # VM-level warning, orthogonal to approval
 
+# A stopped VM crossing its renewal is being charged again for idle hardware.
+# Legitimate mid-soak pauses stay under this horizon and never trip it.
+RENEWAL_WARNING_HOURS = 12
 
-def classify(resources: list[Billable], rules: list[Rule]) -> list[dict[str, Any]]:
+
+def classify(resources: list[Billable], rules: list[Rule],
+             now: dt.datetime | None = None) -> list[dict[str, Any]]:
     """Attach approval + warning flags. Returns report rows."""
+    now = now or dt.datetime.now(dt.timezone.utc)
     rows = []
     for r in resources:
         rule = next((x for x in rules if x.matches(r)), None)
         approved = rule is not None
         stopped_warning = r.kind in ("vm", "instance") and r.state not in ("running",)
+        renewal_warning = False
+        if stopped_warning and r.renews:
+            renews_at = parse_any_time(r.renews)
+            if renews_at is not None and dt.timedelta(0) <= renews_at - now <= dt.timedelta(hours=RENEWAL_WARNING_HOURS):
+                renewal_warning = True
         rows.append({
             "resource": r,
             "approved": approved,
             "reason": rule.reason if rule else "",
             "stopped_warning": stopped_warning,
+            "renewal_warning": renewal_warning,
         })
     return rows
 
@@ -161,7 +174,16 @@ def classify(resources: list[Billable], rules: list[Rule]) -> list[dict[str, Any
 def worst_problem(rows: list[dict[str, Any]]) -> str:
     """'' when fine, else the failure cause (drives exit code 1)."""
     unapproved = [x for x in rows if not x["approved"]]
-    return f"{len(unapproved)} unapproved billable resource(s)" if unapproved else ""
+    renewing = [x for x in rows if x.get("renewal_warning")]
+    problems = []
+    if unapproved:
+        problems.append(f"{len(unapproved)} unapproved billable resource(s)")
+    if renewing:
+        problems.append(
+            f"{len(renewing)} stopped VM(s) renewing within {RENEWAL_WARNING_HOURS}h "
+            "— cancel or resume them (renewal while stopped = paying for idle hardware)"
+        )
+    return "; ".join(problems)
 
 
 # ── SHC ledger + spend reconstruction (pure — unit-tested) ─────────────
@@ -279,6 +301,7 @@ def collect_shc() -> tuple[list[Billable], dict[str, Any], str]:
                 name=v.get("hostname", f"service-{sid}"),
                 state=state, daily_cost=daily, cost_basis=basis,
                 created=str(v.get("date_created", "")),
+                renews=str(v.get("date_renews", "")),
                 extra=(f"ordered-by: {ordered_by}; " if ordered_by else "")
                       + f"service {sid}; renews {v.get('date_renews', '?')}",
             ))
@@ -436,6 +459,7 @@ def render_report(rows: list[dict[str, Any]], ledger: dict[str, Any],
         r: Billable = row["resource"]
         flag = "✓ APPROVED" if row["approved"] else "✗ UNAPPROVED"
         warn = "  ⚠ STOPPED-BUT-BILLABLE" if row["stopped_warning"] else ""
+        warn += "  ⚠ RENEWING-WHILE-STOPPED" if row.get("renewal_warning") else ""
         basis = "" if r.cost_basis == "exact" else f"  [{r.cost_basis}]"
         reason = f"  ({row['reason']})" if row["reason"] else ""
         lines.append(
@@ -533,7 +557,8 @@ def main(argv: list[str] | None = None) -> int:
             "resources": [{**asdict(row["resource"]),
                            "approved": row["approved"],
                            "reason": row["reason"],
-                           "stopped_warning": row["stopped_warning"]} for row in rows],
+                           "stopped_warning": row["stopped_warning"],
+                           "renewal_warning": row.get("renewal_warning", False)} for row in rows],
             "burn_per_day": round(burn, 4),
             "spend_reconstructed": {k: round(v, 4) for k, v in reconstruct_spend(resources, now).items()},
             "credits_added": window_credits(items, now) if items else None,

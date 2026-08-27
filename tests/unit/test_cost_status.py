@@ -81,6 +81,38 @@ class TestClassify:
             [_vm("whatever", state="terminated", provider="gcp", kind="instance")], self.RULES)
         assert rows[0]["stopped_warning"]
 
+    def test_stopped_near_renewal_flags_renewal_warning(self):
+        vm = _vm("tollgate-main-x", state="stopped")
+        vm.renews = (NOW + dt.timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
+        rows = _cs.classify([vm], self.RULES, now=NOW)
+        assert rows[0]["renewal_warning"]
+        assert "renewing within" in _cs.worst_problem(rows)
+
+    def test_stopped_far_from_renewal_is_only_a_warning(self):
+        vm = _vm("tollgate-main-x", state="stopped")
+        vm.renews = (NOW + dt.timedelta(hours=30)).strftime("%Y-%m-%d %H:%M:%S")
+        rows = _cs.classify([vm], self.RULES, now=NOW)
+        assert rows[0]["stopped_warning"] and not rows[0]["renewal_warning"]
+        assert _cs.worst_problem(rows) == ""
+
+    def test_renewal_warning_applies_even_when_approved(self):
+        vm = _vm("tollgate-main-x", state="stopped")
+        vm.renews = (NOW + dt.timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+        rows = _cs.classify([vm], self.RULES, now=NOW)
+        assert rows[0]["approved"] and rows[0]["renewal_warning"]
+
+    def test_running_vm_near_renewal_never_flags(self):
+        vm = _vm("tollgate-main-x", state="running")
+        vm.renews = (NOW + dt.timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        rows = _cs.classify([vm], self.RULES, now=NOW)
+        assert not rows[0]["renewal_warning"]
+
+    def test_already_past_renewal_time_not_flagged_as_imminent(self):
+        vm = _vm("tollgate-main-x", state="stopped")
+        vm.renews = (NOW - dt.timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        rows = _cs.classify([vm], self.RULES, now=NOW)
+        assert not rows[0]["renewal_warning"]
+
     def test_non_vm_kinds_never_stopped_warning(self):
         rows = _cs.classify(
             [Billable(provider="gcp", kind="snapshot", name="snap", state="active",
