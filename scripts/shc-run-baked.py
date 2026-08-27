@@ -217,6 +217,56 @@ def main() -> int:
     if overlay_b64:
         print(f"Overlay: {len(overlay_b64)} bytes b64")
 
+    # SECURITY: arming + minting stay controller-side — Basic creds never reach the VM.
+    lease_minutes = args.lease_minutes if hasattr(args, "lease_minutes") else 90
+    legacy_killswitch = True
+    if os.environ.get("SHC_SUICIDE_KEY") or (
+        os.environ.get("SHC_ACCOUNT_EMAIL")
+        and os.environ.get("SHC_ACCOUNT_PASSWORD")
+    ):
+        from shc_toolkit.selfdestruct import arm_self_destruct
+
+        def _ssh_run(cmd: str) -> str:
+            rc, out, err = _ssh(args.ip, cmd, user=user, timeout=120)
+            if rc != 0:
+                raise RuntimeError(f"self-destruct install failed: {err[-300:]}")
+            return out
+
+        arm = arm_self_destruct(_ssh_run, args.service_id, lease_minutes)
+        legacy_killswitch = False
+        print(f"Self-destruct armed: {arm['minutes']}min (key: {arm['key_source']})")
+    else:
+        print(
+            "WARNING: no SHC_SUICIDE_KEY / SHC_ACCOUNT_EMAIL+PASSWORD — "
+            "legacy lease switch will plant the full account key on the VM "
+            "(lesson-23 anti-pattern)."
+        )
+
+    if legacy_killswitch:
+        killswitch_step = f"""# Install systemd lease kill switch (survives reboot, cancels SHC VM)
+LEASE_SECONDS=$(( {lease_minutes} * 60 ))
+HARD_LIMIT_SECONDS=$(( 3 * 3600 ))
+cat > /etc/systemd/system/tollgate-lease.service <<EOF
+[Unit]
+Description=TollGate SHC lease kill switch
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c 'sleep ${{LEASE_SECONDS}}; curl -sf -X POST -H "Authorization: Bearer $SHC_API_KEY" -H "Content-Type: application/json" -d "{{\\"immediate\\":true}}" "https://blesta.sovereignhybridcompute.com/user-api/v2/vm/$TOLLGATE_SERVICE_ID/cancel" 2>/dev/null; shutdown -h now'
+TimeoutStartSec=${{HARD_LIMIT_SECONDS}}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now tollgate-lease.service
+echo "Lease kill switch armed (cancels in {lease_minutes} min, hard limit 3h)"
+"""
+    else:
+        killswitch_step = 'echo "Self-destruct: handled by shc-self-destruct.timer (planted separately)"'
+
+
     bootstrap_env = " ".join([
         f"TOLLGATE_RUN_ID={shlex.quote(run_id)}",
         f"TOLLGATE_SUT_BRANCH={shlex.quote(args.branch)}",
@@ -246,13 +296,17 @@ def main() -> int:
         "TOLLGATE_CLOUD=shc",
         f"TOLLGATE_SERVICE_ID={args.service_id}",
         f"TOLLGATE_TWO_ROUTER={'true' if args.two_router else 'false'}",
-        f"SHC_API_KEY={shlex.quote(os.environ.get('SHC_API_KEY', ''))}",
         f"GH_TOKEN={shlex.quote(token)}",
         f"BOT_NSEC_HEX={shlex.quote(nsec)}",
         f"VIRT_LAB_PASSWORD={VIRT_LAB_PASSWORD}",
         "NSEC_FILE=/root/nsec",
         "HOME=/root",
-    ])
+    ] + (
+        # only the legacy kill-switch consumes the account key on the VM
+        [f"SHC_API_KEY={shlex.quote(os.environ.get('SHC_API_KEY', ''))}"]
+        if legacy_killswitch
+        else []
+    ))
 
     # 4. Build a WORKER-ONLY script (skip provisioning steps 1-14; the VM is baked).
     #    Re-fetch suite_ref + apply overlay, then run the worker.
@@ -271,25 +325,7 @@ echo "=== TollGate baked-worker started $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 export {bootstrap_env}
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.cargo/bin"
 
-# Install systemd lease kill switch (survives reboot, cancels SHC VM)
-LEASE_SECONDS=$(( {args.lease_minutes if hasattr(args, 'lease_minutes') else 90} * 60 ))
-HARD_LIMIT_SECONDS=$(( 3 * 3600 ))
-cat > /etc/systemd/system/tollgate-lease.service <<EOF
-[Unit]
-Description=TollGate SHC lease kill switch
-After=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/bin/bash -c 'sleep ${{LEASE_SECONDS}}; curl -sf -X POST -H "Authorization: Bearer $SHC_API_KEY" -H "Content-Type: application/json" -d "{{\\"immediate\\":true}}" "https://blesta.sovereignhybridcompute.com/user-api/v2/vm/$TOLLGATE_SERVICE_ID/cancel" 2>/dev/null; shutdown -h now'
-TimeoutStartSec=${{HARD_LIMIT_SECONDS}}
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload
-systemctl enable --now tollgate-lease.service
-echo "Lease kill switch armed (cancels in {args.lease_minutes if hasattr(args, 'lease_minutes') else 90} min, hard limit 3h)"
+{killswitch_step}
 
 echo "[1] Re-fetching suite at $TOLLGATE_SUITE_REF..."
 cd {TEST_DIR}
