@@ -1584,3 +1584,24 @@ Tracked as: https://github.com/OpenTollGate/tollgate-module-basic-go/issues/213
 3. **Virtual lab config management**: Script to switch backend config between testnut and CDK V2 mint without manual SSH + sed + jq chains.
 4. **cdk-cli integration**: Bundle `/tmp/cdk-cli` into the test framework as a standard tool for V4 token minting.
 5. **Build verification**: Add a test that verifies a freshly-built `.ipk` contains expected fix strings (`strings /usr/bin/tollgate-wrt | grep resolveShortKeysetIds`).
+
+## VM cleanup: bounded self-destruct keys (2026-08-27)
+
+`lib/cloud_lab/shc_submit.py` no longer plants the full account `SHC_API_KEY` on
+test VMs when a suicide-key source is configured. Resolution order at submit
+time: `SHC_SUICIDE_KEY` (pre-minted short-expiry full-scope key — the CI path,
+set it as a repo secret) → per-run 1-day mint over HTTP Basic
+(`SHC_ACCOUNT_EMAIL` + `SHC_ACCOUNT_PASSWORD`). Without either, the legacy
+in-script kill-switch (account key on the box) is used with a loud warning.
+
+Only **full-scope** keys can cancel a VM (operate-scope keys and nostr operate
+leases 403 cancel — money class), and Bearer keys **cannot mint** other keys
+(Basic only). `revokeApiKey` is Basic+OTP-only, so a minted suicide key
+self-revokes at expiry instead.
+
+To mint the CI secret value (one-time, needs the CI account's password):
+`python3 -c "from shc_toolkit.selfdestruct import mint_suicide_key; print(mint_suicide_key('<email>','<password>',0))"`
+then `gh secret set SHC_SUICIDE_KEY -R OpenTollGate/physical-router-test-automation`.
+Rotate per its `expires_in_days` (mint uses 1; hand-minted secrets: 30 is a
+reasonable balance). The planted key grants account-wide spend for its
+lifetime — never arm on tollgate/untrusted-workload boxes.
