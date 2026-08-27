@@ -1089,6 +1089,35 @@ python3 scripts/shc-run-baked.py --service-id <ID> --ip <IP> \
 enforce 1 in practice. Delete old snapshots before creating new ones:
 `shc snapshot-delete <service_id> <snapshot_id>`.
 
+### SHC VM self-destruct (bounded keys — account key never on VMs)
+
+Every SHC VM ordered by `cloud-lab.py submit` / `shc-run-baked.py` arms a
+self-destruct at bootstrap via `_resolve_selfdestruct()` in
+`lib/cloud_lab/shc_submit.py` (wraps shc-toolkit's lesson-23 module):
+an on-VM systemd timer cancels the service at boot+`--lease` minutes using
+a key planted at `/etc/shc/self-destruct.key` (0400) — NOT the account key.
+
+**Key resolution (controller-side only — Basic creds never reach the VM):**
+1. `SHC_SUICIDE_KEY` env (static short-expiry key) — override;
+2. per-run 1-day mint over HTTP Basic from `SHC_ACCOUNT_EMAIL` +
+   `SHC_ACCOUNT_PASSWORD` repo secrets (**`SHC_ACCOUNT_EMAIL` must be the
+   BARE Blesta username, not the account email** — shc-toolkit lesson 26).
+   Minted keys self-revoke the next day; nothing to rotate manually.
+3. neither present → `legacy-warned`: the old inline kill-switch runs with
+   the account key + a loud WARN in the log (the lesson-23 anti-pattern).
+
+When the bounded path arms, the bootstrap `unset SHC_API_KEY` immediately —
+steps 1–15 never see the account key. If the installer fails on the VM, the
+legacy switch is kept as fallback. If minting fails on the controller
+(rotated password), the submit **fails loudly** rather than silently
+downgrading security — fix per shc-toolkit lesson 26 (credentials live in
+`~/.config/shc/credentials.sh` on the lab machine) and update the
+`SHC_ACCOUNT_*` repo secrets.
+
+The static `SHC_SUICIDE_KEY` repo secrets are obsolete under this scheme
+(per-run mints) and have been deleted; restore one only for
+belt-and-braces.
+
 ### SHC Zone Reachability + Reaper Gotchas
 
 **Paid-resource audits: `scripts/cost-status.py`.** Lists everything billing across SHC (services, snapshots, backups) and GCP (instances, disks, snapshots, images, addresses, machine-images). Resources are classified against `config/approved-resources.yaml` (regex on name, or GCP label match): anything not matching is UNAPPROVED → exit 1. VMs that exist but are powered off are flagged **STOPPED-BUT-BILLABLE** — SHC bills by service existence, not power state (incident: `lightning-playground` sat stopped for 9 days accruing $0.26/day unnoticed). Spend per 24h/7d/30d is reconstructed (Σ price/day × days-existed) because SHC's transaction ledger only records credits/refunds — renewals draw down credit silently and `list_invoices` stays empty. `--export-reaper-env` emits the allowlist as `SHC_REAPER_EXTRA_KEEP_PATTERNS` so the reaper and the audit share one approval source.
@@ -1587,21 +1616,9 @@ Tracked as: https://github.com/OpenTollGate/tollgate-module-basic-go/issues/213
 
 ## VM cleanup: bounded self-destruct keys (2026-08-27)
 
-`lib/cloud_lab/shc_submit.py` no longer plants the full account `SHC_API_KEY` on
-test VMs when a suicide-key source is configured. Resolution order at submit
-time: `SHC_SUICIDE_KEY` (pre-minted short-expiry full-scope key — the CI path,
-set it as a repo secret) → per-run 1-day mint over HTTP Basic
-(`SHC_ACCOUNT_EMAIL` + `SHC_ACCOUNT_PASSWORD`). Without either, the legacy
-in-script kill-switch (account key on the box) is used with a loud warning.
-
-Only **full-scope** keys can cancel a VM (operate-scope keys and nostr operate
-leases 403 cancel — money class), and Bearer keys **cannot mint** other keys
-(Basic only). `revokeApiKey` is Basic+OTP-only, so a minted suicide key
-self-revokes at expiry instead.
-
-To mint the CI secret value (one-time, needs the CI account's password):
-`python3 -c "from shc_toolkit.selfdestruct import mint_suicide_key; print(mint_suicide_key('<email>','<password>',0))"`
-then `gh secret set SHC_SUICIDE_KEY -R OpenTollGate/physical-router-test-automation`.
-Rotate per its `expires_in_days` (mint uses 1; hand-minted secrets: 30 is a
-reasonable balance). The planted key grants account-wide spend for its
-lifetime — never arm on tollgate/untrusted-workload boxes.
+Superseded by "SHC VM self-destruct" above (per-run 1-day mints via the
+`SHC_ACCOUNT_*` repo secrets; the static `SHC_SUICIDE_KEY` secrets are
+deleted). Still true from this incident: only **full-scope** keys can cancel
+(operate-scope and nostr leases 403 cancel — money class), Bearer keys cannot
+mint (Basic only), and the planted key grants account-wide spend for its
+lifetime — **never arm self-destruct on tollgate/untrusted-workload boxes**.
