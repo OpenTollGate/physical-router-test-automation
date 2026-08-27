@@ -26,4 +26,4 @@ approved:
   - pattern: '^europa-vpn-vps$'
     reason: explicitly excluded from reaping (infra, not test VM)
   - pattern: '^clboss-soak$'
-    reason: CLBOSS soak test VM (lightning-playground session). Soak COMPLETED 2026-08-26 21:58 UTC (drain contract #44 executed, artifacts exfiltrated, vzdump taken) — CANCEL before 2026-08-28 07:08 renewal unless resumed.
+    reason: CLBOSS soak test VM (lightning-playground session). Soak COMPLETED 2026-08-26 21:58 UTC (drain contract #44 executed, artifacts exfiltrated, vzdump taken) — CANCELLED 2026-08-27 (before the 2026-08-28 07:08 renewal; entry kept for audit history).

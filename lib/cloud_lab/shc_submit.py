@@ -157,17 +157,63 @@ def _build_bootstrap_script(
     test_dir: str,
     suite_repo_url: str,
     lease_minutes: int = 90,
+    legacy_killswitch: bool = True,
 ) -> str:
     """Build the bash bootstrap script that runs inside the VM.
 
     Each step has explicit error checking. A completion marker (/tmp/tollgate-done)
     is created at the end so the host can reliably detect completion.
+
+    With ``legacy_killswitch=False`` the in-script self-cancel block is
+    omitted: cleanup is handled by the on-VM systemd timer planted by
+    ``shc_toolkit.selfdestruct`` (bounded 1-day key instead of the full
+    account key), and SHC_API_KEY never reaches the box.
     """
     overlay_step = (
         f"base64 -d /tmp/overlay.b64 | sudo tar xzf - -C {test_dir}\n"
         f'echo "[6] Applied suite overlay"'
         if overlay_b64
         else 'echo "[6] No overlay to apply"'
+    )
+
+    killswitch_step = (
+        f"""LEASE_MINUTES={lease_minutes}
+
+self_cancel() {{
+    local sid="${{TOLLGATE_SERVICE_ID}}"
+    local key="${{SHC_API_KEY}}"
+    [ -z "$sid" ] || [ -z "$key" ] && return 1
+    local api="https://blesta.sovereignhybridcompute.com/user-api/v2"
+    local resp code body cid
+    resp=$(curl -s -X POST "$api/vm/$sid/cancel" \\
+        -H "Authorization: Bearer $key" \\
+        -H "Content-Type: application/json" \\
+        -d '{{"immediate": true}}' -w '\\n%{{http_code}}' 2>/dev/null)
+    code=$(echo "$resp" | tail -1)
+    body=$(echo "$resp" | grep -o '{{.*}}' | head -1)
+    if [ "$code" = "409" ]; then
+        cid=$(echo "$body" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('confirmation',{{}}).get('confirmation_id',''))" 2>/dev/null)
+        if [ -n "$cid" ]; then
+            curl -s -X POST "$api/vm/$sid/cancel" \\
+                -H "Authorization: Bearer $key" \\
+                -H "Content-Type: application/json" \\
+                -H "X-User-Api-Confirm: $cid" \\
+                -d '{{"immediate": true}}' >/dev/null 2>&1
+            echo "VM cancelled via SHC API (service #$sid)"
+        fi
+    elif [ "$code" = "200" ] || [ "$code" = "201" ]; then
+        echo "VM cancelled via SHC API (service #$sid)"
+    fi
+}}
+
+echo "Scheduling self-cancel in ${{LEASE_MINUTES}} minutes via at..."
+echo "self_cancel; shutdown -h now 'TollGate lease expired'" | at "now + ${{LEASE_MINUTES}} minutes" 2>/dev/null || \\
+  ( echo "$(( $(date +%s) + LEASE_MINUTES * 60 ))" > /tmp/tollgate-lease-expires && \\
+    ( while true; do sleep 60; [ "$(date +%s)" -ge "$(cat /tmp/tollgate-lease-expires)" ] && self_cancel && shutdown -h now; done & ) )
+echo "Lease kill switch armed (cancels SHC service + shuts down)"
+"""
+        if legacy_killswitch
+        else 'echo "Self-destruct: handled by shc-self-destruct.timer (planted separately)"'
     )
 
     # NOTE: $VAR refs bash variables (runtime), {var} refs Python f-string (build time)
@@ -204,40 +250,7 @@ fail() {{
 N_STEPS=15
 echo "BOOTSTRAP_START" >> /tmp/tollgate-status
 
-LEASE_MINUTES={lease_minutes}
-
-self_cancel() {{
-    local sid="${{TOLLGATE_SERVICE_ID}}"
-    local key="${{SHC_API_KEY}}"
-    [ -z "$sid" ] || [ -z "$key" ] && return 1
-    local api="https://blesta.sovereignhybridcompute.com/user-api/v2"
-    local resp code body cid
-    resp=$(curl -s -X POST "$api/vm/$sid/cancel" \
-        -H "Authorization: Bearer $key" \
-        -H "Content-Type: application/json" \
-        -d '{{"immediate": true}}' -w '\n%{{http_code}}' 2>/dev/null)
-    code=$(echo "$resp" | tail -1)
-    body=$(echo "$resp" | grep -o '{{.*}}' | head -1)
-    if [ "$code" = "409" ]; then
-        cid=$(echo "$body" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('confirmation',{{}}).get('confirmation_id',''))" 2>/dev/null)
-        if [ -n "$cid" ]; then
-            curl -s -X POST "$api/vm/$sid/cancel" \
-                -H "Authorization: Bearer $key" \
-                -H "Content-Type: application/json" \
-                -H "X-User-Api-Confirm: $cid" \
-                -d '{{"immediate": true}}' >/dev/null 2>&1
-            echo "VM cancelled via SHC API (service #$sid)"
-        fi
-    elif [ "$code" = "200" ] || [ "$code" = "201" ]; then
-        echo "VM cancelled via SHC API (service #$sid)"
-    fi
-}}
-
-echo "Scheduling self-cancel in ${{LEASE_MINUTES}} minutes via at..."
-echo "self_cancel; shutdown -h now 'TollGate lease expired'" | at "now + ${{LEASE_MINUTES}} minutes" 2>/dev/null || \
-  ( echo "$(( $(date +%s) + LEASE_MINUTES * 60 ))" > /tmp/tollgate-lease-expires && \
-    ( while true; do sleep 60; [ "$(date +%s)" -ge "$(cat /tmp/tollgate-lease-expires)" ] && self_cancel && shutdown -h now; done & ) )
-echo "Lease kill switch armed (cancels SHC service + shuts down)"
+{killswitch_step}
 
 TOTAL_RAM=$(free -m | awk '/^Mem:/{{print $2}}')
 if [ "$TOTAL_RAM" -le 4096 ] && [ "$(swapon --show 2>/dev/null | wc -l)" -eq 0 ]; then
@@ -671,6 +684,39 @@ def submit_run_shc(
         capture_output=True, text=True, timeout=15,
     )
 
+    # Arm the on-VM self-destruct timer with a BOUNDED key when a source is
+    # configured; otherwise fall back to the legacy in-script kill-switch,
+    # which plants the full account SHC_API_KEY on the VM (warned below).
+    legacy_killswitch = True
+    if os.environ.get("SHC_SUICIDE_KEY") or (
+        os.environ.get("SHC_ACCOUNT_EMAIL")
+        and os.environ.get("SHC_ACCOUNT_PASSWORD")
+    ):
+        from shc_toolkit.selfdestruct import arm_self_destruct
+
+        def _ssh_run(cmd: str) -> str:
+            proc = subprocess.run(
+                ssh_cmd(cmd), capture_output=True, text=True, timeout=120
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"self-destruct install failed: {proc.stderr[-300:]}"
+                )
+            return proc.stdout
+
+        arm = arm_self_destruct(_ssh_run, service_id, lease_minutes)
+        legacy_killswitch = False
+        print(
+            f"Self-destruct armed: {arm['minutes']}min "
+            f"(key: {arm['key_source']})"
+        )
+    else:
+        print(
+            "WARNING: no SHC_SUICIDE_KEY / SHC_ACCOUNT_EMAIL+PASSWORD — "
+            "falling back to legacy kill-switch (full account key on the VM). "
+            "Set SHC_SUICIDE_KEY to stop shipping the account key."
+        )
+
     # 6. Build bootstrap script
     bootstrap_env = " ".join([
         f"TOLLGATE_RUN_ID={shlex.quote(run_id)}",
@@ -702,7 +748,6 @@ def submit_run_shc(
         f"TOLLGATE_VM_NAME={hostname}",
         "TOLLGATE_CLOUD=shc",
         f"TOLLGATE_SERVICE_ID={service_id}",
-        f"SHC_API_KEY={shlex.quote(os.environ.get('SHC_API_KEY', ''))}",
         f"GH_TOKEN={shlex.quote(token)}",
         f"BOT_NSEC_HEX={shlex.quote(nsec)}",
         f"EXPECTED_NPUB={shlex.quote(os.environ.get('EXPECTED_NPUB', ''))}",
@@ -710,7 +755,12 @@ def submit_run_shc(
         f"VIRT_LAB_PASSWORD={VIRT_LAB_PASSWORD}",
         "NSEC_FILE=/root/nsec",
         "HOME=/root",
-    ])
+    ] + (
+        # only the legacy kill-switch consumes the account key on the VM
+        [f"SHC_API_KEY={shlex.quote(os.environ.get('SHC_API_KEY', ''))}"]
+        if legacy_killswitch
+        else []
+    ))
 
     bootstrap_script = _build_bootstrap_script(
         bootstrap_env=bootstrap_env,
@@ -718,6 +768,7 @@ def submit_run_shc(
         test_dir=TEST_DIR,
         suite_repo_url=SUITE_REPO_URL,
         lease_minutes=lease_minutes,
+        legacy_killswitch=legacy_killswitch,
     )
 
     # 7. Upload script
