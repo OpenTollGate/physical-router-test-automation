@@ -140,6 +140,26 @@ class TestReconstructSpend:
         assert spend["30d"] > 0
 
 
+# ── Order attribution (SHC key comment) ─────────────────────────────────
+
+class TestParseOrderTag:
+    KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM/CoI0W macbook@old-host"
+
+    def test_prefers_shc_order_tag(self):
+        tagged = _cs.parse_order_tag(self.KEY + " #shc-order=opencode:ses_9")
+        assert tagged == "opencode:ses_9"
+
+    def test_falls_back_to_raw_comment(self):
+        assert _cs.parse_order_tag(self.KEY) == "macbook@old-host"
+
+    def test_keyless_and_garbage_return_empty(self):
+        assert _cs.parse_order_tag("") == ""
+        assert _cs.parse_order_tag("not a key at all") == ""
+
+    def test_bare_key_no_comment_returns_empty(self):
+        assert _cs.parse_order_tag("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAabc") == ""
+
+
 # ── Reaper env export ────────────────────────────────────────────────────
 
 class TestReaperExport:

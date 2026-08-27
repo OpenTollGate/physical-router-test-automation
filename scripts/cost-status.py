@@ -119,6 +119,22 @@ def load_rules(path: str) -> tuple[list[Rule], str]:
     return rules, ""
 
 
+def parse_order_tag(ssh_key: str) -> str:
+    """Extract the orderer from an SHC VM's stored public key comment.
+
+    Prefers the toolkit's '#shc-order=' tag; falls back to the raw key
+    comment (e.g. 'macbook@mbp.lan'); empty when keyless or unrecognized.
+    """
+    parts = (ssh_key or "").strip().split(None, 2)
+    if len(parts) < 3 or not parts[0].startswith(("ssh-", "ecdsa-", "sk-")):
+        return ""
+    comment = parts[2]
+    m = re.search(r"#shc-order=(\S+)", comment)
+    if m:
+        return m.group(1)
+    return comment.strip()
+
+
 # ── Classification (pure — unit-tested) ────────────────────────────────
 
 APPROVED = "APPROVED"
@@ -257,12 +273,14 @@ def collect_shc() -> tuple[list[Billable], dict[str, Any], str]:
             runtime = (detail.get("runtime") or {})
             state = runtime.get("state") or v.get("service_status", "unknown")
             daily, basis = _shc_daily(detail.get("pricing") or {})
+            ordered_by = parse_order_tag(detail.get("ssh_key") or "")
             resources.append(Billable(
                 provider="shc", kind="vm",
                 name=v.get("hostname", f"service-{sid}"),
                 state=state, daily_cost=daily, cost_basis=basis,
                 created=str(v.get("date_created", "")),
-                extra=f"service {sid}; renews {v.get('date_renews', '?')}",
+                extra=(f"ordered-by: {ordered_by}; " if ordered_by else "")
+                      + f"service {sid}; renews {v.get('date_renews', '?')}",
             ))
             try:
                 for snap in client.list_snapshots(sid) or []:
