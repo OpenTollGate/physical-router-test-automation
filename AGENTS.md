@@ -1141,8 +1141,9 @@ inherits working routes.
 
 **The SHC reaper kills test VMs by hostname prefix.** Two GHA workflows run
 automatically:
-- `shc-toolkit/.github/workflows/reap-orphan-vms.yml` (hourly)
-- `physical-router-test-automation/.github/workflows/vm-reaper.yml` (every 30 min)
+- `shc-toolkit/.github/workflows/reap-orphan-vms.yml` (daily 05:23 UTC — eased from hourly 2026-08-27)
+- `physical-router-test-automation/.github/workflows/vm-reaper.yml` (dispatch-only since 2026-08-27 — schedule removed; the lab machine's local `*/30` cron runs `cleanup-stale`)
+- On-VM self-destruct timers (primary failsafe on every VM ordered through cloud-lab since 2026-08-27)
 
 Both reap VMs whose hostnames start with: `tf-acc-`, `tollgate-`, `test-`,
 `tmp-`, `ci-`, `tg-`, `zone-test-`, `nutshell-`, `pytest-test-`. VMs are

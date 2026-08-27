@@ -1,8 +1,9 @@
 name: VM Reaper
 
+# Schedule removed 2026-08-27: the lab machine's local cron runs
+# cleanup-stale every 30 min and the on-VM self-destruct timers are the
+# primary failsafe — this workflow is now a manual/dispatch backstop.
 on:
-  schedule:
-    - cron: '*/30 * * * *'
   workflow_dispatch:
     inputs:
       max-age-hours:
