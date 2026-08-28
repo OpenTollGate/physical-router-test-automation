@@ -406,6 +406,39 @@ The framework runs in three environments. Detection is automatic — no manual c
 
 ## Lessons Learned
 
+### GitHub org-Actions freeze: billing hold, not policy (2026-08-27 forensics)
+
+**Symptom**: workflow dispatch 422s with "Actions has been disabled for this
+repository" while org AND repo Actions policies read `enabled/all`, workflows
+read `active`, and queued runs sit `queued` forever.
+
+**Root cause here**: an unpaid net billing balance — $14.68 of Actions storage
+overage (May 2026, `tollgate-release-explorer-site`, 43.7k GB-hours from
+artifact volume) — on a free org with no payment method. Enforcement swept
+during GitHub's platform billing incident (status page, Aug 26–27). Public-repo
+minutes are free; artifact STORAGE is metered past ~500 MB.
+
+**Diagnosis chain** (gh token needs `-s admin:org` for the org endpoints;
+refresh via `gh auth refresh -h github.com -s admin:org` — device-code flow):
+1. `gh api /user/memberships/orgs/OpenTollGate` → confirm role.
+2. `gh api /orgs/OpenTollGate/actions/permissions` + repo-level → both green
+   rules out policy.
+3. `gh api "/orgs/OpenTollGate/settings/billing/usage"` → per-repo usage items
+   with `grossAmount`/`discountAmount`/`netAmount` — any nonzero net = the hold.
+   (Free orgs get NO audit log — that API 404s; don't chase it.)
+
+**Fix**: org owner pays the balance (Billing & plans → payment method) and sets
+org artifact retention to ≤7 days. Per-workflow `retention-days` is belt to
+that (ci.yml/nut-auditor.yml carry `retention-days: 3`).
+
+**Posture adopted**: GH-side scheduled noise minimized (reaper daily; vm-reaper
+dispatch-only), local cron is the fast reaper, every cloud-lab VM self-destructs,
+and local `cloud-lab.py submit` runs without GitHub at all. A recovery tripwire
+lives in crontab (daily 08:12 UTC dispatch probe → `~/.cache/org-actions-watch.log`).
+Upstream trigger-hygiene + SDK-caching PRs #369/#370 and the SDK audit #371
+track the remaining build-matrix work.
+
+
 ### `chpasswd` does not exist on OpenWrt BusyBox
 
 OpenWrt's BusyBox does not ship with `chpasswd`. Attempting `echo 'root:pw' | chpasswd` in a uci-defaults script will fail. Use `printf '%s\n%s\n' 'pw' 'pw' | passwd root` instead.
