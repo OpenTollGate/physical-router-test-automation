@@ -57,7 +57,7 @@ POC_BRIDGE = "tg-poc-br"
 POC_TAP = "tg-poc-tap"
 DEBIAN_TAP = "tg-poc-tap2"
 DEBIAN_RAM = 1024
-DEBIAN_IMAGE = "debian-12-nocloud-amd64.qcow2"
+DEBIAN_IMAGE = "debian-12-generic-amd64.qcow2"
 DEBIAN_IMAGE_URL = f"https://cloud.debian.org/images/cloud/bookworm/latest/{DEBIAN_IMAGE}"
 DEBIAN_MAC = "de:54:4e:91:49:da"
 POC_OPENWRT_MAC = "52:54:00:12:34:56"
@@ -365,7 +365,16 @@ print('Configuring networking...')
 send_and_wait(s, 'ip link set ens3 up', wait=2)
 send_and_wait(s, 'ip addr add 10.99.99.100/24 dev ens3', wait=2)
 send_and_wait(s, 'ip route add default via 10.99.99.1', wait=2)
-send_and_wait(s, 'echo "nameserver 10.99.99.1" > /etc/resolv.conf', wait=2)
+send_and_wait(s, 'echo "nameserver 10.99.99.2" > /etc/resolv.conf', wait=2)
+# Persist as netplan: this image uses netplan+systemd-networkd and has no
+# /etc/network/interfaces. Overwrite the DHCP match-all default — a separate
+# higher-numbered file loses to it because netplan emits both with the same
+# prefix and networkd picks the lexicographically-first match. Without
+# persistence every reboot comes up network-less and serial provisioning
+# becomes mandatory again on each start-poc.
+send_and_wait(s, "printf 'network:\\n  version: 2\\n  ethernets:\\n    ens3:\\n      addresses:\\n        - 10.99.99.100/24\\n      routes:\\n        - to: default\\n          via: 10.99.99.1\\n      nameservers:\\n        addresses: [10.99.99.2]\\n' > /etc/netplan/90-default.yaml && chmod 600 /etc/netplan/90-default.yaml", wait=3)
+send_and_wait(s, "printf '[Unit]\\nDescription=Regenerate networkd config from netplan at boot\\nDefaultDependencies=no\\nBefore=systemd-networkd.service\\n[Service]\\nType=oneshot\\nExecStart=/usr/sbin/netplan generate\\nRemainAfterExit=yes\\n[Install]\\nWantedBy=multi-user.target\\n' > /etc/systemd/system/netplan-generate-boot.service && systemctl enable netplan-generate-boot.service", wait=4)
+send_and_wait(s, 'rm -f /etc/systemd/system/systemd-networkd.service.d/10-netplan.conf; rmdir --ignore-fail-on-non-empty /etc/systemd/system/systemd-networkd.service.d 2>/dev/null', wait=2)
 send_and_wait(s, 'sleep 5 && ping -c 1 -W 5 10.99.99.1', wait=10)
 
 print('Installing openssh-server...')
@@ -626,6 +635,96 @@ if [ ! -f "$overlay" ]; then
 fi
 qemu-img resize "$overlay" 10G
 
+# NoCloud seed: lets cloud-init provision a fresh overlay on first boot
+# (ssh server, root access, static IP), so serial-console provisioning is
+# only a fallback. start-poc attaches images/seed.iso when it exists.
+if command -v genisoimage >/dev/null 2>&1 || command -v mkisofs >/dev/null 2>&1; then
+  pubkey=$(cat ~/.ssh/id_ed25519.pub 2>/dev/null || cat ~/.ssh/id_rsa.pub 2>/dev/null || true)
+  cat > user-data <<UD
+#cloud-config
+hostname: debian-client
+disable_root: false
+ssh_pwauth: true
+chpasswd:
+  expire: false
+  users:
+    - name: root
+      password: {POC_PASSWORD}
+      type: text
+packages:
+  - openssh-server
+  - curl
+  - iputils-ping
+  - iproute2
+ssh_authorized_keys:
+  - $pubkey
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-tollgate-lab.conf
+    permissions: '0644'
+    content: |
+      PermitRootLogin yes
+      PasswordAuthentication yes
+  - path: /etc/systemd/system/netplan-generate-boot.service
+    permissions: '0644'
+    content: |
+      # Debian's netplan.io ships no boot hook and systemd-networkd.service
+      # is sandboxed (ProtectSystem=strict, CapabilityBoundingSet without
+      # DAC_OVERRIDE), so an ExecStartPre drop-in there fails and
+      # crash-loops networkd. This unconfined oneshot regenerates
+      # /run/systemd/network (tmpfs) before networkd starts instead.
+      [Unit]
+      Description=Regenerate networkd config from netplan at boot
+      DefaultDependencies=no
+      Before=systemd-networkd.service
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/sbin/netplan generate
+      RemainAfterExit=yes
+      [Install]
+      WantedBy=multi-user.target
+  - path: /etc/netplan/90-default.yaml
+    permissions: '0600'
+    content: |
+      network:
+        version: 2
+        ethernets:
+          ens3:
+            addresses:
+              - {DEBIAN_CLIENT_IP}/24
+            routes:
+              - to: default
+                via: {POC_GATEWAY}
+            nameservers:
+              addresses: [{POC_HOST_BRIDGE_IP.split('/')[0]}]
+runcmd:
+  - systemctl enable netplan-generate-boot.service
+  - systemctl restart ssh
+UD
+  cat > meta-data <<MD
+instance-id: debian-client-local-01
+local-hostname: debian-client
+MD
+  cat > network-config <<NC
+version: 2
+ethernets:
+  ens3:
+    addresses:
+      - {DEBIAN_CLIENT_IP}/24
+    routes:
+      - to: default
+        via: {POC_GATEWAY}
+    nameservers:
+      addresses: [{POC_HOST_BRIDGE_IP.split('/')[0]}]
+NC
+  mkisobin=$(command -v genisoimage || command -v mkisofs)
+  "$mkisobin" -output seed.iso -volid cidata -rational-rock -joliet \\
+    user-data meta-data network-config >/dev/null
+  rm -f user-data meta-data network-config
+  printf 'Built NoCloud seed: %s/seed.iso\\n' "$workdir/images"
+else
+  printf 'genisoimage/mkisofs not found — skipping seed; serial provisioning stays mandatory\\n' >&2
+fi
+
 printf 'Prepared Debian nocloud client image\\n'
 qemu-img info "$overlay"
 '''
@@ -835,14 +934,19 @@ sudo ip link set {DEBIAN_TAP} up
 
 seed_iso="$workdir/images/seed.iso"
 cdrom_opts=""
+smbios_opts=""
 if [ -f "$seed_iso" ]; then
   cdrom_opts="-cdrom $seed_iso"
+  # ds=nocloud skips cloud-init's datasource probing (Ec2/Azure/...), which
+  # otherwise delays sshd by ~2 minutes on every boot via cloud-init.service.
+  smbios_opts="-smbios type=1,serial=ds=nocloud"
 fi
 nohup qemu-system-x86_64 \
   -enable-kvm \
   -m {DEBIAN_RAM} \
   -smp 2 \
   -nographic \
+  $smbios_opts \
   -drive file="$client_disk",if=virtio \
   $cdrom_opts \
   -netdev tap,id=client,ifname={DEBIAN_TAP},script=no,downscript=no \
@@ -862,36 +966,54 @@ printf 'Started Debian client VM pid=%s\\n' "$(cat "$client_pidfile")"
     if rc != 0:
         return rc
 
-    print("Step 5: provision Debian VM via serial console...", flush=True)
-    debian_provision_script = _generate_debian_provision_script(workdir)
-    result = run_python_on_host(host, debian_provision_script, timeout=600)
-    if result.stdout:
-        print(result.stdout)
-    if result.stderr:
-        print(result.stderr, file=sys.stderr)
-    if result.returncode != 0:
-        print("Debian serial console provisioning failed.", file=sys.stderr)
-        return result.returncode
-
-    # Step 5b: inject SSH key and set root password.
-    # chpasswd over the serial console gets corrupted by terminal escape
-    # sequences, so we inject the host SSH key via base64, then set the
-    # password through SSH (which avoids the serial console entirely).
-    print("Injecting SSH key into Debian VM...", flush=True)
-    ssh_key_script = _generate_ssh_key_inject_script(workdir)
-    key_result = run_python_on_host(host, ssh_key_script, timeout=60)
-    if key_result.returncode != 0:
-        print(f"SSH key injection failed: {key_result.stderr}", file=sys.stderr)
-
-    print("Setting root password via SSH...", flush=True)
-    pw_script = (
-        f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-        f"-o ConnectTimeout=10 -o LogLevel=ERROR "
-        f"root@{DEBIAN_CLIENT_IP} 'echo root:{POC_PASSWORD} | chpasswd'"
+    # Step 4b: an already-provisioned client overlay boots straight to sshd
+    # with its static IP — skip the serial-console provisioning entirely.
+    # Serial (Step 5) is the fallback for a fresh overlay only.
+    print("Step 4b: waiting for client SSH (provisioned overlay)...", flush=True)
+    ssh_probe = (
+        f"for i in $(seq 1 36); do "
+        f"if sshpass -p {POC_PASSWORD} ssh -o StrictHostKeyChecking=no "
+        f"-o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR "
+        f"root@{DEBIAN_CLIENT_IP} 'echo SSH_OK' 2>/dev/null | grep -q SSH_OK; then "
+        f"echo CLIENT_SSH_READY; exit 0; fi; "
+        f"sleep 5; done; exit 1"
     )
-    rc = _print_result(run_remote(host, quote_script(pw_script), timeout=30))
-    if rc != 0:
-        print("Warning: SSH password setup failed, continuing with key auth only.", file=sys.stderr)
+    probe_result = run_remote(host, quote_script(ssh_probe), timeout=300)
+    client_provisioned = probe_result.returncode == 0
+    if client_provisioned:
+        print("Client SSH up — skipping serial provisioning.", flush=True)
+
+    if not client_provisioned:
+        print("Step 5: provision Debian VM via serial console...", flush=True)
+        debian_provision_script = _generate_debian_provision_script(workdir)
+        result = run_python_on_host(host, debian_provision_script, timeout=600)
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+        if result.returncode != 0:
+            print("Debian serial console provisioning failed.", file=sys.stderr)
+            return result.returncode
+
+        # Step 5b: inject SSH key and set root password.
+        # chpasswd over the serial console gets corrupted by terminal escape
+        # sequences, so we inject the host SSH key via base64, then set the
+        # password through SSH (which avoids the serial console entirely).
+        print("Injecting SSH key into Debian VM...", flush=True)
+        ssh_key_script = _generate_ssh_key_inject_script(workdir)
+        key_result = run_python_on_host(host, ssh_key_script, timeout=60)
+        if key_result.returncode != 0:
+            print(f"SSH key injection failed: {key_result.stderr}", file=sys.stderr)
+
+        print("Setting root password via SSH...", flush=True)
+        pw_script = (
+            f"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+            f"-o ConnectTimeout=10 -o LogLevel=ERROR "
+            f"root@{DEBIAN_CLIENT_IP} 'echo root:{POC_PASSWORD} | chpasswd'"
+        )
+        rc = _print_result(run_remote(host, quote_script(pw_script), timeout=30))
+        if rc != 0:
+            print("Warning: SSH password setup failed, continuing with key auth only.", file=sys.stderr)
 
     print("Step 6: verify SSH to Debian VM...", flush=True)
     ssh_verify_debian = (
@@ -967,6 +1089,25 @@ client_pidfile={client_pidfile}
 for pf in "$client_pidfile" "$pidfile"; do
   if [ -f "$pf" ]; then
     p=$(cat "$pf")
+    # ACPI shutdown first: a hard kill leaves a dirty qcow2, and the next
+    # boot pays journal replay (minutes), which defeats the fast
+    # SSH-first start path.
+    mon=""
+    case "$pf" in *debian-client*) mon="$workdir/run/monitor-client.sock";; *) mon="$workdir/run/monitor.sock";; esac
+    if [ -S "$mon" ]; then
+      python3 - "$mon" <<'PYMON' 2>/dev/null || true
+import socket, sys
+c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+c.settimeout(3)
+c.connect(sys.argv[1])
+c.sendall(b"system_powerdown\n")
+c.close()
+PYMON
+      for _w in $(seq 1 20); do
+        kill -0 "$p" 2>/dev/null || break
+        sleep 1
+      done
+    fi
     kill "$p" 2>/dev/null || true
     sleep 1
     kill -9 "$p" 2>/dev/null || true
