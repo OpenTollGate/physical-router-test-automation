@@ -141,6 +141,7 @@ jobs:
         with:
           name: test-report
           path: test-results/
+          retention-days: 3
 
 # =============================================================================
 # Job 3: Physical Router Tests (Self-Hosted)
@@ -205,6 +206,7 @@ jobs:
         with:
           name: physical-test-report
           path: test-results/
+          retention-days: 3
 
 # =============================================================================
 # Job 4: Publish Test Report (Main Branch Only)
