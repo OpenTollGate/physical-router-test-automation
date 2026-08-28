@@ -1656,3 +1656,51 @@ deleted). Still true from this incident: only **full-scope** keys can cancel
 (operate-scope and nostr leases 403 cancel — money class), Bearer keys cannot
 mint (Basic only), and the planted key grants account-wide spend for its
 lifetime — **never arm self-destruct on tollgate/untrusted-workload boxes**.
+
+## Lessons Learned — Local Virtual Lab Fast-Start (2026-08-28)
+
+Repeat start-poc cycles went **590s → ~157s** and serial provisioning became a
+fallback-only path. Four stacked root causes, each hiding the next:
+
+1. **`debian-12-nocloud` ships NO cloud-init.** "nocloud" means *no cloud
+   integration*, not the NoCloud datasource — the seed ISO attached to the QEMU
+   command was dead weight. Switched the client base to
+   `debian-12-generic-amd64.qcow2` (has cloud-init); `prepare-debian` now also
+   builds `images/seed.iso` (genisoimage, volid `cidata`) with user-data
+   (root password, sshd, packages, ssh key), meta-data, and network-config v2
+   (static `10.99.99.100/24`, gateway 10.99.99.1, **nameservers → host bridge
+   10.99.99.2** — the freshly provisioned OpenWrt's dnsmasq is unreliable
+   during provisioning windows; apt via its resolver failed).
+2. **Serial provisioning configured the network runtime-only** (`ip addr add`):
+   every reboot came up network-less, forcing serial on every start. Persist as
+   netplan — but **overwrite the image's `90-default.yaml` rather than adding a
+   sibling file**: netplan emits all files with the same prefix and networkd
+   picks the lexicographically-first match, so a DHCP match-all (`en*`) in
+   90-default shadows a higher-numbered explicit-ens3 file.
+3. **Debian's netplan.io ships no boot-time generate**: `/run/systemd/network`
+   is tmpfs; on reboot ens3 is unmanaged and `systemd-networkd-wait-online`
+   burns its full 120s timeout before sshd. An `ExecStartPre` drop-in inside
+   `systemd-networkd.service` crash-loops — the unit is sandboxed
+   (`ProtectSystem=strict`, `CapabilityBoundingSet` without
+   `CAP_DAC_OVERRIDE`) and cannot read a 0600 netplan file. Fix: an
+   **unconfined oneshot** `netplan-generate-boot.service`
+   (`Before=systemd-networkd.service`, enabled via cloud-config runcmd).
+4. **stop-poc hard-killed QEMU**, dirtying the qcow2; the next boot paid
+   journal replay on top of everything. stop-poc now sends
+   `system_powerdown` via the monitor socket (20s grace) before falling back
+   to kill.
+
+Plus two client-side fixes: `-smbios type=1,serial=ds=nocloud` (skips
+cloud-init's ~2-min datasource probing on every boot) and a mint **health
+probe** in `run-local-tests.sh` — `/v1/info` answering is NOT proof of health;
+a wedged cdk-mintd accepts quotes but never settles them (FakeWallet dead),
+which hung every payment test past the suite timeout. The probe posts a 1-sat
+quote and requires PAID within ~12s, restarting the mint otherwise. The runner
+also passes `--timeout-method=signal` (the ini's `thread` method dumps stacks
+but cannot kill a hung test — payments hung "forever" under it).
+
+Verified: fresh first boot 295s via cloud-init (serial skipped even on first
+boot); two consecutive restart cycles 160s/157s; client userspace boot 16s
+(was 2min3s); payment suite 3/3 after each cycle and after a mid-payment
+SIGKILL. Related: SHC Dev-zone status tracked in shc-toolkit#28 (provisioning
+fixed, network attach still broken — see shc-toolkit AGENTS.md lesson 26).
