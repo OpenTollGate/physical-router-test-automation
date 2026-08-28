@@ -264,7 +264,7 @@ sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils \
   sshpass git curl wget python3-venv python3-pip python3-setuptools python3-wheel python3-dev \
   net-tools iproute2 socat nftables build-essential libssl-dev pkg-config \
   fuse3 libfuse3-dev ca-certificates cmake g++ libnl-3-dev libnl-genl-3-dev \
-  libsecp256k1-dev jq genisoimage ffmpeg seabios ipxe-qemu \
+  libsecp256k1-dev jq genisoimage ffmpeg seabios ipxe-qemu libffi-dev \
   libsecp256k1-dev autoconf automake libtool || fail 1 "apt-get install"
 sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/*
 echo "[1/$N_STEPS] done"
@@ -319,10 +319,13 @@ sudo /opt/tollgate-venv/bin/python3 -c "import nostr_publish" 2>/dev/null || sud
 echo "[7/$N_STEPS] done"
 
 step 8 "Creating cashu venv..."
-sudo python3 -m venv /opt/cashu-venv || fail 8 "cashu venv"
-sudo /opt/cashu-venv/bin/pip install -q --upgrade pip
-echo 'scikit-build-core<0.10' > /tmp/pip-constraint.txt && \
-  PIP_CONSTRAINT=/tmp/pip-constraint.txt sudo -E /opt/cashu-venv/bin/pip install -q cashu 'marshmallow<4' || fail 8 "cashu install"
+# cashu (nutshell) does not install on Python 3.13 (Debian 13 default): its
+# cffi pin predates cp313 wheels and old cffi will not compile on 3.13.
+# Build the venv with uv-managed Python 3.12 instead.
+curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || fail 8 "uv install"
+UV="$HOME/.local/bin/uv"
+sudo "$UV" venv --python 3.12 /opt/cashu-venv || fail 8 "cashu venv"
+sudo "$UV" pip install --python /opt/cashu-venv/bin/python cashu 'marshmallow<4' || fail 8 "cashu install"
 MODELS=$(/opt/cashu-venv/bin/python3 -c 'import cashu.core.models; print(cashu.core.models.__file__)')
 sudo sed -i 's/    active: bool$/    active: bool = True/' "$MODELS"
 echo "[8/$N_STEPS] done"
