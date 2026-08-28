@@ -811,6 +811,7 @@ def _generate_debian_provision_script(workdir: str) -> str:
 
 def start_poc(args: argparse.Namespace) -> int:
     host = cast(str, args.host)
+    ephemeral_client = bool(getattr(args, "ephemeral_client", False))
     workdir = cast(str, args.workdir)
     pidfile, _serial_sock, disk = _poc_paths(workdir)
 
@@ -916,6 +917,7 @@ set -eu
 workdir={shlex.quote(workdir)}
 workdir=$(eval printf '%s' "$workdir")
 client_pidfile={client_pidfile}
+snapshot_opts={"" if not ephemeral_client else "-snapshot"}
 client_disk={client_disk}
 
 if [ -f "$client_pidfile" ] && kill -0 "$(cat "$client_pidfile")" 2>/dev/null; then
@@ -935,6 +937,7 @@ sudo ip link set {DEBIAN_TAP} up
 seed_iso="$workdir/images/seed.iso"
 cdrom_opts=""
 smbios_opts=""
+snapshot_opts=""
 if [ -f "$seed_iso" ]; then
   cdrom_opts="-cdrom $seed_iso"
   # ds=nocloud skips cloud-init's datasource probing (Ec2/Azure/...), which
@@ -949,6 +952,7 @@ nohup qemu-system-x86_64 \
   $smbios_opts \
   -drive file="$client_disk",if=virtio \
   $cdrom_opts \
+  $snapshot_opts \
   -netdev tap,id=client,ifname={DEBIAN_TAP},script=no,downscript=no \
   -device virtio-net-pci,netdev=client,mac={DEBIAN_MAC} \
   -serial unix:"$workdir/run/serial-client.sock",server,nowait \
@@ -982,6 +986,12 @@ printf 'Started Debian client VM pid=%s\\n' "$(cat "$client_pidfile")"
     client_provisioned = probe_result.returncode == 0
     if client_provisioned:
         print("Client SSH up — skipping serial provisioning.", flush=True)
+    elif ephemeral_client:
+        print("ERROR: --ephemeral-client requires an already-provisioned overlay "
+              "(ephemeral writes would be discarded, so serial provisioning cannot "
+              "run in this mode). Boot once without the flag, then retry.",
+              file=sys.stderr)
+        return 1
 
     if not client_provisioned:
         print("Step 5: provision Debian VM via serial console...", flush=True)
@@ -1433,6 +1443,11 @@ def build_parser() -> argparse.ArgumentParser:
     start_parser = subparsers.add_parser("start-poc", help="Start OpenWrt VM and Debian client VM")
     _ = start_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = start_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    _ = start_parser.add_argument("--ephemeral-client", action="store_true",
+                                  help="Run the Debian client with QEMU -snapshot: writes are discarded "
+                                       "on stop-poc, guaranteeing a pristine client per cycle. Requires an "
+                                       "already-provisioned overlay (provision first without this flag); "
+                                       "provision_debian changes (playwright/chromium) will not persist.")
     start_parser.set_defaults(func=start_poc)
 
     stop_parser = subparsers.add_parser("stop-poc", help="Stop the POC VMs and clean up")
