@@ -508,6 +508,13 @@ def submit_run_shc(
     if tier not in SHC_TIER_PACKAGE_PRICING:
         raise ValueError(f"Unknown tier '{tier}'. Use: {list(SHC_TIER_PACKAGE_PRICING)}")
     package_id, pricing_id = SHC_TIER_PACKAGE_PRICING[tier]
+    # Env override for zone reachability when the Dev tier's zone is down:
+    # e.g. SHC_PACKAGE_ID=26 + SHC_PRICING_ID=56 (NVMe VPS Standard, Katy TX).
+    # 64.188.7.0/24 (Dev tier, Cherryvale) was unroutable from every vantage,
+    # incl. cross-zone from SHC's own Katy site (shc-toolkit#28). The Dev tier
+    # is the only one with nested KVM, which the worker's inner QEMU VMs need.
+    package_id = int(os.environ.get("SHC_PACKAGE_ID", package_id))
+    pricing_id = int(os.environ.get("SHC_PRICING_ID", pricing_id))
     tier_label = tier.capitalize()
     tier_min_balance = 0.25 if tier == "starter" else 0.50
 
