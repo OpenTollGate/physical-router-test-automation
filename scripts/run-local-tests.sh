@@ -26,6 +26,7 @@ log() { echo "[run-local] $*"; }
 start_mint() {
   if curl -sf "${MINT_URL}/v1/info" >/dev/null 2>&1; then
     log "CDK mint already running at ${MINT_URL}"
+    verify_mint_fakewallet || restart_mint
     return
   fi
 
@@ -63,6 +64,7 @@ EOF
   for i in $(seq 1 15); do
     if curl -sf "${MINT_URL}/v1/info" >/dev/null 2>&1; then
       log "CDK mint ready (PID $(cat ${CDK_PID_FILE}))"
+      verify_mint_fakewallet || restart_mint
       return
     fi
     sleep 1
@@ -70,6 +72,47 @@ EOF
   log "ERROR: CDK mint did not become healthy"
   cat "${CDK_LOG}" | tail -10
   exit 1
+}
+
+# /v1/info answering is not proof of health: a wedged cdk-mintd accepts
+# quotes but its FakeWallet never settles them, which makes every
+# payment test hang until the outer timeout. Probe the actual
+# quote→PAID path; a healthy FakeWallet settles in ~1s.
+verify_mint_fakewallet() {
+  local quote state
+  quote=$(curl -sf --max-time 5 -X POST "${MINT_URL}/v1/mint/quote/bolt11" \
+    -H 'Content-Type: application/json' -d '{"amount":1,"unit":"sat"}' \
+    | jq -r '.quote // empty' 2>/dev/null) || return 1
+  [ -n "$quote" ] || return 1
+  for _ in $(seq 1 6); do
+    state=$(curl -sf --max-time 5 "${MINT_URL}/v1/mint/quote/bolt11/${quote}" \
+      | jq -r '.state // empty' 2>/dev/null) || return 1
+    [ "$state" = "PAID" ] && return 0
+    sleep 2
+  done
+  log "WARNING: mint FakeWallet did not settle a probe quote (state=${state:-none})"
+  return 1
+}
+
+restart_mint() {
+  log "Restarting wedged CDK mint..."
+  if [ -f "${CDK_PID_FILE}" ]; then
+    kill "$(cat ${CDK_PID_FILE})" 2>/dev/null || true
+    sleep 1
+  fi
+  pkill -f "cdk-mintd -c ${CDK_CONFIG}" 2>/dev/null || true
+  sleep 1
+  setsid bash -c "exec ${CDK_BIN} -c ${CDK_CONFIG}" >"${CDK_LOG}" 2>&1 &
+  echo $! > "${CDK_PID_FILE}"
+  for i in $(seq 1 15); do
+    if curl -sf "${MINT_URL}/v1/info" >/dev/null 2>&1; then
+      verify_mint_fakewallet && { log "CDK mint restarted healthy"; return 0; }
+    fi
+    sleep 1
+  done
+  log "ERROR: CDK mint restart failed"
+  cat "${CDK_LOG}" | tail -10
+  return 1
 }
 
 stop_mint() {
@@ -140,7 +183,7 @@ run_tests() {
     "curl -s -o /dev/null --max-time 5 http://example.com" 2>/dev/null || true
 
   log "Running pytest: ${test_files}"
-  python3 -m pytest ${test_files} -v --no-deploy --timeout=180 --tb=short -rs "$@"
+  python3 -m pytest ${test_files} -v --no-deploy --timeout=180 --timeout-method=signal --tb=short -rs "$@"
 }
 
 cleanup() {
