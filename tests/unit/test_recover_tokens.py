@@ -1,4 +1,4 @@
-"""Unit tests for scripts/recover-tokens.py — Cashu token recovery tool.
+"""Unit tests for scripts/recover_tokens.py — Cashu token recovery tool.
 
 Tests cover:
   * Token file parsing (pipe-delimited records)
@@ -22,6 +22,7 @@ import cbor2
 import pytest
 
 from scripts.recover_tokens import (
+    ACTION_SUBMIT_FAILED,
     TOKEN_PREFIX_A,
     TOKEN_PREFIX_B,
     TokenRecord,
@@ -266,6 +267,80 @@ def test_extract_proofs_empty():
 # compute_proof_y
 # --------------------------------------------------------------------------- #
 
+# Canonical cross-implementation vectors (cashu-cross-vectors.json, from the
+# Amperstrand review). Y = hash_to_curve(secret) is what NUT-07 checkstate
+# keys on — these pin the exact values the gonuts mint (btcec),
+# cashu-core-lite (k256), and coincurve produce. Any divergence in the
+# derivation fails here instead of silently mis-reporting spend state.
+CROSS_VECTORS = [
+    ("test-secret-01", "0279110ffdbbaccf1f96e0641dd8794fb206e8f95eb52c0fa001487b070cb5f7b1"),
+    ("a", "029794c59a5d9b910a18e50e10623c864b77c7edf4552f8652b0c85d30ac0498f0"),
+    # Hex-looking-secret trap: a valid 64-char hex string that MUST be
+    # hashed as its 64 ASCII characters, never hex-decoded. Hashing the
+    # decoded 32 bytes produces a plausible-but-wrong Y — this exact
+    # divergence shipped in the original code AND in the first patch
+    # draft in the review thread.
+    ("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+     "0244d4bdec44e84725e2b6d9d7a2896df8bc27b482e84e0cb2144272d318375bc3"),
+]
+
+
+@pytest.mark.parametrize("secret,expected_y", CROSS_VECTORS)
+def test_compute_proof_y_cross_vectors(secret, expected_y):
+    # C deliberately present: pins that the blind signature is IGNORED
+    # in favor of hash_to_curve(secret).
+    proof = {"secret": secret, "C": "02" + "ff" * 32}
+    assert compute_proof_y(proof) == expected_y
+
+
+def test_compute_proof_y_ignores_c():
+    """A proof carrying C must NOT send C as its Y (the NUT-07 bug).
+
+    C is the blind signature, not the secret-derived Y the mint keys
+    checkstate on.
+    """
+    with_c = dict(_PROOF)  # has "C"
+    without_c = {"secret": _PROOF["secret"]}
+    assert compute_proof_y(with_c) == compute_proof_y(without_c)
+    assert compute_proof_y(with_c) != _PROOF["C"]
+
+
+def test_compute_proof_y_ignores_untrusted_y_field():
+    """A Y field on an untrusted token must not be trusted to identify
+    its own spend state — always re-derive from the secret."""
+    fake_y = "02" + "ee" * 32
+    assert compute_proof_y({"secret": "a", "Y": fake_y}) == compute_proof_y({"secret": "a"})
+    assert compute_proof_y({"secret": "a", "Y": fake_y}) != fake_y
+
+
+def test_compute_proof_y_ignores_cbor_short_c_key():
+    """CBOR short-key 'c' (normalized C) must be ignored too."""
+    with_c = {"secret": "a", "c": "02" + "ab" * 32}
+    assert compute_proof_y(with_c) == compute_proof_y({"secret": "a"})
+
+
+def test_compute_proof_y_hex_looking_secret_not_decoded():
+    """Hex-looking secrets are hashed as their ASCII bytes verbatim."""
+    secret = "deadbeef" * 8
+    expected = "0244d4bdec44e84725e2b6d9d7a2896df8bc27b482e84e0cb2144272d318375bc3"
+    assert compute_proof_y({"secret": secret}) == expected
+
+
+def test_compute_proof_y_bytes_secret():
+    """CBOR byte-string secrets hash identically to their str form."""
+    expected = compute_proof_y({"secret": "test-secret-01"})
+    assert compute_proof_y({"secret": b"test-secret-01"}) == expected
+
+
+def test_compute_proof_y_cbor_short_s_key():
+    """CBOR short key 's' is accepted for secret extraction."""
+    assert compute_proof_y({"s": "a"}) == compute_proof_y({"secret": "a"})
+
+
+def test_compute_proof_y_missing_secret():
+    """No secret → empty string (filtered out of the Ys list)."""
+    assert compute_proof_y({"amount": 4}) == ""
+
 
 def test_compute_proof_y_returns_hex_string():
     """Y value should be a 66-char hex string (33-byte compressed pubkey)."""
@@ -372,7 +447,8 @@ def _make_token_file(records_data: list[dict]) -> Path:
 @patch("scripts.recover_tokens.requests.post")
 def test_process_tokens_check_mode_all_unspent(mock_post, mock_check):
     """--check mode: reports state without submitting."""
-    mock_check.return_value = {"states": [{"Y": "abc", "state": "UNSPENT"}]}
+    # Real return shape of check_token_state: processed counts, not raw states.
+    mock_check.return_value = {"unspent_count": 1, "spent_count": 0, "total_proofs": 1}
     path = _make_token_file([
         {"timestamp": "2026-06-18T16:14:05Z",
          "mint_url": "https://nofee.testnut.cashu.space",
@@ -395,7 +471,7 @@ def test_process_tokens_check_mode_all_unspent(mock_post, mock_check):
 @patch("scripts.recover_tokens.requests.post")
 def test_process_tokens_recover_mode_unspent(mock_post, mock_check):
     """--recover mode: submits unspent tokens."""
-    mock_check.return_value = {"states": [{"Y": "abc", "state": "UNSPENT"}]}
+    mock_check.return_value = {"unspent_count": 1, "spent_count": 0, "total_proofs": 1}
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.text = '{"ok": true}'
@@ -424,7 +500,7 @@ def test_process_tokens_recover_mode_unspent(mock_post, mock_check):
 @patch("scripts.recover_tokens.requests.post")
 def test_process_tokens_recover_mode_spent_skipped(mock_post, mock_check):
     """--recover mode: skips already-spent tokens."""
-    mock_check.return_value = {"states": [{"Y": "abc", "state": "SPENT"}]}
+    mock_check.return_value = {"unspent_count": 0, "spent_count": 1, "total_proofs": 1}
     path = _make_token_file([
         {"timestamp": "2026-06-18T16:14:05Z",
          "mint_url": "https://nofee.testnut.cashu.space",
@@ -466,7 +542,7 @@ def test_process_tokens_checkstate_error(mock_check):
 @patch("scripts.recover_tokens.requests.post")
 def test_process_tokens_dry_run_mode(mock_post, mock_check):
     """--dry-run mode: checks state but never submits."""
-    mock_check.return_value = {"states": [{"Y": "abc", "state": "UNSPENT"}]}
+    mock_check.return_value = {"unspent_count": 1, "spent_count": 0, "total_proofs": 1}
     path = _make_token_file([
         {"timestamp": "2026-06-18T16:14:05Z",
          "mint_url": "https://nofee.testnut.cashu.space",
@@ -480,6 +556,31 @@ def test_process_tokens_dry_run_mode(mock_post, mock_check):
         assert results[0].state == "UNSPENT"
         assert results[0].action == "DRY_RUN"
         mock_post.assert_not_called()
+    finally:
+        path.unlink(missing_ok=True)
+
+
+@patch("scripts.recover_tokens.check_token_state")
+@patch("scripts.recover_tokens.requests.post")
+def test_process_tokens_recover_mode_submit_failed(mock_post, mock_check):
+    """--recover mode: a submit exception gets its own SUBMIT_FAILED action,
+    distinct from a successful submission."""
+    mock_check.return_value = {"unspent_count": 1, "spent_count": 0, "total_proofs": 1}
+    mock_post.side_effect = ConnectionError("router unreachable")
+    path = _make_token_file([
+        {"timestamp": "2026-06-18T16:14:05Z",
+         "mint_url": "https://nofee.testnut.cashu.space",
+         "token": CASHU_B_TOKEN,
+         "error": "rejected"},
+    ])
+    try:
+        results = process_tokens(
+            str(path), mode="recover", router_ip="192.168.8.1",
+        )
+        assert results[0].state == "UNSPENT"
+        assert results[0].action == ACTION_SUBMIT_FAILED
+        assert results[0].submit_status is None
+        assert "router unreachable" in results[0].error
     finally:
         path.unlink(missing_ok=True)
 

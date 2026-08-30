@@ -3,13 +3,13 @@
 
 Usage:
     # Check which tokens are still unspent (no changes)
-    python scripts/recover-tokens.py --file tokens-to-recover.txt --check
+    python scripts/recover_tokens.py --file tokens-to-recover.txt --check
 
     # Check + re-submit unspent tokens to router
-    python scripts/recover-tokens.py --file tokens-to-recover.txt --recover
+    python scripts/recover_tokens.py --file tokens-to-recover.txt --recover
 
     # Dry run (parse + show what would happen, no network calls)
-    python scripts/recover-tokens.py --file tokens-to-recover.txt --dry-run
+    python scripts/recover_tokens.py --file tokens-to-recover.txt --dry-run
 
 Token file format (pipe-delimited, one per line):
     2026-06-18T16:14:05Z | https://nofee.testnut.cashu.space | cashuBo2F0... | payment rejected: failed to open gate: exit status 1
@@ -39,6 +39,7 @@ TOKEN_PREFIX_B = "cashuB"
 # Actions reported in ResultRecord
 ACTION_CHECK_ONLY = "CHECK_ONLY"
 ACTION_SUBMITTED = "SUBMITTED"
+ACTION_SUBMIT_FAILED = "SUBMIT_FAILED"
 ACTION_SKIPPED_SPENT = "SKIPPED_SPENT"
 ACTION_CHECK_FAILED = "CHECK_FAILED"
 ACTION_DRY_RUN = "DRY_RUN"
@@ -64,7 +65,7 @@ class ResultRecord:
     mint_url: str
     amount: int = 0
     state: str = ""        # UNSPENT / SPENT / ERROR
-    action: str = ""       # CHECK_ONLY / SUBMITTED / SKIPPED_SPENT / CHECK_FAILED / DRY_RUN
+    action: str = ""       # CHECK_ONLY / SUBMITTED / SUBMIT_FAILED / SKIPPED_SPENT / CHECK_FAILED / DRY_RUN
     submit_status: int | None = None
     submit_body: str = ""
     error: str = ""
@@ -213,50 +214,52 @@ def extract_mint_url(decoded: Any) -> str:
 # Proof Y-value computation (NUT-07)
 # --------------------------------------------------------------------------- #
 
+# NUT-00 domain separator, matches gonuts crypto/bdhke.go HashToCurve —
+# the derivation the mint keys NUT-07 checkstate on (mint/mint.go:492/783/1607).
+_HASH_TO_CURVE_DOMAIN = b"Secp256k1_HashToCurve_Cashu_"
+
+
 def compute_proof_y(proof: dict) -> str:
-    """Compute the Y (public key) value for a proof's secret.
+    """Y = HashToCurve(secret), serialized compressed (66 hex chars).
 
-    Y = PK(secret) where PK is the secp256k1 public key of the secret bytes.
-    Returns a 66-char hex string (33-byte compressed pubkey).
+    This is the value the mint's NUT-07 checkstate keys on. It is NOT
+    the proof's C (blind signature) and NOT PK(sha256(secret)).
+
+    The secret string is hashed verbatim (UTF-8 bytes) — never
+    hex-decoded, even when it looks like hex: gonuts hashes
+    ``[]byte(proof.Secret)`` as-is. CBOR byte-string secrets hash as
+    their raw bytes. Any C/Y/c fields on the (untrusted) proof are
+    ignored — a Y field must not be trusted to identify its own spend
+    state, and C is simply the wrong value.
     """
-    # If proof already has a Y or C field, return that
-    if "Y" in proof:
-        y = proof["Y"]
-        return y.hex() if isinstance(y, (bytes, bytearray)) else str(y)
-    if "c" in proof:
-        c = proof["c"]
-        return c.hex() if isinstance(c, (bytes, bytearray)) else str(c)
-    if "C" in proof:
-        c = proof["C"]
-        return c.hex() if isinstance(c, (bytes, bytearray)) else str(c)
-
     secret = proof.get("secret") or proof.get("s")
     if secret is None:
         return ""
-
     if isinstance(secret, (bytes, bytearray)):
-        secret_bytes = bytes(secret)
+        secret_bytes = bytes(secret)  # CBOR byte-string secrets
     else:
-        # hex string or utf-8
-        s = str(secret)
-        try:
-            secret_bytes = bytes.fromhex(s)
-        except (ValueError, AttributeError):
-            secret_bytes = s.encode("utf-8")
+        secret_bytes = str(secret).encode("utf-8")  # mint hashes the string verbatim
+    return _hash_to_curve(secret_bytes).hex()
 
-    # Hash to 32 bytes (required for secp256k1 secret key)
-    x = hashlib.sha256(secret_bytes).digest()
-    try:
-        import coincurve
-        pk = coincurve.PublicKey.from_secret(x)
-        return pk.format().hex()
-    except ImportError:
-        # Fallback to ecdsa
-        import os
-        from ecdsa import SECP256k1, SigningKey
-        sk = SigningKey.from_string(x, curve=SECP256k1)
-        vk = sk.get_verifying_key()
-        return vk.to_string("compressed").hex()
+
+def _hash_to_curve(message: bytes) -> bytes:
+    """NUT-00 HashToCurve — port of gonuts crypto.HashToCurve (bdhke.go).
+
+    sha256(domain || message), then counter-loop (4-byte little-endian)
+    hashing until the digest is a valid even-y x-coordinate; returns
+    the 33-byte compressed point.
+    """
+    import coincurve
+
+    msg_hash = hashlib.sha256(_HASH_TO_CURVE_DOMAIN + message).digest()
+    for counter in range(2**16):
+        c = counter.to_bytes(4, "little")
+        h = hashlib.sha256(msg_hash + c).digest()
+        try:
+            return coincurve.PublicKey(b"\x02" + h).format()  # compressed
+        except ValueError:
+            continue
+    raise ValueError("hash_to_curve: no valid point after 2**16 iterations")
 
 
 def build_checkstate_request(proofs: list[dict]) -> dict:
@@ -377,13 +380,7 @@ def process_tokens(
         # Check state at mint
         try:
             raw_state = check_token_state(record.mint_url, record.token)
-            # check_token_state may return either {"states": [...]} (raw)
-            # or {"unspent_count": ..., "spent_count": ...} (processed)
-            if "states" in raw_state:
-                states_list = raw_state["states"]
-                unspent = sum(1 for s in states_list if s.get("state") == "UNSPENT")
-            else:
-                unspent = raw_state.get("unspent_count", 0)
+            unspent = raw_state.get("unspent_count", 0)
             result.state = "UNSPENT" if unspent > 0 else "SPENT"
         except Exception as e:
             result.state = "ERROR"
@@ -404,8 +401,7 @@ def process_tokens(
                     result.submit_status = status
                     result.submit_body = body
                 except Exception as e:
-                    result.action = ACTION_SUBMITTED
-                    result.submit_status = -1
+                    result.action = ACTION_SUBMIT_FAILED
                     result.error = str(e)
             else:
                 result.action = ACTION_SKIPPED_SPENT
