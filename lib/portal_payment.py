@@ -40,10 +40,17 @@ log = logging.getLogger("tollgate.portal_payment")
 # Selectors — kept identical to tests/captive-portal.spec.mjs so the Python
 # port tracks the same DOM contract as the Node Playwright suite.
 # --------------------------------------------------------------------------- #
-SEL_TOKEN_INPUT = "#cashu-token"
-SEL_SUBMIT_READY = ".tollgate-captive-portal-method-submit button.cta:not([disabled])"
-SEL_SUBMIT_CLICK = ".tollgate-captive-portal-method-submit button.cta"
-SEL_CHECKMARK = ".checkmark"
+# The captive-portal UI is now tabbed (Cashu / Lightning). The Cashu token
+# input only renders after the Cashu tab is clicked, and it has no stable id —
+# it is an ``<input type="text" placeholder="cashuxyz…">`` — so we locate it by
+# placeholder substring. The submit button (text "Continue") lives inside
+# .tollgate-captive-portal-method-submit and is enabled (``disabled`` attr
+# removed) once a valid token is entered.
+SEL_CASHU_TAB = ".tollgate-captive-portal-tabs-tab-cashu"
+SEL_TOKEN_INPUT = 'input[placeholder*="cashu"]'
+SEL_SUBMIT_READY = ".tollgate-captive-portal-method-submit button:not([disabled])"
+SEL_SUBMIT_CLICK = ".tollgate-captive-portal-method-submit button:not([disabled])"
+SEL_CHECKMARK = ".tollgate-captive-portal-access-granted-check"
 SEL_CONTENT = ".tollgate-captive-portal-method-content"
 
 # Allotment text like "500 MB", "2 GB", "1024 MiB", "1.5 GiB", "1,024 KB".
@@ -160,6 +167,11 @@ def pay_cashu_via_portal(
     """
     log.info("portal payment: navigating to %s", portal_url)
     page.goto(portal_url, wait_until="networkidle", timeout=goto_timeout)
+
+    # The portal is tabbed — click the Cashu tab so the token input renders.
+    log.debug("portal payment: clicking cashu tab %s", SEL_CASHU_TAB)
+    page.wait_for_selector(SEL_CASHU_TAB, timeout=input_timeout)
+    page.click(SEL_CASHU_TAB)
 
     log.debug("portal payment: waiting for token input %s", SEL_TOKEN_INPUT)
     page.wait_for_selector(SEL_TOKEN_INPUT, timeout=input_timeout)

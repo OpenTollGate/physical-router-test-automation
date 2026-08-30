@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from lib.portal_payment import (
+    SEL_CASHU_TAB,
     SEL_CHECKMARK,
     SEL_CONTENT,
     SEL_SUBMIT_CLICK,
@@ -76,7 +77,7 @@ class FakePage:
 
 def _happy_page(content_text: str = "You have 500 MB remaining") -> FakePage:
     return FakePage(
-        present={SEL_TOKEN_INPUT, SEL_SUBMIT_READY, SEL_CHECKMARK},
+        present={SEL_CASHU_TAB, SEL_TOKEN_INPUT, SEL_SUBMIT_READY, SEL_CHECKMARK},
         texts={SEL_CONTENT: content_text},
     )
 
@@ -124,7 +125,7 @@ def test_happy_path_fills_token_and_reports_success():
     assert result.checkmark_visible is True
     assert result.allotment_bytes == 500_000_000
     assert "500 MB" in result.allotment_text
-    # The token must be filled into the #cashu-token input specifically.
+    # The token must be filled into the Cashu token input specifically.
     assert page.filled == {SEL_TOKEN_INPUT: TOKEN}
 
 
@@ -135,6 +136,8 @@ def test_happy_path_calls_selectors_in_spec_order():
     # Exact ordered call sequence mirrors the proven Node spec flow.
     expected_calls = [
         ("goto", PORTAL_URL, "networkidle"),
+        ("wait_for_selector", SEL_CASHU_TAB),
+        ("click", SEL_CASHU_TAB),
         ("wait_for_selector", SEL_TOKEN_INPUT),
         ("wait_for_selector", SEL_SUBMIT_READY),
         ("click", SEL_SUBMIT_CLICK),
@@ -170,7 +173,7 @@ def test_uses_custom_timeouts():
 
 def test_checkmark_present_but_hidden_is_not_success():
     page = FakePage(
-        present={SEL_TOKEN_INPUT, SEL_SUBMIT_READY, SEL_CHECKMARK},
+        present={SEL_CASHU_TAB, SEL_TOKEN_INPUT, SEL_SUBMIT_READY, SEL_CHECKMARK},
         visible={SEL_CHECKMARK: False},
         texts={SEL_CONTENT: "500 MB"},
     )
@@ -196,7 +199,7 @@ def test_token_input_never_appears_propagates_timeout():
 
 
 def test_checkmark_never_appears_propagates_timeout():
-    page = FakePage(present={SEL_TOKEN_INPUT, SEL_SUBMIT_READY})  # no checkmark
+    page = FakePage(present={SEL_CASHU_TAB, SEL_TOKEN_INPUT, SEL_SUBMIT_READY})  # no checkmark
     with pytest.raises(FakeTimeout):
         pay_cashu_via_portal(page, TOKEN, PORTAL_URL)
     # Token was filled and submit clicked, but the checkmark never came.
