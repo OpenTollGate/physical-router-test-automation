@@ -572,6 +572,34 @@ def test_process_tokens_recover_mode_spent_skipped(mock_post, mock_check, tmp_pa
 
 
 @patch("scripts.recover_tokens.check_token_state")
+@patch("scripts.recover_tokens.requests.post")
+def test_process_tokens_recover_mode_router_rejects(mock_post, mock_check, tmp_path):
+    """--recover mode: a non-2xx router response is SUBMIT_FAILED, not
+    SUBMITTED (observed live: HTTP 400 session-error after gate-open
+    failure). The body is kept for diagnosis."""
+    mock_check.return_value = {"unspent_count": 1, "spent_count": 0,
+                               "unknown_count": 0, "total_proofs": 1}
+    mock_resp = MagicMock()
+    mock_resp.status_code = 400
+    mock_resp.text = '{"content": "failed to open gate: exit status 1"}'
+    mock_post.return_value = mock_resp
+    path = _make_token_file([
+        {"timestamp": "2026-06-18T16:14:05Z",
+         "mint_url": "https://nofee.testnut.cashu.space",
+         "token": CASHU_B_TOKEN,
+         "error": "rejected"},
+    ], tmp_path / "tokens.txt")
+
+    results = process_tokens(
+        str(path), mode="recover", router_ip="192.168.8.1", delay=0,
+    )
+    assert results[0].state == "UNSPENT"
+    assert results[0].action == ACTION_SUBMIT_FAILED
+    assert results[0].submit_status == 400
+    assert "failed to open gate" in results[0].error
+
+
+@patch("scripts.recover_tokens.check_token_state")
 def test_process_tokens_records_unknown_proofs(mock_check, tmp_path):
     """Proofs the mint doesn't recognize are recorded, not dropped."""
     mock_check.return_value = {"unspent_count": 0, "spent_count": 1,

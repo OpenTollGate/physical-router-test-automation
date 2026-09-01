@@ -403,9 +403,13 @@ def process_tokens(
             if result.state == "UNSPENT":
                 try:
                     status, body = submit_token_to_router(router_ip, record.token)
-                    result.action = ACTION_SUBMITTED
                     result.submit_status = status
                     result.submit_body = body
+                    if status >= 400:
+                        result.action = ACTION_SUBMIT_FAILED
+                        result.error = f"HTTP {status}: {body[:200]}"
+                    else:
+                        result.action = ACTION_SUBMITTED
                 except Exception as e:
                     result.action = ACTION_SUBMIT_FAILED
                     result.error = str(e)

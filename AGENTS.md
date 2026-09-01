@@ -1704,3 +1704,57 @@ boot); two consecutive restart cycles 160s/157s; client userspace boot 16s
 (was 2min3s); payment suite 3/3 after each cycle and after a mid-payment
 SIGKILL. Related: SHC Dev-zone status tracked in shc-toolkit#28 (provisioning
 fixed, network attach still broken — see shc-toolkit AGENTS.md lesson 26).
+
+## Token Recovery Tool + tokens-to-recover.txt semantics (2026-09-01 field validation)
+
+`scripts/recover_tokens.py` (PR #86 + #97; unit tests in
+`tests/unit/test_recover_tokens.py`) parses
+`/etc/tollgate/tokens-to-recover.txt` (line format
+`timestamp | mint_url | token | error`, writer in tmbg
+`src/upstream_session_manager/token_recovery.go`), checks spend state via
+NUT-07 checkstate, and resubmits unspent tokens to the router backend on
+:2121 (raw body, `text/plain`). Dry-run is parse-only (no network);
+non-2xx router responses are recorded as `SUBMIT_FAILED` with the body.
+
+**File-entry semantics (verified live, matters for interpreting results):**
+
+- On payment failure the backend FIRST tries `merchant.Fund(token)`
+  (receive into the router's own wallet). Only if that ALSO fails does it
+  append to the file — file entries are double-failure tokens.
+- The backend consumes (swaps) the token BEFORE opening the gate. A
+  payment that fails at gate-open leaves the token SPENT at the mint
+  (reproduced on the local virtual lab). Therefore every
+  "failed to open gate" entry is SPENT and can never be recovered by
+  resubmission — the value sits in the router wallet (recover via LuCI
+  fund/drain). The recovery tool correctly reports `SKIPPED_SPENT` for
+  these; don't misread that as a tool bug.
+- The tool's real use case: pre-consume rejections (mint outage, transient
+  errors) that also failed the auto-Fund — those are still UNSPENT and
+  resubmission works once the mint is back.
+
+**Unknown-Y checkstate gap (spec-level):** NUT-07 defines only
+`UNSPENT`/`PENDING`/`SPENT` — behavior for a Y the mint doesn't know is
+unspecified. Observed: `cdk-mintd 0.16.0` and `testnut.cashu.exchange`
+answer `UNSPENT` for completely fabricated Ys; mainline nutshell returns
+`UNKNOWN`. Consequence: at these mints an `UNSPENT` result never proves
+recoverability for wrong-mint tokens. The tool surfaces `unknown_count` /
+`unknown_proofs` so operators can distinguish. Spec clarification filed upstream:
+cashubtc/nuts#432.
+
+**Virtual-lab payment-testing gotchas (ai-legion host, found during the
+same validation):**
+
+- Host ufw is default-DROP: the lab needs scoped rules —
+  `ufw allow from 10.99.99.0/24 to any port 8383 proto tcp` (mint),
+  `ufw route allow from 10.99.99.0/24` (forwarded client traffic),
+  `ufw allow in on tg-poc-br from 10.99.99.0/24 to any port 53 proto udp`
+  (client DNS to host).
+- NDS only authenticates MACs already in its client table. From the Debian
+  client, fetch `http://10.99.99.1:2050/` BEFORE submitting a token,
+  otherwise the backend's `ndsctl auth` fails with
+  "failed to open gate: exit status 1" (the exact error this recovery file
+  records — a clean local repro of the #88 incident class).
+- Restart nodogsplash after any `fw4 restart` — fw4 rebuilds the base
+  chains and NDS must re-insert its own.
+- Each failed submit burns the token (consume-before-gate): budget a fresh
+  fakewallet token per attempt when debugging.
