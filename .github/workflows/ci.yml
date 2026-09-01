@@ -24,11 +24,6 @@
 name: CI
 
 on:
-
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
   # Trigger on push to main branch
   push:
     branches: [main]
@@ -46,6 +41,10 @@ concurrency:
         description: 'Viewport (desktop or mobile)'
         required: false
         default: 'desktop'
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 # =============================================================================
 # Job 1: Lint/Collect Tests
