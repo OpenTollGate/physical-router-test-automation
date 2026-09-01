@@ -31,9 +31,30 @@ _SSH_PREFIX = (
 def ensure_conwrt() -> None:
     r = _run(f"test -d {CONWRT_DIR}/scripts/flows && echo EXISTS || echo MISSING", timeout=5, check=False)
     if "EXISTS" in r.stdout:
+        # Keep an existing clone current — a reused worker VM must never test
+        # a stale conwrt silently.
+        _run(
+            f"git -C {CONWRT_DIR} fetch -q origin master "
+            f"&& git -C {CONWRT_DIR} reset -q --hard origin/master",
+            timeout=60, check=False,
+        )
         return
     log.info("Cloning conwrt for flow-based deploy...")
     _run(f"git clone --depth 1 {CONWRT_REPO} {CONWRT_DIR}", timeout=60)
+
+
+def _execute_host_commands(lines: list[str], timeout: int = 180) -> None:
+    """Run rendered host-side commands as one script piped to bash via stdin.
+
+    Piping (with set -e) instead of joining lines with ' && ' keeps multi-line
+    and heredoc commands valid — the same bug class conwrt hit when it
+    &&-joined rendered scripts into ash syntax errors — while preserving the
+    fail-fast behavior of the old chain."""
+    script = "\n".join(ln for ln in lines if ln.strip())
+    if not script:
+        return
+    log.info("conwrt: executing %d host commands", len(script.splitlines()))
+    _run(f"printf %s {shlex.quote('set -e\n' + script + '\n')} | bash", timeout=timeout)
 
 
 def deploy_via_conwrt(config: WorkerConfig) -> None:
@@ -103,8 +124,7 @@ if router_ops:
             if hl.strip().startswith("scp"):
                 hl = f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} {hl}"
             adapted_lines.append(hl)
-        log.info("conwrt: executing %d host commands", len([ln for ln in adapted_lines if ln.strip()]))
-        _run(" && ".join(ln for ln in adapted_lines if ln.strip()), timeout=180)
+        _execute_host_commands(adapted_lines)
 
     if router_script:
         log.info("conwrt: applying router ops via SSH")
