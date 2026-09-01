@@ -27,9 +27,11 @@ from scripts.recover_tokens import (
     TOKEN_PREFIX_B,
     TokenRecord,
     build_checkstate_request,
+    check_token_state,
     compute_proof_y,
     decode_cashu_token,
     extract_proofs,
+    get_token_amount,
     parse_token_file,
     process_tokens,
     submit_token_to_router,
@@ -74,9 +76,10 @@ def _make_cashuA(token_obj: dict | None = None) -> str:
 def _make_cashuB(token_obj: dict | None = None) -> str:
     """Create a cashuB (base64url-CBOR) token for testing.
 
-    Uses the Cashu V3 CBOR key abbreviations:
-      t = token list, u = unit, i = mint, p = proofs,
-      a = amount, id = keyset id, s = secret, c = C
+    Uses the simplified CBOR short-key shape (t = token list, u = unit,
+    i = mint, p = proofs, a = amount, id = keyset id, s = secret, c = C).
+    For the real NUT-00 V4 layout (top-level d/a keys, byte-string
+    secrets), see test_extract_proofs_from_real_v4_cbor.
     """
     obj = token_obj or _TOKEN_OBJ
     cbor_obj = {
@@ -111,69 +114,51 @@ CASHU_B_TOKEN = _make_cashuB()
 # --------------------------------------------------------------------------- #
 
 
-def test_parse_single_line():
-    content = SAMPLE_LINE_FEE + "\n"
-    path = Path("/tmp/test_tokens_recover_parse.txt")
-    path.write_text(content)
-    try:
-        records = parse_token_file(str(path))
-        assert len(records) == 1
-        r = records[0]
-        assert r.timestamp == "2026-06-18T16:14:05Z"
-        assert r.mint_url == "https://nofee.testnut.cashu.space"
-        assert r.token.startswith("cashuB")
-        assert "exit status 1" in r.error
-    finally:
-        path.unlink(missing_ok=True)
+def test_parse_single_line(tmp_path):
+    path = tmp_path / "tokens.txt"
+    path.write_text(SAMPLE_LINE_FEE + "\n")
+    records = parse_token_file(str(path))
+    assert len(records) == 1
+    r = records[0]
+    assert r.timestamp == "2026-06-18T16:14:05Z"
+    assert r.mint_url == "https://nofee.testnut.cashu.space"
+    assert r.token.startswith("cashuB")
+    assert "exit status 1" in r.error
 
 
-def test_parse_multiple_lines():
-    content = f"{SAMPLE_LINE_FEE}\n{SAMPLE_LINE_EXCHANGE}\n"
-    path = Path("/tmp/test_tokens_recover_parse2.txt")
-    path.write_text(content)
-    try:
-        records = parse_token_file(str(path))
-        assert len(records) == 2
-        assert records[0].mint_url == "https://nofee.testnut.cashu.space"
-        assert records[1].mint_url == "https://testnut.cashu.exchange"
-    finally:
-        path.unlink(missing_ok=True)
+def test_parse_multiple_lines(tmp_path):
+    path = tmp_path / "tokens.txt"
+    path.write_text(f"{SAMPLE_LINE_FEE}\n{SAMPLE_LINE_EXCHANGE}\n")
+    records = parse_token_file(str(path))
+    assert len(records) == 2
+    assert records[0].mint_url == "https://nofee.testnut.cashu.space"
+    assert records[1].mint_url == "https://testnut.cashu.exchange"
 
 
-def test_parse_skips_blank_lines():
-    content = f"\n{SAMPLE_LINE_FEE}\n\n\n"
-    path = Path("/tmp/test_tokens_recover_parse3.txt")
-    path.write_text(content)
-    try:
-        records = parse_token_file(str(path))
-        assert len(records) == 1
-    finally:
-        path.unlink(missing_ok=True)
+def test_parse_skips_blank_lines(tmp_path):
+    path = tmp_path / "tokens.txt"
+    path.write_text(f"\n{SAMPLE_LINE_FEE}\n\n\n")
+    records = parse_token_file(str(path))
+    assert len(records) == 1
 
 
-def test_parse_line_without_error_column():
+def test_parse_line_without_error_column(tmp_path):
     """Lines with only 3 fields (no rejection error) still parse."""
     line = "2026-06-18T16:14:05Z | https://nofee.testnut.cashu.space | cashuBabc"
-    path = Path("/tmp/test_tokens_recover_parse4.txt")
+    path = tmp_path / "tokens.txt"
     path.write_text(line + "\n")
-    try:
-        records = parse_token_file(str(path))
-        assert len(records) == 1
-        assert records[0].error == ""
-    finally:
-        path.unlink(missing_ok=True)
+    records = parse_token_file(str(path))
+    assert len(records) == 1
+    assert records[0].error == ""
 
 
-def test_parse_skips_malformed_lines():
+def test_parse_skips_malformed_lines(tmp_path):
     """Lines with fewer than 3 pipe-separated fields are skipped."""
     content = "not a token line\n" + SAMPLE_LINE_FEE + "\n"
-    path = Path("/tmp/test_tokens_recover_parse5.txt")
+    path = tmp_path / "tokens.txt"
     path.write_text(content)
-    try:
-        records = parse_token_file(str(path))
-        assert len(records) == 1  # only the valid line
-    finally:
-        path.unlink(missing_ok=True)
+    records = parse_token_file(str(path))
+    assert len(records) == 1  # only the valid line
 
 
 # --------------------------------------------------------------------------- #
@@ -261,6 +246,42 @@ def test_extract_proofs_empty():
     decoded = decode_cashu_token(token)
     proofs = extract_proofs(decoded)
     assert proofs == []
+
+
+def test_extract_proofs_from_real_v4_cbor():
+    """Real NUT-00 V4 CBOR layout (cashuB): top-level d=unit / a=memo,
+    per-entry i=keyset-id bytes / m=mint URL, proof s/c as byte strings.
+
+    Pins that extraction + Y computation work against what real V4
+    wallets emit, not just the simplified short-key fixture shape.
+    """
+    v4 = {
+        "t": [{
+            "i": bytes.fromhex("00abcdef01234567"),
+            "m": "https://nofee.testnut.cashu.space",
+            "p": [{
+                "a": 4,
+                "s": _PROOF["secret"].encode(),
+                "c": bytes.fromhex(_PROOF["C"]),
+            }],
+        }],
+        "d": "sat",
+        "a": "recovery-test-memo",
+    }
+    token = TOKEN_PREFIX_B + base64.urlsafe_b64encode(
+        cbor2.dumps(v4)
+    ).decode().rstrip("=")
+
+    decoded = decode_cashu_token(token)
+    proofs = extract_proofs(decoded)
+    assert len(proofs) == 1
+    p = proofs[0]
+    assert p["amount"] == 4
+    assert p["secret"] == _PROOF["secret"].encode()
+    assert p["C"] == bytes.fromhex(_PROOF["C"])
+
+    assert get_token_amount(decoded) == 4
+    assert compute_proof_y(p) == compute_proof_y({"secret": _PROOF["secret"]})
 
 
 # --------------------------------------------------------------------------- #
@@ -391,6 +412,41 @@ def test_build_checkstate_request_multiple_proofs():
 
 
 # --------------------------------------------------------------------------- #
+# check_token_state (mocked HTTP)
+# --------------------------------------------------------------------------- #
+
+
+@patch("scripts.recover_tokens.requests.post")
+def test_check_token_state_counts_unknown(mock_post):
+    """Proofs not resolvable to UNSPENT/SPENT (UNKNOWN, PENDING) are
+    surfaced as unknown_count instead of being silently dropped."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"states": [
+        {"Y": "02aa", "state": "UNSPENT"},
+        {"Y": "02bb", "state": "SPENT"},
+        {"Y": "02cc", "state": "UNKNOWN"},
+        {"Y": "02dd", "state": "PENDING"},
+    ]}
+    mock_post.return_value = mock_resp
+
+    result = check_token_state("https://m.example", CASHU_A_TOKEN)
+    assert result["unspent_count"] == 1
+    assert result["spent_count"] == 1
+    assert result["unknown_count"] == 2
+    assert result["total_proofs"] == 4
+
+
+@patch("scripts.recover_tokens.requests.post")
+def test_check_token_state_no_proofs(mock_post):
+    obj = {"token": [{"mint": "https://m.example", "proofs": []}], "unit": "sat"}
+    result = check_token_state("https://m.example", _make_cashuA(obj))
+    assert result["total_proofs"] == 0
+    assert result.get("error") == "no proofs found"
+    mock_post.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
 # submit_token_to_router (mocked HTTP)
 # --------------------------------------------------------------------------- #
 
@@ -430,7 +486,7 @@ def test_submit_token_failure(mock_post):
 # --------------------------------------------------------------------------- #
 
 
-def _make_token_file(records_data: list[dict]) -> Path:
+def _make_token_file(records_data: list[dict], path: Path) -> Path:
     """Write sample records to a temp file."""
     lines = []
     for d in records_data:
@@ -438,40 +494,40 @@ def _make_token_file(records_data: list[dict]) -> Path:
         if d.get("error"):
             parts.append(d["error"])
         lines.append(" | ".join(parts))
-    path = Path("/tmp/test_tokens_recover_process.txt")
     path.write_text("\n".join(lines) + "\n")
     return path
 
 
 @patch("scripts.recover_tokens.check_token_state")
 @patch("scripts.recover_tokens.requests.post")
-def test_process_tokens_check_mode_all_unspent(mock_post, mock_check):
+def test_process_tokens_check_mode_all_unspent(mock_post, mock_check, tmp_path):
     """--check mode: reports state without submitting."""
     # Real return shape of check_token_state: processed counts, not raw states.
-    mock_check.return_value = {"unspent_count": 1, "spent_count": 0, "total_proofs": 1}
+    mock_check.return_value = {"unspent_count": 1, "spent_count": 0,
+                               "unknown_count": 0, "total_proofs": 1}
     path = _make_token_file([
         {"timestamp": "2026-06-18T16:14:05Z",
          "mint_url": "https://nofee.testnut.cashu.space",
          "token": CASHU_B_TOKEN,
          "error": "rejected"},
-    ])
-    try:
-        results = process_tokens(
-            str(path), mode="check", router_ip="192.168.8.1",
-        )
-        assert len(results) == 1
-        assert results[0].state == "UNSPENT"
-        assert results[0].action == "CHECK_ONLY"
-        mock_post.assert_not_called()  # no submission in check mode
-    finally:
-        path.unlink(missing_ok=True)
+    ], tmp_path / "tokens.txt")
+
+    results = process_tokens(
+        str(path), mode="check", router_ip="192.168.8.1", delay=0,
+    )
+    assert len(results) == 1
+    assert results[0].state == "UNSPENT"
+    assert results[0].action == "CHECK_ONLY"
+    assert results[0].unknown_count == 0
+    mock_post.assert_not_called()  # no submission in check mode
 
 
 @patch("scripts.recover_tokens.check_token_state")
 @patch("scripts.recover_tokens.requests.post")
-def test_process_tokens_recover_mode_unspent(mock_post, mock_check):
+def test_process_tokens_recover_mode_unspent(mock_post, mock_check, tmp_path):
     """--recover mode: submits unspent tokens."""
-    mock_check.return_value = {"unspent_count": 1, "spent_count": 0, "total_proofs": 1}
+    mock_check.return_value = {"unspent_count": 1, "spent_count": 0,
+                               "unknown_count": 0, "total_proofs": 1}
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.text = '{"ok": true}'
@@ -482,44 +538,60 @@ def test_process_tokens_recover_mode_unspent(mock_post, mock_check):
          "mint_url": "https://nofee.testnut.cashu.space",
          "token": CASHU_B_TOKEN,
          "error": "rejected"},
-    ])
-    try:
-        results = process_tokens(
-            str(path), mode="recover", router_ip="192.168.8.1",
-        )
-        assert len(results) == 1
-        assert results[0].state == "UNSPENT"
-        assert results[0].action == "SUBMITTED"
-        assert results[0].submit_status == 200
-        mock_post.assert_called_once()
-    finally:
-        path.unlink(missing_ok=True)
+    ], tmp_path / "tokens.txt")
+
+    results = process_tokens(
+        str(path), mode="recover", router_ip="192.168.8.1", delay=0,
+    )
+    assert len(results) == 1
+    assert results[0].state == "UNSPENT"
+    assert results[0].action == "SUBMITTED"
+    assert results[0].submit_status == 200
+    mock_post.assert_called_once()
 
 
 @patch("scripts.recover_tokens.check_token_state")
 @patch("scripts.recover_tokens.requests.post")
-def test_process_tokens_recover_mode_spent_skipped(mock_post, mock_check):
+def test_process_tokens_recover_mode_spent_skipped(mock_post, mock_check, tmp_path):
     """--recover mode: skips already-spent tokens."""
-    mock_check.return_value = {"unspent_count": 0, "spent_count": 1, "total_proofs": 1}
+    mock_check.return_value = {"unspent_count": 0, "spent_count": 1,
+                               "unknown_count": 0, "total_proofs": 1}
     path = _make_token_file([
         {"timestamp": "2026-06-18T16:14:05Z",
          "mint_url": "https://nofee.testnut.cashu.space",
          "token": CASHU_B_TOKEN,
          "error": "rejected"},
-    ])
-    try:
-        results = process_tokens(
-            str(path), mode="recover", router_ip="192.168.8.1",
-        )
-        assert results[0].state == "SPENT"
-        assert results[0].action == "SKIPPED_SPENT"
-        mock_post.assert_not_called()
-    finally:
-        path.unlink(missing_ok=True)
+    ], tmp_path / "tokens.txt")
+
+    results = process_tokens(
+        str(path), mode="recover", router_ip="192.168.8.1", delay=0,
+    )
+    assert results[0].state == "SPENT"
+    assert results[0].action == "SKIPPED_SPENT"
+    mock_post.assert_not_called()
 
 
 @patch("scripts.recover_tokens.check_token_state")
-def test_process_tokens_checkstate_error(mock_check):
+def test_process_tokens_records_unknown_proofs(mock_check, tmp_path):
+    """Proofs the mint doesn't recognize are recorded, not dropped."""
+    mock_check.return_value = {"unspent_count": 0, "spent_count": 1,
+                               "unknown_count": 1, "total_proofs": 2}
+    path = _make_token_file([
+        {"timestamp": "2026-06-18T16:14:05Z",
+         "mint_url": "https://nofee.testnut.cashu.space",
+         "token": CASHU_B_TOKEN,
+         "error": "rejected"},
+    ], tmp_path / "tokens.txt")
+
+    results = process_tokens(
+        str(path), mode="check", router_ip="192.168.8.1", delay=0,
+    )
+    assert results[0].unknown_count == 1
+    assert results[0].state == "SPENT"
+
+
+@patch("scripts.recover_tokens.check_token_state")
+def test_process_tokens_checkstate_error(mock_check, tmp_path):
     """Network error during checkstate is reported, not fatal."""
     mock_check.side_effect = ConnectionError("mint unreachable")
     path = _make_token_file([
@@ -527,62 +599,58 @@ def test_process_tokens_checkstate_error(mock_check):
          "mint_url": "https://nofee.testnut.cashu.space",
          "token": CASHU_B_TOKEN,
          "error": "rejected"},
-    ])
-    try:
-        results = process_tokens(
-            str(path), mode="check", router_ip="192.168.8.1",
-        )
-        assert results[0].state == "ERROR"
-        assert results[0].action == "CHECK_FAILED"
-    finally:
-        path.unlink(missing_ok=True)
+    ], tmp_path / "tokens.txt")
+
+    results = process_tokens(
+        str(path), mode="check", router_ip="192.168.8.1", delay=0,
+    )
+    assert results[0].state == "ERROR"
+    assert results[0].action == "CHECK_FAILED"
 
 
 @patch("scripts.recover_tokens.check_token_state")
 @patch("scripts.recover_tokens.requests.post")
-def test_process_tokens_dry_run_mode(mock_post, mock_check):
-    """--dry-run mode: checks state but never submits."""
-    mock_check.return_value = {"unspent_count": 1, "spent_count": 0, "total_proofs": 1}
+def test_process_tokens_dry_run_mode(mock_post, mock_check, tmp_path):
+    """--dry-run mode: parse-only — no network calls, no fabricated state."""
     path = _make_token_file([
         {"timestamp": "2026-06-18T16:14:05Z",
          "mint_url": "https://nofee.testnut.cashu.space",
          "token": CASHU_B_TOKEN,
          "error": "rejected"},
-    ])
-    try:
-        results = process_tokens(
-            str(path), mode="dry-run", router_ip="192.168.8.1",
-        )
-        assert results[0].state == "UNSPENT"
-        assert results[0].action == "DRY_RUN"
-        mock_post.assert_not_called()
-    finally:
-        path.unlink(missing_ok=True)
+    ], tmp_path / "tokens.txt")
+
+    results = process_tokens(
+        str(path), mode="dry-run", router_ip="192.168.8.1", delay=0,
+    )
+    assert results[0].action == "DRY_RUN"
+    assert results[0].amount == 4
+    assert results[0].state == ""
+    mock_check.assert_not_called()
+    mock_post.assert_not_called()
 
 
 @patch("scripts.recover_tokens.check_token_state")
 @patch("scripts.recover_tokens.requests.post")
-def test_process_tokens_recover_mode_submit_failed(mock_post, mock_check):
+def test_process_tokens_recover_mode_submit_failed(mock_post, mock_check, tmp_path):
     """--recover mode: a submit exception gets its own SUBMIT_FAILED action,
     distinct from a successful submission."""
-    mock_check.return_value = {"unspent_count": 1, "spent_count": 0, "total_proofs": 1}
+    mock_check.return_value = {"unspent_count": 1, "spent_count": 0,
+                               "unknown_count": 0, "total_proofs": 1}
     mock_post.side_effect = ConnectionError("router unreachable")
     path = _make_token_file([
         {"timestamp": "2026-06-18T16:14:05Z",
          "mint_url": "https://nofee.testnut.cashu.space",
          "token": CASHU_B_TOKEN,
          "error": "rejected"},
-    ])
-    try:
-        results = process_tokens(
-            str(path), mode="recover", router_ip="192.168.8.1",
-        )
-        assert results[0].state == "UNSPENT"
-        assert results[0].action == ACTION_SUBMIT_FAILED
-        assert results[0].submit_status is None
-        assert "router unreachable" in results[0].error
-    finally:
-        path.unlink(missing_ok=True)
+    ], tmp_path / "tokens.txt")
+
+    results = process_tokens(
+        str(path), mode="recover", router_ip="192.168.8.1", delay=0,
+    )
+    assert results[0].state == "UNSPENT"
+    assert results[0].action == ACTION_SUBMIT_FAILED
+    assert results[0].submit_status is None
+    assert "router unreachable" in results[0].error
 
 
 # --------------------------------------------------------------------------- #
@@ -606,3 +674,16 @@ def test_summarize_results_counts():
     assert summary["spent"] == 1
     assert summary["errors"] == 1
     assert summary["submitted"] == 1
+    assert summary["unknown_proofs"] == 0
+
+
+def test_summarize_results_counts_unknown_proofs():
+    from scripts.recover_tokens import ResultRecord
+    results = [
+        ResultRecord(timestamp="t1", mint_url="m1", amount=4,
+                     state="SPENT", action="SKIPPED_SPENT", unknown_count=2),
+        ResultRecord(timestamp="t2", mint_url="m1", amount=4,
+                     state="UNSPENT", action="SUBMITTED", unknown_count=1),
+    ]
+    summary = summarize_results(results)
+    assert summary["unknown_proofs"] == 3

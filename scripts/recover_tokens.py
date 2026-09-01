@@ -23,7 +23,7 @@ import hashlib
 import json
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -64,11 +64,12 @@ class ResultRecord:
     timestamp: str
     mint_url: str
     amount: int = 0
-    state: str = ""        # UNSPENT / SPENT / ERROR
+    state: str = ""        # UNSPENT / SPENT / ERROR / "" (dry-run: not checked)
     action: str = ""       # CHECK_ONLY / SUBMITTED / SUBMIT_FAILED / SKIPPED_SPENT / CHECK_FAILED / DRY_RUN
     submit_status: int | None = None
     submit_body: str = ""
     error: str = ""
+    unknown_count: int = 0  # proofs the mint didn't resolve to UNSPENT/SPENT
 
 
 # --------------------------------------------------------------------------- #
@@ -102,9 +103,10 @@ def parse_token_file(filepath: str) -> list[TokenRecord]:
 # --------------------------------------------------------------------------- #
 
 def decode_cashu_token(token: str) -> dict:
-    """Decode a Cashu V3 (cashuB...) or V4 (cashuA...) token.
+    """Decode a Cashu token: V1/V3 (cashuA, base64url JSON) or V4
+    (cashuB, base64url CBOR).
 
-    Returns the decoded JSON structure with proofs/token/mint info.
+    Returns the decoded structure with proofs/token/mint info.
 
     Raises ValueError on unknown prefixes.
     """
@@ -128,7 +130,7 @@ def decode_cashu_token(token: str) -> dict:
     padded = raw + "=" * (4 - len(raw) % 4)
     data = base64.urlsafe_b64decode(padded)
 
-    # Try decompress (Cashu V4 uses gzip)
+    # Optional gzip (some V3 serializations are gzipped; V4 CBOR is not)
     try:
         data = zlib.decompress(data, wbits=zlib.MAX_WBITS | 16)
     except Exception:
@@ -169,14 +171,14 @@ def _normalize_proof(p: dict) -> dict:
 def extract_proofs(decoded: Any) -> list[dict]:
     """Extract proof list from decoded token structure.
 
-    Handles V3 CBOR format: {"t": [{"i": keyset_id, "p": [...]}], "m": mint_url, "u": "sat"}
-    Handles V3 JSON format: {"token": [{"mint": ..., "proofs": [...]}], "unit": "sat"}
-    Handles V4 JSON format: {"token": {"mint": ..., "proofs": [...]}, ...}
+    Handles V4 CBOR format (cashuB): {"t": [{"i": keyset_id, "m": mint_url,
+    "p": [...]}], "d": unit, "a": memo}
+    Handles V3 JSON format (cashuA): {"token": [{"mint": ..., "proofs": [...]}], "unit": "sat"}
+    Handles V4-JSON-embedded format: {"token": {"mint": ..., "proofs": [...]}, ...}
 
-    CBOR proofs use short keys (a, s, c, id); these are normalized to
-    long names (amount, secret, C, id) for consistent access.
+    CBOR proofs use short keys (a, s, c); these are normalized to
+    long names (amount, secret, C) for consistent access.
     """
-    # CBOR short-key format: {"t": [...], "m": ..., "u": ...}
     if isinstance(decoded, dict):
         if "t" in decoded:
             token_list = decoded["t"]
@@ -279,13 +281,17 @@ def build_checkstate_request(proofs: list[dict]) -> dict:
 def check_token_state(mint_url: str, token: str, timeout: int = 10) -> dict:
     """Check if token's proofs are spent at the mint (NUT-07 checkstate).
 
-    Returns dict with 'unspent_count', 'spent_count', 'total_proofs'.
+    Returns dict with 'unspent_count', 'spent_count', 'unknown_count'
+    (proofs the mint didn't resolve to UNSPENT/SPENT — e.g. UNKNOWN or
+    PENDING states; some mints also answer UNSPENT for completely
+    unknown Ys), and 'total_proofs'.
     """
     decoded = decode_cashu_token(token)
     proofs = extract_proofs(decoded)
 
     if not proofs:
-        return {"unspent_count": 0, "spent_count": 0, "total_proofs": 0, "error": "no proofs found"}
+        return {"unspent_count": 0, "spent_count": 0, "unknown_count": 0,
+                "total_proofs": 0, "error": "no proofs found"}
 
     payload = build_checkstate_request(proofs)
 
@@ -304,6 +310,7 @@ def check_token_state(mint_url: str, token: str, timeout: int = 10) -> dict:
     return {
         "unspent_count": unspent,
         "spent_count": spent,
+        "unknown_count": len(states) - unspent - spent,
         "total_proofs": len(states),
     }
 
@@ -347,7 +354,8 @@ def process_tokens(
     Modes:
       "check"   — check state only, no submission
       "recover" — check state, submit unspent tokens to router
-      "dry-run" — parse + show state, no network submission (state still checked)
+      "dry-run" — parse + show what would happen, no network calls at all
+                  (spend state is NOT checked)
 
     Returns a list of ResultRecord.
     """
@@ -370,11 +378,8 @@ def process_tokens(
         )
 
         if mode == "dry-run":
-            result.state = "UNSPENT" if amount > 0 else "SPENT"
             result.action = ACTION_DRY_RUN
             results.append(result)
-            if delay and len(results) < len(records):
-                time.sleep(delay)
             continue
 
         # Check state at mint
@@ -382,6 +387,7 @@ def process_tokens(
             raw_state = check_token_state(record.mint_url, record.token)
             unspent = raw_state.get("unspent_count", 0)
             result.state = "UNSPENT" if unspent > 0 else "SPENT"
+            result.unknown_count = raw_state.get("unknown_count", 0)
         except Exception as e:
             result.state = "ERROR"
             result.action = ACTION_CHECK_FAILED
@@ -422,6 +428,7 @@ def summarize_results(results: list[ResultRecord]) -> dict:
         "errors": 0,
         "submitted": 0,
         "skipped": 0,
+        "unknown_proofs": 0,
     }
     for r in results:
         if r.state == "UNSPENT":
@@ -434,6 +441,7 @@ def summarize_results(results: list[ResultRecord]) -> dict:
             summary["submitted"] += 1
         elif r.action == ACTION_SKIPPED_SPENT:
             summary["skipped"] += 1
+        summary["unknown_proofs"] += r.unknown_count
     return summary
 
 
@@ -467,8 +475,10 @@ def main():
         print(f"[{i+1}/{len(results)}] {r.timestamp}")
         print(f"  Mint: {r.mint_url}")
         print(f"  Amount: {r.amount} sats")
-        print(f"  State: {r.state}")
+        print(f"  State: {r.state or 'NOT_CHECKED'}")
         print(f"  Action: {r.action}")
+        if r.unknown_count:
+            print(f"  Unknown proofs: {r.unknown_count}")
         if r.submit_status is not None:
             print(f"  Submit: HTTP {r.submit_status}")
         if r.error:
@@ -484,11 +494,13 @@ def main():
     print(f"  Submitted:    {summary['submitted']}")
     print(f"  Skipped:      {summary['skipped']}")
     print(f"  Errors:       {summary['errors']}")
+    if summary["unknown_proofs"]:
+        print(f"  Unknown proofs (not UNSPENT/SPENT at mint): {summary['unknown_proofs']}")
     print("=" * 50)
 
     # Write detailed results
     results_path = Path(args.file).parent / "recovery-results.json"
-    Path(results_path).write_text(json.dumps(results, indent=2, default=str))
+    Path(results_path).write_text(json.dumps([asdict(r) for r in results], indent=2))
     print(f"Detailed results: {results_path}")
 
 
