@@ -7,6 +7,7 @@ coincurve>=18.0
 pyserial>=3.5
 PyYAML>=6.0
 requests
+cbor2>=5.2
 nostr-publish @ git+https://github.com/Amperstrand/nostr-publish-file-metadata-action.git@main
 httpx
 tollgate-lab @ git+https://github.com/Amperstrand/tollgate-lab.git@main
