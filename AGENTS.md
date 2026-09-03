@@ -1764,3 +1764,52 @@ same validation):**
   chains and NDS must re-insert its own.
 - Each failed submit burns the token (consume-before-gate): budget a fresh
   fakewallet token per attempt when debugging.
+
+### Nodogsplash 5.0.2 auth-mark bug: authenticated clients cannot open NEW connections (2026-09-03)
+
+Root-caused on the local virtual lab after the recovery-tool E2E kept
+passing payments (`kind:1022`, allotment granted) while the client could
+not reach the internet. This is the lab-side reason "authenticated but no
+internet" incidents reproduce here, distinct from the firewall-tollgate
+masquerade bug above.
+
+**The bug** (nodogsplash 5.0.2-r1 on OpenWrt 24.10): on `ndsctl auth`, NDS
+inserts a per-client uplink rule in `mangle ndsOUT` with
+`MARK --or-mark 0x30000` — setting BOTH the 0x10000 (preauth) and 0x20000
+(auth) bits — but the accept rule in `filter ndsNET` tests
+`--mark 0x20000/0x30000`, i.e. `(mark & 0x30000) == 0x20000`, which a
+0x30000-marked packet can never satisfy. New connections from an
+authenticated client fall through to `ndsAUT`'s catch-all
+`REJECT --reject-with icmp-port-unreachable`; only ESTABLISHED flows
+survive via the conntrack accept. Symptom: payment succeeds, `ndsctl
+status` shows `State: Authenticated`, client gets timeouts (or ICMP port
+unreachable on ping).
+
+**Workaround** (after each successful auth, per client IP/MAC):
+
+```bash
+iptables -t mangle -R ndsOUT 1 -s <client-ip> -m mac --mac-source <mac> \
+  -j MARK --or-mark 0x20000
+```
+
+Verified: with the corrected mark the client's new connections are
+accepted in `ndsNET`, forwarded through the host (ufw route allow +
+MASQUERADE), and internet works end-to-end (HTTP 200 via the captive
+portal). Why the lab never caught this: `run-local-tests` payment tests
+assert backend/session state only — no test opens a NEW connection from
+the client after payment (same blind spot as the masquerade bug).
+
+**Full validated lifecycle (2026-09-03, local virtual lab, cdk-mintd
+fakewallet):** mint token → `recover_tokens.py --check` UNSPENT → submit
+raw token from Debian client (portal fetch first! see above) → backend
+`kind:1022` gate-open, allotment granted → NDS mark workaround → client
+internet HTTP 200 → token SPENT at mint. Note when testing from the
+client: use IP-literal HTTP endpoints (9.9.9.9:80 does not serve HTTP —
+cost me a false negative) and set client DNS to the router
+(`nameserver 10.99.99.1`); the host's systemd-resolved listens on
+loopback only, so the cloud-init default `nameserver 10.99.99.2` resolves
+nothing in steady state (it exists only because the freshly-provisioned
+router's dnsmasq is unreliable during provisioning — see the fast-start
+notes above). Natural follow-up: fold the NDS mark workaround into the
+lab runner / `lib/router.py` as a `fix_nodogsplash_auth_marks()` helper
+in the spirit of `fix_nodogsplash_dhcp()`.
