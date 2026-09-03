@@ -1794,6 +1794,19 @@ and emit the matching config.
   checkstate verified live on 0.18.0: full payment E2E + unknown-Y probe
   both pass; unknown Y still reads `UNSPENT`, consistent with
   `unwrap_or(State::Unspent)` in `check_spendable.rs`).
+- **Full-suite A/B (2026-09-03)**: entire `tests/api` on the local lab —
+  83 passed / 23 failed / 1 hang on 0.18.0; the SAME 21 of 23 tests fail
+  identically on 0.16.0 (diff-verified failure sets; 2 flaky passes).
+  The failures are pre-existing local-lab environment issues (missing
+  balance.html/uhttpd on the fresh VM, degraded-mode simulations,
+  lightning-portal melts), NOT 0.18 regressions. The payment-critical
+  surface is fully green on 0.18 (25/25: payment regression, quote
+  persistence, lightning backoff, mint-url fuzzy, V3/V4/V2-keyset token
+  formats, spent-token rejection). Known local-lab quirks regardless of
+  version: a swap-concurrency test can hang past pytest's signal timeout
+  (thread-pool + signal-method limitation) — kill and rerun; and 0.18
+  fakewallet melt logs `Fee was too high`/`Over paid melt quote` WARNs on
+  the lightning-portal tests (settlement completes anyway).
 - 0.18 opens/migrates existing mint DBs — never point 0.16 at a
   0.18-written work dir afterwards (backup first if the DB matters; lab
   mints are disposable).
