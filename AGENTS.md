@@ -1732,14 +1732,20 @@ non-2xx router responses are recorded as `SUBMIT_FAILED` with the body.
   errors) that also failed the auto-Fund — those are still UNSPENT and
   resubmission works once the mint is back.
 
-**Unknown-Y checkstate gap (spec-level):** NUT-07 defines only
-`UNSPENT`/`PENDING`/`SPENT` — behavior for a Y the mint doesn't know is
-unspecified. Observed: `cdk-mintd 0.16.0` and `testnut.cashu.exchange`
-answer `UNSPENT` for completely fabricated Ys; mainline nutshell returns
-`UNKNOWN`. Consequence: at these mints an `UNSPENT` result never proves
-recoverability for wrong-mint tokens. The tool surfaces `unknown_count` /
-`unknown_proofs` so operators can distinguish. Spec clarification filed upstream:
-cashubtc/nuts#432.
+**Unknown-Y checkstate semantics (source-verified across implementations):**
+NUT-07 defines only `UNSPENT`/`PENDING`/`SPENT` and never says what a mint
+returns for a Y it does not know. Every reference implementation answers
+`UNSPENT`, deliberately: mainline nutshell
+(`cashu/mint/db/read.py:get_proofs_states` — absent Y → `unspent`), CDK
+(`crates/cdk/src/mint/check_spendable.rs` — `unwrap_or(State::Unspent)`,
+predating PR #756, still current at v0.18), and cashu-cf (ISSUE-048 in that
+repo). This is information-theoretic, not sloppiness: the mint never learns
+the Y of an unspent proof (blind signatures — it only sees Y at redemption),
+so "issued and unspent" is indistinguishable from "never issued".
+Consequence for recovery tooling: an `UNSPENT` result NEVER proves
+recoverability for wrong-mint tokens — the tool surfaces `unknown_count` /
+`unknown_proofs` so operators can distinguish. Spec clarification proposed
+upstream: cashubtc/nuts#432.
 
 **Virtual-lab payment-testing gotchas (ai-legion host, found during the
 same validation):**
