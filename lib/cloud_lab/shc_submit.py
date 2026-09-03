@@ -168,7 +168,11 @@ def _build_bootstrap_script(
     omitted: cleanup is handled by the on-VM systemd timer planted by
     ``shc_toolkit.selfdestruct`` (bounded 1-day key instead of the full
     account key), and SHC_API_KEY never reaches the box.
+
+    The CDK mint version is taken from the controller's ``CDK_VER`` env
+    (default 0.18.0); override with e.g. ``CDK_VER=0.17.6`` to pin older.
     """
+    cdk_ver = os.environ.get("CDK_VER", "0.18.0")
     overlay_step = (
         f"base64 -d /tmp/overlay.b64 | sudo tar xzf - -C {test_dir}\n"
         f'echo "[6] Applied suite overlay"'
@@ -331,7 +335,7 @@ sudo sed -i 's/    active: bool$/    active: bool = True/' "$MODELS"
 echo "[8/$N_STEPS] done"
 
 step 9 "Downloading CDK mints..."
-CDK_VER=0.16.0
+CDK_VER={cdk_ver}
 sudo mkdir -p /opt/cdk-mintd
 sudo pkill -f cdk-mintd 2>/dev/null || true
 sudo rm -f /opt/cdk-mintd/cdk-mintd /opt/cdk-mintd/cdk-cli

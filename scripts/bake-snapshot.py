@@ -9,6 +9,7 @@ and cleans up.
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import subprocess
 import sys
@@ -255,9 +256,10 @@ def cmd_bake(args: argparse.Namespace) -> int:
         # Step 6b: Download CDK mintd and cdk-cli binaries
         _step(7, total_steps, "Downloading CDK mint binaries")
         t0 = time.monotonic()
+        cdk_ver = os.environ.get("CDK_VER", "0.18.0")
         cdk_cmd = (
             "mkdir -p /opt/cdk-mintd && "
-            "CDK_VER=0.16.0 && "
+            f"CDK_VER={cdk_ver} && "
             "if [ -x /opt/cdk-mintd/cdk-mintd ]; then echo 'cdk-mintd cached'; else "
             "  wget -q -O /opt/cdk-mintd/cdk-mintd "
             "    https://github.com/cashubtc/cdk/releases/download/v${CDK_VER}/cdk-mintd-${CDK_VER}-x86_64 && "

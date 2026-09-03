@@ -1765,6 +1765,39 @@ same validation):**
 - Each failed submit burns the token (consume-before-gate): budget a fresh
   fakewallet token per attempt when debugging.
 
+### CDK mint version: variable, default 0.18.0 (upgraded from 0.16.0, 2026-09-03)
+
+The local fakewallet mint binary (`/opt/cdk-mintd/cdk-mintd`) was pinned to
+`CDK_VER=0.16.0` (2026-03-31) in `bake-snapshot.py` and `shc_submit.py`
+since the SHC lab was built. It is now a variable defaulting to **0.18.0**
+(v0.18.0 final, 2026-09-02); override with `CDK_VER=0.17.6` (last 0.17.x)
+for `bake-snapshot.py` / `cloud-lab.py submit`. `run-local-tests.sh` and
+`lib/cloud_lab/worker/mints.py` auto-detect the installed binary's version
+and emit the matching config.
+
+**v0.18 config-model changes that the scripts already handle:**
+
+- Config is stored authoritatively in the mint DB; a normal start ignores
+  `config.toml`. Fresh mints need `config validate` +
+  `config init --new-mint --file config.toml` (with `--work-dir`/`CDK_MINTD_WORK_DIR`)
+  before the first start. `--new-mint` rejects a DB that already has an
+  identity — that's why the scripts always start from a fresh work dir
+  (fakewallet value is disposable, mnemonic is fixed).
+- **Secrets must be references**: `mnemonic = "abandon …"` is rejected;
+  use `mnemonic = "env:CDK_MINTD_MNEMONIC"` and export the variable for
+  both `config init` and the daemon start.
+- `[ln] ln_backend = "fakewallet"` → `[payment_backend] backend = "fakewallet"`;
+  `CDK_MINTD_LN_*` → `CDK_MINTD_PAYMENT_BACKEND_*`.
+- `[fake_wallet]` still exists; keep `min_delay_time = 0` /
+  `max_delay_time = 0` — 0.18 defaults are 1–3s, which slows every mint.
+- NUT-04/07 HTTP behavior is unchanged for our flows (HttpMinter,
+  checkstate verified live on 0.18.0: full payment E2E + unknown-Y probe
+  both pass; unknown Y still reads `UNSPENT`, consistent with
+  `unwrap_or(State::Unspent)` in `check_spendable.rs`).
+- 0.18 opens/migrates existing mint DBs — never point 0.16 at a
+  0.18-written work dir afterwards (backup first if the DB matters; lab
+  mints are disposable).
+
 ### Nodogsplash 5.0.2 auth-mark bug: authenticated clients cannot open NEW connections (2026-09-03)
 
 Root-caused on the local virtual lab after the recovery-tool E2E kept

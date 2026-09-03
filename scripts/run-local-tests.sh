@@ -20,8 +20,15 @@ CDK_BIN="/opt/cdk-mintd/cdk-mintd"
 CDK_CONFIG="/tmp/cdk-mintd-local/config.toml"
 CDK_LOG="/tmp/cdk-mintd-local.log"
 CDK_PID_FILE="/tmp/cdk-mintd-local.pid"
+# Override with CDK_VER when a specific mint release is needed; the binaries
+# themselves are installed by scripts/bake-snapshot.py / shc bootstrap.
+CDK_VER="${CDK_VER:-0.18.0}"
 
 log() { echo "[run-local] $*"; }
+
+cdk_minor_version() {
+  "${CDK_BIN}" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1 | cut -d. -f2
+}
 
 start_mint() {
   if curl -sf "${MINT_URL}/v1/info" >/dev/null 2>&1; then
@@ -37,7 +44,44 @@ start_mint() {
 
   log "Starting CDK V2 mint on port ${MINT_PORT}..."
   mkdir -p /tmp/cdk-mintd-local
-  cat > /tmp/cdk-mintd-local/config.toml << EOF
+
+  local cdk_minor
+  cdk_minor=$(cdk_minor_version)
+  if [ "${cdk_minor:-0}" -ge 18 ]; then
+    # v0.18+: config lives in the mint DB ([ln] renamed to [payment_backend],
+    # config.toml ignored at start; `config init --new-mint` required pre-start).
+    # Fakewallet value is disposable and the mnemonic is fixed, so start from a
+    # fresh work dir every time — no legacy-DB migration edge cases.
+    rm -rf /tmp/cdk-mintd-local
+    mkdir -p /tmp/cdk-mintd-local
+    cat > /tmp/cdk-mintd-local/config.toml << EOF
+[info]
+url = "${MINT_URL}/"
+listen_host = "0.0.0.0"
+listen_port = ${MINT_PORT}
+mnemonic = "env:CDK_MINTD_MNEMONIC"
+
+[database]
+engine = "sqlite"
+
+[payment_backend]
+backend = "fakewallet"
+
+[fake_wallet]
+fee_percent = 0
+reserve_fee_min = 0
+min_delay_time = 0
+max_delay_time = 0
+EOF
+    export CDK_MINTD_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+    export CDK_MINTD_WORK_DIR=/tmp/cdk-mintd-local
+    "${CDK_BIN}" --work-dir /tmp/cdk-mintd-local config validate \
+      --file /tmp/cdk-mintd-local/config.toml || { log "ERROR: v0.18 config validation failed"; exit 1; }
+    "${CDK_BIN}" --work-dir /tmp/cdk-mintd-local config init --new-mint \
+      --file /tmp/cdk-mintd-local/config.toml || { log "ERROR: v0.18 config init failed"; exit 1; }
+    setsid bash -c "exec ${CDK_BIN} --work-dir /tmp/cdk-mintd-local" >"${CDK_LOG}" 2>&1 &
+  else
+    cat > /tmp/cdk-mintd-local/config.toml << EOF
 [info]
 url = "${MINT_URL}/"
 listen_host = "0.0.0.0"
@@ -57,8 +101,8 @@ reserve_fee_min = 0
 min_delay_time = 0
 max_delay_time = 0
 EOF
-
-  setsid bash -c "exec ${CDK_BIN} -c ${CDK_CONFIG}" >"${CDK_LOG}" 2>&1 &
+    setsid bash -c "exec ${CDK_BIN} -c ${CDK_CONFIG}" >"${CDK_LOG}" 2>&1 &
+  fi
   echo $! > "${CDK_PID_FILE}"
 
   for i in $(seq 1 15); do
@@ -100,19 +144,9 @@ restart_mint() {
     kill "$(cat ${CDK_PID_FILE})" 2>/dev/null || true
     sleep 1
   fi
-  pkill -f "cdk-mintd -c ${CDK_CONFIG}" 2>/dev/null || true
+  pkill -f "cdk-mintd.*cdk-mintd-local" 2>/dev/null || true
   sleep 1
-  setsid bash -c "exec ${CDK_BIN} -c ${CDK_CONFIG}" >"${CDK_LOG}" 2>&1 &
-  echo $! > "${CDK_PID_FILE}"
-  for i in $(seq 1 15); do
-    if curl -sf "${MINT_URL}/v1/info" >/dev/null 2>&1; then
-      verify_mint_fakewallet && { log "CDK mint restarted healthy"; return 0; }
-    fi
-    sleep 1
-  done
-  log "ERROR: CDK mint restart failed"
-  cat "${CDK_LOG}" | tail -10
-  return 1
+  start_mint
 }
 
 stop_mint() {
