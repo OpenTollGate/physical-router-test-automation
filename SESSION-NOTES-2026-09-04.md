@@ -101,7 +101,32 @@ workflow-file changes).
   next suite inherits the wedge: payments/degraded/mint tests cascade-fail
   (31 failed / 91 skipped vs clean 18/54). **Fix before any suite run:
   `/etc/init.d/nodogsplash restart && /etc/init.d/tollgate-wrt restart` if
-  `ndsctl json` doesn't return valid JSON.** run4 (clean) launched ~20:45.
+  `ndsctl json` doesn't return valid JSON.**
+- 🔬 **THE local-lab root cause found (live-probed, fixed in 90bf9c6)**:
+  the runner wipes the mint work-dir every start; the Go wallet keeps
+  stale mint state in wallet.db → discovery serves kind 21023
+  "no-reachable-mints" while the prober reports ok=true and curl from
+  router+host returns 200. `run-local-tests.sh` now restarts
+  tollgate-wrt after mint health (resync_backend_wallet()). ALSO: mint
+  health transitions ride the backend's 300s proactive poll — 180s test
+  budgets expired pre-probe (HEALTH_POLL_TIMEOUT→420, module timeout
+  →900). Result: merchant_provider alone went 1F/1P/4S → **3 PASSED**.
+  Remaining 3 failures = backend design (recovery after repeated block
+  cycles exceeds any budget; escalating backoff not reset on unblock) →
+  **filed Amperstrand/tollgate-module-basic-go#87**.
+- Suite numbers context: run1 (fresh boot) 105/18/54; run3 (NDS wedge
+  legacy) 127/31/91; run4 (wedge cleared, but wallet-staleness +
+  poll-cadence failures) 268 PASSED/40 FAILED/182 SKIPPED — the 40
+  cluster decomposes into: balance_page/uhttpd env cluster (5, known),
+  wallet-staleness degraded cluster (fixed by resync), poll-cadence
+  transitions (fixed by budgets), repeated-cycle recovery (issue #87),
+  and cdk-0.18 `UNIQUE constraint failed: blind_signature.blinded_message`
+  → "Duplicate outputs" swap rejections + "Token Already Spent" (mint log,
+  /tmp/cdk-mintd-local.log — concurrency collisions, knowledgebase#1
+  items 3/4 territory).
+- Runner gap noted: pytest stdout buffers under nohup → failure tracebacks
+  + `-rs` skip reasons lost on crash; next session add `--junitxml` +
+  `-rA` to the runner invocation.
 - tmb-rust ln-invoice test fixes above ALSO count here (CI env surfaced
   them; local rust-basic suite now 22 green).
 
@@ -120,8 +145,9 @@ Keyset-expiry + pacing-burst experiments still need a free lab window.
 |---|---|---|
 | tollgate-module-basic-rust | (merged) | main @ b3dcff0, CI green |
 | physical-router-test-automation | fix/rust-basic-ln-invoice-schema | ON amperstrand main (15eab12) |
-| physical-router-test-automation | fix/local-lab-green | be7a309+2dc1122, run4 in flight |
+| physical-router-test-automation | fix/local-lab-green | be7a309+2dc1122+90bf9c6, pushed |
 | tollgate-module-basic-go | fix/ci-apk-packaging | PR #86 green, artifacts on Blossom, awaiting review |
+| tollgate-module-basic-go | (issue) | #87 filed: prober/wallet split + poll-driven health + backoff |
 
 ## Resource state at handoff (to be updated after run4)
 
