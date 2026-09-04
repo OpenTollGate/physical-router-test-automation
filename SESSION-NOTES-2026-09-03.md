@@ -67,3 +67,30 @@ Disk 12G free (watch: 98%-full shared disk; cargo clean rs-ai again if
 needed). Lab STOPPED. No stray processes. prta has one unrelated local
 deletion (`results/dual-router-20260703-164218/report.md`) predating this
 session — review or restore.
+
+## Follow-up session addendum (CI results on today's pushes, 2026-09-03 ~22:00)
+
+- tmb-rust `779a3a2` (cdk 0.18): CI = 1 success + failures. FAILED jobs:
+  "Rust basic + PRTA tests" (the 213-green local suite fails in CI — env
+  difference, needs log triage) + package-apk jobs (x86_64/aarch64 apk).
+  PRIMARY suspect: apk targets cross-compile mipsel/aarch64 where the
+  dropped cdk-common fork (AtomicU64→AtomicUsize, MIPS-safe) may still be
+  REQUIRED — if the apk failure logs show AtomicU64 linker/compile errors
+  on 32-bit targets, re-add the [patch.crates-io] pin using a cdk-common
+  0.18 fork (recipe: Amperstrand/cdk-common@524e9c9 transformation applied
+  to the 0.18.0 crate source; 0.18 grep showed no AtomicU64 in src/, so
+  first check whether the failure is actually the atomics or something
+  else entirely).
+- tmbg fork: BOTH runs failed (my 67d4f6c AND the preceding #358) — the
+  package-apk failures PREDATE today's push. So: not caused by
+  local-build-ipk.sh; the fork's apk packaging pipeline is broken
+  independently. Still no fresh x86_64 artifacts → SHC full-suite run
+  remains blocked. Debug the apk packaging job first; ipk jobs may be fine.
+- Local clean full-suite run finished 77 passed / 26 failed / 1 hang —
+  matches the A/B (pre-existing env failures, not CDK).
+- NEXT SESSION PRIORITY QUEUE: (1) triage tmb-rust CI test-job + apk-job
+  logs, (2) triage tmbg fork apk packaging job, (3) SHC submit once
+  artifacts exist, (4) local-lab-green session (21 pre-existing failures +
+  NDS marks helper + merchant-provider test isolation), (5) knowledgebase#1
+  experiments (keyset-expiry vs backend, pacing burst), (6) conwrt lint
+  after vpn-revival lands.
