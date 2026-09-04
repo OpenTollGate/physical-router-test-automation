@@ -301,6 +301,51 @@ class Router:
         except Exception as e:
             log.warning(f"Could not fix nodogsplash DHCP: {e}")
 
+    def fix_nodogsplash_auth_marks(self, ip: str | None = None, mac: str | None = None):
+        """Repair NDS 5.0.2 auth-mark rules so authenticated clients can open
+        NEW connections.
+
+        On `ndsctl auth`, nodogsplash 5.0.2 inserts the per-client uplink rule
+        in `mangle ndsOUT` with `MARK --or-mark 0x30000`, setting BOTH the
+        0x10000 (preauth) and 0x20000 (auth) bits. The accept rule in
+        `filter ndsNET` tests `--mark 0x20000/0x30000`, i.e.
+        (mark & 0x30000) == 0x20000, which a 0x30000-marked packet can never
+        satisfy. Payments succeed and `ndsctl status` shows Authenticated,
+        but the client's new connections hit ndsAUT's catch-all REJECT; only
+        ESTABLISHED flows survive via conntrack.
+
+        Each matching ndsOUT rule is replaced (delete + re-insert at position
+        1) with a corrected `--or-mark 0x20000`. With no arguments, every
+        0x30000-marked rule currently in ndsOUT is repaired; pass `ip`/`mac`
+        to restrict the repair to one client.
+        """
+        try:
+            out = self.ssh("iptables -t mangle -S ndsOUT 2>/dev/null", timeout=10)
+            rules = [
+                line.strip()
+                for line in out.split("\n")
+                if line.strip().startswith("-A ndsOUT") and "0x30000" in line
+            ]
+            if ip or mac:
+                rules = [
+                    r for r in rules
+                    if (ip is None or f"-s {ip}" in r)
+                    and (mac is None or f"--mac-source {mac}" in r)
+                ]
+            if not rules:
+                log.debug("ndsOUT has no 0x30000-marked auth rules (fixed or NDS < 5.0.2)")
+                return
+            for rule in rules:
+                delete = rule.replace("-A ndsOUT", "-D ndsOUT", 1)
+                insert = (
+                    rule.replace("-A ndsOUT", "-I ndsOUT 1", 1)
+                    .replace("--or-mark 0x30000", "--or-mark 0x20000", 1)
+                )
+                self.ssh(f"{delete} && {insert}", timeout=10)
+            log.info("Corrected %d ndsOUT auth-mark rule(s) (0x30000 -> 0x20000)", len(rules))
+        except Exception as e:
+            log.warning(f"Could not fix nodogsplash auth marks: {e}")
+
     def disable_ipv6_on_lan(self):
         """Disable IPv6 on the LAN interface to prevent captive portal bypass.
 
