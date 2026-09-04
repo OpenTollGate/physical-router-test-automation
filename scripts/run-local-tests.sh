@@ -109,6 +109,7 @@ EOF
     if curl -sf "${MINT_URL}/v1/info" >/dev/null 2>&1; then
       log "CDK mint ready (PID $(cat ${CDK_PID_FILE}))"
       verify_mint_fakewallet || restart_mint
+      resync_backend_wallet
       return
     fi
     sleep 1
@@ -136,6 +137,20 @@ verify_mint_fakewallet() {
   done
   log "WARNING: mint FakeWallet did not settle a probe quote (state=${state:-none})"
   return 1
+}
+
+resync_backend_wallet() {
+  # The Go wallet caches mint state in /etc/tollgate/wallet.db. After the
+  # mint work-dir is wiped between suite runs (fresh DB, same keysets), the
+  # backend keeps serving kind 21023 "no-reachable-mints" even though its
+  # proactive prober reports ok=true and the mint answers 200 — payments
+  # still work but discovery/degraded tests cascade-fail. Restarting the
+  # backend makes the wallet re-register the mint (kind 10021 within ~10s).
+  # Root-caused 2026-09-04: probes ok=true + curl 200 + discovery 21023.
+  sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+    "root@${OPENWRT_IP}" "/etc/init.d/tollgate-wrt restart" >/dev/null 2>&1 || true
+  sleep 8
+  log "Backend wallet resync: tollgate-wrt restarted"
 }
 
 restart_mint() {
