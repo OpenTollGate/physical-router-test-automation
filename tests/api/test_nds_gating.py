@@ -41,13 +41,15 @@ def check_internet():
     is_redirected=True means NDS is intercepting (client NOT authed).
     is_redirected=False means client has direct internet access.
 
-    IP-literal probe on purpose: DNS-through-NDS is governed by the
-    users_to_router allow-list (only tcp/53 is allowed), a separate
-    concern from the mark-based forwarding this file verifies.
+    IP-literal probe, no redirect-following: 1.1.1.1's 301 targets a
+    hostname, and DNS-through-NDS is governed by the users_to_router
+    allow-list (only tcp/53) — a different concern from the mark-based
+    forwarding under test. redirect_url carries the portal marker when
+    NDS intercepts, or 1.1.1.1's own Location when direct.
     """
     out = ssh(
         CLIENT,
-        "curl -sL --max-time 5 -o /dev/null -w '%{url_effective}' http://1.1.1.1 2>/dev/null || echo BLOCKED",
+        "curl -s --max-time 5 -o /dev/null -w '%{redirect_url}' http://1.1.1.1 2>/dev/null || echo BLOCKED",
     )
     if "BLOCKED" in out:
         return True, "blocked entirely"
@@ -83,7 +85,16 @@ def deauth():
     mac, _ = get_nds_client()
     if mac:
         ssh(OPENWRT, f"ndsctl deauth {mac}")
-        time.sleep(2)
+        # NDS 5.0.2 removes the per-client ndsOUT mark rule asynchronously,
+        # on its own loop tick — until then the client keeps the auth bit.
+        for _ in range(10):
+            rules = ssh(
+                OPENWRT,
+                f"iptables -t mangle -S ndsOUT 2>/dev/null | grep '{mac}' | wc -l",
+            )
+            if rules.strip() == "0":
+                break
+            time.sleep(1)
     return mac
 
 
@@ -137,6 +148,12 @@ def test_nds_allows_after_payment():
     print(f"  NDS state: {mac} → {state}")
 
     redirected_after, detail_after = check_internet()
+    if redirected_after:
+        dbg = ssh(
+            OPENWRT,
+            "iptables -t mangle -S ndsOUT; iptables -S ndsNET | head -3",
+        )
+        print(f"  fw state at failure:\n{dbg}")
     assert not redirected_after, f"Post-payment: should have direct access, but: {detail_after}"
     print(f"  ✅ Direct access: {detail_after}")
 
