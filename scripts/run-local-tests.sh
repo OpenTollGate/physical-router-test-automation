@@ -252,6 +252,36 @@ run_tests() {
   python3 -m pytest ${test_files} -v --no-deploy --timeout=180 --timeout-method=signal --tb=short -rA ${client_default} --junitxml=/tmp/local-suite-junit.xml "$@"
 }
 
+nds_healthy() {
+  # Host-side timeout: the router has no `timeout` binary, and a wedged NDS
+  # hangs the ssh channel forever (ndsctl never returns).
+  local out
+  out=$(timeout 15 sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no \
+    -o ConnectTimeout=8 "root@${OPENWRT_IP}" "ndsctl json 2>/dev/null | head -c 200" 2>/dev/null) || return 1
+  case "${out}" in "{"*) return 0 ;; *) return 1 ;; esac
+}
+
+ensure_nds_healthy() {
+  # A wedged NDS (documented trap: SIGKILL'd runs leave ndsctl hanging while
+  # the portal stays up) poisons the whole suite — every container_nds_preflight
+  # times out as setup errors. Restart NDS + backend once; abort if still
+  # wedged instead of burning a 2h run on cascade errors.
+  if nds_healthy; then
+    return 0
+  fi
+  log "ndsctl unresponsive — restarting nodogsplash + tollgate-wrt"
+  timeout 30 sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no \
+    -o ConnectTimeout=8 "root@${OPENWRT_IP}" \
+    "/etc/init.d/nodogsplash restart; /etc/init.d/tollgate-wrt restart" >/dev/null 2>&1 || true
+  sleep 12
+  if nds_healthy; then
+    log "NDS recovered after restart"
+    return 0
+  fi
+  log "ERROR: NDS still unresponsive after restart — reboot the OpenWrt VM (virtual-lab.py stop-poc + start-poc) before rerunning"
+  exit 1
+}
+
 cleanup() {
   stop_mint
 }
@@ -261,4 +291,5 @@ log "=== TollGate Local Test Runner ==="
 check_vms
 start_mint
 configure_mint
+ensure_nds_healthy
 run_tests "$@"
