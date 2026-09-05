@@ -584,12 +584,16 @@ class Router:
         start = time.time()
         while time.time() - start < timeout:
             if self.get_nds_state(mac) == "Authenticated":
+                self.fix_nodogsplash_auth_marks()
                 return True
             # Fallback: if backend delayed auth didn't fire, trigger manually
             if time.time() - start > 10:
                 self.ssh(f"ndsctl auth {mac or self.phone_mac} 2>&1", timeout=5)
             time.sleep(1)
-        return self.get_nds_state(mac) == "Authenticated"
+        authed = self.get_nds_state(mac) == "Authenticated"
+        if authed:
+            self.fix_nodogsplash_auth_marks()
+        return authed
 
     def ensure_dhcp_lease(self, ip: str | None = None, mac: str | None = None) -> None:
         """Ensure the client IP/MAC pair exists in /tmp/dhcp.leases.

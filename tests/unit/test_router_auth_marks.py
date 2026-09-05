@@ -37,7 +37,6 @@ def test_rewrites_buggy_rule_to_0x20000_at_position_1():
     router = make_router(f"{CHAIN_DEF}\n{BUGGY}", calls)
 
     router.fix_nodogsplash_auth_marks()
-
     assert len(calls) == 2
     delete_cmd, insert_cmd = calls[1].split("&&")
     assert "-D ndsOUT -s 10.99.99.186/32" in delete_cmd
@@ -84,3 +83,21 @@ def test_ssh_failure_is_swallowed():
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+def test_wait_for_auth_repairs_marks_once_authed(monkeypatch):
+    router = Router("10.99.99.1", "10.99.99.186", "aa:bb:cc:dd:ee:ff", "test.lan")
+    monkeypatch.setattr(router, "get_nds_state", lambda mac=None: "Authenticated")
+    repaired = []
+    monkeypatch.setattr(router, "fix_nodogsplash_auth_marks", lambda: repaired.append(True))
+    assert router.wait_for_auth(timeout=1) is True
+    assert repaired == [True]
+
+
+def test_wait_for_auth_no_repair_when_not_authed(monkeypatch):
+    router = Router("10.99.99.1", "10.99.99.186", "aa:bb:cc:dd:ee:ff", "test.lan")
+    monkeypatch.setattr(router, "get_nds_state", lambda mac=None: "Preauthenticated")
+    repaired = []
+    monkeypatch.setattr(router, "fix_nodogsplash_auth_marks", lambda: repaired.append(True))
+    assert router.wait_for_auth(timeout=1) is False
+    assert repaired == []

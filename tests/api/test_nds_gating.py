@@ -17,6 +17,7 @@ Run:
 import json
 import os
 import subprocess
+import sys
 import time
 
 OPENWRT = "10.99.99.1"
@@ -60,6 +61,18 @@ def get_nds_client():
     except Exception:
         pass
     return None, "none"
+
+
+def fix_auth_marks():
+    """Repair NDS 5.0.2 auth marks so authed clients can open NEW connections.
+
+    ndsctl-auth inserts 0x30000 marks that the ndsNET accept rule
+    (0x20000/0x30000) can never match — a paid + Authenticated client stays
+    blocked. See Router.fix_nodogsplash_auth_marks (lib/router.py).
+    """
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+    from lib.router import Router
+    Router(OPENWRT, CLIENT, "de:54:4e:91:49:da", "").fix_nodogsplash_auth_marks()
 
 
 def deauth():
@@ -112,6 +125,8 @@ def test_nds_allows_after_payment():
     ok, pay_detail = pay()
     assert ok, f"Payment failed: {pay_detail}"
     print(f"  Payment: {pay_detail}")
+
+    fix_auth_marks()
 
     time.sleep(3)
     mac, state = get_nds_client()
