@@ -378,12 +378,21 @@ class Router:
                 log.debug("ndsOUT has no 0x30000-marked auth rules (fixed or NDS < 5.0.2)")
                 return
             for rule in rules:
+                if "--set-xmark 0x30000/0x30000" in rule:
+                    corrected = rule.replace(
+                        "--set-xmark 0x30000/0x30000", "--set-xmark 0x20000/0x30000", 1
+                    )
+                elif "--or-mark 0x30000" in rule:
+                    corrected = rule.replace("--or-mark 0x30000", "--or-mark 0x20000", 1)
+                else:
+                    # Unknown mark form — leave the rule untouched.
+                    continue
                 delete = rule.replace("-A ndsOUT", "-D ndsOUT", 1)
-                insert = (
-                    rule.replace("-A ndsOUT", "-I ndsOUT 1", 1)
-                    .replace("--or-mark 0x30000", "--or-mark 0x20000", 1)
+                insert = corrected.replace("-A ndsOUT", "-I ndsOUT 1", 1)
+                self.ssh(
+                    f"iptables -t mangle {delete} && iptables -t mangle {insert}",
+                    timeout=10,
                 )
-                self.ssh(f"{delete} && {insert}", timeout=10)
             log.info("Corrected %d ndsOUT auth-mark rule(s) (0x30000 -> 0x20000)", len(rules))
         except Exception as e:
             log.warning(f"Could not fix nodogsplash auth marks: {e}")

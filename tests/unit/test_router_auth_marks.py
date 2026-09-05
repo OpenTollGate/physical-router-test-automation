@@ -39,11 +39,38 @@ def test_rewrites_buggy_rule_to_0x20000_at_position_1():
     router.fix_nodogsplash_auth_marks()
     assert len(calls) == 2
     delete_cmd, insert_cmd = calls[1].split("&&")
+    assert "iptables -t mangle -D ndsOUT" in delete_cmd
     assert "-D ndsOUT -s 10.99.99.186/32" in delete_cmd
     assert "--or-mark 0x30000" in delete_cmd
+    assert "iptables -t mangle -I ndsOUT 1" in insert_cmd
     assert "-I ndsOUT 1" in insert_cmd
     assert "--or-mark 0x20000" in insert_cmd
     assert "0x30000" not in insert_cmd
+
+
+def test_rewrites_set_xmark_form():
+    calls = []
+    buggy = BUGGY.replace("--or-mark 0x30000", "--set-xmark 0x30000/0x30000")
+    router = make_router(f"{CHAIN_DEF}\n{buggy}", calls)
+
+    router.fix_nodogsplash_auth_marks()
+
+    assert len(calls) == 2
+    delete_cmd, insert_cmd = calls[1].split("&&")
+    assert "iptables -t mangle -D ndsOUT" in delete_cmd
+    assert "--set-xmark 0x30000/0x30000" in delete_cmd
+    assert "iptables -t mangle -I ndsOUT 1" in insert_cmd
+    assert "--set-xmark 0x20000/0x30000" in insert_cmd
+
+
+def test_skips_unknown_mark_form():
+    calls = []
+    weird = BUGGY.replace("--or-mark 0x30000", "--mark 0x30000")
+    router = make_router(f"{CHAIN_DEF}\n{weird}", calls)
+
+    router.fix_nodogsplash_auth_marks()
+
+    assert len(calls) == 1
 
 
 def test_noop_when_no_buggy_rules():
