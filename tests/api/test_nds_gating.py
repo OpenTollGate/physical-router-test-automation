@@ -43,7 +43,7 @@ def check_internet():
     """
     out = ssh(
         CLIENT,
-        "curl -sL --max-time 5 -o /dev/null -w '%{url_effective}' http://neverssl.com 2>/dev/null || echo BLOCKED",
+        "curl -sL --max-time 5 -o /dev/null -w '%{url_effective}' http://example.com 2>/dev/null || echo BLOCKED",
     )
     if "BLOCKED" in out:
         return True, "blocked entirely"
