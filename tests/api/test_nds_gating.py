@@ -40,10 +40,14 @@ def check_internet():
 
     is_redirected=True means NDS is intercepting (client NOT authed).
     is_redirected=False means client has direct internet access.
+
+    IP-literal probe on purpose: DNS-through-NDS is governed by the
+    users_to_router allow-list (only tcp/53 is allowed), a separate
+    concern from the mark-based forwarding this file verifies.
     """
     out = ssh(
         CLIENT,
-        "curl -sL --max-time 5 -o /dev/null -w '%{url_effective}' http://example.com 2>/dev/null || echo BLOCKED",
+        "curl -sL --max-time 5 -o /dev/null -w '%{url_effective}' http://1.1.1.1 2>/dev/null || echo BLOCKED",
     )
     if "BLOCKED" in out:
         return True, "blocked entirely"
