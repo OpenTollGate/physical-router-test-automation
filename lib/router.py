@@ -344,24 +344,35 @@ class Router:
             log.warning(f"Could not fix nodogsplash DHCP: {e}")
 
     def fix_nodogsplash_auth_marks(self, ip: str | None = None, mac: str | None = None):
-        """Repair NDS 5.0.2 auth-mark rules so authenticated clients can open
+        """Repair NDS 5.0.2 auth-mark gating so authenticated clients can open
         NEW connections.
 
-        On `ndsctl auth`, nodogsplash 5.0.2 inserts the per-client uplink rule
-        in `mangle ndsOUT` with `MARK --or-mark 0x30000`, setting BOTH the
-        0x10000 (preauth) and 0x20000 (auth) bits. The accept rule in
-        `filter ndsNET` tests `--mark 0x20000/0x30000`, i.e.
-        (mark & 0x30000) == 0x20000, which a 0x30000-marked packet can never
-        satisfy. Payments succeed and `ndsctl status` shows Authenticated,
-        but the client's new connections hit ndsAUT's catch-all REJECT; only
-        ESTABLISHED flows survive via conntrack.
+        On `ndsctl auth`, nodogsplash 5.0.2 marks the client's packets 0x30000
+        (both the 0x10000 preauth and 0x20000 auth bits), but the accept rule
+        in `filter ndsNET` tests `--mark 0x20000/0x30000` — a 0x30000-marked
+        packet can never match, so it falls through ndsAUT to the catch-all
+        REJECT. Payments succeed, `ndsctl status` shows Authenticated, and
+        the client still cannot open new connections.
 
-        Each matching ndsOUT rule is replaced (delete + re-insert at position
-        1) with a corrected `--or-mark 0x20000`. With no arguments, every
-        0x30000-marked rule currently in ndsOUT is repaired; pass `ip`/`mac`
-        to restrict the repair to one client.
+        Fix: insert one client-agnostic accept rule at the top of ndsNET
+        matching the auth bit (`--mark 0x20000/0x20000`). Rewriting the
+        per-client ndsOUT rule instead leaks: NDS cannot delete a rule it
+        did not insert, so `ndsctl deauth` leaves the corrected mark in
+        place and the client keeps internet access forever. With the
+        ndsNET rule, NDS's own insert/remove lifecycle is untouched — when
+        deauth removes the client's mark rule, packets lose the auth bit
+        and are gated again.
+
+        `ip`/`mac` are accepted for signature compatibility and restrict the
+        0x30000 bug detection to one client; the inserted accept rule is
+        always client-agnostic (it only matches packets NDS itself marked).
         """
+        accept_rule = "-m mark --mark 0x20000/0x20000 -j ACCEPT"
         try:
+            net = self.ssh("iptables -S ndsNET 2>/dev/null", timeout=10)
+            if accept_rule in net:
+                log.debug("ndsNET auth-bit accept rule already present")
+                return
             out = self.ssh("iptables -t mangle -S ndsOUT 2>/dev/null", timeout=10)
             rules = [
                 line.strip()
@@ -377,23 +388,11 @@ class Router:
             if not rules:
                 log.debug("ndsOUT has no 0x30000-marked auth rules (fixed or NDS < 5.0.2)")
                 return
-            for rule in rules:
-                if "--set-xmark 0x30000/0x30000" in rule:
-                    corrected = rule.replace(
-                        "--set-xmark 0x30000/0x30000", "--set-xmark 0x20000/0x30000", 1
-                    )
-                elif "--or-mark 0x30000" in rule:
-                    corrected = rule.replace("--or-mark 0x30000", "--or-mark 0x20000", 1)
-                else:
-                    # Unknown mark form — leave the rule untouched.
-                    continue
-                delete = rule.replace("-A ndsOUT", "-D ndsOUT", 1)
-                insert = corrected.replace("-A ndsOUT", "-I ndsOUT 1", 1)
-                self.ssh(
-                    f"iptables -t mangle {delete} && iptables -t mangle {insert}",
-                    timeout=10,
-                )
-            log.info("Corrected %d ndsOUT auth-mark rule(s) (0x30000 -> 0x20000)", len(rules))
+            self.ssh(f"iptables -I ndsNET 1 {accept_rule}", timeout=10)
+            log.info(
+                "Inserted ndsNET auth-bit accept rule (%d 0x30000-marked client rule(s) present)",
+                len(rules),
+            )
         except Exception as e:
             log.warning(f"Could not fix nodogsplash auth marks: {e}")
 
