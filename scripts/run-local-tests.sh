@@ -181,6 +181,12 @@ check_vms() {
   DEBIAN_VM_UP=false
   if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${DEBIAN_IP}" "echo ok" >/dev/null 2>&1; then
     DEBIAN_VM_UP=true
+    # The client's cloud-init default resolver (host systemd-resolved) only
+    # answers during provisioning; steady-state DNS must come from the router.
+    # Without this, internet-verification tests fail on DNS, not gating.
+    ssh -o StrictHostKeyChecking=no "root@${DEBIAN_IP}" \
+      "grep -q 'nameserver 10.99.99.1' /etc/resolv.conf 2>/dev/null || printf 'nameserver 10.99.99.1\n' > /etc/resolv.conf" \
+      2>/dev/null || log "WARNING: could not set client DNS to router"
   else
     log "WARNING: Debian VM not reachable at ${DEBIAN_IP} (payment tests will skip)"
   fi
