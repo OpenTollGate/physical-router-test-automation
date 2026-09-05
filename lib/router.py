@@ -207,12 +207,46 @@ class Router:
             env["SSHPASS"] = self._ssh_pw
         return env
 
+    def _kill_control_master(self):
+        """Tear down a (possibly wedged) SSH control master.
+
+        A hung ControlMaster blocks every multiplexed client until each
+        client's own timeout fires — one wedged master cascaded into 225
+        suite errors on 2026-09-05 (integ/local-lab-green run 1) while the
+        router itself stayed healthy and fresh connections worked.
+        ``ssh -O exit`` is the polite teardown; removing the socket covers
+        a master that ignores it.
+        """
+        try:
+            subprocess.run(
+                ["ssh", "-o", f"ControlPath={self._control_path}", "-O", "exit",
+                 f"root@{self.host}"],
+                capture_output=True, timeout=5,
+            )
+        except Exception:
+            pass
+        try:
+            os.remove(self._control_path)
+        except OSError:
+            pass
+        log.warning("SSH control master torn down after timeout; retrying on a fresh connection")
+
     def ssh(self, cmd: str, timeout: int = 30) -> str:
-        r = subprocess.run(
-            self._ssh_base + [cmd],
-            capture_output=True, text=True, timeout=timeout,
-            env=self._ssh_env(),
-        )
+        try:
+            r = subprocess.run(
+                self._ssh_base + [cmd],
+                capture_output=True, text=True, timeout=timeout,
+                env=self._ssh_env(),
+            )
+        except subprocess.TimeoutExpired:
+            # The client timed out, but the wedged ControlMaster is the
+            # culprit: kill it and retry once on a fresh connection.
+            self._kill_control_master()
+            r = subprocess.run(
+                self._ssh_base + [cmd],
+                capture_output=True, text=True, timeout=timeout,
+                env=self._ssh_env(),
+            )
         if r.returncode != 0:
             noise = re.compile(r"Warning:.*Permanently added[^\n]*")
             cleaned = noise.sub("", r.stderr).strip()
@@ -235,11 +269,19 @@ class Router:
         self.write_remote_text(remote_path, json.dumps(payload, indent=indent), timeout=timeout)
 
     def ssh_stdin(self, cmd: str, data: str, timeout: int = 15):
-        return subprocess.run(
-            self._ssh_base + [cmd],
-            input=data, capture_output=True, text=True, timeout=timeout,
-            env=self._ssh_env(),
-        )
+        try:
+            return subprocess.run(
+                self._ssh_base + [cmd],
+                input=data, capture_output=True, text=True, timeout=timeout,
+                env=self._ssh_env(),
+            )
+        except subprocess.TimeoutExpired:
+            self._kill_control_master()
+            return subprocess.run(
+                self._ssh_base + [cmd],
+                input=data, capture_output=True, text=True, timeout=timeout,
+                env=self._ssh_env(),
+            )
 
     def scp_to(self, local_path: str, remote_path: str, timeout: int = 120):
         ssh_opts = [
