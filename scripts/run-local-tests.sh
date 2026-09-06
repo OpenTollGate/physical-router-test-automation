@@ -351,6 +351,24 @@ junit_dir, out = sys.argv[1], sys.argv[2]
 suite = ET.Element("testsuites")
 for name in sorted(os.listdir(junit_dir)):
     if name.endswith(".timeout"):
+        # Killed before pytest could write junit — synthesize the failure here
+        # (paired markers whose .xml also exists are handled below).
+        base = name[: -len(".timeout")]
+        if os.path.exists(os.path.join(junit_dir, base)):
+            continue
+        target = open(os.path.join(junit_dir, name)).read().strip()
+        ts = ET.SubElement(suite, "testsuite", {
+            "name": f"{base} (runner timeout)",
+            "tests": "1", "failures": "1", "errors": "0", "time": "0",
+        })
+        tc = ET.SubElement(ts, "testcase", {
+            "classname": "runner", "name": f"{target} — hard budget exceeded",
+        })
+        ET.SubElement(tc, "failure", {
+            "message": f"pytest exceeded the per-file hard budget and was killed: {target}",
+        }).text = "Hung past LOCAL_TEST_FILE_BUDGET; the file must be rerun individually."
+        continue
+    if not name.endswith(".xml"):
         continue
     path = os.path.join(junit_dir, name)
     marker = path + ".timeout"
