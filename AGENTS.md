@@ -1896,9 +1896,15 @@ Environment traps found while verifying:
   reruns trip it (`kind 21023` / `rate limit exceeded`); absent in
   post-merge-12. Env knob `TOLLGATE_RATE_LIMIT_RPM` exists but is not
   persistable through the init script.
-- **reveal-seed API changed**: 400 `invalid mnemonic` on empty-body POST
-  (plus CORS hardening 415s busybox wget's form content-type — use curl with
-  `Content-Type: application/json`). pr193 tests feature-gate on it.
+- **reveal-seed is a derivation oracle now** (recontracted 2026-09-06, PRTA
+  #102): `POST /identity/reveal-seed` takes a raw 12-word BIP39 mnemonic as
+  the body (not JSON) and returns the identity derived from it — it no longer
+  reveals the stored seed. Empty/garbage body → 400 `invalid mnemonic`;
+  GET → 405; non-loopback → 403. Passwords are v2-format: six lowercase
+  BIP39 words hyphen-joined (the Nato-Nato-Nato-NN regexes are stale).
+  `tests/api/test_pr193_identity_endpoints.py` pins the full contract. (Also:
+  CORS hardening 415s busybox wget's form content-type on the payment root —
+  use curl with an explicit content-type.)
 - **OpenWrt deletes uci-defaults scripts after execution** — post-boot
   firmware legitimately has no `/etc/uci-defaults/99-tollgate-setup`; tests
   must presence-guard.
