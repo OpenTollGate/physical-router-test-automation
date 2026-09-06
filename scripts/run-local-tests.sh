@@ -33,6 +33,9 @@ cdk_minor_version() {
 start_mint() {
   if curl -sf "${MINT_URL}/v1/info" >/dev/null 2>&1; then
     log "CDK mint already running at ${MINT_URL}"
+    # Record the existing daemon's PID so the EXIT trap cleans it up too —
+    # a manually-started mint otherwise survives the runner.
+    pgrep -f 'cdk-mintd.*cdk-mintd-local' | head -1 > "${CDK_PID_FILE}" 2>/dev/null || true
     verify_mint_fakewallet || restart_mint
     return
   fi
@@ -168,8 +171,11 @@ stop_mint() {
   if [ -f "${CDK_PID_FILE}" ]; then
     kill "$(cat ${CDK_PID_FILE})" 2>/dev/null || true
     rm -f "${CDK_PID_FILE}"
-    log "CDK mint stopped"
   fi
+  # The pid file can hold a launcher-shell pid (pgrep matches the wrapper
+  # too); sweep by pattern so no mint daemon outlives the runner.
+  pkill -f 'cdk-mintd.*cdk-mintd-local' 2>/dev/null || true
+  log "CDK mint stopped"
 }
 
 check_vms() {
