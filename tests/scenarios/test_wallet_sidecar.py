@@ -197,11 +197,40 @@ class TestWalletSidecarSecurityParity:
     here as skipped acceptance cases so the gate is explicit.
     """
 
-    def test_reject_untrusted_mint_token(self, sidecar):
-        pytest.skip(
-            "T15: craft a token for a mint the wallet does not trust and assert "
-            "receive is rejected (untrusted-mint guard)"
+    def test_reject_token_from_other_mint(self, sidecar):
+        """A token for a mint the wallet is not configured for must not be
+        credited (no cross-mint value)."""
+        if not _mint_reachable(sidecar):
+            pytest.skip("router cannot reach the mint (no upstream?)")
+        if run_client(sidecar, "balance").get("balance", 0) < 20:
+            pytest.skip("wallet balance too low")
+
+        token = run_client(sidecar, "send", 10).get("token")
+        assert token, "send failed"
+
+        # Second daemon configured for a DIFFERENT mint; feed it the token.
+        sock2 = "/tmp/tollgate-wallet2.sock"
+        sidecar.ssh(f"rm -f {sock2}; rm -rf /tmp/tollgate-wallet2; mkdir -p /tmp/tollgate-wallet2")
+        sidecar.ssh(
+            f"{{ {RDAEMON} --socket {sock2} --work-dir /tmp/tollgate-wallet2 "
+            f"--mint https://mint.example.invalid </dev/null >/tmp/cdk-walletd2.log 2>&1 & }} ; echo started"
         )
+        for _ in range(20):
+            if "srwx" in sidecar.ssh(f"ls -l {sock2} 2>&1"):
+                break
+            time.sleep(1)
+
+        recv_out = sidecar.ssh(f"{RCLIENT} {sock2} receive {token}", timeout=60)
+        bal_out = sidecar.ssh(f"{RCLIENT} {sock2} balance", timeout=30)
+        sidecar.ssh("kill $(pidof cdk-walletd) 2>/dev/null || true")
+
+        def last_json(s):
+            lines = [ln for ln in s.strip().splitlines() if ln.strip().startswith("{")]
+            return json.loads(lines[-1]) if lines else {}
+
+        res = last_json(recv_out)
+        assert res.get("ok") is False, f"a foreign-mint token was accepted: {res}"
+        assert last_json(bal_out).get("balance", 0) == 0, "foreign-mint token changed the balance"
 
     def test_htlc_signature_enforcement(self, sidecar):
         pytest.skip(
