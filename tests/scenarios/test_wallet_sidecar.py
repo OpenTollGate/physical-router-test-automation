@@ -175,3 +175,42 @@ class TestWalletSidecarValueFlow:
         assert recv.get("ok") is True, recv
         # receive credits the post-swap-fee amount (<= face value).
         assert 0 < recv["received"] <= 10, recv
+
+    def test_double_spend_rejected(self, sidecar):
+        """A token must not be credited twice (double-spend rejection)."""
+        if not _mint_reachable(sidecar):
+            pytest.skip("router cannot reach the mint (no upstream?)")
+        if run_client(sidecar, "balance").get("balance", 0) < 20:
+            pytest.skip("wallet balance too low")
+        token = run_client(sidecar, "send", 10).get("token")
+        assert token, "send failed"
+        first = run_client(sidecar, "receive", token)
+        assert first.get("ok") is True, first
+        second = run_client(sidecar, "receive", token)
+        assert second.get("ok") is False, f"double-spend was accepted: {second}"
+
+
+class TestWalletSidecarSecurityParity:
+    """T15 parity: the gonuts fork carries two funds-safety fixes any replacement
+    must reproduce (research/wallet-migration experiments/parity). The exact fork
+    scenarios need a controllable mint and fault injection; they are recorded
+    here as skipped acceptance cases so the gate is explicit.
+    """
+
+    def test_reject_untrusted_mint_token(self, sidecar):
+        pytest.skip(
+            "T15: craft a token for a mint the wallet does not trust and assert "
+            "receive is rejected (untrusted-mint guard)"
+        )
+
+    def test_htlc_signature_enforcement(self, sidecar):
+        pytest.skip(
+            "T15: reproduce gonuts fork fix 296c7bf — a flow that bypasses HTLC "
+            "signature enforcement must be rejected by the candidate wallet"
+        )
+
+    def test_swap_proof_loss(self, sidecar):
+        pytest.skip(
+            "T15: reproduce gonuts fork fix 7dc430b — an interrupted swap must not "
+            "lose proofs (fault injection)"
+        )
