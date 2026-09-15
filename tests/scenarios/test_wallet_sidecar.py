@@ -136,7 +136,7 @@ class TestWalletSidecarValueFlow:
     def test_mint_quote_then_mint(self, sidecar):
         if not _mint_reachable(sidecar):
             pytest.skip("router cannot reach the mint (no upstream?)")
-        q = run_client(sidecar, "mintquote")
+        q = run_client(sidecar, "mintquote", 100)
         assert q.get("ok") is True, q
         assert q.get("has_request") is True
         assert q.get("quote_id"), "mint quote must carry an id for polling"
@@ -157,7 +157,7 @@ class TestWalletSidecarValueFlow:
         m = run_client(sidecar, "mint", q["quote_id"])
         assert m.get("ok") is True, m
         after = run_client(sidecar, "balance").get("balance", 0)
-        assert after >= before + 10, f"balance did not increase: {before} -> {after}"
+        assert after >= before + 100, f"balance did not increase: {before} -> {after}"
 
     def test_send_receive_roundtrip(self, sidecar):
         if not _mint_reachable(sidecar):
