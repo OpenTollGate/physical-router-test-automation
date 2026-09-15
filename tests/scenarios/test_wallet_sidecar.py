@@ -222,7 +222,7 @@ class TestWalletSidecarSecurityParity:
 
         recv_out = sidecar.ssh(f"{RCLIENT} {sock2} receive {token}", timeout=60)
         bal_out = sidecar.ssh(f"{RCLIENT} {sock2} balance", timeout=30)
-        sidecar.ssh("kill $(pidof cdk-walletd) 2>/dev/null || true")
+        sidecar.ssh("kill $(pgrep -f 'tollgate-wallet2[.]sock') 2>/dev/null || true")
 
         def last_json(s):
             lines = [ln for ln in s.strip().splitlines() if ln.strip().startswith("{")]
@@ -258,7 +258,7 @@ class TestWalletSidecarSecurityParity:
             time.sleep(1)
         out = sidecar.ssh(f"{RCLIENT} {sock2} receive {sent['token']}", timeout=60)
         bal = sidecar.ssh(f"{RCLIENT} {sock2} balance", timeout=30)
-        sidecar.ssh("kill $(pidof cdk-walletd) 2>/dev/null || true")
+        sidecar.ssh("kill $(pgrep -f 'tollgate-wallet-p2pk[.]sock') 2>/dev/null || true")
 
         def last_json(s):
             lines = [ln for ln in s.strip().splitlines() if ln.strip().startswith("{")]
