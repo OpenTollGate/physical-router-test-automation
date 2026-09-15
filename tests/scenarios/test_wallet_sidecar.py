@@ -232,11 +232,41 @@ class TestWalletSidecarSecurityParity:
         assert res.get("ok") is False, f"a foreign-mint token was accepted: {res}"
         assert last_json(bal_out).get("balance", 0) == 0, "foreign-mint token changed the balance"
 
-    def test_htlc_signature_enforcement(self, sidecar):
-        pytest.skip(
-            "T15: reproduce gonuts fork fix 296c7bf — a flow that bypasses HTLC "
-            "signature enforcement must be rejected by the candidate wallet"
+    def test_signature_enforcement_p2pk(self, sidecar):
+        """A P2PK-locked token (NUT-11) must not be spendable without the key —
+        the signature-enforcement property behind the gonuts fork fix 296c7bf."""
+        if not _mint_reachable(sidecar):
+            pytest.skip("router cannot reach the mint (no upstream?)")
+        if run_client(sidecar, "balance").get("balance", 0) < 20:
+            pytest.skip("wallet balance too low")
+
+        # Lock to the secp256k1 generator G (nobody here holds its key).
+        g_pubkey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+        sent = run_client(sidecar, "send_p2pk", 5, g_pubkey)
+        assert sent.get("ok") is True and sent.get("token"), f"send_p2pk failed: {sent}"
+
+        # A second wallet (same mint, different seed) must not be able to spend it.
+        sock2 = "/tmp/tollgate-wallet-p2pk.sock"
+        sidecar.ssh(f"rm -f {sock2}; rm -rf /tmp/tollgate-wallet-p2pk; mkdir -p /tmp/tollgate-wallet-p2pk")
+        sidecar.ssh(
+            f"{{ {RDAEMON} --socket {sock2} --work-dir /tmp/tollgate-wallet-p2pk "
+            f"--mint {MINT} </dev/null >/tmp/cdk-walletd-p2pk.log 2>&1 & }} ; echo started"
         )
+        for _ in range(20):
+            if "srwx" in sidecar.ssh(f"ls -l {sock2} 2>&1"):
+                break
+            time.sleep(1)
+        out = sidecar.ssh(f"{RCLIENT} {sock2} receive {sent['token']}", timeout=60)
+        bal = sidecar.ssh(f"{RCLIENT} {sock2} balance", timeout=30)
+        sidecar.ssh("kill $(pidof cdk-walletd) 2>/dev/null || true")
+
+        def last_json(s):
+            lines = [ln for ln in s.strip().splitlines() if ln.strip().startswith("{")]
+            return json.loads(lines[-1]) if lines else {}
+
+        res = last_json(out)
+        assert res.get("ok") is False, f"a P2PK-locked token was spent without the key: {res}"
+        assert last_json(bal).get("balance", 0) == 0, "locked token changed the receiver balance"
 
     def test_swap_proof_loss(self, sidecar):
         pytest.skip(
