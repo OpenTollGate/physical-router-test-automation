@@ -46,6 +46,7 @@ import { test, expect } from '@playwright/test';
 import { execSync, spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
+import { basename } from 'path';
 
 const ROUTER_IP = process.env.ROUTER_IP || '192.168.1.1';
 const ROUTER_PASSWORD = process.env.ROUTER_PASSWORD || '';
@@ -111,15 +112,6 @@ function upstreamCIDR() {
   return sshSafe(`ip -4 -o addr show dev ${iface} 2>/dev/null | awk '{print $4}' | head -1`);
 }
 
-function localCIDRs() {
-  const out = sshSafe(`ip -4 -o addr show 2>/dev/null | awk '{print $2" "$4}'`);
-  return out
-    .split('\n')
-    .map((l) => l.trim().split(/\s+/))
-    .filter(([iface, c]) => iface && c && c.includes('/') && iface !== 'lo' && !iface.startsWith('wg'))
-    .map(([iface, c]) => ({ iface, cidr: c }));
-}
-
 async function waitForWizard(page, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -138,13 +130,15 @@ test.beforeAll(async () => {
   if (!existsSync(INSTALLER_BIN)) {
     test.skip(true, `installer binary not found: ${INSTALLER_BIN}`);
   }
-  // Reuse an already-running wizard on the port when present.
+  // Always start from a FRESH wizard: a long-lived instance can wedge after
+  // several deploy jobs (observed: a later run never left the scan view, while
+  // a restart fixed it). Kill any listener for this port first.
   try {
-    execSync(`curl -sf -m 3 -o /dev/null ${WIZARD_URL}/`, { stdio: 'ignore' });
-    return;
+    execSync(`pkill -f '${basename(INSTALLER_BIN)}.*-port ${INSTALLER_PORT}'`, { stdio: 'ignore' });
   } catch {
-    /* not running */
+    /* nothing to kill */
   }
+  await new Promise((r) => setTimeout(r, 1000));
   const child = spawn(INSTALLER_BIN, ['-port', INSTALLER_PORT], {
     detached: true,
     stdio: 'ignore',
@@ -165,31 +159,37 @@ test('seeds DNS corruption + a subnet collision', async ({ page }) => {
   expect(lan, 'router LAN IP must be readable').toMatch(/^\d+\.\d+\.\d+\.\d+$/);
 
   const gw = sshSafe(`ip route show default 2>/dev/null | awk '{print $3}' | head -1`);
-  const upPrefix = gw.split('.').slice(0, 3).join('.');
-  const collidingPrivate = `${upPrefix}.1`;
+  const gwValid = /^\d+\.\d+\.\d+\.\d+$/.test(gw);
 
-  const script = [
+  const parts = [
     // (a) DNS corruption exactly as the old installer wrote it.
     `uci -q set dhcp.@dnsmasq[0].address='/tollgate.lan/${lan}/24'`,
     `uci -q set dhcp.lan.dhcp_option='6,${lan}/24'`,
     `sed -i '/tollgate\\.lan/d; /tollgate\\.local/d' /etc/hosts`,
     `echo '${lan}/24 tollgate.lan tollgate.local' >> /etc/hosts`,
-    // (b) force the derived private subnet into the upstream subnet.
-    `if uci -q get network.private >/dev/null 2>&1; then ` +
-      `uci -q set network.private.ipaddr='${collidingPrivate}'; ` +
-      `uci -q set network.private.netmask='255.255.255.0'; uci commit network; fi`,
-    `uci commit dhcp`,
-    `/etc/init.d/network reload 2>/dev/null`,
-    `/etc/init.d/dnsmasq restart 2>/dev/null`,
-    `sleep 2; true`,
-  ].join('; ');
-  sshSafe(script);
+  ];
+  // (b) force the derived private subnet into the upstream subnet — only when
+  // a real upstream gateway is known (otherwise the derived value would be
+  // garbage and could break the router's config).
+  if (gwValid) {
+    const collidingPrivate = `${gw.split('.').slice(0, 3).join('.')}.1`;
+    parts.push(
+      `if uci -q get network.private >/dev/null 2>&1; then ` +
+        `uci -q set network.private.ipaddr='${collidingPrivate}'; ` +
+        `uci -q set network.private.netmask='255.255.255.0'; uci commit network; ` +
+        `/sbin/ifup private 2>/dev/null; fi`,
+    );
+    console.log(`[seed] forced private  = ${collidingPrivate} (upstream ${gw})`);
+  } else {
+    console.warn('[seed] no usable default gateway — skipping the collision seed');
+  }
+  parts.push(`uci commit dhcp`, `/etc/init.d/dnsmasq restart 2>/dev/null`, `sleep 2; true`);
+  sshSafe(parts.join('; '));
 
   const addr = sshSafe(`uci -q get dhcp.@dnsmasq[0].address`);
   const hosts = sshSafe(`grep tollgate /etc/hosts`);
   console.log(`[seed] dnsmasq address = ${addr}`);
   console.log(`[seed] /etc/hosts      = ${hosts}`);
-  console.log(`[seed] forced private  = ${collidingPrivate} (upstream ${gw})`);
   expect(addr).toContain(`/tollgate.lan/${lan}/24`);
   expect(hosts).toContain(`${lan}/24`);
 });
@@ -212,15 +212,29 @@ test('wizard deploys and repairs the router', async ({ page }) => {
   await page.waitForTimeout(1500); // let the debounced identify run
 
   if (DEPLOY_MODE === 'sta') {
+    if (!UPSTREAM_SSID || !UPSTREAM_PASSWORD) {
+      throw new Error('sta mode requires UPSTREAM_SSID and UPSTREAM_PASSWORD');
+    }
     await page.click('#mode-sta');
-    await page.fill('#ssid', UPSTREAM_SSID);
+    // Switching to STA triggers a WiFi scan that populates the #ssid <select>.
+    await page.waitForFunction(
+      () => {
+        const s = document.getElementById('ssid');
+        return s && !s.disabled && [...s.options].some((o) => o.value);
+      },
+      null,
+      { timeout: 90000 },
+    );
+    await page.locator('#ssid').selectOption(UPSTREAM_SSID);
     await page.fill('#wifi-pass', UPSTREAM_PASSWORD);
   } else {
     await page.click('#mode-wan');
   }
   await page.fill('#lnurl', TOLLGATE_LNURL);
 
-  await expect(page.locator('#deploy-btn')).toBeEnabled({ timeout: 90000 });
+  // STA waits for the automatic upstream WiFi test to confirm before enabling
+  // Deploy, so allow generous time here.
+  await expect(page.locator('#deploy-btn')).toBeEnabled({ timeout: 180000 });
   await page.click('#deploy-btn');
 
   await page.waitForSelector('#deploy-view:not(.hidden)', { timeout: 20000 });
@@ -252,13 +266,16 @@ test('router ends healthy: dnsmasq fixed and no subnet collision', async () => {
 
   const lan = addr.split('/')[2]; // /tollgate.lan/<ip>
   const upstream = upstreamCIDR();
-  const upIface = upstreamIface();
   expect(upstream, 'router must have an upstream address').toMatch(/^\d+\.\d+\.\d+\.\d+\/\d+$/);
-  for (const { iface, cidr: c } of localCIDRs()) {
-    if (iface === upIface) continue; // the upstream interface itself
+  // Only the bridge networks the module serves (the LAN AP + the private AP)
+  // must stay out of the upstream subnet — the uplink interface itself
+  // (eth1 in WAN mode, phy*-sta* in STA mode) is expected to be in it.
+  for (const iface of ['br-lan', 'br-private']) {
+    const c = sshSafe(`ip -4 -o addr show dev ${iface} 2>/dev/null | awk '{print $4}' | head -1`);
+    if (!c || !c.includes('/')) continue;
     expect(
       overlaps(c, upstream),
-      `local ${iface} ${c} overlaps upstream ${upstream}`,
+      `${iface} ${c} overlaps upstream ${upstream}`,
     ).toBe(false);
   }
 
