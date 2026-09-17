@@ -1868,3 +1868,36 @@ router's dnsmasq is unreliable during provisioning — see the fast-start
 notes above). Natural follow-up: fold the NDS mark workaround into the
 lab runner / `lib/router.py` as a `fix_nodogsplash_auth_marks()` helper
 in the spirit of `fix_nodogsplash_dhcp()`.
+
+## Physical-router deployment kit (2026-09-17)
+
+`deployment-kit/` holds reproducible bring-up tooling for **physical** routers
+(complementing the cloud-lab mint recipe in `lib/cloud_lab/worker/mints.py`).
+
+- `deployment-kit/scripts/bring-up-fakewallet-mint.sh` — run cdk-mintd
+  `fakewallet` natively on a host the router can reach (auto-pays NUT-04 quotes).
+- `deployment-kit/scripts/configure-router-test-mint.sh` — backup the router's
+  `config.json`/`wallet.db` and repoint `accepted_mints` at the test mint
+  (`--restore` to revert).
+- `deployment-kit/scripts/hot-deploy-portal.sh` — build + hot-deploy the portal
+  SPA to `/etc/tollgate/tollgate-captive-portal-site` (`:2051`).
+- `deployment-kit/scripts/lightning-e2e.sh` — prime NDS, create an invoice,
+  poll until `access_granted=true`.
+- `deployment-kit/runbooks/mt6000-lightning-e2e.md` — the verified reproduction.
+- `tests/browser/tollgate-portal-lightning.spec.mjs` — hardware regression for
+  the Lightning capability probe + balance page.
+
+### Two root causes for the Lightning flow (both bit us)
+
+1. **Mint generation must match the backend wallet.** The Go backend's Cashu
+   wallet (`cashubtc/cdk-go 0.17.3`) rejects mint-quote signatures from
+   cdk-mintd `<0.17`; settlement fails with
+   `ensureLightningAccessGranted failed: Signature missing or invalid` even
+   though `POST /ln-invoice` succeeds. Use **cdk-mintd 0.18.0**.
+2. **Prime NDS before paying.** `ndsctl auth <mac>` only works for a MAC NDS
+   already tracks, so the client must fetch `http://<router>:2050/` (and the
+   `:2051` portal) first, or gate-open fails with
+   `failed to open gate: exit status 1` — after the token was already consumed.
+
+Also: `wallet.db` caches mint URLs, so delete it after changing mints; use
+`scp -O` for OpenWrt.
