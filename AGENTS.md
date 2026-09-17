@@ -1810,6 +1810,15 @@ and emit the matching config.
 - 0.18 opens/migrates existing mint DBs — never point 0.16 at a
   0.18-written work dir afterwards (backup first if the DB matters; lab
   mints are disposable).
+- **0.18.0-FINAL startup contract (2026-09-17, upgrade bench)**: the final
+  release dropped `--config`/`--config-file` as startup inputs entirely.
+  Config lives in the DB: run `cdk-mintd config validate --file config.toml`
+  + `cdk-mintd config init --new-mint --file config.toml` once (with
+  `CDK_MINTD_WORK_DIR` + `CDK_MINTD_MNEMONIC` exported, mnemonic as
+  `env:` ref), then start **bare** `cdk-mintd` — the daemon reads its config
+  from the work-dir DB. A dedicated second-mint setup script lives at
+  `scripts/upgrade-emulation/mint2-setup.sh` (fakewallet on 10.99.99.2:8383,
+  usable from the QEMU upgrade bench and the host).
 
 ### Nodogsplash 5.0.2 auth-mark bug: authenticated clients cannot open NEW connections (2026-09-03)
 
