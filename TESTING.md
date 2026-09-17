@@ -228,3 +228,62 @@ sudo nft insert rule inet vps_killswitch forward oifname "tg-poc-br" accept
 
 **Prevention**: The `virtual-lab.py start-poc` script should verify that
 10.99.99.1 is NOT assigned to any host interface before starting the VM.
+
+## QEMU Lab Complete Fix (2026-09-17, session 2)
+
+Three cascading issues prevented the QEMU OpenWrt 24.10 lab from working:
+
+### 1. IP Conflict (root cause of SSH failures)
+**Symptom**: SSH to 10.99.99.1 showed `SSH-2.0-OpenSSH_9.6p1` (host's banner, not dropbear)
+**Cause**: `10.99.99.1` was assigned to ai-legion's `wlan0` — all traffic to that IP
+went to the host's own SSH daemon. Keys/passwords were checked against the WRONG server.
+**Fix**: `sudo ip addr del 10.99.99.1/24 dev wlan0`
+
+### 2. No NAT / Forwarding (VM had no internet)
+**Symptom**: VM couldn't ping 8.8.8.8, DNS timed out, daemon entered degraded mode
+**Cause**: The `vps_killswitch` nftables table (from VPN setup) had `policy drop` on
+forwarding and no rules for the `tg-poc-br` bridge. No masquerade rule for the subnet.
+**Fix**:
+```bash
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo nft add rule ip nat POSTROUTING ip saddr 10.99.99.0/24 oifname "wlan0" counter masquerade
+sudo nft insert rule inet vps_killswitch forward iifname "tg-poc-br" accept
+sudo nft insert rule inet vps_killswitch forward oifname "tg-poc-br" accept
+```
+
+### 3. Port 2121 Blocked by NDS Pre-Auth + Stale Emulator
+**Symptom**: Daemon reachable from VM's localhost but `Connection refused` from ai-legion
+**Cause**: (a) Old Python emulator (`net4sats-captive-server.py`, PID 225679) was still
+listening on `0.0.0.0:2121` on ai-legion, intercepting connections. (b) NDS `ndsRTR`
+chain allowed :22 and :2050 but NOT :2121 (the tollgate daemon port).
+**Fix**:
+```bash
+# Kill stale emulator
+sudo kill -9 <emulator-pid>
+
+# Allow tollgate ports through NDS pre-auth
+iptables -I ndsRTR -p tcp --dport 2121 -j ACCEPT
+iptables -I ndsRTR -p tcp --dport 2051 -j ACCEPT
+
+# Make persistent
+uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 2121'
+uci add_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port 2051'
+uci commit nodogsplash
+```
+
+### Prevention (should be added to virtual-lab.py)
+1. **Preflight check**: verify 10.99.99.1 is NOT on any host interface before starting VM
+2. **NAT setup**: automatically add masquerade + killswitch rules when bridge is created
+3. **Port cleanup**: kill any process on :2121 before deploying the daemon
+4. **NDS config**: the tollgate uci-defaults should add :2121/:2051 to users_to_router
+   (this may already be in the .ipk's uci-defaults but didn't run on manual deploy)
+
+### Verified Working State
+- OpenWrt 24.10.1 ✅
+- tollgate-wrt daemon on :2121 (real Go code from main) ✅
+- NDS on :2050 ✅
+- Mint reachable (signut.cashu.exchange) ✅
+- SSH from ai-legion via key ✅
+- Internet from VM ✅
+- External HTTP to :2121 ✅
+- No iptables-nft workaround needed ✅
