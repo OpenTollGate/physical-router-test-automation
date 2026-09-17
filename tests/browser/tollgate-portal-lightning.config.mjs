@@ -26,7 +26,9 @@ export default defineConfig({
 		viewport: { width: 1280, height: 900 },
 		screenshot: 'on',
 		trace: 'retain-on-failure',
-		video: 'on',
+		// no video: Playwright's ffmpeg bundle is unavailable on some distros
+		// (e.g. ubuntu26.04), which would fail the run before any assertion
+		video: 'off',
 		ignoreHTTPSErrors: true,
 		actionTimeout: 20000,
 		navigationTimeout: 30000,
