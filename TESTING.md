@@ -201,3 +201,30 @@ Upgrade the AP VM from OpenWrt 22.03 to 25.12:
 
 This eliminates the NDS 22.03 workaround and aligns with the net4sats-feed's
 recommended version.
+
+## QEMU Lab Networking Fix (2026-09-17)
+
+**Root cause**: IP 10.99.99.1 was accidentally assigned to ai-legion's `wlan0`
+interface, causing all traffic to that IP to be answered by the host's own
+OpenSSH server instead of the QEMU OpenWrt VM's dropbear.
+
+**Symptom**: SSH to 10.99.99.1 showed `Permission denied (publickey)` with
+`SSH-2.0-OpenSSH_9.6p1` banner (the host's SSH, not dropbear). Keys and
+passwords were being checked against the WRONG server.
+
+**Fix** (on ai-legion):
+```bash
+# Remove the IP from wlan0
+sudo ip addr del 10.99.99.1/24 dev wlan0
+
+# Enable IP forwarding + NAT for the VM bridge
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo nft add rule ip nat POSTROUTING ip saddr 10.99.99.0/24 oifname "wlan0" counter masquerade
+
+# Allow forwarding through the vps_killswitch
+sudo nft insert rule inet vps_killswitch forward iifname "tg-poc-br" accept
+sudo nft insert rule inet vps_killswitch forward oifname "tg-poc-br" accept
+```
+
+**Prevention**: The `virtual-lab.py start-poc` script should verify that
+10.99.99.1 is NOT assigned to any host interface before starting the VM.
