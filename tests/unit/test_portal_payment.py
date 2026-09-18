@@ -6,6 +6,8 @@ router path is exercised by tests/scenarios/test_captive_portal_cashu_payment.py
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from lib.portal_payment import (
@@ -108,6 +110,70 @@ def test_parse_allotment_bytes_valid(text, expected):
 @pytest.mark.parametrize("text", ["", "no units here", "123", "MB only", "0 bytes"])
 def test_parse_allotment_bytes_no_match(text):
     assert parse_allotment_bytes(text) is None
+
+
+# --------------------------------------------------------------------------- #
+# SEL_CHECKMARK contract — must match what the portal actually serves
+# --------------------------------------------------------------------------- #
+
+
+def _class_star_matches(class_attr: str, selector: str) -> bool:
+    """Emulate the CSS ``[class*="..."]`` substring match without a browser.
+
+    Mirrors how Chromium evaluates the attribute selector that
+    :data:`SEL_CHECKMARK` uses: the quoted substring must appear anywhere in
+    the element's ``class`` attribute value.
+    """
+    match = re.fullmatch(r'\[class\*="(.+)"\]', selector)
+    assert match, f"expected a class*= attribute selector, got {selector!r}"
+    return match.group(1) in class_attr
+
+
+@pytest.mark.parametrize(
+    "class_attr",
+    [
+        # Shipped leaf classes, exactly as compiled into the served bundles
+        # (tollgate-captive-portal-site build: assets/index-DxBkINUB.js;
+        # net4sats-captive-portal-site build: assets/index-C9QTYeLH.js).
+        "tollgate-captive-portal-access-granted-checkmark",
+        "net4sats-captive-portal-access-granted-checkmark",
+    ],
+)
+def test_sel_checkmark_matches_served_checkmark_spelling(class_attr):
+    assert _class_star_matches(class_attr, SEL_CHECKMARK) is True
+
+
+def test_sel_checkmark_still_tolerates_the_short_legacy_spelling():
+    # Forward/backward tolerance: if a front-end ever emits the shorter class
+    # PR #87 assumed, the same selector keeps working.
+    assert _class_star_matches("tollgate-captive-portal-access-granted-check", SEL_CHECKMARK)
+
+
+def test_sel_checkmark_does_not_match_the_granted_container():
+    # The container div (class ``...-access-granted``) is not a success marker.
+    assert _class_star_matches("tollgate-captive-portal-access-granted", SEL_CHECKMARK) is False
+
+
+def test_sel_checkmark_is_not_an_exact_class_selector():
+    # Regression guard: an exact-class selector for the short spelling matched
+    # nothing on the served portal (the bug this card fixes).
+    assert SEL_CHECKMARK == '[class*="access-granted-check"]'
+
+
+def _exact_class_matches(class_attr: str, selector: str) -> bool:
+    """Emulate a plain CSS class selector (``.foo``): whole-token match."""
+    assert selector.startswith(".") and "[" not in selector
+    return selector[1:] in class_attr.split()
+
+
+def test_legacy_exact_class_selector_never_matched_the_served_markup():
+    # The pre-fix PR #87 selector required the whole token
+    # ``tollgate-captive-portal-access-granted-check``; the served element's
+    # class list holds ``...-checkmark`` instead, so it matched nothing. The
+    # new selector matches the same markup.
+    served = "tollgate-captive-portal-access-granted-checkmark"
+    assert _exact_class_matches(served, ".tollgate-captive-portal-access-granted-check") is False
+    assert _class_star_matches(served, SEL_CHECKMARK) is True
 
 
 # --------------------------------------------------------------------------- #
