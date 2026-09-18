@@ -2,7 +2,7 @@
  * tollgate-admin-hw.spec.mjs
  *
  * Hardware smoke for the admin board served on :8090 (TollGate brand at
- * /tollgate/). Logs in with the router root password via ubus session.login
+ * root path). Logs in with the router root password via ubus session.login
  * and asserts the dashboard shell renders.
  *
  * Requires the admin build + rpcd plugin installed (see deployment-kit and the
