@@ -1158,6 +1158,36 @@ deploy-ci:
 deploy-ci-rust:
 	bash scripts/deploy-rust-ci.sh
 
+# --- Feed RC verification (FreedomTechFeed/packages) ---
+#
+# Installs the feed-built tollgate-wrt release candidate over the router's own
+# package manager and asserts version + build identity + service health:
+#   * OpenWrt 24.x -> opkg -> .ipk    (FORMAT=ipk, default)
+#   * OpenWrt 25.x -> apk  -> .apk    (FORMAT=apk)
+# The artifact is downloaded from the feed release (sha256-verified) by
+# scripts/download-feed-release.sh. Requires the hardware lock.
+
+FEED_RELEASE_TAG ?= v0.6.0-alpha2-pre
+FEED_EXPECT_VERSION ?= 0.6.0_alpha2_pre-r1
+FEED_EXPECT_COMMIT ?= 089e876cb24fd2fa8bd9d36323edb71e347e825b
+FORMAT ?= ipk
+PYTHON ?= python3
+PYTEST_ARGS ?=
+
+.PHONY: verify-feed-rc
+verify-feed-rc: ## [hardware] Verify the FreedomTechFeed RC installs+works (.ipk on 24.x, .apk on 25.x)
+	$(call require_hardware_lock)
+	@test -n "$${TOLLGATE_SSH_HOST:-}" || { echo "$(RED)Set TOLLGATE_SSH_HOST (e.g. 192.168.1.1)$(RESET)"; exit 1; }
+	@test -n "$${TOLLGATE_SSH_PASSWORD:-}" || { echo "$(RED)Set TOLLGATE_SSH_PASSWORD$(RESET)"; exit 1; }
+	@ARCH="$${TOLLGATE_ROUTER_ARCH:-aarch64_cortex-a53}"; \
+	PKG=$$(bash scripts/download-feed-release.sh "$(FEED_RELEASE_TAG)" "$$ARCH" "$(FORMAT)"); \
+	echo "$(BOLD)=== verify-feed-rc: $$PKG (format=$(FORMAT), arch=$$ARCH) ===$(RESET)"; \
+	TOLLGATE_PACKAGE_PATH="$$PKG" \
+	TOLLGATE_ROUTER_ARCH="$$ARCH" \
+	FEED_EXPECT_VERSION="$(FEED_EXPECT_VERSION)" \
+	FEED_EXPECT_COMMIT="$(FEED_EXPECT_COMMIT)" \
+	$(PYTHON) -m pytest tests/scenarios/test_feed_package.py -v -s $(PYTEST_ARGS)
+
 # --- Setup (Python venv) ---
 
 setup-python:

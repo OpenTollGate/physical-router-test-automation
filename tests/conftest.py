@@ -23,6 +23,7 @@ from lib.clients.adb import ADBDevice
 from lib.clients.wifi import WiFi
 from lib.clients.desktop import MacWiFiClient, MacAdapter, LinuxWiFiClient, LinuxAdapter
 from lib.clients.container import ContainerClient
+from lib.clients.cuttlefish import CuttlefishClient
 from lib.constants import DEFAULT_STEP_SIZE_MS, NDS_PORTAL_PORT
 from lib.backend import BackendConfig, BACKEND_CHOICES_CLI
 
@@ -570,6 +571,12 @@ def adb(request, router):
         )
         request.session._tollgate_adb = client
         return client
+    if client == "cuttlefish":
+        cf_host = os.environ.get("TOLLGATE_CF_HOST", "ai-legion")
+        cf_serial = os.environ.get("TOLLGATE_CF_SERIAL", "0.0.0.0:6520")
+        cf = CuttlefishClient(host=cf_host, serial=cf_serial)
+        request.session._tollgate_adb = cf
+        return cf
     serial = os.environ.get("PHONE_SERIAL", "")
     pin = os.environ.get("PHONE_PIN", "")
     return ADBDevice(serial=serial, pin=pin)

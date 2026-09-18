@@ -565,7 +565,15 @@ The Go backend's wallet dependency is declared as `Origami74/gonuts-tollgate v0.
 
 **testnut.cashu.exchange returns a dummy string, not bolt11**:
 
-> **Note (July 2026)**: `testnut.cashu.space` is currently unreachable (HTTP 000 / connection refused). Only `testnut.cashu.exchange` is operational. The `.space` domain was previously the recommended fallback for valid bolt11 invoices but is no longer available.
+> **Note (updated 2026-09-18)**: both testnut domains are currently operational —
+> live-probed: `testnut.cashu.space` answers `/v1/info` (0.17s) AND settles
+> NUT-04 quotes (verified end-to-end with HttpMinter), as does
+> `testnut.cashu.exchange`. An earlier July 2026 note declared `.space` dead
+> (HTTP 000); that was transient or has been fixed. `.space` is the canonical
+> testnut domain (returns proper bolt11); `.exchange` remains the fallback and
+> still returns its dummy `dummy-mint-*` string instead of bolt11 (see below).
+> Mints flap — probe before blaming the router, and prefer a quote-settle probe
+> over `/v1/info` alone.
 
 ```
 testnut.cashu.exchange → "dummy-mint-4-46876457c0684c65d07e993705706d7b84c528aa75be1c722b8970f37585c7ba-exp1780177644"
@@ -1810,6 +1818,15 @@ and emit the matching config.
 - 0.18 opens/migrates existing mint DBs — never point 0.16 at a
   0.18-written work dir afterwards (backup first if the DB matters; lab
   mints are disposable).
+- **0.18.0-FINAL startup contract (2026-09-17, upgrade bench)**: the final
+  release dropped `--config`/`--config-file` as startup inputs entirely.
+  Config lives in the DB: run `cdk-mintd config validate --file config.toml`
+  + `cdk-mintd config init --new-mint --file config.toml` once (with
+  `CDK_MINTD_WORK_DIR` + `CDK_MINTD_MNEMONIC` exported, mnemonic as
+  `env:` ref), then start **bare** `cdk-mintd` — the daemon reads its config
+  from the work-dir DB. A dedicated second-mint setup script lives at
+  `scripts/upgrade-emulation/mint2-setup.sh` (fakewallet on 10.99.99.2:8383,
+  usable from the QEMU upgrade bench and the host).
 
 ### Nodogsplash 5.0.2 auth-mark bug: authenticated clients cannot open NEW connections (2026-09-03)
 
@@ -1911,3 +1928,35 @@ Environment traps found while verifying:
 - The documented signal-timeout hang class struck again
   (`test_startup_mint_recovery_latency` >10 min past `--timeout=180`); kill
   + rerun the remainder is still the only recourse.
+## Physical-router deployment kit (2026-09-17)
+
+`deployment-kit/` holds reproducible bring-up tooling for **physical** routers
+(complementing the cloud-lab mint recipe in `lib/cloud_lab/worker/mints.py`).
+
+- `deployment-kit/scripts/bring-up-fakewallet-mint.sh` — run cdk-mintd
+  `fakewallet` natively on a host the router can reach (auto-pays NUT-04 quotes).
+- `deployment-kit/scripts/configure-router-test-mint.sh` — backup the router's
+  `config.json`/`wallet.db` and repoint `accepted_mints` at the test mint
+  (`--restore` to revert).
+- `deployment-kit/scripts/hot-deploy-portal.sh` — build + hot-deploy the portal
+  SPA to `/etc/tollgate/tollgate-captive-portal-site` (`:2051`).
+- `deployment-kit/scripts/lightning-e2e.sh` — prime NDS, create an invoice,
+  poll until `access_granted=true`.
+- `deployment-kit/runbooks/mt6000-lightning-e2e.md` — the verified reproduction.
+- `tests/browser/tollgate-portal-lightning.spec.mjs` — hardware regression for
+  the Lightning capability probe + balance page.
+
+### Two root causes for the Lightning flow (both bit us)
+
+1. **Mint generation must match the backend wallet.** The Go backend's Cashu
+   wallet (`cashubtc/cdk-go 0.17.3`) rejects mint-quote signatures from
+   cdk-mintd `<0.17`; settlement fails with
+   `ensureLightningAccessGranted failed: Signature missing or invalid` even
+   though `POST /ln-invoice` succeeds. Use **cdk-mintd 0.18.0**.
+2. **Prime NDS before paying.** `ndsctl auth <mac>` only works for a MAC NDS
+   already tracks, so the client must fetch `http://<router>:2050/` (and the
+   `:2051` portal) first, or gate-open fails with
+   `failed to open gate: exit status 1` — after the token was already consumed.
+
+Also: `wallet.db` caches mint URLs, so delete it after changing mints; use
+`scp -O` for OpenWrt.
