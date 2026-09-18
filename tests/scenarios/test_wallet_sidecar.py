@@ -105,7 +105,14 @@ class TestWalletSidecarOffline:
         assert r["backend"] == "cdk"
         assert r["kind"] == "sidecar"
         assert r["licence"], "manifest must advertise a licence"
-        assert "aarch64_cortex-a53" in r["arches"]
+        # opkg print-architecture emits one "arch <name> <priority>" line per arch.
+        arches = sidecar.ssh(
+            "opkg print-architecture 2>/dev/null | awk '{print $2}'"
+        ).split()
+        assert arches, "could not determine router arch (opkg print-architecture empty)"
+        assert any(a in r["arches"] for a in arches), (
+            f"manifest arches {r.get('arches')} do not cover router arch(es) {arches}"
+        )
 
     def test_balance_is_integer(self, sidecar):
         r = run_client(sidecar, "balance")
