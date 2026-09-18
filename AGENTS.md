@@ -174,7 +174,7 @@ Both Go and Rust backends successfully process V3 token payments end-to-end:
 - Rust + V1 keyset (testnut): `Receive completed, amount=3, err=<nil>`
 - Both backends: token parsed, verified, payment processed, MAC authorized, session event returned
 
-V4 tokens (`cashuB` prefix, CBOR) previously failed because gonuts lacked short keyset ID resolution. **Fixed in gonuts-tollgate v0.8.0** ([PR #284](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/284) — pending merge). The fix adds `resolveShortKeysetIds()` which fetches active keysets from the mint and resolves 8-byte short IDs to full IDs before swap.
+V4 tokens (`cashuB` prefix, CBOR) previously failed because gonuts lacked short keyset ID resolution. **Fixed in gonuts-tollgate v0.8.0** (tollgate-module-basic-go PR [#286](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/286), merged 2026-07-24 — the fork-PR #284 was closed in its favor; fork PRs didn't trigger CI). The fix adds `resolveShortKeysetIds()` which fetches active keysets from the mint and resolves 8-byte short IDs to full IDs before swap. Main has since moved to gonuts-tollgate **v0.11.2**; V4+V1 re-verified end-to-end on 2026-09-18 against a v0.6.0-alpha2 build (portal checkmark + `Receive completed, amount=4` + 150 MiB granted).
 
 **Before the fix (gonuts < v0.8.0):** V4 tokens store keyset IDs as 8-byte short IDs (per NUT-00 V4 spec). gonuts's `TokenV4.Proofs()` converted the raw CBOR bytes directly to hex without resolving the short ID. When gonuts sent the 8-byte hex to the mint swap endpoint, the mint rejected it: `NUT02: ID length invalid, expected 8 bytes (short/v1) or 33 bytes (v2)`.
 
@@ -1533,7 +1533,7 @@ Tests are ordered by dependency and run sequentially. The full suite validates W
 
 ## Cashu Token Version Compatibility
 
-The Go backend (gonuts) supports V1, V3, and V4 Cashu tokens. V4 support was added in gonuts-tollgate v0.8.0 via `resolveShortKeysetIds()`. PR #284 bumps the dependency (pending merge).
+The Go backend (gonuts) supports V1, V3, and V4 Cashu tokens. V4 support was added in gonuts-tollgate v0.8.0 via `resolveShortKeysetIds()`, merged via tollgate-module-basic-go PR #286 (2026-07-24); main now pins v0.11.2.
 
 | Token Version | Prefix | Encoding | Go Backend | Notes |
 |---------------|--------|----------|------------|-------|
@@ -1541,7 +1541,9 @@ The Go backend (gonuts) supports V1, V3, and V4 Cashu tokens. V4 support was add
 | V3 | `cashuAeyJ` | Base64 JSON | **Accepted** | Current standard, tested with 378-char testnut tokens |
 | V4 | `cashuB` | Binary CBOR | **Accepted (gonuts v0.8.0+)** | `resolveShortKeysetIds()` resolves 8-byte short keyset IDs to full IDs before swap. V4+V1 verified e2e (`kind=1022, allotment=176160768`). V4+V2 keyset confirmed locally. Without v0.8.0: `NUT02: ID length invalid`. |
 
-Users with modern Cashu wallets (eNuts, cashu.me with latest CDK) producing V4 tokens are supported once PR #284 is merged.
+Users with modern Cashu wallets (eNuts, cashu.me with latest CDK) producing V4 tokens are supported on main and in v0.6.0-alpha2+. Field routers on v0.5.0 (released 2026-07-03, before the gonuts v0.8.0 merge) still reject V4.
+
+**Minting caveats (2026-09-18, gonuts-tollgate v0.11.2 wallet):** the Go wallet path cannot mint from either public testnut domain — `testnut.cashu.exchange` returns its dummy non-bolt11 string (zpay32 decode fails), and `testnut.cashu.space` now runs **V2 keysets**, which the gonuts wallet rejects at LoadWallet (`Derived id: '00…' but got '01…' from mint`). To mint V4+V1 tokens for tests use **cdk-cli** (on ai-legion-small at `/opt/cdk-mintd/cdk-cli`, 0.18.0): `cdk-cli mint https://testnut.cashu.exchange 11` then `cdk-cli send --mint-url https://testnut.cashu.exchange --amount 4 --include-fee` (V4 by default, `--v3` for V3). `scripts/mint-token` (also gonuts-based) only works against real-bolt11 V1-keyset mints, e.g. the local Nutshell V1 at `:8385`.
 
 Full findings and test matrix: `docs/portal-test-findings.md`.
 
