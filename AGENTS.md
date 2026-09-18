@@ -565,7 +565,15 @@ The Go backend's wallet dependency is declared as `Origami74/gonuts-tollgate v0.
 
 **testnut.cashu.exchange returns a dummy string, not bolt11**:
 
-> **Note (July 2026)**: `testnut.cashu.space` is currently unreachable (HTTP 000 / connection refused). Only `testnut.cashu.exchange` is operational. The `.space` domain was previously the recommended fallback for valid bolt11 invoices but is no longer available.
+> **Note (updated 2026-09-18)**: both testnut domains are currently operational —
+> live-probed: `testnut.cashu.space` answers `/v1/info` (0.17s) AND settles
+> NUT-04 quotes (verified end-to-end with HttpMinter), as does
+> `testnut.cashu.exchange`. An earlier July 2026 note declared `.space` dead
+> (HTTP 000); that was transient or has been fixed. `.space` is the canonical
+> testnut domain (returns proper bolt11); `.exchange` remains the fallback and
+> still returns its dummy `dummy-mint-*` string instead of bolt11 (see below).
+> Mints flap — probe before blaming the router, and prefer a quote-settle probe
+> over `/v1/info` alone.
 
 ```
 testnut.cashu.exchange → "dummy-mint-4-46876457c0684c65d07e993705706d7b84c528aa75be1c722b8970f37585c7ba-exp1780177644"
