@@ -632,6 +632,7 @@ def cmd_bake(args: argparse.Namespace) -> int:
             "ip link set mgmt-tap2 up 2>/dev/null || true; "
             "nohup qemu-system-x86_64 "
             "-enable-kvm -m 1536 -smp 2 -display none "
+            "-smbios type=1,serial=ds=nocloud "
             f"-drive file=overlays/debian-client.qcow2,format=qcow2,if=virtio "
             "-netdev tap,id=net0,ifname=tg-poc-tap2,script=no,downscript=no "
             f"-device virtio-net-pci,netdev=net0,mac=de:54:4e:91:49:da "
@@ -643,13 +644,13 @@ def cmd_bake(args: argparse.Namespace) -> int:
 
         print("  Waiting for Debian VM SSH...")
         deb_ssh_wait = (
-            f"for i in $(seq 1 30); do "
+            f"for i in $(seq 1 90); do "
             f"sshpass -p {shlex.quote(VIRT_LAB_PASSWORD)} ssh "
             "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
             f"-o ConnectTimeout=3 root@10.99.99.100 'echo DEB_SSH_OK' 2>/dev/null && break; "
             "sleep 2; done"
         )
-        r = _gcloud_ssh(vm_name, deb_ssh_wait, zone, project, timeout=120)
+        r = _gcloud_ssh(vm_name, deb_ssh_wait, zone, project, timeout=300)
 
         if "DEB_SSH_OK" in (r.stdout or ""):
             print("  Debian VM SSH ready, installing Playwright...")
