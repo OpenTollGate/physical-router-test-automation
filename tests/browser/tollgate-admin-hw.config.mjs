@@ -1,5 +1,5 @@
 /**
- * Playwright config for the admin-board hardware smoke (:8090, /tollgate/).
+ * Playwright config for the admin-board hardware smoke (:8090, root).
  *
  *   ROUTER_IP=192.168.1.1 ROUTER_PASSWORD=... npx playwright test \
  *     --config tests/browser/tollgate-admin-hw.config.mjs
@@ -19,7 +19,7 @@ export default defineConfig({
 		['html', { outputFolder: 'tollgate-admin-hw-report', open: 'never' }],
 	],
 	use: {
-		baseURL: `http://${ROUTER_IP}:8090/tollgate/`,
+		baseURL: `http://${ROUTER_IP}:8090/`,
 		headless: true,
 		channel: 'chrome',
 		viewport: { width: 1280, height: 900 },
