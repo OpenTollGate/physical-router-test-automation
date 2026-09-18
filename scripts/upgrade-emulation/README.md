@@ -11,8 +11,21 @@ physical #106 release-matrix runner with a reproducible QEMU venue.
 | `upgrade-bench.sh` | `up` / `provision` / `down` — bridge+tap+NAT, fresh overlay boot, serial provisioning |
 | `boot-vm.sh` | Boot the VM (daemonized qemu, serial+monitor sockets, pidfile) |
 | `serial.sh` | One-shot serial-console command runner |
+| `run-matrix.sh` | One-command full matrix: clean-install → fund → upgrade → assert → rollback → no-jq robustness → multi-mint |
 | `mint2-setup.sh` | Second Cashu mint (CDK 0.18.0 fakewallet @ `10.99.99.2:8383`) for multi-mint tests |
 | `repack-preinst-probe.py` | Repack a locally-built tar.gz-ipk with an env-logging preinst (opkg maintainer-script env forensics) |
+
+`run-matrix.sh` exits non-zero on any failure and drops evidence under
+`~/upgrade-test/results/<ts>/` (logs, payment responses, sha ledger). Current
+expected state against the pre-#407 artifact: **all checks pass except the
+no-jq robustness upgrade** — that one is the regression gate for
+Amperstrand/tollgate-module-basic-go#93 (preinst jq dependency); it flips to
+pass with an artifact built from upstream PR 407. Token minting goes through
+this repo's `HttpMinter` (venv at `~/upgrade-test/pyenv` with `coincurve`,
+repo `lib/` copied to `~/upgrade-test/prta`) — cdk-cli's interactive `send`
+is not deterministic across wallet states (shared `~/.cdk-cli` DB, unit-dual
+mint listings, and an 0.18 `Empty IN clause for placeholder: ys` send bug on
+fresh V2-keyset wallets).
 
 Host: **ai-legion-small** (not ai-legion — that box is reserved by the #110 soak
 while it runs). VM: OpenWrt 24.10.1 x86_64 from
