@@ -243,6 +243,31 @@ test-cashu-payment: ## Run cashu e2e payment Playwright test [playwright]
 	$(call migrated_target,test-cashu-payment)
 
 # ===========================================================================
+#  DEMO RECORDING (docs/demo-recording.md)
+# ===========================================================================
+
+.PHONY: record-demo-clientd
+
+TOLLGATE_LAB_COMPOSE ?= ../tollgate-module-basic-go/tests/cloud-lab/docker-compose.yml
+
+record-demo-clientd: ## Record clientd auto-top-up demo vs cloud lab → evidence/ [demo]
+	@test -f "$(TOLLGATE_LAB_COMPOSE)" || { echo "cloud-lab compose not found: $(TOLLGATE_LAB_COMPOSE) — set TOLLGATE_LAB_COMPOSE"; exit 1; }
+	@mkdir -p /tmp/tollgate-demo-wallet
+	docker compose -f $(TOLLGATE_LAB_COMPOSE) run --rm --entrypoint cdk-cli \
+		-v /tmp/tollgate-demo-wallet:/w client -w /w mint http://mint:8085 100
+	docker compose -f $(TOLLGATE_LAB_COMPOSE) restart upstream
+	python3 scripts/record-demo.py \
+		--clientd-cmd "docker compose -f $(TOLLGATE_LAB_COMPOSE) run --rm --entrypoint python3 \
+			-v /tmp/tollgate-demo-wallet:/w -v $(CURDIR)/scripts:/prta:ro client \
+			/prta/tollgate-clientd.py --gateway upstream --mac 02:00:00:00:00:20 \
+			--wallet cdk-cli --wallet-dir /w --steps 1 --renew-below 45s --interval 1" \
+		--log-source docker:tg-upstream \
+		--duration 45 \
+		--out evidence/$(shell date +%F)-clientd-demo \
+		--title "PRTA laptop lane — clientd auto-top-up (cloud lab)" \
+		--export-video --export-speed 2
+
+# ===========================================================================
 #  FULL TEST SUITES
 # ===========================================================================
 
