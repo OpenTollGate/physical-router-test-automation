@@ -65,18 +65,16 @@ pin_mint() {  # router accepted_mints := [url], restart, wait
 
 row() { echo "$*" | tee -a "$OUT/matrix.tsv"; }
 
-# name|version-family|port
+# name|version-family|port — latest + second-latest per implementation
 FLEET="
-ns-1650|nutshell|33165
-ns-1820|nutshell|33182
-ns-1910|nutshell|33191
-ns-2000|nutshell|33200
+ns-2100|nutshell|33210
 ns-2003|nutshell|33203
-cdk-0170|cdk|33370
-cdk-0176|cdk|33376
+cdk-0181|cdk|33381
 cdk-0180|cdk|33380
 "
-[ $# -ge 1 ] && FLEET=$(printf '%s\n' "$@")
+if [ $# -ge 1 ]; then
+  FLEET=$(printf '%s\n' "$FLEET" | grep -E "^($(IFS='|'; echo "$*"))\|")
+fi
 
 row "mint	family	port	health	settle	keyset	payment	degrade_secs	recover_secs	config_churn"
 
@@ -107,7 +105,6 @@ while IFS='|' read -r name family port; do
   # outage resilience + config churn
   cfg0=$(vm "sha256sum /etc/tollgate/config.json" </dev/null | cut -d' ' -f1)
   d0=$(vm "logread | grep -c 'downgrading to degraded mode'" </dev/null | tr -d '\r')
-  r0=$(vm "logread | grep -cE 'became reachable|upgrade from degraded'" </dev/null | tr -d '\r')
   d_secs=FAIL; r_secs=FAIL
   vm "iptables -I OUTPUT -d $HOST_IP -p tcp --dport $port -j DROP" </dev/null >/dev/null 2>&1
   t0=$(date +%s)
@@ -117,12 +114,15 @@ while IFS='|' read -r name family port; do
     [ "${d1:-0}" -gt "${d0:-0}" ] 2>/dev/null && { d_secs=$(( $(date +%s) - t0 )); break; }
     sleep 4
   done
+  # baseline AFTER degrade: "Reachable mint set changed" fires on BOTH
+  # transitions, so a pre-block baseline would match the degrade transition.
+  r0=$(vm "logread | grep -cE 'became reachable|upgrade from degraded|Reachable mint set changed'" </dev/null | tr -d '\r')
   vm "iptables -D OUTPUT -d $HOST_IP -p tcp --dport $port -j DROP" </dev/null >/dev/null 2>&1
   if [ "$d_secs" != "FAIL" ]; then
     t1=$(date +%s)
     # recovery needs 3 consecutive successful 5-min probes (~15+ min worst case)
     for _ in $(seq 1 120); do
-      r1=$(vm "logread | grep -cE 'became reachable|upgrade from degraded'" </dev/null | tr -d '\r')
+      r1=$(vm "logread | grep -cE 'became reachable|upgrade from degraded|Reachable mint set changed'" </dev/null | tr -d '\r')
       [ "${r1:-0}" -gt "${r0:-0}" ] 2>/dev/null && { r_secs=$(( $(date +%s) - t1 )); break; }
       sleep 8
     done

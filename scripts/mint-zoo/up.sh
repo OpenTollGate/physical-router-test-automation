@@ -10,17 +10,15 @@
 set -u
 CMD="${1:-up}"
 
-# name|image|port  (nutshell = env config; cdk = config.toml bind mount)
+# name|image|port  (nutshell = env config; cdk = version-dialect config)
+# Focus: latest + second-latest of each implementation — what real mints run
+# (user-directed 2026-09-19; the 0.16-0.19 history fleet was retired).
 NUTSHELL_FLEET="
-ns-1650|cashubtc/nutshell:0.16.5|33165
-ns-1820|cashubtc/nutshell:0.18.2|33182
-ns-1910|cashubtc/nutshell:0.19.1|33191
-ns-2000|cashubtc/nutshell:0.20.0|33200
+ns-2100|cashubtc/nutshell:0.21.0|33210
 ns-2003|cashubtc/nutshell:0.20.3|33203
 "
 CDK_FLEET="
-cdk-0170|cashubtc/mintd:0.17.0|33370
-cdk-0176|cashubtc/mintd:0.17.6|33376
+cdk-0181|cashubtc/mintd:0.18.1|33381
 cdk-0180|cashubtc/mintd:0.18.0|33380
 "
 ZOO_DIR="$HOME/mint-zoo"
@@ -53,7 +51,7 @@ up_cdk() {
   # was renamed to [payment_backend] backend in 0.18).
   local backend_section mnemonic_line=""
   case "$name" in
-    cdk-0180)
+    cdk-018*)
       backend_section='[payment_backend]
 backend = "fakewallet"'
       # 0.18-final: secrets must be in-config env: references (plaintext rejected)
@@ -62,7 +60,7 @@ backend = "fakewallet"'
   esac
   docker rm -f "zoo-$name" >/dev/null 2>&1 || true
   case "$name" in
-    cdk-0180)
+    cdk-018*)
       # 0.18-final: config lives in the DB — one-shot init, then bare start.
       cat > "$dir/config.toml" << EOF
 [info]

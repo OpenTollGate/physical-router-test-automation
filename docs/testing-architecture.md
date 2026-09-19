@@ -61,13 +61,15 @@ E2E (HttpMinter token, raw-body POST, kind:1022), outage resilience (block
 mint → degraded tick → unblock → recovery; targets tmbg #400/#401), and
 config-churn check across the outage cycle (targets #402).
 
-First-pass findings (2026-09-19, v0.6.0-alpha2 @373770a): payments succeed
-against nutshell V1-keyset mints; V2-keyset mints (nutshell 0.20.x, all cdk)
-are rejected by the Go backend — consistent with the known V2-keyset gap
-**except** it now includes nutshell-0.20 V2 (previously only cdk V2 was
-known-open). NDS gate races contaminate consecutive payments unless the client
-is deauthenticated first (consume-before-gate burns tokens — the matrix now
-deauths per payment).
+First clean matrix (2026-09-19, v0.6.0-alpha2 @373770a, per-payment deauth):
+payments succeed across **all focused mints** — nutshell 0.21.0 / 0.20.3 and
+cdk 0.18.1 / 0.18.0 (all V2-keyset), plus V1-keyset nutshell 0.16.5 in the
+retired history fleet. Degrade timing is textbook (~310s = one 5-min probe
+tick + probe timeout); no config churn across outage cycles. An earlier
+"V2-keyset rejection" read was NDS-race contamination (see below). The
+recovery-timing metric needs the post-degrade-baseline pattern (the recovery
+log line "Reachable mint set changed" fires on both transitions — the same
+patterns made the 24h soak's flap rows report recover=FAIL spuriously).
 
 ## Evidence pipeline
 
