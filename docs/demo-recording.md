@@ -86,3 +86,6 @@ subnet, or stop the other one first.
 shape, and player rendering — no docker, no hardware. Recorded evidence
 from the cloud lab lives in `evidence/2026-09-19-clientd-demo-player/`
 (2 payments incl. threshold renewal, 194 router log lines, 27s export).
+Media files (`*.webm`, `*.png`) are gitignored by repo policy — only
+`events.json` and the self-contained `player.html` are committed;
+re-record or `--export-video` to regenerate media locally.
