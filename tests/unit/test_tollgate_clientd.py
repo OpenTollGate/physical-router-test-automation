@@ -59,4 +59,4 @@ def test_module_version_recorded_in_provenance():
     docstring = SCRIPT.read_text().splitlines()
     header = "\n".join(docstring[:6])
     assert "tollgate-module-basic-go" in header
-    assert "19b76ec" in header
+    assert "9e89ab5" in header

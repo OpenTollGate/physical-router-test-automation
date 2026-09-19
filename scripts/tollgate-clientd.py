@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """tollgate-clientd — keep a laptop alive behind a TollGate.
 
-Vendored from OpenTollGate/tollgate-module-basic-go@19b76ec
+Vendored from OpenTollGate/tollgate-module-basic-go@9e89ab5
 (scripts/tollgate-clientd.py). The module repo is the source of truth —
 re-vendor there on updates. Local regression lane:
 tests/unit/test_tollgate_clientd.py (runs --selftest; no hardware).
@@ -14,7 +14,8 @@ current allotment runs out.
 
 Wallets supported (auto-detected, or forced with --wallet):
   * cdk-cli   — https://github.com/cashubtc/cdk (crates/cdk-cli)
-  * nutshell  — `pip install cashu` (https://github.com/cashubtc/nutshell)
+  * nutshell  — `pip install cashu "marshmallow<4"` — the pin is required:
+                marshmallow 4.x breaks cashu's environs dependency today
 
 Wire protocol spoken (all against the TollGate gateway, port 2121):
   GET  /            -> kind 10021 advertisement (metric, step_size, price_per_step)
