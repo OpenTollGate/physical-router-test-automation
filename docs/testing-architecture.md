@@ -64,7 +64,16 @@ config-churn check across the outage cycle (targets #402).
 First clean matrix (2026-09-19, v0.6.0-alpha2 @373770a, per-payment deauth):
 payments succeed across **all focused mints** — nutshell 0.21.0 / 0.20.3 and
 cdk 0.18.1 / 0.18.0 (all V2-keyset), plus V1-keyset nutshell 0.16.5 in the
-retired history fleet. Degrade timing is textbook (~310s = one 5-min probe
+retired history fleet, plus minibits-class cdk 0.17.6.
+
+**Token-format verification (2026-09-19, clean-room: router pinned to the
+token's mint + per-payment deauth + full-response capture): V4 (cashuB)
+tokens pay on v0.6.0-alpha2 AND main (a6e01bd) against V2-keyset nutshell
+0.21.0 AND cdk 0.17.6 — kind:1022 in all four cells.** V4+V2 is VERIFIED
+WORKING (the AGENTS "E2E pending" caveat is resolved). Two earlier
+"V4 broken" readings this session were test-rail contamination (NDS
+already-authenticated race, then a stale mint pin) — the clean-room
+discipline is now baked into the matrix and must stay. Degrade timing is textbook (~310s = one 5-min probe
 tick + probe timeout); no config churn across outage cycles. An earlier
 "V2-keyset rejection" read was NDS-race contamination (see below). The
 recovery-timing metric needs the post-degrade-baseline pattern (the recovery
