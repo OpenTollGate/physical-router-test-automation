@@ -168,6 +168,16 @@ class TestLogSourceCommand:
         assert raised
 
 
+class TestTerminalNoiseFilter:
+    def test_compose_status_lines_dropped(self):
+        entries = [(1.0, " Container prta-mint Running "),
+                   (1.1, " Container cloud-lab-client-run-abc Created "),
+                   (1.2, "[TollGate upstream] no session — needs payment"),
+                   (1.3, "  -> paid 1 sats (allotment now 60000)")]
+        kept = rd.filter_terminal(entries)
+        assert kept == entries[2:]
+
+
 def test_module_importable_via_dash_name():
     # sanity for the importlib load used by other lanes
     assert hasattr(rd, "run_recording")

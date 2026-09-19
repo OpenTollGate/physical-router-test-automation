@@ -179,6 +179,11 @@ def default_clientd_cmd(args) -> str:
     return " ".join(shlex.quote(c) for c in cmd)
 
 
+def filter_terminal(entries):
+    """Drop docker-compose status noise from the terminal stream."""
+    return [e for e in entries if not COMPOSE_NOISE.match(e[1])]
+
+
 def build_manifest(title: str, start_epoch: float, terminal, router, status,
                    events) -> dict:
     def rel(entries):
@@ -315,7 +320,8 @@ def run_recording(args) -> int:
         router_entries = [(ts, line) for ts, line in router_entries
                           if ts >= start_epoch - 1]
 
-    manifest = build_manifest(args.title, start_epoch, term_collector.entries,
+    manifest = build_manifest(args.title, start_epoch,
+                              filter_terminal(term_collector.entries),
                               router_entries, status, events)
     (out / "events.json").write_text(json.dumps(manifest, indent=1))
 

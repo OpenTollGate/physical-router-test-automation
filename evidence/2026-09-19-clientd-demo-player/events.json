@@ -5,46 +5,6 @@
  "streams": {
   "terminal": [
    {
-    "t": 0.449,
-    "line": " Container prta-mint Running "
-   },
-   {
-    "t": 0.449,
-    "line": " Container prta-upstream Running "
-   },
-   {
-    "t": 0.489,
-    "line": " Container prta-mint Waiting "
-   },
-   {
-    "t": 0.993,
-    "line": " Container prta-mint Healthy "
-   },
-   {
-    "t": 1.108,
-    "line": " Container prta-mint Waiting "
-   },
-   {
-    "t": 1.108,
-    "line": " Container prta-upstream Waiting "
-   },
-   {
-    "t": 1.612,
-    "line": " Container prta-upstream Healthy "
-   },
-   {
-    "t": 1.612,
-    "line": " Container prta-mint Healthy "
-   },
-   {
-    "t": 1.612,
-    "line": " Container prta-demo-lab-client-run-508dc270e285 Creating "
-   },
-   {
-    "t": 1.799,
-    "line": " Container prta-demo-lab-client-run-508dc270e285 Created "
-   },
-   {
     "t": 2.251,
     "line": "TollGate upstream | milliseconds | 1 step(s) = 1 sats via cdk-cli @ http://mint:8085"
    },
