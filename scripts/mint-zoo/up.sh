@@ -20,6 +20,7 @@ ns-2003|cashubtc/nutshell:0.20.3|33203
 CDK_FLEET="
 cdk-0181|cashubtc/mintd:0.18.1|33381
 cdk-0180|cashubtc/mintd:0.18.0|33380
+cdk-0176|cashubtc/mintd:0.17.6|33376
 "
 ZOO_DIR="$HOME/mint-zoo"
 HOST_IP=10.99.99.2

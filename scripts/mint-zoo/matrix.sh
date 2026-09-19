@@ -71,6 +71,7 @@ ns-2100|nutshell|33210
 ns-2003|nutshell|33203
 cdk-0181|cdk|33381
 cdk-0180|cdk|33380
+cdk-0176|cdk|33376
 "
 if [ $# -ge 1 ]; then
   FLEET=$(printf '%s\n' "$FLEET" | grep -E "^($(IFS='|'; echo "$*"))\|")
