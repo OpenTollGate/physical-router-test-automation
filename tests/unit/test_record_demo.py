@@ -107,6 +107,12 @@ class TestDedupe:
         out = rd.dedupe_events(events, gap=5.0)
         assert [e["t"] for e in out] == [0.0, 9.0]
 
+    def test_keeps_renewal_payment_just_past_throttle(self):
+        # payments land ~5s apart (client throttle == dedupe gap); distinct text must survive
+        events = [{"t": 1.4, "kind": "payment", "text": "paid 1 sats (allotment now 22020096)"},
+                  {"t": 6.3, "kind": "payment", "text": "paid 1 sats (allotment now 44040192)"}]
+        assert len(rd.dedupe_events(events)) == 2
+
     def test_keeps_alternating_kinds(self):
         events = [{"t": 0.0, "kind": "notice", "text": "a"},
                   {"t": 0.5, "kind": "payment", "text": "b"},

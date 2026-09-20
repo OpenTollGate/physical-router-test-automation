@@ -267,6 +267,17 @@ record-demo-clientd: ## Record clientd auto-top-up demo vs cloud lab → evidenc
 		--title "PRTA laptop lane — clientd auto-top-up (cloud lab)" \
 		--export-video --export-speed 2
 
+.PHONY: test-laptop-clientd
+
+# tests/laptop/ — clientd from this host against a real TollGate router
+# (real ARP + NoDogSplash MAC registration). Requires provisioning, see
+# docs/tollgate-clientd.md "The laptop lane": LAPTOP_GATEWAY (router IP),
+# a funded cdk-cli wallet reachable in PATH, and SSH to the router.
+test-laptop-clientd: ## [hardware] clientd vs real router: ARP + NDS MAC lane (tests/laptop/)
+	$(call require_hardware_lock)
+	@test -n "$${LAPTOP_GATEWAY:-}" || { echo "$(RED)Set LAPTOP_GATEWAY (e.g. 10.99.99.1)$(RESET)"; exit 1; }
+	LAPTOP_GATEWAY="$${LAPTOP_GATEWAY}" $(PYTHON) -m pytest tests/laptop/ -v $(PYTEST_ARGS)
+
 # ===========================================================================
 #  FULL TEST SUITES
 # ===========================================================================

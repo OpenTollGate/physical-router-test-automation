@@ -124,10 +124,16 @@ def parse_event_line(line: str) -> tuple[str, str] | None:
 
 
 def dedupe_events(events: list[dict], gap: float = 5.0) -> list[dict]:
-    """Collapse runs of the same event kind within `gap` seconds."""
+    """Collapse runs of the same event (kind and text) within `gap` seconds.
+
+    Payments/failures carry distinct text (amounts, allotments), so
+    threshold renewals landing just past the client's payment throttle
+    survive; repeated identical notices ("no session — payment needed"
+    every poll) still collapse."""
     out: list[dict] = []
     for e in sorted(events, key=lambda e: e["t"]):
-        if out and out[-1]["kind"] == e["kind"] and e["t"] - out[-1]["t"] < gap:
+        if (out and out[-1]["kind"] == e["kind"] and out[-1]["text"] == e["text"]
+                and e["t"] - out[-1]["t"] < gap):
             continue
         out.append(e)
     return out
