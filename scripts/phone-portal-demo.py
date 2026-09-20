@@ -98,11 +98,85 @@ def submit_via_devtools(phone, token, out, gateway_ip):
                     pass  # asserted below with the actual URL
             assert ":2051/" in page.url, f"portal did not load: {page.url}"
             page.bring_to_front()
-            field = page.locator("textarea, input[type=text]").first
-            field.click()
-            field.fill(token)
+            try:
+                page.get_by_text("Cashu").first.click(timeout=5000)
+                time.sleep(1)
+            except Exception:
+                pass  # already active or single-tab build
+            # whitelabel builds open on a size selector; 100 MB is the
+            # 5-sat minimum the demo token pays for. The panel re-renders
+            # asynchronously after the click — wait for the token input to
+            # re-attach and verify the value actually stuck.
+            try:
+                page.get_by_role("button", name="100 MB").click(timeout=4000)
+            except Exception:
+                pass  # default build has no size selector
+            field = None
+            for attempt in range(3):
+                try:
+                    page.wait_for_selector(
+                        "input[id=cashu-token], textarea", timeout=8000)
+                except Exception:
+                    print(f"attempt {attempt}: field selector timeout",
+                          file=sys.stderr)
+                time.sleep(2)
+                # React controlled inputs drop playwright's fill(); set the
+                # value through the native setter, reset the value tracker
+                # so onChange observes the change, and bubble the input event
+                try:
+                    page.evaluate(
+                        """token => {
+                            const el = document.querySelector(
+                                'input[id=cashu-token], textarea');
+                            const setter = Object.getOwnPropertyDescriptor(
+                                el.tagName === 'TEXTAREA'
+                                    ? window.HTMLTextAreaElement.prototype
+                                    : window.HTMLInputElement.prototype,
+                                'value').set;
+                            setter.call(el, token);
+                            if (el._valueTracker) {
+                                el._valueTracker.setValue('');
+                            }
+                            el.dispatchEvent(new Event('input',
+                                                       {bubbles: true}));
+                        }""", token)
+                    time.sleep(1)
+                    field = page.locator(
+                        "input[id=cashu-token], textarea").first
+                    val = field.input_value()
+                    print(f"attempt {attempt}: field value "
+                          f"{val[:16]!r}", file=sys.stderr)
+                    if val.startswith("cashu"):
+                        break
+                except Exception as exc:
+                    print(f"attempt {attempt}: {exc!r}"[:200], file=sys.stderr)
+                    continue
+            else:
+                raise RuntimeError("token never landed in the portal field")
             page.screenshot(path=str(out / "02-token-typed.png"))
-            page.get_by_text("sat to get").first.click()
+            try:
+                clicked = False
+                # whitelabel: "Purchase Internet Access" button after size
+                # selection; default build: "Pay N sat(s) to get X" (the
+                # text is split across spans, so match on a text fragment)
+                for loc in (page.get_by_role("button",
+                                             name="Purchase Internet Access"),
+                            page.get_by_text("sat to get")):
+                    try:
+                        loc.last.click(timeout=15000)
+                        clicked = True
+                        break
+                    except Exception:
+                        continue
+                if not clicked:
+                    raise RuntimeError("no Pay/Purchase control found")
+            except Exception:
+                page.screenshot(path=str(out / "click-timeout.png"))
+                texts = page.evaluate(
+                    "() => document.body.innerText.slice(0, 400)")
+                print(f"click timeout; url={page.url} body={texts!r}",
+                      file=sys.stderr)
+                raise
             time.sleep(1)
             page.screenshot(path=str(out / "03-after-purchase.png"))
     finally:
@@ -151,16 +225,23 @@ def main():
     ap.add_argument("--gateway-ip", default="192.168.99.129",
                     help="WiFi-side gateway IP to trigger the intercept")
     ap.add_argument("--out", default="evidence/phone-demo")
+    ap.add_argument("--ssid-prefix", default="TollGate",
+                    help="WiFi SSID brand prefix to expect (TollGate | Net4sats)")
     args = ap.parse_args()
 
     token = Path(args.token_file).read_text().strip()
+    if not token.startswith("cashu"):
+        print(f"token file {args.token_file} does not hold a cashu token — "
+              "mint one first", file=sys.stderr)
+        return 1
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
     phone = CuttlefishClient()
     mac = phone.wifi_mac()
     print(f"phone wifi mac: {mac}")
-    assert phone.is_wifi_connected("TollGate"), "phone not on TollGate WiFi"
+    assert phone.is_wifi_connected(args.ssid_prefix), \
+        f"phone not on {args.ssid_prefix} WiFi"
 
     # a prior run's mark workaround (below) survives restarts — drop it so
     # the phone starts genuinely preauthenticated
