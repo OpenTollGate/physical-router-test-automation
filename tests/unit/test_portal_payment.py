@@ -117,16 +117,24 @@ def test_parse_allotment_bytes_no_match(text):
 # --------------------------------------------------------------------------- #
 
 
-def _class_star_matches(class_attr: str, selector: str) -> bool:
-    """Emulate the CSS ``[class*="..."]`` substring match without a browser.
+def _selector_matches(element_id: str, class_attr: str, selector: str) -> bool:
+    """Emulate a compound CSS selector list (``#id, [class*=...]``) without a browser.
 
-    Mirrors how Chromium evaluates the attribute selector that
-    :data:`SEL_CHECKMARK` uses: the quoted substring must appear anywhere in
-    the element's ``class`` attribute value.
+    Mirrors how Chromium evaluates :data:`SEL_CHECKMARK`: the element matches
+    if any comma-separated part matches — the id token against the element's
+    id, the ``class*=`` attribute part as a substring of the class value.
     """
-    match = re.fullmatch(r'\[class\*="(.+)"\]', selector)
-    assert match, f"expected a class*= attribute selector, got {selector!r}"
-    return match.group(1) in class_attr
+    for part in (p.strip() for p in selector.split(",")):
+        id_match = re.fullmatch(r"#([A-Za-z0-9_-]+)", part)
+        if id_match and element_id == id_match.group(1):
+            return True
+        class_match = re.fullmatch(r'\[class\*="(.+)"\]', part)
+        if class_match and class_match.group(1) in class_attr:
+            return True
+    return False
+
+
+_STABLE_ID = "captive-portal-access-granted-checkmark"
 
 
 @pytest.mark.parametrize(
@@ -139,25 +147,39 @@ def _class_star_matches(class_attr: str, selector: str) -> bool:
         "net4sats-captive-portal-access-granted-checkmark",
     ],
 )
-def test_sel_checkmark_matches_served_checkmark_spelling(class_attr):
-    assert _class_star_matches(class_attr, SEL_CHECKMARK) is True
+def test_sel_checkmark_matches_new_bundle_by_stable_id(class_attr):
+    assert _selector_matches(_STABLE_ID, class_attr, SEL_CHECKMARK) is True
 
 
-def test_sel_checkmark_still_tolerates_the_short_legacy_spelling():
-    # Forward/backward tolerance: if a front-end ever emits the shorter class
-    # PR #87 assumed, the same selector keeps working.
-    assert _class_star_matches("tollgate-captive-portal-access-granted-check", SEL_CHECKMARK)
+@pytest.mark.parametrize(
+    "class_attr",
+    [
+        "tollgate-captive-portal-access-granted-checkmark",
+        "net4sats-captive-portal-access-granted-checkmark",
+        "tollgate-captive-portal-access-granted-check",
+    ],
+)
+def test_sel_checkmark_falls_back_to_substring_on_deployed_portals(class_attr):
+    assert _selector_matches("", class_attr, SEL_CHECKMARK) is True
 
 
 def test_sel_checkmark_does_not_match_the_granted_container():
     # The container div (class ``...-access-granted``) is not a success marker.
-    assert _class_star_matches("tollgate-captive-portal-access-granted", SEL_CHECKMARK) is False
+    assert _selector_matches("", "tollgate-captive-portal-access-granted", SEL_CHECKMARK) is False
 
 
-def test_sel_checkmark_is_not_an_exact_class_selector():
-    # Regression guard: an exact-class selector for the short spelling matched
-    # nothing on the served portal (the bug this card fixes).
-    assert SEL_CHECKMARK == '[class*="access-granted-check"]'
+def test_sel_checkmark_expired_view_matches_only_via_fallback():
+    # On NEW bundles the expired-session view carries the checkmark class but
+    # NOT the stable id — the id part cannot match it. Only the substring
+    # fallback does, which is why the id-first order matters for new bundles.
+    expired_class = "tollgate-captive-portal-access-granted-checkmark"
+    id_only = SEL_CHECKMARK.split(",")[0].strip()
+    assert _selector_matches("", expired_class, id_only) is False
+    assert _selector_matches("", expired_class, SEL_CHECKMARK) is True
+
+
+def test_sel_checkmark_is_id_first_with_substring_fallback():
+    assert SEL_CHECKMARK == '#captive-portal-access-granted-checkmark, [class*="access-granted-check"]'
 
 
 def _exact_class_matches(class_attr: str, selector: str) -> bool:
@@ -173,7 +195,8 @@ def test_legacy_exact_class_selector_never_matched_the_served_markup():
     # new selector matches the same markup.
     served = "tollgate-captive-portal-access-granted-checkmark"
     assert _exact_class_matches(served, ".tollgate-captive-portal-access-granted-check") is False
-    assert _class_star_matches(served, SEL_CHECKMARK) is True
+    assert _selector_matches(_STABLE_ID, served, SEL_CHECKMARK) is True
+    assert _selector_matches("", served, SEL_CHECKMARK) is True
 
 
 # --------------------------------------------------------------------------- #
