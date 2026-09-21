@@ -21,14 +21,19 @@
 //     (tollgate-captive-portal-site/src/App.jsx:267,302 and
 //     net4sats-captive-portal-site/src/App.jsx:255,290, verified 2026-09-11),
 //     while lib/portal_payment.py (PR #87) uses the shorter
-//     `...-access-granted-check` spelling. Neither front-end emits the legacy
-//     plain success class, so SEL_SUCCESS matches either spelling via a
-//     `class*=` attribute selector and is forward/backward tolerant.
+//     `...-access-granted-check` spelling. New bundles mark the success-state
+//     checkmark with the shared, prefix-free id
+//     `captive-portal-access-granted-checkmark` (tollgate-captive-portal-site#42,
+//     net4sats-captive-portal-site#3) — success view only, so the
+//     expired-session view that reuses the checkmark class can never match.
+//     SEL_SUCCESS is id-first with the `class*=` fallback for already-deployed
+//     portals; on old bundles the fallback also matches the expired view (a
+//     known limitation of the compatibility path).
 export const SEL_CASHU_TAB = '.tollgate-captive-portal-tabs-tab-cashu';
 export const SEL_TOKEN_INPUT = 'input[placeholder*="cashu"]';
 export const SEL_SUBMIT_READY = '.tollgate-captive-portal-method-submit button:not([disabled])';
 export const SEL_SUBMIT_CLICK = '.tollgate-captive-portal-method-submit button';
-export const SEL_SUCCESS = '[class*="access-granted-check"]';
+export const SEL_SUCCESS = '#captive-portal-access-granted-checkmark, [class*="access-granted-check"]';
 export const SEL_CONTENT = '.tollgate-captive-portal-method-content';
 
 /**
