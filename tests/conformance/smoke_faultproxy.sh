@@ -7,10 +7,11 @@ FAIL=0
 note() { echo "[smoke] $*"; }
 die() { echo "[smoke] FAIL: $*"; FAIL=1; }
 
-# 1. Dummy upstream: echoes JSON, sleeps 1s on /v1/slow
-python3 - <<'EOF' >"$WORK/upstream.log" 2>&1 &
-import json, time
+# 1. Dummy upstream: echoes JSON, sleeps 1s on /v1/slow, records POST bodies
+python3 - "$WORK/upstream-bodies.log" <<'EOF' >"$WORK/upstream.log" 2>&1 &
+import json, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+RECORD = sys.argv[1]
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     def _r(self, body):
@@ -27,11 +28,14 @@ class H(BaseHTTPRequestHandler):
         body = self.rfile.read(n)
         if self.path.startswith("/v1/slow"):
             time.sleep(1)
+        with open(RECORD, "a") as fh:
+            fh.write(self.path + " " + body.decode(errors="replace") + "\n")
         self._r(json.dumps({"ok": True, "path": self.path, "echo": body.decode()[:80]}))
     def log_message(self, *a): pass
 ThreadingHTTPServer(("127.0.0.1", 18081), H).serve_forever()
 EOF
 UP=$!
+touch "$WORK/upstream-bodies.log"
 python3 tests/conformance/faultproxy.py --upstream http://127.0.0.1:18081 --listen 127.0.0.1:18082 >"$WORK/proxy.log" 2>&1 &
 PX=$!
 sleep 1
@@ -64,6 +68,14 @@ curl -s --max-time 5 "$P/v1/reset" >/dev/null 2>&1
 curl -s -X POST "$P/__fault/control" -d '{"rules":[{"match_path":"/v1/drop","action":"drop"}]}' >/dev/null
 DROP_RC=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "$P/v1/drop" 2>&1); RC=$?
 [ "$RC" -ne 0 ] || [ "$DROP_RC" = "000" ] && note "drop OK (no response)" || die "drop: rc=$RC code=$DROP_RC"
+
+# 6b. drop_response: upstream MUST have processed it, client gets nothing
+curl -s -X POST "$P/__fault/control" -d '{"rules":[{"match_path":"/v1/dropresp","action":"drop_response"}]}' >/dev/null
+MARK="dropped-$$"
+DR_RC=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -X POST "$P/v1/dropresp" -H 'Content-Type: text/plain' -d "$MARK" 2>&1); DR=$?
+{ [ "$DR" -ne 0 ] || [ "$DR_RC" = "000" ]; } || die "drop_response: client got rc=$DR code=$DR_RC"
+grep -q "$MARK" "$WORK/upstream-bodies.log" && note "drop_response OK (upstream processed $MARK, client black-holed)" || die "drop_response: upstream never saw the request"
+curl -s -X POST "$P/__fault/control" -d '{"clear":true}' >/dev/null
 
 # 7. blinded-message observation + reuse flag
 curl -s -X POST "$P/__fault/control" -d '{"clear":true}' >/dev/null
@@ -116,6 +128,35 @@ curl -s -X POST "$P/v1/swap" -H 'Content-Type: application/json' -d '{}' >/dev/n
 for i in 1 2 3 4 5; do grep -q '"path": "/v1/swap"' "$WORK/webhook.log" && break; sleep 0.5; done
 grep -q '"path": "/v1/swap"' "$WORK/webhook.log" && note "notify OK (webhook fired, request forwarded)" || die "notify: webhook never fired"
 kill $WH 2>/dev/null
+
+# 9b. notify_on=response ordering: a slow webhook must delay the client
+# response (webhook completes before the response is forwarded)
+python3 - <<'EOF' >"$WORK/webhook2.log" 2>&1 &
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+class H(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(n)
+        time.sleep(1.0)
+        b = b"{}"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+    def log_message(self, *a): pass
+ThreadingHTTPServer(("127.0.0.1", 18084), H).serve_forever()
+EOF
+WH2=$!
+sleep 0.5
+curl -s -X POST "$P/__fault/control" -d '{"rules":[{"match_path":"/v1/keys","action":"notify","notify_on":"response","notify_url":"http://127.0.0.1:18084/hit"}]}' >/dev/null
+T0=$(date +%s%N)
+curl -s "$P/v1/keys" | grep -q '"ok": *true' || die "notify_on=response: request not forwarded"
+MS=$(( ($(date +%s%N) - T0) / 1000000 ))
+[ "$MS" -ge 950 ] && note "notify_on=response OK (${MS}ms >= 950: webhook blocked the client response)" || die "notify_on=response ordering: ${MS}ms"
+kill $WH2 2>/dev/null
+curl -s -X POST "$P/__fault/control" -d '{"clear":true}' >/dev/null
 
 kill $PX $UP 2>/dev/null; wait $PX $UP 2>/dev/null
 rm -rf "$WORK"

@@ -11,7 +11,7 @@ backends. This directory is the **co-owned spec** referenced by:
 | File | Purpose |
 |------|---------|
 | `matrix.yaml` | The single source of truth: 7 invariants + the fault scenarios. Scenario IDs are stable; lanes and reports join on them. |
-| `faultproxy.py` | Stdlib-only HTTP fault proxy (drop / delay / status / reset / notify per-route rules) that also records every blinded message exposed to the mint. The `notify` action fires a blocking webhook before the matched request is forwarded — the deterministic trigger for kill-at-boundary scenarios. |
+| `faultproxy.py` | Stdlib-only HTTP fault proxy with per-route rules: `drop` (request-side black-hole), `drop_response` (mint processes, response swallowed — the ambiguous-outcome fault), `delay`, `status` (429/500), `reset`, and `notify` (blocking webhook at `notify_on: request\|response`) — plus blinded-message recording. `notify_on: response` gives lanes a deterministic kill trigger inside the ambiguity window. |
 
 ## Ownership rules
 

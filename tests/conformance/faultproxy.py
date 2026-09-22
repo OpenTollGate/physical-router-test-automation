@@ -56,7 +56,7 @@ import urllib.request
 
 CONTROL_PREFIX = "/__fault/"
 
-VALID_ACTIONS = {"drop", "delay", "status", "reset", "pass", "notify"}
+VALID_ACTIONS = {"drop", "drop_response", "delay", "status", "reset", "pass", "notify"}
 
 
 class Rule:
@@ -73,6 +73,10 @@ class Rule:
         self.status_code = int(spec.get("status_code", 503))
         self.delay_ms = int(spec.get("delay_ms", 0))
         self.notify_url = spec.get("notify_url", "")
+        notify_on = spec.get("notify_on", "request")
+        if notify_on not in {"request", "response"}:
+            raise ValueError(f"rule {self.id}: notify_on must be 'request' or 'response'")
+        self.notify_on = notify_on
         self.remaining = spec.get("remaining")  # None = unlimited
         self.probability = float(spec.get("probability", 1.0))
         self.hits = 0
@@ -101,6 +105,7 @@ class Rule:
             "status_code": self.status_code,
             "delay_ms": self.delay_ms,
             "notify_url": self.notify_url,
+            "notify_on": self.notify_on,
             "remaining": self.remaining,
             "probability": self.probability,
             "hits": self.hits,
@@ -288,8 +293,8 @@ def make_handler(upstream: str):
                         pass
                     return
                 if rule.action == "drop":
-                    # Black-hole: close without a response after stalling briefly,
-                    # so the client's request times out rather than errors fast.
+                    # Request-side black-hole: the upstream never sees the
+                    # request; the client stalls then errors.
                     time.sleep(min(rule.delay_ms, 10_000) / 1000.0 if rule.delay_ms else 0.0)
                     try:
                         self.connection.close()
@@ -299,14 +304,42 @@ def make_handler(upstream: str):
                 if rule.action == "status":
                     self._send_json(rule.status_code, {"fault": rule.id, "injected": True})
                     return
-                if rule.action == "notify":
+                if rule.action == "notify" and rule.notify_on == "request":
                     # Blocking by design: lanes use notify to act (e.g. kill the
-                    # backend) BEFORE the mint response reaches it.
+                    # backend) BEFORE the request reaches the mint.
                     self._notify(rule, self.command, self.path)
                 if rule.action == "delay":
                     time.sleep(rule.delay_ms / 1000.0)
                 # action == "pass" falls through to forwarding
 
+            outcome = self._upstream(body)
+
+            if rule is not None:
+                if rule.action == "notify" and rule.notify_on == "response":
+                    # The mint has processed the request; fire the webhook
+                    # BEFORE the response reaches the client, so a lane can
+                    # kill the backend inside the ambiguity window.
+                    self._notify(rule, self.command, self.path)
+                if rule.action == "drop_response":
+                    # Ambiguous outcome: the upstream processed the request,
+                    # but the client never sees the response.
+                    try:
+                        self.connection.close()
+                    except OSError:
+                        pass
+                    return
+
+            if outcome is not None:
+                status, content_type, resp_body = outcome
+                self.send_response(status)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(resp_body)))
+                self.end_headers()
+                self.wfile.write(resp_body)
+
+        def _upstream(self, body: bytes) -> tuple[int, str, bytes] | None:
+            """Forward to the upstream; on transport failure respond 502 and
+            return None (the response has already been sent)."""
             url = upstream + self.path
             req = urllib.request.Request(url, data=body if body else None, method=self.command)
             for header in ("Content-Type", "Accept"):
@@ -314,21 +347,12 @@ def make_handler(upstream: str):
                     req.add_header(header, self.headers[header])
             try:
                 with urllib.request.urlopen(req, timeout=60) as resp:
-                    resp_body = resp.read()
-                    self.send_response(resp.status)
-                    self.send_header("Content-Type", resp.headers.get("Content-Type", "application/json"))
-                    self.send_header("Content-Length", str(len(resp_body)))
-                    self.end_headers()
-                    self.wfile.write(resp_body)
+                    return resp.status, resp.headers.get("Content-Type", "application/json"), resp.read()
             except urllib.error.HTTPError as exc:
-                exc_body = exc.read()
-                self.send_response(exc.code)
-                self.send_header("Content-Type", exc.headers.get("Content-Type", "application/json"))
-                self.send_header("Content-Length", str(len(exc_body)))
-                self.end_headers()
-                self.wfile.write(exc_body)
+                return exc.code, exc.headers.get("Content-Type", "application/json"), exc.read()
             except (TimeoutError, urllib.error.URLError, OSError) as exc:
                 self._send_json(502, {"fault": "upstream-unreachable", "error": str(exc)})
+                return None
 
         def log_message(self, fmt: str, *args) -> None:  # quiet default logging
             sys.stderr.write("[faultproxy] " + fmt % args + "\n")

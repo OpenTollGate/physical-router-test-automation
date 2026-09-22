@@ -65,14 +65,21 @@ invariants:
 # its control endpoint — see README.md):
 #   match_path:   substring matched against the request path
 #   match_method: optional HTTP method filter
-#   action:       drop | delay | status | reset | pass | notify
+#   action:       drop | drop_response | delay | status | reset | pass | notify
 #   status_code:  for action=status (e.g. 429, 500)
 #   delay_ms:     for action=delay
-#   notify_url:   for action=notify (blocking webhook fired before the
-#                 matched request is forwarded; lanes use it for
+#   notify_url:   for action=notify (blocking webhook; lanes use it for
 #                 deterministic kill-at-boundary triggers)
+#   notify_on:    request | response (default request) — when the notify
+#                 webhook fires: before the request is forwarded, or after
+#                 the upstream processed it but before the response reaches
+#                 the client (the ambiguity window)
 #   remaining:    apply to the next N matching requests only (default: all)
 #   probability:  0.0..1.0 (default 1.0)
+#
+# drop = request-side black-hole (the mint never sees the request; clean
+# timeout). drop_response = the request reaches the mint and is processed,
+# but the response never returns (ambiguous outcome).
 scenarios:
   # ---- payment -> kill at transaction boundary -> restart -----------------
   # One scenario per boundary. The lane kills the backend process (SIGKILL)
@@ -173,14 +180,15 @@ scenarios:
     class: fault-proxy
     subset: fast
     description: >-
-      The proxy drops the mint's response to the backend's first swap (or
-      melt) call, making the outcome ambiguous to the backend. The backend
-      must reconcile (check state / regenerate from a fresh counter), never
-      blind-retry the same derivation range.
+      The proxy forwards the backend's first swap (or melt) call to the
+      mint — the mint processes it — but drops the response, making the
+      outcome ambiguous to the backend. The backend must reconcile (check
+      state / regenerate from a fresh counter), never blind-retry the same
+      derivation range.
     fault:
       proxy:
         - match_path: /v1/swap
-          action: drop
+          action: drop_response
           remaining: 1
     driver:
       - POST one valid token to the payment endpoint.
