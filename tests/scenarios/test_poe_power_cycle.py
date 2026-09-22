@@ -16,8 +16,12 @@ Two layers:
    FAILS LOUDLY if the device is absent: SEARCHING at deadline means
    cable unplugged, dead PD, or PoE negotiation failure.
 
-Locking follows the bench discipline: BenchLock first (cross-project,
-kernel-enforced), then the project RouterLock. Never the reverse.
+Locking (per-resource model, 2026-09-22): per-DUT work locks only the
+resource it touches — the PRTA-venue flock (prta-poe-bench) serializes
+this suite's own scenarios, RouterLock holds the gate router. The GLOBAL
+amperstrand-bench flock is reserved for switch-wide mutations (VLAN
+changes, reboots, daemon restarts) and is never needed for per-port
+power control.
 
 Privacy: physical venue — ``can_publish`` must be False; results stay in
 gitignored ``results/`` only.

@@ -54,27 +54,35 @@ session works; never infer the map from a single source.
   (dry-run default; `--execute` gated; re-inserts the runtime-only nft
   rule its serve-step needs after switch reboots).
 
-## Phase 2 — labgrid coordinator client (NEXT)
+## Phase 2 — labgrid coordinator client (LIVE 2026-09-22)
 
-conwrt already runs the topology: coordinator at the shared rig address
-(see inventory `coordinator.address`), exporter on the lab host,
-`conwrt_poe` power backend, places `ap-lan3..8`. PRTA becomes a client:
+All OpenWrt DUTs on the GS1900 are enrolled: exporter resources
+`ai-legion/ap-lan2..8/NetworkPowerPort` (conwrt_poe backend) and places
+`ap-lan2..8` on the shared coordinator (address in inventory). PRTA's
+scope is the `ap-lan*` places ONLY — the coordinator hosts other
+projects' places (fips atoms, charger HIL, bolty records) that PRTA
+never touches.
 
-1. Smoke as a client first:
-   `labgrid-client -x <coordinator> places` then acquire/power/release on
-   an agreed place.
-2. Replace the inline env in `configs/labgrid/physical-poe-lab.yaml.example`
-   with `RemotePlace: {name: ap-lan2}` per target; keep the Phase-1
-   direct controller as fallback for bench bring-up.
-3. Converge semantics: conwrt's `conwrt_poe` backend does fire-and-forget
-   manage; our controller verifies + detects frozen daemons. Contribution
-   candidate: port the verify/frozen logic into the backend (or their
-   fork's enable-bool patch + uhttpd-mod-ubus → stock ubus backend, per
-   their own hardening note).
-4. Locking discipline unchanged: BenchLock FIRST, then labgrid place
-   acquire, then RouterLock. Labgrid places exclude only labgrid-aware
-   callers.
-5. labgrid YAML gotcha (from conwrt): comments must use `##`, never `#`
+Locking granularity (owner directive 2026-09-22 — per-resource, not
+global):
+
+| Operation | Lock |
+|---|---|
+| Per-DUT work (power on one port, SSH, tests) | labgrid place acquire + RouterLock — no global lock |
+| PRTA's own PoE scenarios vs each other | `prta-poe-bench` flock (venue-local) |
+| Switch-wide mutations (VLAN/network changes, reboots, poe-daemon restart, exporter restarts) | global `amperstrand-bench` flock, only when no place is acquired |
+
+Remaining PRTA steps:
+
+1. `pip install labgrid` client (done in tollgate-test-venv 2026-09-22).
+2. Client smoke: `labgrid-client -x <coordinator> -p ap-lan2 show` (done —
+   place matched, resource avail). First acquire/power-cycle only after
+   operator sign-off on ap-lan2 allocation.
+3. Tests adopt `--lg-env=configs/labgrid/physical-poe-lab.yaml` with
+   RemotePlace; keep the direct PoePowerController path as bring-up
+   fallback (it carries protected-port + frozen-daemon guards the
+   coordinator path doesn't have yet — porting proposal sits with conwrt).
+4. labgrid YAML gotcha (from conwrt): comments must use `##`, never `#`
    (Jinja templates).
 
 ## Release testing on the PoE venue (target: next tollgate release)

@@ -1,40 +1,38 @@
-# Labgrid environment template — PoE-controlled physical lab.
+# Labgrid environment — PoE physical lab via the shared coordinator.
 #
-# Copy to physical-poe-lab.yaml (gitignored) and fill identifiers from
-# configs/labgrid/inventory.local.yaml. Never commit real IPs/MACs/serials.
+# Phase 2 shape (LIVE since 2026-09-22): power flows through the shared
+# labgrid coordinator (see inventory.local.yaml coordinator.address) using
+# conwrt's conwrt_poe backend. Copy to physical-poe-lab.yaml (gitignored)
+# and extend per target. Comments in labgrid YAML must use ## never #.
 #
-# Phase 1 (now): inline environment, pytest drives power directly through
-# tollgate_lab's PoePowerController (SSH -> `ubus call poe manage` on the
-# GS1900-8HP). Tests/scenarios/test_poe_power_cycle.py is the entry point.
+# Locking model (per-resource, owner directive 2026-09-22):
+#   - per-DUT work: labgrid place acquire (this file) — no global lock
+#   - switch-wide mutations (VLANs, reboots, daemon restarts): the
+#     global amperstrand-bench flock, taken by nobody else's DUT work
+# PRTA touches ONLY the OpenWrt DUT places (ap-lan*), never the other
+# projects' places on this coordinator.
 #
-# Phase 2 (coordinator): swap the inline NetworkService resources for
-# RemotePlace and let labgrid own power via its native ubus backend —
-# per-target power resource then becomes:
-#
-#   NetworkPowerPort:
-#     model: ubus
-#     host: "http://<switch-ip>/ubus"   # requires uhttpd-mod-ubus on switch
-#     index: "lan2"                     # verify string index on installed labgrid
-#
-# Nothing in Phase 1 is throwaway: targets, locks and inventory carry over.
+# Network resources per target get added as DUTs adopt bench addressing
+# (lan4 already has: see inventory). Direct-SSH fallback for bring-up:
+# tollgate_lab PoePowerController against inventory.switch.
 
 targets:
-  gs1900-switch:
+  ap-lan2:
     resources:
-      NetworkService:
-        address: "<inventory:switch.host>"
-        username: "root"
+      RemotePlace:
+        name: "ap-lan2"
     drivers:
-      RouterDriver: {}
+      NetworkPowerDriver: {}
+      ## SSHDriver + NetworkService once the unit adopts 192.168.102.x
 
-  nr7101:
+  ap-lan4:
     resources:
-      NetworkService:
-        address: "<inventory:routers.nr7101.address>"
-        username: "root"
+      RemotePlace:
+        name: "ap-lan4"
     drivers:
-      RouterDriver: {}
-    # power: switch lan2 (PoePowerController, Phase 1) /
-    #        NetworkPowerPort ubus (Phase 2)
+      NetworkPowerDriver: {}
+      ## reference unit; owner = conwrt mesh plan — acquire only with handoff
 
-  # ap3915i: add when bench frees (lan4/lan5 in active use 2026-09-22)
+  ## ap-lan3 / ap-lan5: places exist but PROTECTED (inventory.local.yaml
+  ## + PoeProtectedPortError on the direct path). Do not add matches here
+  ## until conwrt #61 / lifeline re-arm; ap-lan5 power is a one-way trip.
