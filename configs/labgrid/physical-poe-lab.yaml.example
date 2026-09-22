@@ -1,0 +1,40 @@
+# Labgrid environment template — PoE-controlled physical lab.
+#
+# Copy to physical-poe-lab.yaml (gitignored) and fill identifiers from
+# configs/labgrid/inventory.local.yaml. Never commit real IPs/MACs/serials.
+#
+# Phase 1 (now): inline environment, pytest drives power directly through
+# tollgate_lab's PoePowerController (SSH -> `ubus call poe manage` on the
+# GS1900-8HP). Tests/scenarios/test_poe_power_cycle.py is the entry point.
+#
+# Phase 2 (coordinator): swap the inline NetworkService resources for
+# RemotePlace and let labgrid own power via its native ubus backend —
+# per-target power resource then becomes:
+#
+#   NetworkPowerPort:
+#     model: ubus
+#     host: "http://<switch-ip>/ubus"   # requires uhttpd-mod-ubus on switch
+#     index: "lan2"                     # verify string index on installed labgrid
+#
+# Nothing in Phase 1 is throwaway: targets, locks and inventory carry over.
+
+targets:
+  gs1900-switch:
+    resources:
+      NetworkService:
+        address: "<inventory:switch.host>"
+        username: "root"
+    drivers:
+      RouterDriver: {}
+
+  nr7101:
+    resources:
+      NetworkService:
+        address: "<inventory:routers.nr7101.address>"
+        username: "root"
+    drivers:
+      RouterDriver: {}
+    # power: switch lan2 (PoePowerController, Phase 1) /
+    #        NetworkPowerPort ubus (Phase 2)
+
+  # ap3915i: add when bench frees (lan4/lan5 in active use 2026-09-22)
