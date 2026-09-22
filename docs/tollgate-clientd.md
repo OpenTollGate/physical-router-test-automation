@@ -101,6 +101,44 @@ python3 scripts/record-demo.py \
 Session reset between runs: `ssh root@<router> 'ndsctl deauth <mac>;
 /etc/init.d/tollgate-wrt restart'` (sessions are in-memory per MAC).
 
+## Mint sources: FakeWallet fixture vs the signet zoo
+
+The lanes default to the throwaway FakeWallet fixture mint (identical
+keys everywhere, tokens are free, nothing is real). For real-settlement
+runs — or when the fixture box is down — point the rig at the standing
+[cashu-mint-zoo](https://github.com/Amperstrand/cashu-mint-zoo) signet
+mints instead. As of 2026-09-22 the **router side works against zoo
+mints** (V2 keysets verified end-to-end, kind-1022 from both cdk 0.18
+and nutshell 0.21 mints; see the zoo's
+`evidence/zoo-router-acceptance.md`).
+
+Two differences matter operationally:
+
+1. **Funding is real**: `pay-and-mint.sh <wallet> <mint-url> 1000` from
+   the zoo checkout pays a signet invoice through inr2 and mints real
+   tokens (keep amounts in the 1000–5000 sat range). There is no
+   FakeWallet auto-refill — budget tokens per run, and remember each
+   *rejected* payment burns its token.
+2. **Router mint entries need their pricing fields**: repointing
+   `accepted_mints` with a bare `{"url": …}` object passes the health
+   probe but grants nothing — payments fail at allotment calculation
+   (price_per_step 0, division by zero) *after* the token was received.
+   Copy a full mint entry and change only the URL:
+
+```bash
+ssh root@$ROUTER 'jq ".accepted_mints = [{url: \"https://cdk-d3dec24.cashu.exchange\",
+  min_balance: 0, balance_tolerance_percent: 0, price_per_step: 1,
+  price_unit: \"sats\", purchase_min_steps: 0}]" /etc/tollgate/config.json \
+  > /tmp/c.json && mv /tmp/c.json /etc/tollgate/config.json \
+  && /etc/init.d/tollgate-wrt restart'
+```
+
+The venue router needs outbound HTTPS to the zoo hostnames (default
+route via a NAT-ing lab host is enough — the mints answer through
+their public Cloudflare tunnel from anywhere). Client-side, the zoo is
+drop-in via `TOLLGATE_TEST_MINT_URL=https://cdk-d3dec24.cashu.exchange`
+and wallets mint/pay exactly as against the fixture.
+
 ## Regression lane
 
 `tests/unit/test_tollgate_clientd.py` runs the script's built-in
