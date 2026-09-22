@@ -1234,6 +1234,12 @@ record-portal: ## Record portal demo videos WITH cursor highlight (desktop+mobil
 	@if [ ! -d node_modules ]; then echo "$(YELLOW)Run npm install first$(RESET)"; exit 1; fi
 	@node scripts/record-portal-highlight.mjs
 
+# --- Pre-auth probes ---
+
+.PHONY: probe-ports
+probe-ports: ## Pre-auth port/UI sweep from a captive-LAN client (no SSH, no creds)
+	@bash scripts/tollgate-port-sweep.sh $(if $(HOST),--host $(HOST),)
+
 # --- Clean ---
 
 clean:
