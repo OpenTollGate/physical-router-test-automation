@@ -60,6 +60,15 @@ mutating lane leaves the router transitional.
 4. `make hw-readonly` is the local equivalent of the read-only lane and needs no
    lock, no secrets and no runner.
 
+Two platform facts worth knowing before you try to trigger the lane:
+
+- `workflow_dispatch` only becomes available once the workflow file exists on the
+  repository's **default branch**. Until this lands on `main`, `gh workflow run
+  hw-smoke.yml` answers `HTTP 404: not found on the default branch` — the local
+  `make hw-readonly` path is the way to run the read-only lane in the meantime.
+- A `schedule` trigger with no runner queues ghost runs, which is why the cron is
+  gated on the `HW_BENCH_SCHEDULE` repo variable instead of being live.
+
 There is no `if: false` anywhere in `.github/workflows/`; enablement is a
 dispatch input, a repo variable, or an environment approval instead. That is
 deliberate — a disabled job behind a boolean is an invitation to flip it.
