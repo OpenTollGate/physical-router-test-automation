@@ -97,6 +97,20 @@ run_case job-if-false 1 'R3 disabled job' if-false.yml
 # RED: hardware work with no dedicated hardware workflow at all.
 run_case hw-missing 1 'R2 hardware workflow missing' @rm:hw-smoke.yml
 
+# RED (round-2, cold cross-family review glm-5.3 Y1): a PR workflow that names
+# ONLY the bench runner's custom label — no `self-hosted` string to grep for.
+run_case pr-label-only 1 'R1 self-hosted runner label' pr-label-only.yml
+
+# RED (review Y2): an expression-valued runner target cannot be verified, so it
+# must fail closed.
+run_case pr-runs-on-expression 1 'R1 expression-valued runs-on' pr-runs-on-expression.yml
+
+# RED (review Y3): the kill switch with a capital F.
+run_case job-if-false-capital 1 'R3 disabled job' job-if-false-capital.yml
+
+# RED (review Y4): the approval gate declared under a typo'd environment name.
+run_case hw-env-typo 1 'R4 job "mutating-e2e"' hw-env-typo
+
 echo
 if [ "$cases_failed" -eq 0 ]; then
     echo "PASS — $cases_run/$cases_run guard cases behaved as specified."

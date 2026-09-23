@@ -78,20 +78,44 @@ deliberate — a disabled job behind a boolean is an invitation to flip it.
 `scripts/ci/check-workflow-hw-isolation.sh` runs in the `ci.yml` `lint` job on
 every PR and fails on:
 
-- **R1** a `pull_request`/`pull_request_target`-triggered workflow that
-  references `self-hosted` or a bench-mutating env flag;
+- **R1** a `pull_request`/`pull_request_target`-triggered workflow that reaches a
+  bench runner or a bench-mutating env flag. Bench reach is decided on the
+  **label set**, not on the literal string `self-hosted` — every label used by
+  the hardware workflow's own runner declaration (plus `self-hosted` and
+  anything in `HW_RUNNER_LABELS_EXTRA`) is denied, so a runner target naming
+  only the bench label is caught too. An **expression-valued** runner target
+  (`${{ vars.RUNNER_LABEL }}`) cannot be verified by reading, so it fails
+  closed;
 - **R2** `hw-smoke.yml` missing, PR-reachable, or carrying a trigger outside
   `{workflow_dispatch, schedule}`;
-- **R3** any `if: false` job guard in the tree;
-- **R4** a job referencing the bench-mutating env flags without `environment:`;
-- **R5** a job in the hardware workflow using `secrets.` without `environment:`.
+- **R3** any falsy job guard in the tree — a capitalised `False`/`FALSE` counts
+  as one, as do the YAML-1.1 falsy words `no`/`off`;
+- **R4** a job referencing the bench-mutating env flags without an approval gate
+  NAMED `bench-hardware` (default, `HW_ENVIRONMENT_NAME` overrides). The name is
+  checked, not just the presence of the key — a typo such as `bench-hadware`
+  would silently drop the required-reviewer gate;
+- **R5** a job in the hardware workflow using `secrets.` without the same named
+  environment gate.
+
+The first round of this guard matched the literal `self-hosted` string and only
+checked that an approval-gate key existed; a cold cross-family review found both
+holes (a label-only runner target, an expression, a capitalised falsy condition,
+a typo'd environment name), and rules R1/R3/R4/R5 above are the fix. 13
+self-test cases cover them one regression at a time.
+
+**Limit, stated rather than hidden:** the guard is an in-repo check, so it runs
+from the PR's own checkout — a hostile PR can delete it in the same commit that
+adds a bench job. For that PR the mechanical protection is branch protection plus
+making the `lint` check *required*, not this script. The guard's job is to stop
+the accidental path (someone re-enabling a parked job or adding a lane in good
+faith), which is how the original defect appeared.
 
 It scans effective YAML only (comments stripped), so this documentation can name
 the anti-patterns it bans.
 
 `scripts/ci/test-check-workflow-hw-isolation.sh` injects one regression at a time
 into a copy of the real tree and asserts the guard fails with the right rule —
-9 cases, all green. A guard never seen red is decoration, not evidence.
+13 cases, all green. A guard never seen red is decoration, not evidence.
 
 ## Read-only vs mutating locally
 
