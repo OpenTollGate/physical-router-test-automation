@@ -174,7 +174,7 @@ Both Go and Rust backends successfully process V3 token payments end-to-end:
 - Rust + V1 keyset (testnut): `Receive completed, amount=3, err=<nil>`
 - Both backends: token parsed, verified, payment processed, MAC authorized, session event returned
 
-V4 tokens (`cashuB` prefix, CBOR) previously failed because gonuts lacked short keyset ID resolution. **Fixed in gonuts-tollgate v0.8.0** ([PR #284](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/284) — pending merge). The fix adds `resolveShortKeysetIds()` which fetches active keysets from the mint and resolves 8-byte short IDs to full IDs before swap.
+V4 tokens (`cashuB` prefix, CBOR) previously failed because gonuts lacked short keyset ID resolution. **Fixed in gonuts-tollgate v0.8.0** (tollgate-module-basic-go PR [#286](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/286), merged 2026-07-24 — the fork-PR #284 was closed in its favor; fork PRs didn't trigger CI). The fix adds `resolveShortKeysetIds()` which fetches active keysets from the mint and resolves 8-byte short IDs to full IDs before swap. Main has since moved to gonuts-tollgate **v0.11.2**; V4+V1 re-verified end-to-end on 2026-09-18 against a v0.6.0-alpha2 build (portal checkmark + `Receive completed, amount=4` + 150 MiB granted).
 
 **Before the fix (gonuts < v0.8.0):** V4 tokens store keyset IDs as 8-byte short IDs (per NUT-00 V4 spec). gonuts's `TokenV4.Proofs()` converted the raw CBOR bytes directly to hex without resolving the short ID. When gonuts sent the 8-byte hex to the mint swap endpoint, the mint rejected it: `NUT02: ID length invalid, expected 8 bytes (short/v1) or 33 bytes (v2)`.
 
@@ -406,6 +406,100 @@ The framework runs in three environments. Detection is automatic — no manual c
 
 ## Lessons Learned
 
+### Test-rail contamination produced two false "product broken" verdicts (2026-09-19, mint-zoo session)
+
+During mint-compat testing, the SAME product defect ("V4 tokens rejected")
+was "confirmed" twice — and both were **test-rail bugs, not product bugs**:
+
+1. **NDS already-authenticated race**: a prior successful payment leaves the
+   client MAC authenticated; the next payment's `ndsctl auth` then exits 1 and
+   the backend reports `session-error: failed to open gate` — AFTER consuming
+   the token (consume-before-gate). Read as "payment broken".
+2. **Stale mint pin**: the router's `accepted_mints` still pointed at the
+   previous scenario's mint; the new token was rejected as
+   "Token for mint X is not accepted". Read as "token format broken".
+
+A clean-room retest (router pinned to the token's mint + deauth before every
+payment + full-response capture) showed **both verdicts were false** — V4+V2
+pays fine everywhere. The contamination nearly drove a pre-release wallet
+rewrite.
+
+**Rules (enforced by `scripts/bench/bench.py` — use it, don't hand-copy rails):**
+- Deauthenticate the paying client before EVERY payment.
+- Pin `accepted_mints` to the token's mint in the SAME scenario that pays.
+- Capture and assert on FULL responses (kind + code + content) — never grep
+  a truncated body.
+- Assertions must FAIL LOUDLY on sentinel garbage: an advertisement parse
+  returning `"0"`/`""`/`AD_EMPTY` must raise, not compare-equal-and-pass.
+  (An ad-tag off-by-one returned the min-steps field `"0"` and two assertions
+  silently evaluated against it.)
+- Compatibility claims require the clean-room rail behind them.
+
+### Shell orchestration footguns (repeated 2026-09-19)
+
+- **Never edit a script while it runs** — bash reads scripts incrementally;
+  overwriting `matrix.sh` mid-run corrupted execution past the file offset.
+  Killed two runs. Copy-then-run, or use an installed library.
+- **pgrep/pkill self-match**: an ssh wrapper whose command line contains the
+  pattern kills itself (`pkill -f partial-degradation` matched my own ssh).
+  Third strike this session. Match `bash /full/path/script.sh` or use pidfiles.
+- **One rail library, not copies**: pay/pin/deauth/probe logic was
+  hand-copied into four shell runners; bugs fixed in one persisted in the
+  others (recovery-log pattern fixed twice; ad-parser bug existed in only one
+  copy). New scenario code goes in `scripts/bench/` on `Bench`, not in new
+  shell.
+
+### Readiness ≠ liveness (reaffirmed)
+
+`/v1/info` answering is NOT mint health — settle a NUT-04 quote before
+blaming the router (see the fast-start lesson). The same applies to the
+backend (`:2121` answering ≠ wallet registered) and to docker ("running"
+≠ ready). Every wait in `Bench` uses a functional probe.
+
+### Labgrid (future direction for physical hardware)
+
+As physical-hardware testing gets serious, the plan is
+[labgrid](https://labgrid.readthedocs.io/) for board/place management
+(power, serial, console logging, resource reservation). `scripts/bench/`
+is deliberately shaped as the seam: `Bench` abstracts
+router-control/payment/mint-control behind one interface — a future
+`LabgridBench` can subclass it and swap SSH/QEMU control for labgrid places
+without touching scenario code. Keep scenarios written against `Bench`, never
+against raw ssh/curl.
+
+### GitHub org-Actions freeze: billing hold, not policy (2026-08-27 forensics)
+
+**Symptom**: workflow dispatch 422s with "Actions has been disabled for this
+repository" while org AND repo Actions policies read `enabled/all`, workflows
+read `active`, and queued runs sit `queued` forever.
+
+**Root cause here**: an unpaid net billing balance — $14.68 of Actions storage
+overage (May 2026, `tollgate-release-explorer-site`, 43.7k GB-hours from
+artifact volume) — on a free org with no payment method. Enforcement swept
+during GitHub's platform billing incident (status page, Aug 26–27). Public-repo
+minutes are free; artifact STORAGE is metered past ~500 MB.
+
+**Diagnosis chain** (gh token needs `-s admin:org` for the org endpoints;
+refresh via `gh auth refresh -h github.com -s admin:org` — device-code flow):
+1. `gh api /user/memberships/orgs/OpenTollGate` → confirm role.
+2. `gh api /orgs/OpenTollGate/actions/permissions` + repo-level → both green
+   rules out policy.
+3. `gh api "/orgs/OpenTollGate/settings/billing/usage"` → per-repo usage items
+   with `grossAmount`/`discountAmount`/`netAmount` — any nonzero net = the hold.
+   (Free orgs get NO audit log — that API 404s; don't chase it.)
+
+**Fix**: org owner pays the balance (Billing & plans → payment method) and sets
+org artifact retention to ≤7 days. Per-workflow `retention-days` is belt to
+that (ci.yml/nut-auditor.yml carry `retention-days: 3`).
+
+**Posture adopted**: GH-side scheduled noise minimized (reaper daily; vm-reaper
+dispatch-only), local cron is the fast reaper, every cloud-lab VM self-destructs,
+and local `cloud-lab.py submit` runs without GitHub at all. A recovery tripwire
+lives in crontab (daily 08:12 UTC dispatch probe → `~/.cache/org-actions-watch.log`).
+Upstream trigger-hygiene + SDK-caching PRs #369/#370 and the SDK audit #371
+track the remaining build-matrix work.
+
+
 ### `chpasswd` does not exist on OpenWrt BusyBox
 
 OpenWrt's BusyBox does not ship with `chpasswd`. Attempting `echo 'root:pw' | chpasswd` in a uci-defaults script will fail. Use `printf '%s\n%s\n' 'pw' 'pw' | passwd root` instead.
@@ -532,7 +626,15 @@ The Go backend's wallet dependency is declared as `Origami74/gonuts-tollgate v0.
 
 **testnut.cashu.exchange returns a dummy string, not bolt11**:
 
-> **Note (July 2026)**: `testnut.cashu.space` is currently unreachable (HTTP 000 / connection refused). Only `testnut.cashu.exchange` is operational. The `.space` domain was previously the recommended fallback for valid bolt11 invoices but is no longer available.
+> **Note (updated 2026-09-18)**: both testnut domains are currently operational —
+> live-probed: `testnut.cashu.space` answers `/v1/info` (0.17s) AND settles
+> NUT-04 quotes (verified end-to-end with HttpMinter), as does
+> `testnut.cashu.exchange`. An earlier July 2026 note declared `.space` dead
+> (HTTP 000); that was transient or has been fixed. `.space` is the canonical
+> testnut domain (returns proper bolt11); `.exchange` remains the fallback and
+> still returns its dummy `dummy-mint-*` string instead of bolt11 (see below).
+> Mints flap — probe before blaming the router, and prefer a quote-settle probe
+> over `/v1/info` alone.
 
 ```
 testnut.cashu.exchange → "dummy-mint-4-46876457c0684c65d07e993705706d7b84c528aa75be1c722b8970f37585c7ba-exp1780177644"
@@ -706,7 +808,11 @@ If `99-asu-defaults` is still there, it failed partway through. Read it, fix the
 
 After `sysupgrade -n`, the WAN port is configured for DHCP by default. Check that the upstream network is providing DHCP. Verify with `ping 192.168.13.1` from the router.
 
-## GCP cloud lab (fire-and-forget)
+## GCP cloud lab (fire-and-forget) — DEPRECATED
+
+> **Superseded by SHC** (default provider, ~$0.01/run vs ~$0.10/run, Zone 4 reachable from Europe; note Zone 7/Dev VPS is still unreachable). No GCP runner snapshot is baked — `submit`/`up` fail fast via `ensure_runner_snapshot()` in `lib/cloud_lab/gcp.py`. To revive: `scripts/bake-snapshot.py` + update `SNAPSHOT_NAME`. Reaped-VM cost-hygiene notes below still apply in spirit to SHC (`scripts/cost-status.py` audits it).
+
+**Deprecated section kept for reference.** To revive GCP: run `scripts/bake-snapshot.py`, update `SNAPSHOT_NAME` in `lib/cloud_lab/constants.py`, and remove the guard.
 
 ### Cost Policy
 
@@ -1085,7 +1191,40 @@ python3 scripts/shc-run-baked.py --service-id <ID> --ip <IP> \
 enforce 1 in practice. Delete old snapshots before creating new ones:
 `shc snapshot-delete <service_id> <snapshot_id>`.
 
+### SHC VM self-destruct (bounded keys — account key never on VMs)
+
+Every SHC VM ordered by `cloud-lab.py submit` / `shc-run-baked.py` arms a
+self-destruct at bootstrap via `_resolve_selfdestruct()` in
+`lib/cloud_lab/shc_submit.py` (wraps shc-toolkit's lesson-23 module):
+an on-VM systemd timer cancels the service at boot+`--lease` minutes using
+a key planted at `/etc/shc/self-destruct.key` (0400) — NOT the account key.
+
+**Key resolution (controller-side only — Basic creds never reach the VM):**
+1. `SHC_SUICIDE_KEY` env (static short-expiry key) — override;
+2. per-run 1-day mint over HTTP Basic from `SHC_ACCOUNT_EMAIL` +
+   `SHC_ACCOUNT_PASSWORD` repo secrets (**`SHC_ACCOUNT_EMAIL` must be the
+   BARE Blesta username, not the account email** — shc-toolkit lesson 26).
+   Minted keys self-revoke the next day; nothing to rotate manually.
+3. neither present → `legacy-warned`: the old inline kill-switch runs with
+   the account key + a loud WARN in the log (the lesson-23 anti-pattern).
+
+When the bounded path arms, the bootstrap `unset SHC_API_KEY` immediately —
+steps 1–15 never see the account key. If the installer fails on the VM, the
+legacy switch is kept as fallback. If minting fails on the controller
+(rotated password), the submit **fails loudly** rather than silently
+downgrading security — fix per shc-toolkit lesson 26 (credentials live in
+`~/.config/shc/credentials.sh` on the lab machine) and update the
+`SHC_ACCOUNT_*` repo secrets.
+
+The static `SHC_SUICIDE_KEY` repo secrets are obsolete under this scheme
+(per-run mints) and have been deleted; restore one only for
+belt-and-braces.
+
 ### SHC Zone Reachability + Reaper Gotchas
+
+**Paid-resource audits: `scripts/cost-status.py`.** Lists everything billing across SHC (services, snapshots, backups) and GCP (instances, disks, snapshots, images, addresses, machine-images). Resources are classified against `config/approved-resources.yaml` (regex on name, or GCP label match): anything not matching is UNAPPROVED → exit 1. VMs that exist but are powered off are flagged **STOPPED-BUT-BILLABLE** — SHC bills by service existence, not power state (incident: `lightning-playground` sat stopped for 9 days accruing $0.26/day unnoticed). Spend per 24h/7d/30d is reconstructed (Σ price/day × days-existed) because SHC's transaction ledger only records credits/refunds — renewals draw down credit silently and `list_invoices` stays empty. `--export-reaper-env` emits the allowlist as `SHC_REAPER_EXTRA_KEEP_PATTERNS` so the reaper and the audit share one approval source.
+
+**This SHC account is shared by every agent project on the lab mini-PC** (lightning-playground, hackathon-tooling, clboss, tollgate-lab, shc-toolkit users…). A VM you did not order may belong to another session's soak test — check `get_vm_detail().ssh_key` for the `#shc-order=` tag to attribute it by ordering session before touching it, and never cancel a foreign VM without asking the user. Agents that order SHC VMs must: (0) `export SHC_ORDER_TAG=opencode:<session-id>` first so every order is attributable (shc-toolkit ≥403e177 embeds it in the key comment; `cost-status.py` displays `ordered-by`), (1) cancel them in the same session (stop = still billed), (2) use a reaper-reapable hostname prefix (`tollgate-`, `ci-`, `test-`, `tg-`) for ephemeral VMs — hostnames like `clboss-soak` or `lightning-playground` match no reap prefix and bill forever, and (3) register intentional long-lived VMs in `config/approved-resources.yaml`.
 
 **Zone 7 (Cherryvale, Kansas / Dev VPS tier) is unreachable from Europe.**
 The `66.92.204.0/24` subnet (Cherryvale) has no working BGP route from at
@@ -1104,8 +1243,9 @@ inherits working routes.
 
 **The SHC reaper kills test VMs by hostname prefix.** Two GHA workflows run
 automatically:
-- `shc-toolkit/.github/workflows/reap-orphan-vms.yml` (hourly)
-- `physical-router-test-automation/.github/workflows/vm-reaper.yml` (every 30 min)
+- `shc-toolkit/.github/workflows/reap-orphan-vms.yml` (daily 05:23 UTC — eased from hourly 2026-08-27)
+- `physical-router-test-automation/.github/workflows/vm-reaper.yml` (dispatch-only since 2026-08-27 — schedule removed; the lab machine's local `*/30` cron runs `cleanup-stale`)
+- On-VM self-destruct timers (primary failsafe on every VM ordered through cloud-lab since 2026-08-27)
 
 Both reap VMs whose hostnames start with: `tf-acc-`, `tollgate-`, `test-`,
 `tmp-`, `ci-`, `tg-`, `zone-test-`, `nutshell-`, `pytest-test-`. VMs are
@@ -1454,15 +1594,17 @@ Tests are ordered by dependency and run sequentially. The full suite validates W
 
 ## Cashu Token Version Compatibility
 
-The Go backend (gonuts) supports V1, V3, and V4 Cashu tokens. V4 support was added in gonuts-tollgate v0.8.0 via `resolveShortKeysetIds()`. PR #284 bumps the dependency (pending merge).
+The Go backend (gonuts) supports V1, V3, and V4 Cashu tokens. V4 support was added in gonuts-tollgate v0.8.0 via `resolveShortKeysetIds()`, merged via tollgate-module-basic-go PR #286 (2026-07-24); main now pins v0.11.2.
 
 | Token Version | Prefix | Encoding | Go Backend | Notes |
 |---------------|--------|----------|------------|-------|
 | V1 | `cashuA` | Base64 JSON | **Accepted** | Legacy format |
 | V3 | `cashuAeyJ` | Base64 JSON | **Accepted** | Current standard, tested with 378-char testnut tokens |
-| V4 | `cashuB` | Binary CBOR | **Accepted (gonuts v0.8.0+)** | `resolveShortKeysetIds()` resolves 8-byte short keyset IDs to full IDs before swap. V4+V1 verified e2e (`kind=1022, allotment=176160768`). V4+V2 keyset confirmed locally. Without v0.8.0: `NUT02: ID length invalid`. |
+| V4 | `cashuB` | Binary CBOR | **Accepted (gonuts v0.8.0+ for V2 keysets)** | `resolveShortKeysetIds()` resolves 8-byte short keyset IDs to full IDs before swap. V4+V1 verified e2e (`kind=1022, allotment=176160768`). V4+V2 keyset confirmed locally. The v0.8.0 requirement applies to **V4+V2** (short ID ≠ 33-byte V2 full ID → `NUT02: ID length invalid`); V4+V1 needs no resolution (the 8-byte short ID *is* the full V1 ID) and pays even on pre-v0.8.0 gonuts — verified live 2026-09-20 against the v0.5.0 tag build (Amperstrand gonuts v0.7.0): `Receive completed, amount=4, err=<nil>`. |
 
-Users with modern Cashu wallets (eNuts, cashu.me with latest CDK) producing V4 tokens are supported once PR #284 is merged.
+Users with modern Cashu wallets (eNuts, cashu.me with latest CDK) producing V4 tokens are supported on main and in v0.6.0-alpha2+. Field-compat is narrower than previously believed (live-verified 2026-09-20): **V4+V1 pays even on field v0.5.0 routers** (v0.5.0 tag pins the Amperstrand gonuts fork v0.7.0, and V1 keysets need no short-ID resolution); the actual v0.5.0 field gap is **V4+V2-keyset** tokens only.
+
+**Minting caveats (2026-09-18, gonuts-tollgate v0.11.2 wallet):** the Go wallet path cannot mint from either public testnut domain — `testnut.cashu.exchange` returns its dummy non-bolt11 string (zpay32 decode fails), and `testnut.cashu.space` now runs **V2 keysets**, which the gonuts wallet rejects at LoadWallet (`Derived id: '00…' but got '01…' from mint`). To mint V4+V1 tokens for tests use **cdk-cli** (on ai-legion-small at `/opt/cdk-mintd/cdk-cli`, 0.18.0): `cdk-cli mint https://testnut.cashu.exchange 11` then `cdk-cli send --mint-url https://testnut.cashu.exchange --amount 4 --include-fee` (V4 by default, `--v3` for V3). `scripts/mint-token` (also gonuts-based) only works against real-bolt11 V1-keyset mints, e.g. the local Nutshell V1 at `:8385`.
 
 Full findings and test matrix: `docs/portal-test-findings.md`.
 
@@ -1576,3 +1718,257 @@ Tracked as: https://github.com/OpenTollGate/tollgate-module-basic-go/issues/213
 3. **Virtual lab config management**: Script to switch backend config between testnut and CDK V2 mint without manual SSH + sed + jq chains.
 4. **cdk-cli integration**: Bundle `/tmp/cdk-cli` into the test framework as a standard tool for V4 token minting.
 5. **Build verification**: Add a test that verifies a freshly-built `.ipk` contains expected fix strings (`strings /usr/bin/tollgate-wrt | grep resolveShortKeysetIds`).
+
+## VM cleanup: bounded self-destruct keys (2026-08-27)
+
+Superseded by "SHC VM self-destruct" above (per-run 1-day mints via the
+`SHC_ACCOUNT_*` repo secrets; the static `SHC_SUICIDE_KEY` secrets are
+deleted). Still true from this incident: only **full-scope** keys can cancel
+(operate-scope and nostr leases 403 cancel — money class), Bearer keys cannot
+mint (Basic only), and the planted key grants account-wide spend for its
+lifetime — **never arm self-destruct on tollgate/untrusted-workload boxes**.
+
+## Lessons Learned — Local Virtual Lab Fast-Start (2026-08-28)
+
+Repeat start-poc cycles went **590s → ~157s** and serial provisioning became a
+fallback-only path. Four stacked root causes, each hiding the next:
+
+1. **`debian-12-nocloud` ships NO cloud-init.** "nocloud" means *no cloud
+   integration*, not the NoCloud datasource — the seed ISO attached to the QEMU
+   command was dead weight. Switched the client base to
+   `debian-12-generic-amd64.qcow2` (has cloud-init); `prepare-debian` now also
+   builds `images/seed.iso` (genisoimage, volid `cidata`) with user-data
+   (root password, sshd, packages, ssh key), meta-data, and network-config v2
+   (static `10.99.99.100/24`, gateway 10.99.99.1, **nameservers → host bridge
+   10.99.99.2** — the freshly provisioned OpenWrt's dnsmasq is unreliable
+   during provisioning windows; apt via its resolver failed).
+2. **Serial provisioning configured the network runtime-only** (`ip addr add`):
+   every reboot came up network-less, forcing serial on every start. Persist as
+   netplan — but **overwrite the image's `90-default.yaml` rather than adding a
+   sibling file**: netplan emits all files with the same prefix and networkd
+   picks the lexicographically-first match, so a DHCP match-all (`en*`) in
+   90-default shadows a higher-numbered explicit-ens3 file.
+3. **Debian's netplan.io ships no boot-time generate**: `/run/systemd/network`
+   is tmpfs; on reboot ens3 is unmanaged and `systemd-networkd-wait-online`
+   burns its full 120s timeout before sshd. An `ExecStartPre` drop-in inside
+   `systemd-networkd.service` crash-loops — the unit is sandboxed
+   (`ProtectSystem=strict`, `CapabilityBoundingSet` without
+   `CAP_DAC_OVERRIDE`) and cannot read a 0600 netplan file. Fix: an
+   **unconfined oneshot** `netplan-generate-boot.service`
+   (`Before=systemd-networkd.service`, enabled via cloud-config runcmd).
+4. **stop-poc hard-killed QEMU**, dirtying the qcow2; the next boot paid
+   journal replay on top of everything. stop-poc now sends
+   `system_powerdown` via the monitor socket (20s grace) before falling back
+   to kill.
+
+Plus two client-side fixes: `-smbios type=1,serial=ds=nocloud` (skips
+cloud-init's ~2-min datasource probing on every boot) and a mint **health
+probe** in `run-local-tests.sh` — `/v1/info` answering is NOT proof of health;
+a wedged cdk-mintd accepts quotes but never settles them (FakeWallet dead),
+which hung every payment test past the suite timeout. The probe posts a 1-sat
+quote and requires PAID within ~12s, restarting the mint otherwise. The runner
+also passes `--timeout-method=signal` (the ini's `thread` method dumps stacks
+but cannot kill a hung test — payments hung "forever" under it).
+
+Verified: fresh first boot 295s via cloud-init (serial skipped even on first
+boot); two consecutive restart cycles 160s/157s; client userspace boot 16s
+(was 2min3s); payment suite 3/3 after each cycle and after a mid-payment
+SIGKILL. Related: SHC Dev-zone status tracked in shc-toolkit#28 (provisioning
+fixed, network attach still broken — see shc-toolkit AGENTS.md lesson 26).
+
+## Token Recovery Tool + tokens-to-recover.txt semantics (2026-09-01 field validation)
+
+`scripts/recover_tokens.py` (PR #86 + #97; unit tests in
+`tests/unit/test_recover_tokens.py`) parses
+`/etc/tollgate/tokens-to-recover.txt` (line format
+`timestamp | mint_url | token | error`, writer in tmbg
+`src/upstream_session_manager/token_recovery.go`), checks spend state via
+NUT-07 checkstate, and resubmits unspent tokens to the router backend on
+:2121 (raw body, `text/plain`). Dry-run is parse-only (no network);
+non-2xx router responses are recorded as `SUBMIT_FAILED` with the body.
+
+**File-entry semantics (verified live, matters for interpreting results):**
+
+- On payment failure the backend FIRST tries `merchant.Fund(token)`
+  (receive into the router's own wallet). Only if that ALSO fails does it
+  append to the file — file entries are double-failure tokens.
+- The backend consumes (swaps) the token BEFORE opening the gate. A
+  payment that fails at gate-open leaves the token SPENT at the mint
+  (reproduced on the local virtual lab). Therefore every
+  "failed to open gate" entry is SPENT and can never be recovered by
+  resubmission — the value sits in the router wallet (recover via LuCI
+  fund/drain). The recovery tool correctly reports `SKIPPED_SPENT` for
+  these; don't misread that as a tool bug.
+- The tool's real use case: pre-consume rejections (mint outage, transient
+  errors) that also failed the auto-Fund — those are still UNSPENT and
+  resubmission works once the mint is back.
+
+**Unknown-Y checkstate semantics (source-verified across implementations):**
+NUT-07 defines only `UNSPENT`/`PENDING`/`SPENT` and never says what a mint
+returns for a Y it does not know. Every reference implementation answers
+`UNSPENT`, deliberately: mainline nutshell
+(`cashu/mint/db/read.py:get_proofs_states` — absent Y → `unspent`), CDK
+(`crates/cdk/src/mint/check_spendable.rs` — `unwrap_or(State::Unspent)`,
+predating PR #756, still current at v0.18), and cashu-cf (ISSUE-048 in that
+repo). This is information-theoretic, not sloppiness: the mint never learns
+the Y of an unspent proof (blind signatures — it only sees Y at redemption),
+so "issued and unspent" is indistinguishable from "never issued".
+Consequence for recovery tooling: an `UNSPENT` result NEVER proves
+recoverability for wrong-mint tokens — the tool surfaces `unknown_count` /
+`unknown_proofs` so operators can distinguish. Spec clarification proposed
+upstream: cashubtc/nuts#432.
+
+**Virtual-lab payment-testing gotchas (ai-legion host, found during the
+same validation):**
+
+- Host ufw is default-DROP: the lab needs scoped rules —
+  `ufw allow from 10.99.99.0/24 to any port 8383 proto tcp` (mint),
+  `ufw route allow from 10.99.99.0/24` (forwarded client traffic),
+  `ufw allow in on tg-poc-br from 10.99.99.0/24 to any port 53 proto udp`
+  (client DNS to host).
+- NDS only authenticates MACs already in its client table. From the Debian
+  client, fetch `http://10.99.99.1:2050/` BEFORE submitting a token,
+  otherwise the backend's `ndsctl auth` fails with
+  "failed to open gate: exit status 1" (the exact error this recovery file
+  records — a clean local repro of the #88 incident class).
+- Restart nodogsplash after any `fw4 restart` — fw4 rebuilds the base
+  chains and NDS must re-insert its own.
+- Each failed submit burns the token (consume-before-gate): budget a fresh
+  fakewallet token per attempt when debugging.
+
+### CDK mint version: variable, default 0.18.0 (upgraded from 0.16.0, 2026-09-03)
+
+The local fakewallet mint binary (`/opt/cdk-mintd/cdk-mintd`) was pinned to
+`CDK_VER=0.16.0` (2026-03-31) in `bake-snapshot.py` and `shc_submit.py`
+since the SHC lab was built. It is now a variable defaulting to **0.18.0**
+(v0.18.0 final, 2026-09-02); override with `CDK_VER=0.17.6` (last 0.17.x)
+for `bake-snapshot.py` / `cloud-lab.py submit`. `run-local-tests.sh` and
+`lib/cloud_lab/worker/mints.py` auto-detect the installed binary's version
+and emit the matching config.
+
+**v0.18 config-model changes that the scripts already handle:**
+
+- Config is stored authoritatively in the mint DB; a normal start ignores
+  `config.toml`. Fresh mints need `config validate` +
+  `config init --new-mint --file config.toml` (with `--work-dir`/`CDK_MINTD_WORK_DIR`)
+  before the first start. `--new-mint` rejects a DB that already has an
+  identity — that's why the scripts always start from a fresh work dir
+  (fakewallet value is disposable, mnemonic is fixed).
+- **Secrets must be references**: `mnemonic = "abandon …"` is rejected;
+  use `mnemonic = "env:CDK_MINTD_MNEMONIC"` and export the variable for
+  both `config init` and the daemon start.
+- `[ln] ln_backend = "fakewallet"` → `[payment_backend] backend = "fakewallet"`;
+  `CDK_MINTD_LN_*` → `CDK_MINTD_PAYMENT_BACKEND_*`.
+- `[fake_wallet]` still exists; keep `min_delay_time = 0` /
+  `max_delay_time = 0` — 0.18 defaults are 1–3s, which slows every mint.
+- NUT-04/07 HTTP behavior is unchanged for our flows (HttpMinter,
+  checkstate verified live on 0.18.0: full payment E2E + unknown-Y probe
+  both pass; unknown Y still reads `UNSPENT`, consistent with
+  `unwrap_or(State::Unspent)` in `check_spendable.rs`).
+- **Full-suite A/B (2026-09-03)**: entire `tests/api` on the local lab —
+  83 passed / 23 failed / 1 hang on 0.18.0; the SAME 21 of 23 tests fail
+  identically on 0.16.0 (diff-verified failure sets; 2 flaky passes).
+  The failures are pre-existing local-lab environment issues (missing
+  balance.html/uhttpd on the fresh VM, degraded-mode simulations,
+  lightning-portal melts), NOT 0.18 regressions. The payment-critical
+  surface is fully green on 0.18 (25/25: payment regression, quote
+  persistence, lightning backoff, mint-url fuzzy, V3/V4/V2-keyset token
+  formats, spent-token rejection). Known local-lab quirks regardless of
+  version: a swap-concurrency test can hang past pytest's signal timeout
+  (thread-pool + signal-method limitation) — kill and rerun; and 0.18
+  fakewallet melt logs `Fee was too high`/`Over paid melt quote` WARNs on
+  the lightning-portal tests (settlement completes anyway).
+- 0.18 opens/migrates existing mint DBs — never point 0.16 at a
+  0.18-written work dir afterwards (backup first if the DB matters; lab
+  mints are disposable).
+- **0.18.0-FINAL startup contract (2026-09-17, upgrade bench)**: the final
+  release dropped `--config`/`--config-file` as startup inputs entirely.
+  Config lives in the DB: run `cdk-mintd config validate --file config.toml`
+  + `cdk-mintd config init --new-mint --file config.toml` once (with
+  `CDK_MINTD_WORK_DIR` + `CDK_MINTD_MNEMONIC` exported, mnemonic as
+  `env:` ref), then start **bare** `cdk-mintd` — the daemon reads its config
+  from the work-dir DB. A dedicated second-mint setup script lives at
+  `scripts/upgrade-emulation/mint2-setup.sh` (fakewallet on 10.99.99.2:8383,
+  usable from the QEMU upgrade bench and the host).
+
+### Nodogsplash 5.0.2 auth-mark bug: authenticated clients cannot open NEW connections (2026-09-03)
+
+Root-caused on the local virtual lab after the recovery-tool E2E kept
+passing payments (`kind:1022`, allotment granted) while the client could
+not reach the internet. This is the lab-side reason "authenticated but no
+internet" incidents reproduce here, distinct from the firewall-tollgate
+masquerade bug above.
+
+**The bug** (nodogsplash 5.0.2-r1 on OpenWrt 24.10): on `ndsctl auth`, NDS
+inserts a per-client uplink rule in `mangle ndsOUT` with
+`MARK --or-mark 0x30000` — setting BOTH the 0x10000 (preauth) and 0x20000
+(auth) bits — but the accept rule in `filter ndsNET` tests
+`--mark 0x20000/0x30000`, i.e. `(mark & 0x30000) == 0x20000`, which a
+0x30000-marked packet can never satisfy. New connections from an
+authenticated client fall through to `ndsAUT`'s catch-all
+`REJECT --reject-with icmp-port-unreachable`; only ESTABLISHED flows
+survive via the conntrack accept. Symptom: payment succeeds, `ndsctl
+status` shows `State: Authenticated`, client gets timeouts (or ICMP port
+unreachable on ping).
+
+**Workaround** (after each successful auth, per client IP/MAC):
+
+```bash
+iptables -t mangle -R ndsOUT 1 -s <client-ip> -m mac --mac-source <mac> \
+  -j MARK --or-mark 0x20000
+```
+
+Verified: with the corrected mark the client's new connections are
+accepted in `ndsNET`, forwarded through the host (ufw route allow +
+MASQUERADE), and internet works end-to-end (HTTP 200 via the captive
+portal). Why the lab never caught this: `run-local-tests` payment tests
+assert backend/session state only — no test opens a NEW connection from
+the client after payment (same blind spot as the masquerade bug).
+
+**Full validated lifecycle (2026-09-03, local virtual lab, cdk-mintd
+fakewallet):** mint token → `recover_tokens.py --check` UNSPENT → submit
+raw token from Debian client (portal fetch first! see above) → backend
+`kind:1022` gate-open, allotment granted → NDS mark workaround → client
+internet HTTP 200 → token SPENT at mint. Note when testing from the
+client: use IP-literal HTTP endpoints (9.9.9.9:80 does not serve HTTP —
+cost me a false negative) and set client DNS to the router
+(`nameserver 10.99.99.1`); the host's systemd-resolved listens on
+loopback only, so the cloud-init default `nameserver 10.99.99.2` resolves
+nothing in steady state (it exists only because the freshly-provisioned
+router's dnsmasq is unreliable during provisioning — see the fast-start
+notes above). Natural follow-up: fold the NDS mark workaround into the
+lab runner / `lib/router.py` as a `fix_nodogsplash_auth_marks()` helper
+in the spirit of `fix_nodogsplash_dhcp()`.
+
+## Physical-router deployment kit (2026-09-17)
+
+`deployment-kit/` holds reproducible bring-up tooling for **physical** routers
+(complementing the cloud-lab mint recipe in `lib/cloud_lab/worker/mints.py`).
+
+- `deployment-kit/scripts/bring-up-fakewallet-mint.sh` — run cdk-mintd
+  `fakewallet` natively on a host the router can reach (auto-pays NUT-04 quotes).
+- `deployment-kit/scripts/configure-router-test-mint.sh` — backup the router's
+  `config.json`/`wallet.db` and repoint `accepted_mints` at the test mint
+  (`--restore` to revert).
+- `deployment-kit/scripts/hot-deploy-portal.sh` — build + hot-deploy the portal
+  SPA to `/etc/tollgate/tollgate-captive-portal-site` (`:2051`).
+- `deployment-kit/scripts/lightning-e2e.sh` — prime NDS, create an invoice,
+  poll until `access_granted=true`.
+- `deployment-kit/runbooks/mt6000-lightning-e2e.md` — the verified reproduction.
+- `tests/browser/tollgate-portal-lightning.spec.mjs` — hardware regression for
+  the Lightning capability probe + balance page.
+
+### Two root causes for the Lightning flow (both bit us)
+
+1. **Mint generation must match the backend wallet.** The Go backend's Cashu
+   wallet (`cashubtc/cdk-go 0.17.3`) rejects mint-quote signatures from
+   cdk-mintd `<0.17`; settlement fails with
+   `ensureLightningAccessGranted failed: Signature missing or invalid` even
+   though `POST /ln-invoice` succeeds. Use **cdk-mintd 0.18.0**.
+2. **Prime NDS before paying.** `ndsctl auth <mac>` only works for a MAC NDS
+   already tracks, so the client must fetch `http://<router>:2050/` (and the
+   `:2051` portal) first, or gate-open fails with
+   `failed to open gate: exit status 1` — after the token was already consumed.
+
+Also: `wallet.db` caches mint URLs, so delete it after changing mints; use
+`scp -O` for OpenWrt.

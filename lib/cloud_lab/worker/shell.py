@@ -34,7 +34,7 @@ def _redact(text: str) -> str:
     for pat in _REDACT_PATTERNS:
         text = _re.sub(pat, r"\1***", text)
     return text
-def _run(cmd: str, timeout: int = 120, check: bool = True) -> subprocess.CompletedProcess[str]:
+def _run(cmd: str, timeout: int = 120, check: bool = True, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     redacted = _redact(cmd[:300])
     log.debug("run: %s", redacted)
     t0 = time.monotonic()
@@ -44,6 +44,7 @@ def _run(cmd: str, timeout: int = 120, check: bool = True) -> subprocess.Complet
         text=True,
         timeout=timeout,
         check=False,
+        env=env,
     )
     elapsed = time.monotonic() - t0
     if r.returncode != 0:

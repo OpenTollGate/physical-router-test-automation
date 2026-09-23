@@ -1,14 +1,14 @@
 """Unit tests for lib/hardware_lock.py — file-based hardware mutex.
 
-These tests exercise the standalone fallback implementation. When
-tollgate_lab is installed, the canonical implementation from
+These tests exercise the standalone fallback implementation (JSON lock
+files, matching acquire_hardware_lock's writer) and pin its contract.
+When tollgate_lab is installed, the canonical implementation from
 tollgate_lab.hardware.lock is used instead, and these tests skip.
 """
 from __future__ import annotations
 
-import os
+import json
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 
 import pytest
 
@@ -32,8 +32,13 @@ from lib.hardware_lock import (
 
 
 def _write_lock(path, locked="true", session="user@host", ts=None):
-    ts = ts or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    path.write_text(f"locked: {locked}\nsession: {session}\ntimestamp: {ts}\nphase: test\n")
+    ts = ts or datetime.now(timezone.utc).isoformat()
+    path.write_text(json.dumps({
+        "locked": locked,
+        "session": session,
+        "timestamp": ts,
+        "phase": "test",
+    }))
 
 
 class TestReadHardwareLock:
@@ -49,12 +54,11 @@ class TestReadHardwareLock:
         assert result["session"] == "alice@host1"
         assert result["locked"] == "true"
 
-    def test_corrupt(self, tmp_path, monkeypatch):
+    def test_corrupt_json_returns_none(self, tmp_path, monkeypatch):
         lock = tmp_path / "bad.lock"
-        lock.write_text("this line has no colon so it is skipped\nvalid: yes")
+        lock.write_text("this is not json {{{")
         monkeypatch.setattr("lib.hardware_lock.HARDWARE_LOCK", lock)
-        result = read_hardware_lock()
-        assert result.get("valid") == "yes"
+        assert read_hardware_lock() is None
 
 
 class TestIsStale:
@@ -69,8 +73,12 @@ class TestIsStale:
     def test_missing(self):
         assert _is_stale({}) is True
 
-    def test_bad_format(self):
+    def test_bad_format_is_stale_not_crash(self):
+        # a malformed timestamp must fail CLOSED (stale), never raise —
+        # lock checks run in test setup paths where a crash is worse
+        # than a stale verdict
         assert _is_stale({"timestamp": "garbage"}) is True
+        assert _is_stale({"timestamp": None}) is True
 
 
 class TestIsHardwareLocked:
@@ -91,14 +99,12 @@ class TestIsHardwareLocked:
         monkeypatch.setattr("lib.hardware_lock.HARDWARE_LOCK", lock)
         assert is_hardware_locked() is False
 
-    def test_stale_lock_treated_as_locked(self, tmp_path, monkeypatch):
-        old_ts = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    def test_stale_lock_treated_as_unlocked(self, tmp_path, monkeypatch):
+        old_ts = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
         lock = tmp_path / "hw.lock"
         _write_lock(lock, session="old@host", ts=old_ts)
         monkeypatch.setattr("lib.hardware_lock.HARDWARE_LOCK", lock)
-        # is_hardware_locked only checks locked=true — staleness is handled by acquire
-        assert is_hardware_locked() is True
-
+        assert is_hardware_locked() is False
 
 
 class TestAcquireRelease:
@@ -112,7 +118,10 @@ class TestAcquireRelease:
         assert lock.exists()
         data = read_hardware_lock()
         assert data["phase"] == "test-phase"
-        assert data["locked"] == "true"
+        assert data["session_id"] == "test@host"
+        assert data["git_branch"] == "test-branch"
+        # fresh acquire implies locked
+        assert is_hardware_locked() is True
 
     def test_release_removes(self, tmp_path, monkeypatch):
         lock = tmp_path / "hw.lock"

@@ -7,6 +7,8 @@ test-run-*
 *.ipk
 scripts/mint-token/mint-token
 .env
+.env.bak
+reports/
 
 # Python
 __pycache__/
@@ -69,3 +71,13 @@ infra/pulumi-shc-spike/__pycache__/
 
 # auto-generated opencode session handover (do not commit)
 HANDOVER.md
+tests/browser/happy-path-report/
+tests/browser/kanbanstr-test-results/
+tests/report/
+
+# Machine-local test env files (identifiers/hosts — keep out of git)
+.env.local
+.env.rust-*
+.env.rust-basic-local.bak
+.env.lab-routers-backup
+.env.tunnel

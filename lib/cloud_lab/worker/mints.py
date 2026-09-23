@@ -159,6 +159,16 @@ def create_toxiproxy_proxy(name: str, host: str, listen_port: int, upstream_port
 CDK_PROXY_NAME = "cdk_mint"
 
 
+def _cdk_minor_version(binary: str) -> int:
+    import re
+    try:
+        out = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10)
+        m = re.search(r"(\d+)\.(\d+)\.(\d+)", out.stdout + out.stderr)
+        return int(m.group(2)) if m else 0
+    except Exception:
+        return 0
+
+
 def start_local_mints(config: WorkerConfig) -> dict[str, subprocess.Popen[str]]:
     mints: dict[str, subprocess.Popen[str]] = {}
 
@@ -173,7 +183,63 @@ def start_local_mints(config: WorkerConfig) -> dict[str, subprocess.Popen[str]]:
     ensure_toxiproxy()
 
     # --- CDK V2 Mint (internal port 18383, behind Toxiproxy on 8383) ---
-    cdk_config = f"""\
+    cdk_minor = _cdk_minor_version(f"{CDK_MINT_DIR}/cdk-mintd")
+    if cdk_minor >= 18:
+        # v0.18+ stores config in the mint DB ([ln] renamed to
+        # [payment_backend]; config.toml is ignored at start). Fakewallet
+        # value is disposable and the mnemonic is fixed, so always start
+        # from a fresh work dir — no legacy-DB migration edge cases.
+        cdk_config = f"""\
+[info]
+url = "http://{LOCAL_MINT_HOST}:{CDK_MINT_PORT}/"
+listen_host = "{LOCAL_MINT_HOST}"
+listen_port = {CDK_MINT_INTERNAL_PORT}
+mnemonic = "env:CDK_MINTD_MNEMONIC"
+
+[database]
+engine = "sqlite"
+
+[payment_backend]
+backend = "fakewallet"
+
+[fake_wallet]
+fee_percent = 0
+reserve_fee_min = 0
+min_delay_time = 0
+max_delay_time = 0
+"""
+        _run(f"mkdir -p {shlex.quote(CDK_MINT_DIR)}", timeout=10)
+        Path(f"{CDK_MINT_DIR}/config.toml").write_text(cdk_config)
+
+        cdk_env = {
+            **os.environ,
+            "CDK_MINTD_MNEMONIC": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        }
+        _run(
+            f"{CDK_MINT_DIR}/cdk-mintd --work-dir {shlex.quote(CDK_MINT_DIR)} "
+            f"config validate --file {CDK_MINT_DIR}/config.toml",
+            timeout=30,
+            env=cdk_env,
+        )
+        _run(
+            f"{CDK_MINT_DIR}/cdk-mintd --work-dir {shlex.quote(CDK_MINT_DIR)} "
+            f"config init --new-mint --file {CDK_MINT_DIR}/config.toml",
+            timeout=30,
+            env=cdk_env,
+        )
+
+        cdk_log = Path("/tmp/cdk-mintd.log")
+        cdk_proc = subprocess.Popen(
+            [f"{CDK_MINT_DIR}/cdk-mintd", "--work-dir", CDK_MINT_DIR],
+            cwd=CDK_MINT_DIR,
+            env=cdk_env,
+            stdout=cdk_log.open("w"),
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+    else:
+        cdk_config = f"""\
 [info]
 url = "http://{LOCAL_MINT_HOST}:{CDK_MINT_PORT}/"
 listen_host = "{LOCAL_MINT_HOST}"
@@ -193,21 +259,21 @@ reserve_fee_min = 0
 min_delay_time = 0
 max_delay_time = 0
 """
-    _run(f"mkdir -p {shlex.quote(CDK_MINT_DIR)}", timeout=10)
-    Path(f"{CDK_MINT_DIR}/config.toml").write_text(cdk_config)
+        _run(f"mkdir -p {shlex.quote(CDK_MINT_DIR)}", timeout=10)
+        Path(f"{CDK_MINT_DIR}/config.toml").write_text(cdk_config)
 
-    cdk_log = Path("/tmp/cdk-mintd.log")
-    cdk_proc = subprocess.Popen(
-        [f"{CDK_MINT_DIR}/cdk-mintd", "-c", f"{CDK_MINT_DIR}/config.toml"],
-        cwd=CDK_MINT_DIR,
-        stdout=cdk_log.open("w"),
-        stderr=subprocess.STDOUT,
-        text=True,
-        start_new_session=True,
-    )
+        cdk_log = Path("/tmp/cdk-mintd.log")
+        cdk_proc = subprocess.Popen(
+            [f"{CDK_MINT_DIR}/cdk-mintd", "-c", f"{CDK_MINT_DIR}/config.toml"],
+            cwd=CDK_MINT_DIR,
+            stdout=cdk_log.open("w"),
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
     mints["cdk-v2"] = cdk_proc
-    log.info("Started CDK V2 mint (pid=%d, internal port=%d, public port=%d via Toxiproxy)",
-             cdk_proc.pid, CDK_MINT_INTERNAL_PORT, CDK_MINT_PORT)
+    log.info("Started CDK V2 mint (v%d.x, pid=%d, internal port=%d, public port=%d via Toxiproxy)",
+             cdk_minor, cdk_proc.pid, CDK_MINT_INTERNAL_PORT, CDK_MINT_PORT)
 
     start_toxiproxy()
 

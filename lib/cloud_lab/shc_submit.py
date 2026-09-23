@@ -157,17 +157,67 @@ def _build_bootstrap_script(
     test_dir: str,
     suite_repo_url: str,
     lease_minutes: int = 90,
+    legacy_killswitch: bool = True,
 ) -> str:
     """Build the bash bootstrap script that runs inside the VM.
 
     Each step has explicit error checking. A completion marker (/tmp/tollgate-done)
     is created at the end so the host can reliably detect completion.
+
+    With ``legacy_killswitch=False`` the in-script self-cancel block is
+    omitted: cleanup is handled by the on-VM systemd timer planted by
+    ``shc_toolkit.selfdestruct`` (bounded 1-day key instead of the full
+    account key), and SHC_API_KEY never reaches the box.
+
+    The CDK mint version is taken from the controller's ``CDK_VER`` env
+    (default 0.18.0); override with e.g. ``CDK_VER=0.17.6`` to pin older.
     """
+    cdk_ver = os.environ.get("CDK_VER", "0.18.0")
     overlay_step = (
         f"base64 -d /tmp/overlay.b64 | sudo tar xzf - -C {test_dir}\n"
         f'echo "[6] Applied suite overlay"'
         if overlay_b64
         else 'echo "[6] No overlay to apply"'
+    )
+
+    killswitch_step = (
+        f"""LEASE_MINUTES={lease_minutes}
+
+self_cancel() {{
+    local sid="${{TOLLGATE_SERVICE_ID}}"
+    local key="${{SHC_API_KEY}}"
+    [ -z "$sid" ] || [ -z "$key" ] && return 1
+    local api="https://blesta.sovereignhybridcompute.com/user-api/v2"
+    local resp code body cid
+    resp=$(curl -s -X POST "$api/vm/$sid/cancel" \\
+        -H "Authorization: Bearer $key" \\
+        -H "Content-Type: application/json" \\
+        -d '{{"immediate": true}}' -w '\\n%{{http_code}}' 2>/dev/null)
+    code=$(echo "$resp" | tail -1)
+    body=$(echo "$resp" | grep -o '{{.*}}' | head -1)
+    if [ "$code" = "409" ]; then
+        cid=$(echo "$body" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('confirmation',{{}}).get('confirmation_id',''))" 2>/dev/null)
+        if [ -n "$cid" ]; then
+            curl -s -X POST "$api/vm/$sid/cancel" \\
+                -H "Authorization: Bearer $key" \\
+                -H "Content-Type: application/json" \\
+                -H "X-User-Api-Confirm: $cid" \\
+                -d '{{"immediate": true}}' >/dev/null 2>&1
+            echo "VM cancelled via SHC API (service #$sid)"
+        fi
+    elif [ "$code" = "200" ] || [ "$code" = "201" ]; then
+        echo "VM cancelled via SHC API (service #$sid)"
+    fi
+}}
+
+echo "Scheduling self-cancel in ${{LEASE_MINUTES}} minutes via at..."
+echo "self_cancel; shutdown -h now 'TollGate lease expired'" | at "now + ${{LEASE_MINUTES}} minutes" 2>/dev/null || \\
+  ( echo "$(( $(date +%s) + LEASE_MINUTES * 60 ))" > /tmp/tollgate-lease-expires && \\
+    ( while true; do sleep 60; [ "$(date +%s)" -ge "$(cat /tmp/tollgate-lease-expires)" ] && self_cancel && shutdown -h now; done & ) )
+echo "Lease kill switch armed (cancels SHC service + shuts down)"
+"""
+        if legacy_killswitch
+        else 'echo "Self-destruct: handled by shc-self-destruct.timer (planted separately)"'
     )
 
     # NOTE: $VAR refs bash variables (runtime), {var} refs Python f-string (build time)
@@ -204,40 +254,7 @@ fail() {{
 N_STEPS=15
 echo "BOOTSTRAP_START" >> /tmp/tollgate-status
 
-LEASE_MINUTES={lease_minutes}
-
-self_cancel() {{
-    local sid="${{TOLLGATE_SERVICE_ID}}"
-    local key="${{SHC_API_KEY}}"
-    [ -z "$sid" ] || [ -z "$key" ] && return 1
-    local api="https://blesta.sovereignhybridcompute.com/user-api/v2"
-    local resp code body cid
-    resp=$(curl -s -X POST "$api/vm/$sid/cancel" \
-        -H "Authorization: Bearer $key" \
-        -H "Content-Type: application/json" \
-        -d '{{"immediate": true}}' -w '\n%{{http_code}}' 2>/dev/null)
-    code=$(echo "$resp" | tail -1)
-    body=$(echo "$resp" | grep -o '{{.*}}' | head -1)
-    if [ "$code" = "409" ]; then
-        cid=$(echo "$body" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('confirmation',{{}}).get('confirmation_id',''))" 2>/dev/null)
-        if [ -n "$cid" ]; then
-            curl -s -X POST "$api/vm/$sid/cancel" \
-                -H "Authorization: Bearer $key" \
-                -H "Content-Type: application/json" \
-                -H "X-User-Api-Confirm: $cid" \
-                -d '{{"immediate": true}}' >/dev/null 2>&1
-            echo "VM cancelled via SHC API (service #$sid)"
-        fi
-    elif [ "$code" = "200" ] || [ "$code" = "201" ]; then
-        echo "VM cancelled via SHC API (service #$sid)"
-    fi
-}}
-
-echo "Scheduling self-cancel in ${{LEASE_MINUTES}} minutes via at..."
-echo "self_cancel; shutdown -h now 'TollGate lease expired'" | at "now + ${{LEASE_MINUTES}} minutes" 2>/dev/null || \
-  ( echo "$(( $(date +%s) + LEASE_MINUTES * 60 ))" > /tmp/tollgate-lease-expires && \
-    ( while true; do sleep 60; [ "$(date +%s)" -ge "$(cat /tmp/tollgate-lease-expires)" ] && self_cancel && shutdown -h now; done & ) )
-echo "Lease kill switch armed (cancels SHC service + shuts down)"
+{killswitch_step}
 
 TOTAL_RAM=$(free -m | awk '/^Mem:/{{print $2}}')
 if [ "$TOTAL_RAM" -le 4096 ] && [ "$(swapon --show 2>/dev/null | wc -l)" -eq 0 ]; then
@@ -251,7 +268,7 @@ sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils \
   sshpass git curl wget python3-venv python3-pip python3-setuptools python3-wheel python3-dev \
   net-tools iproute2 socat nftables build-essential libssl-dev pkg-config \
   fuse3 libfuse3-dev ca-certificates cmake g++ libnl-3-dev libnl-genl-3-dev \
-  libsecp256k1-dev jq genisoimage ffmpeg seabios ipxe-qemu \
+  libsecp256k1-dev jq genisoimage ffmpeg seabios ipxe-qemu libffi-dev \
   libsecp256k1-dev autoconf automake libtool || fail 1 "apt-get install"
 sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/*
 echo "[1/$N_STEPS] done"
@@ -306,16 +323,19 @@ sudo /opt/tollgate-venv/bin/python3 -c "import nostr_publish" 2>/dev/null || sud
 echo "[7/$N_STEPS] done"
 
 step 8 "Creating cashu venv..."
-sudo python3 -m venv /opt/cashu-venv || fail 8 "cashu venv"
-sudo /opt/cashu-venv/bin/pip install -q --upgrade pip
-echo 'scikit-build-core<0.10' > /tmp/pip-constraint.txt && \
-  PIP_CONSTRAINT=/tmp/pip-constraint.txt sudo -E /opt/cashu-venv/bin/pip install -q cashu 'marshmallow<4' || fail 8 "cashu install"
+# cashu (nutshell) does not install on Python 3.13 (Debian 13 default): its
+# cffi pin predates cp313 wheels and old cffi will not compile on 3.13.
+# Build the venv with uv-managed Python 3.12 instead.
+curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || fail 8 "uv install"
+UV="$HOME/.local/bin/uv"
+sudo "$UV" venv --python 3.12 /opt/cashu-venv || fail 8 "cashu venv"
+sudo "$UV" pip install --python /opt/cashu-venv/bin/python cashu 'marshmallow<4' || fail 8 "cashu install"
 MODELS=$(/opt/cashu-venv/bin/python3 -c 'import cashu.core.models; print(cashu.core.models.__file__)')
 sudo sed -i 's/    active: bool$/    active: bool = True/' "$MODELS"
 echo "[8/$N_STEPS] done"
 
 step 9 "Downloading CDK mints..."
-CDK_VER=0.16.0
+CDK_VER={cdk_ver}
 sudo mkdir -p /opt/cdk-mintd
 sudo pkill -f cdk-mintd 2>/dev/null || true
 sudo rm -f /opt/cdk-mintd/cdk-mintd /opt/cdk-mintd/cdk-cli
@@ -492,6 +512,13 @@ def submit_run_shc(
     if tier not in SHC_TIER_PACKAGE_PRICING:
         raise ValueError(f"Unknown tier '{tier}'. Use: {list(SHC_TIER_PACKAGE_PRICING)}")
     package_id, pricing_id = SHC_TIER_PACKAGE_PRICING[tier]
+    # Env override for zone reachability when the Dev tier's zone is down:
+    # e.g. SHC_PACKAGE_ID=26 + SHC_PRICING_ID=56 (NVMe VPS Standard, Katy TX).
+    # 64.188.7.0/24 (Dev tier, Cherryvale) was unroutable from every vantage,
+    # incl. cross-zone from SHC's own Katy site (shc-toolkit#28). The Dev tier
+    # is the only one with nested KVM, which the worker's inner QEMU VMs need.
+    package_id = int(os.environ.get("SHC_PACKAGE_ID", package_id))
+    pricing_id = int(os.environ.get("SHC_PRICING_ID", pricing_id))
     tier_label = tier.capitalize()
     tier_min_balance = 0.25 if tier == "starter" else 0.50
 
@@ -542,12 +569,13 @@ def submit_run_shc(
     else:
         tier_specs = {"starter": "1C/4GB/8GB", "standard": "2C/8GB/16GB"}
         print(f"Ordering SHC VM '{hostname}' ({tier_label} {tier_specs[tier]})...")
+        order_pubkey = client.augment_key_comment(pubkey, f"prta:cloud-lab:{run_id}") if pubkey else None
         result = client.submit_order(
             hostname=hostname,
             package_id=package_id,
             pricing_id=pricing_id,
             idempotency_key=f"tollgate-{run_id}",
-            ssh_key=pubkey or None,
+            ssh_key=order_pubkey,
         )
         sids = result.get("service_ids", [])
         if not sids:
@@ -671,6 +699,39 @@ def submit_run_shc(
         capture_output=True, text=True, timeout=15,
     )
 
+    # Arm the on-VM self-destruct timer with a BOUNDED key when a source is
+    # configured; otherwise fall back to the legacy in-script kill-switch,
+    # which plants the full account SHC_API_KEY on the VM (warned below).
+    legacy_killswitch = True
+    if os.environ.get("SHC_SUICIDE_KEY") or (
+        os.environ.get("SHC_ACCOUNT_EMAIL")
+        and os.environ.get("SHC_ACCOUNT_PASSWORD")
+    ):
+        from shc_toolkit.selfdestruct import arm_self_destruct
+
+        def _ssh_run(cmd: str) -> str:
+            proc = subprocess.run(
+                ssh_cmd(cmd), capture_output=True, text=True, timeout=120
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"self-destruct install failed: {proc.stderr[-300:]}"
+                )
+            return proc.stdout
+
+        arm = arm_self_destruct(_ssh_run, service_id, lease_minutes)
+        legacy_killswitch = False
+        print(
+            f"Self-destruct armed: {arm['minutes']}min "
+            f"(key: {arm['key_source']})"
+        )
+    else:
+        print(
+            "WARNING: no SHC_SUICIDE_KEY / SHC_ACCOUNT_EMAIL+PASSWORD — "
+            "falling back to legacy kill-switch (full account key on the VM). "
+            "Set SHC_SUICIDE_KEY to stop shipping the account key."
+        )
+
     # 6. Build bootstrap script
     bootstrap_env = " ".join([
         f"TOLLGATE_RUN_ID={shlex.quote(run_id)}",
@@ -702,7 +763,6 @@ def submit_run_shc(
         f"TOLLGATE_VM_NAME={hostname}",
         "TOLLGATE_CLOUD=shc",
         f"TOLLGATE_SERVICE_ID={service_id}",
-        f"SHC_API_KEY={shlex.quote(os.environ.get('SHC_API_KEY', ''))}",
         f"GH_TOKEN={shlex.quote(token)}",
         f"BOT_NSEC_HEX={shlex.quote(nsec)}",
         f"EXPECTED_NPUB={shlex.quote(os.environ.get('EXPECTED_NPUB', ''))}",
@@ -710,7 +770,12 @@ def submit_run_shc(
         f"VIRT_LAB_PASSWORD={VIRT_LAB_PASSWORD}",
         "NSEC_FILE=/root/nsec",
         "HOME=/root",
-    ])
+    ] + (
+        # only the legacy kill-switch consumes the account key on the VM
+        [f"SHC_API_KEY={shlex.quote(os.environ.get('SHC_API_KEY', ''))}"]
+        if legacy_killswitch
+        else []
+    ))
 
     bootstrap_script = _build_bootstrap_script(
         bootstrap_env=bootstrap_env,
@@ -718,6 +783,7 @@ def submit_run_shc(
         test_dir=TEST_DIR,
         suite_repo_url=SUITE_REPO_URL,
         lease_minutes=lease_minutes,
+        legacy_killswitch=legacy_killswitch,
     )
 
     # 7. Upload script

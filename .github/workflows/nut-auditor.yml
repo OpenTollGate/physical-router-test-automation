@@ -40,3 +40,4 @@ jobs:
         with:
           name: nut-audit-results
           path: /tmp/nut-audit-results.json
+          retention-days: 3

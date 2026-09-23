@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.request
 
 import pytest
@@ -66,6 +67,22 @@ def fresh_token() -> str:
     if not _local_mint_available():
         pytest.skip("Local mock mint not available (port 3338)")
     return _create_token(amount=1)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _backend_alive():
+    """S5-S9 are plain GETs against the live backend; earlier modules in the
+    suite (e.g. lightning flows) can leave it mid-restart. Poll briefly instead
+    of failing the whole module on a transiently dead backend."""
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        try:
+            if requests.get(f"{BACKEND_URL}/", timeout=5).status_code < 500:
+                return
+        except requests.exceptions.RequestException:
+            pass
+        time.sleep(2)
+    pytest.skip(f"backend at {BACKEND_URL} not answering after 120s")
 
 
 # ─── S1: Happy path — valid V3 token → session event ─────────────

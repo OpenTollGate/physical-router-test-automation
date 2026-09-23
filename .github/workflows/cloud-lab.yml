@@ -1,6 +1,12 @@
 # =============================================================================
-# Cloud Lab CI — Ephemeral self-hosted runner dispatch
+# Cloud Lab CI — Ephemeral self-hosted runner dispatch  [DEPRECATED — use SHC]
 # =============================================================================
+# DEPRECATED: The GCP cloud lab costs ~$0.10/run vs ~$0.01/run on SHC and its
+# runner snapshot no longer exists (fails fast at VM spawn with a clear error).
+# Prefer ./scripts/cloud-lab.py submit (SHC, default provider) or the
+# cloud-lab-shc.yml workflow. This file is kept for a future re-bake:
+# scripts/bake-snapshot.py + update SNAPSHOT_NAME in lib/cloud_lab/constants.py.
+#
 # Triggers a TollGate cloud lab run on GCP using a JIT-configured ephemeral
 # GitHub Actions runner. The workflow:
 #   1. Authenticates to GCP via service account
