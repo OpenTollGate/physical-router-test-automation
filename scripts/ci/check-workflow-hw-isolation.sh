@@ -106,18 +106,43 @@ is_pr_reachable() {
     triggers_of "$1" | grep -qxE 'pull_request|pull_request_target'
 }
 
+# `runs-on` lines of the hardware workflow, as `lineno:rest-of-line`.
+hw_runs_on_lines() {
+    [ -f "$1" ] || return 0
+    yaml_effective "$1" | grep -nE '^[[:space:]]*runs-on:' || true
+}
+
 # Lowercased runner labels used by the hardware workflow's `runs-on` lines.
 hw_runner_labels() {
-    [ -f "$1" ] || return 0
-    yaml_effective "$1" \
-        | grep -nE '^[[:space:]]*runs-on:' \
+    hw_runs_on_lines "$1" \
         | sed -E 's/^[0-9]+:[[:space:]]*runs-on:[[:space:]]*//' \
+        | sed -E 's/[[:space:]]*$//' \
         | tr -d "[]\"'" \
         | tr ',' '\n' \
         | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
         | grep -v '^$' \
         | grep -v '\${{' \
         | tr '[:upper:]' '[:lower:]' || true
+}
+
+# `lineno:reason` for every hardware-workflow `runs-on` the guard cannot read a
+# label set out of. Deriving the denied set from a file the SAME PR controls is
+# only safe if the derivation fails closed when the source is degraded: an
+# expression-valued or block-sequence `runs-on` would otherwise silently shrink
+# the denied set (down to `self-hosted`) and let the original payload through.
+hw_runs_on_unverifiable() {
+    local hit n val
+    while IFS= read -r hit; do
+        [ -n "$hit" ] || continue
+        n="${hit%%:*}"
+        val="${hit#*:runs-on:}"
+        val="${val%%#*}"
+        if printf '%s' "$val" | grep -q '\${{'; then
+            printf '%s:%s\n' "$n" "expression-valued runs-on"
+        elif [ -z "$(printf '%s' "$val" | tr -d '[:space:]')" ]; then
+            printf '%s:%s\n' "$n" "block-sequence runs-on with no inline value"
+        fi
+    done < <(hw_runs_on_lines "$1")
 }
 
 echo "Hardware-lane isolation guard"
@@ -138,6 +163,17 @@ fi
 # Denied label set: `self-hosted` always, every label the hardware workflow
 # itself uses, plus operator-supplied extras. Compared case-insensitively.
 hw_path="$WF_DIR/$HW_WORKFLOW_NAME"
+
+# Fail closed if the hardware workflow's own runner target cannot be read: the
+# denied set is derived from that file, and a degraded derivation would silently
+# shrink it.
+if [ -f "$hw_path" ]; then
+    while IFS= read -r hit; do
+        [ -n "$hit" ] || continue
+        violate "$hw_path:${hit%%:*}  R1 cannot derive the bench label set from the hardware workflow (${hit#*:}) — fix the runner target"
+    done < <(hw_runs_on_unverifiable "$hw_path")
+fi
+
 bench_labels="$(printf '%s\n%s\n' "self-hosted" "$(hw_runner_labels "$hw_path")" | sort -u | grep -v '^$' || true)"
 if [ -n "$HW_RUNNER_LABELS_EXTRA" ]; then
     bench_labels="$(printf '%s\n%s\n' "$bench_labels" "$(printf '%s' "$HW_RUNNER_LABELS_EXTRA" | tr ' ' '\n')" \
@@ -163,6 +199,10 @@ for f in "${wf_files[@]}"; do
             lin="${hit#*:}"
             val="${lin#*runs-on:}"
             val="${val%%#*}"
+            if [ -z "$(printf '%s' "$val" | tr -d '[:space:]')" ]; then
+                violate "$f:$n  R1 runs-on with no inline value (block-sequence form is not verifiable by reading — fail closed)"
+                continue
+            fi
             if printf '%s' "$val" | grep -q '\${{'; then
                 violate "$f:$n  R1 expression-valued runs-on:'$val' is not verifiable by reading — PR-reachable bench routing must be a literal label (fail closed)"
                 continue

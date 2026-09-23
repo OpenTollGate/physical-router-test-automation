@@ -111,6 +111,16 @@ run_case job-if-false-capital 1 'R3 disabled job' job-if-false-capital.yml
 # RED (review Y4): the approval gate declared under a typo'd environment name.
 run_case hw-env-typo 1 'R4 job "mutating-e2e"' hw-env-typo
 
+# RED (round-2 review Y6): the runner target as a block sequence — the label is
+# on the next line, so a same-line parser reads nothing and passes it.
+run_case pr-runs-on-block-sequence 1 'R1 runs-on with no inline value' pr-runs-on-block-sequence.yml
+
+# RED (round-2 review Y7): the denied label set is DERIVED from the hardware
+# workflow, so degrading that file (expression-valued runner target) would
+# silently shrink the denied set to `self-hosted` alone. The derivation must
+# fail closed instead.
+run_case hw-runs-on-unverifiable 1 'cannot derive the bench label set' hw-runs-on-expression
+
 echo
 if [ "$cases_failed" -eq 0 ]; then
     echo "PASS — $cases_run/$cases_run guard cases behaved as specified."
