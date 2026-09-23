@@ -16,13 +16,17 @@
 #       hardware workflow's `runs-on` (plus `self-hosted`, plus anything in
 #       HW_RUNNER_LABELS_EXTRA) is denied, and an expression-valued `runs-on:`
 #       is rejected outright because it cannot be verified by reading. It must
-#       also not reference any bench-mutating env flag.
+#       also not reference any bench-mutating env flag. An `on:` written as a
+#       flow mapping (`on: {…}`) is ALSO a violation: the trigger parser cannot
+#       read it, so PR-reachability becomes undecidable and the file cannot be
+#       proven bench-safe.
 #   R2  The hardware workflow (default `hw-smoke.yml`) must exist, must NOT be
 #       PR-reachable, and its triggers must be a subset of
 #       {workflow_dispatch, schedule} — maintainer-triggered only.
 #   R3  No disabled job parked behind a falsy `if:` anywhere in
-#       .github/workflows/ (case-insensitive `false` plus the YAML-1.1 falsy
-#       words `no`/`off`). A job parked behind a flag is an invitation to flip
+#       .github/workflows/ (case-insensitive `false` — bare, quoted or inside an
+#       expression — plus the YAML-1.1 falsy words `no`/`off`, numeric `0` and a
+#       quoted empty string). A job parked behind a flag is an invitation to flip
 #       it; enablement must be an explicit input / repo variable / environment
 #       approval.
 #   R4  Any job that references a bench-mutating env flag must declare
@@ -104,6 +108,18 @@ triggers_of() {
 
 is_pr_reachable() {
     triggers_of "$1" | grep -qxE 'pull_request|pull_request_target'
+}
+
+# `lineno:…` for every `on:` written as a YAML FLOW MAPPING (`on: {…}`).
+# `triggers_of()` reads the block form and the inline LIST form only, so a flow
+# mapping makes it return nothing — the file then looks exactly like a file with
+# no triggers at all: `is_pr_reachable` is false (R1 never arms) and the R2
+# whitelist loop iterates zero triggers (nothing "not allowed"). A PR-reachable
+# workflow, or the hardware workflow itself, could therefore be replaced with
+# `on: {pull_request: null}` and pass. Unverifiable trigger routing fails closed.
+on_flow_mapping_lines() {
+    [ -f "$1" ] || return 0
+    yaml_effective "$1" | grep -nE '^on[[:space:]]*:[[:space:]]*\{' || true
 }
 
 # `runs-on` lines of the hardware workflow, as `lineno:rest-of-line`.
@@ -191,6 +207,13 @@ is_bench_label() {
 # R1 + R3 — whole-tree rules
 # ---------------------------------------------------------------------------
 for f in "${wf_files[@]}"; do
+    # R1c: an `on:` the trigger parser cannot read (flow mapping) means
+    # PR-reachability itself is undecidable -> fail closed, whatever the file is.
+    while IFS= read -r hit; do
+        [ -n "$hit" ] || continue
+        violate "$f:${hit%%:*}  R1 'on:' written as a flow mapping ({...}) is not verifiable by reading — PR-reachability cannot be decided, so the file cannot be proven bench-safe (fail closed)"
+    done < <(on_flow_mapping_lines "$f")
+
     if is_pr_reachable "$f"; then
         # R1a: no bench runner label, and no unverifiable expression-valued runs-on.
         while IFS= read -r hit; do
@@ -221,11 +244,17 @@ for f in "${wf_files[@]}"; do
         done < <(yaml_effective "$f" | grep -n 'TOLLGATE_ENABLE_' || true)
     fi
 
-    # R3: case-insensitive false + the YAML-1.1 falsy words.
+    # R3: an `if:` that evaluates falsy parks a job exactly as effectively as the
+    # original `if: false` — bare false/no/off, numeric 0, a quoted empty string,
+    # or an expression that is literally false.
     while IFS= read -r hit; do
         [ -n "$hit" ] || continue
-        violate "$f:$hit  R3 disabled job parked behind \`if: false\`"
-    done < <(yaml_effective "$f" | grep -nEi '^[[:space:]]*if:[[:space:]]*(false|no|off)[[:space:]]*$' || true)
+        violate "$f:$hit  R3 disabled job parked behind a falsy \`if:\`"
+    done < <(
+        yaml_effective "$f" | grep -nEi "^[[:space:]]*if:[[:space:]]*(false|no|off|0)['\"]?[[:space:]]*$" || true
+        yaml_effective "$f" | grep -nE "^[[:space:]]*if:[[:space:]]*(''|\"\")[[:space:]]*$" || true
+        yaml_effective "$f" | grep -nEi '^[[:space:]]*if:[[:space:]]*[$]\{\{[^}]*\b(false|off|no|0)\b[^}]*\}\}[[:space:]]*$' || true
+    )
 done
 
 # ---------------------------------------------------------------------------

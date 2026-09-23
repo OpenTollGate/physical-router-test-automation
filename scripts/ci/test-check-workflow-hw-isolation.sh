@@ -121,6 +121,15 @@ run_case pr-runs-on-block-sequence 1 'R1 runs-on with no inline value' pr-runs-o
 # fail closed instead.
 run_case hw-runs-on-unverifiable 1 'cannot derive the bench label set' hw-runs-on-expression
 
+# RED (round-3 review of the hardened head, finding 2 / Y7-family): the trigger
+# section written as a YAML flow mapping (`on: {…}`) is invisible to the trigger
+# parser, so a PR-triggered self-hosted job would pass as "no triggers at all".
+run_case pr-on-flow-mapping 1 'flow mapping' pr-on-flow-mapping.yml
+
+# RED (round-3 review finding 3): R3 only caught the bare word `false`, so the
+# kill switch could simply change spelling (${{ false }} / 0 / '').
+run_case job-if-expression-false 1 'R3 disabled job' job-if-expression-false.yml
+
 echo
 if [ "$cases_failed" -eq 0 ]; then
     echo "PASS — $cases_run/$cases_run guard cases behaved as specified."
