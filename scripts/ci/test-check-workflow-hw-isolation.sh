@@ -31,6 +31,7 @@ run_case() {
     local dir="$TMP/$name" rc=0
     mkdir -p "$dir"
     cp "$SRC"/*.yml "$dir"/ 2>/dev/null || true
+    cp "$SRC"/*.yaml "$dir"/ 2>/dev/null || true
 
     local fx
     for fx in "$@"; do
@@ -129,6 +130,15 @@ run_case pr-on-flow-mapping 1 'flow mapping' pr-on-flow-mapping.yml
 # RED (round-3 review finding 3): R3 only caught the bare word `false`, so the
 # kill switch could simply change spelling (${{ false }} / 0 / '').
 run_case job-if-expression-false 1 'R3 disabled job' job-if-expression-false.yml
+
+# RED (round-4 review finding 1, blocker): a bench-label runner in a THIRD file
+# — not PR-reachable, so R1 never arms, and not the hardware workflow, so
+# R2/R4/R5 never look at it. Only R6 catches this.
+run_case other-self-hosted 1 'R6 bench runner label' other-self-hosted.yml
+
+# RED (round-4 review finding 2): the kill switch as a folded scalar (`if: >-`
+# with `false` on the continuation line) — invisible to a line-anchored regex.
+run_case job-if-folded-false 1 'R3 disabled job parked behind a folded falsy' job-if-folded-false.yml
 
 echo
 if [ "$cases_failed" -eq 0 ]; then

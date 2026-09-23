@@ -24,11 +24,11 @@
 #       PR-reachable, and its triggers must be a subset of
 #       {workflow_dispatch, schedule} — maintainer-triggered only.
 #   R3  No disabled job parked behind a falsy `if:` anywhere in
-#       .github/workflows/ (case-insensitive `false` — bare, quoted or inside an
-#       expression — plus the YAML-1.1 falsy words `no`/`off`, numeric `0` and a
-#       quoted empty string). A job parked behind a flag is an invitation to flip
-#       it; enablement must be an explicit input / repo variable / environment
-#       approval.
+#       .github/workflows/ (case-insensitive `false` — bare, quoted, inside an
+#       expression, or as the body of a folded `if: >-` scalar — plus the
+#       YAML-1.1 falsy words `no`/`off`, numeric `0` and a quoted empty string).
+#       A job parked behind a flag is an invitation to flip it; enablement must
+#       be an explicit input / repo variable / environment approval.
 #   R4  Any job that references a bench-mutating env flag must declare
 #       `environment:` NAMED `$HW_ENVIRONMENT_NAME` (default `bench-hardware`) —
 #       presence of the key is not enough, a typo'd environment would silently
@@ -36,6 +36,16 @@
 #   R5  In the hardware workflow, any job that uses `secrets.` must declare the
 #       same named environment too — the read-only lane must stay
 #       credential-free.
+#   R6  No bench-label runner outside the hardware workflow. R1 only arms on
+#       files whose triggers the parser can read, and R2/R4/R5 only ever look at
+#       the hardware workflow — so a self-hosted job added to a THIRD file
+#       (push-triggered, or `workflow_call`-able and therefore reachable from a
+#       pull_request-triggered caller) would otherwise pass every rule. Bench
+#       work lives in exactly one file. A file that legitimately runs on a
+#       DIFFERENT self-hosted fleet must be named in
+#       HW_NON_BENCH_SELF_HOSTED_ALLOW and is reported as an explicit
+#       exception on every run, never silently skipped; unverifiable `runs-on`
+#       targets in it still fail closed.
 #
 # LIMIT (stated, not hidden): this guard runs from the PR's own checkout, so a
 # hostile PR can delete it in the same commit that adds the self-hosted job.
@@ -63,6 +73,11 @@ HW_WORKFLOW_NAME="${HW_WORKFLOW_NAME:-hw-smoke.yml}"
 HW_ENVIRONMENT_NAME="${HW_ENVIRONMENT_NAME:-bench-hardware}"
 HW_RUNNER_LABELS_EXTRA="${HW_RUNNER_LABELS_EXTRA:-}"
 HW_TRIGGER_WHITELIST="workflow_dispatch schedule"
+# Files (basenames) that may legitimately run on a DIFFERENT self-hosted fleet
+# (i.e. not the bench). They are reported as an explicit exception on every run,
+# never silently skipped. R6 still rejects unverifiable `runs-on` targets in
+# them. Default: cloud-lab-runner.yml targets the ephemeral GCP `cloud-lab` VM.
+HW_NON_BENCH_SELF_HOSTED_ALLOW="${HW_NON_BENCH_SELF_HOSTED_ALLOW:-cloud-lab-runner.yml}"
 
 if [ ! -d "$WF_DIR" ]; then
     echo "FATAL: workflows dir not found: $WF_DIR" >&2
@@ -128,8 +143,8 @@ hw_runs_on_lines() {
     yaml_effective "$1" | grep -nE '^[[:space:]]*runs-on:' || true
 }
 
-# Lowercased runner labels used by the hardware workflow's `runs-on` lines.
-hw_runner_labels() {
+# Lowercased runner labels on any file's `runs-on` lines.
+runs_on_labels() {
     hw_runs_on_lines "$1" \
         | sed -E 's/^[0-9]+:[[:space:]]*runs-on:[[:space:]]*//' \
         | sed -E 's/[[:space:]]*$//' \
@@ -140,6 +155,38 @@ hw_runner_labels() {
         | grep -v '\${{' \
         | tr '[:upper:]' '[:lower:]' || true
 }
+
+# Lowercased runner labels used by the hardware workflow's `runs-on` lines.
+hw_runner_labels() {
+    runs_on_labels "$1"
+}
+
+# Bodies of `if:` guards written as a folded/block scalar (`if: >-`, `if: |`),
+# one joined line per guard. A line-anchored regex cannot see a value that lives
+# on the continuation lines, so a kill switch can simply respell itself as
+# `if: >-` + `false`.
+falsy_folded_if_bodies() {
+    [ -f "$1" ] || return 0
+    yaml_effective "$1" | awk '
+        function flush() {
+            if (body != "") { gsub(/^[ \t]+|[ \t]+$/, "", body); print body; body = "" }
+        }
+        /^[ \t]*if:[ \t]*[>|]/ { flush(); collecting = 1; body = ""; indent = match($0, /[^ \t]/); next }
+        collecting && /^[ \t]*$/ { next }
+        collecting {
+            m = match($0, /[^ \t]/)
+            if (m <= indent) { flush(); collecting = 0; next }
+            line = $0; gsub(/^[ \t]+|[ \t]+$/, "", line)
+            body = (body == "" ? line : body " " line)
+            next
+        }
+        END { flush() }
+    ' || true
+}
+
+# A guard body that evaluates falsy: bare/quoted false/no/off/0, an empty quoted
+# string, or an expression that is literally falsy.
+RE_FALSY_GUARD='^["'"'"']?(false|no|off|0)["'"'"']?$|^["'"'"']{2}$|^[$]\{\{[^}]*\b(false|off|no|0)\b[^}]*\}\}$'
 
 # `lineno:reason` for every hardware-workflow `runs-on` the guard cannot read a
 # label set out of. Deriving the denied set from a file the SAME PR controls is
@@ -214,6 +261,40 @@ for f in "${wf_files[@]}"; do
         violate "$f:${hit%%:*}  R1 'on:' written as a flow mapping ({...}) is not verifiable by reading — PR-reachability cannot be decided, so the file cannot be proven bench-safe (fail closed)"
     done < <(on_flow_mapping_lines "$f")
 
+    # R6: a bench-label runner in ANY file other than the hardware workflow.
+    # R1 only arms on files the trigger parser can see as PR-reachable, and R2/R4/
+    # R5 only look at the hardware workflow — so a self-hosted job in a third file
+    # (push-triggered, or `workflow_call`-able and therefore reachable from a
+    # pull_request-triggered caller) used to pass every rule. Bench work lives in
+    # exactly one file; anything else must be named in
+    # HW_NON_BENCH_SELF_HOSTED_ALLOW and is reported as an exception.
+    if [ "$f" != "$hw_path" ]; then
+        r6_allowed=0
+        for _a in $HW_NON_BENCH_SELF_HOSTED_ALLOW; do
+            [ "$(basename "$f")" = "$_a" ] && r6_allowed=1
+        done
+        while IFS= read -r hit; do
+            [ -n "$hit" ] || continue
+            n="${hit%%:*}"
+            lin="${hit#*:}"
+            val="${lin#*runs-on:}"
+            val="${val%%#*}"
+            if [ -z "$(printf '%s' "$val" | tr -d '[:space:]')" ] \
+               || printf '%s' "$val" | grep -q '\${{'; then
+                violate "$f:$n  R6 runs-on outside the hardware workflow is not verifiable by reading (fail closed)"
+                continue
+            fi
+            for lab in $(printf '%s' "$val" | tr -d "[]\"'" | tr ',' ' '); do
+                is_bench_label "$lab" || continue
+                if [ "$r6_allowed" -eq 1 ]; then
+                    note "  exception: $f:$n  '$lab' allowed by HW_NON_BENCH_SELF_HOSTED_ALLOW (non-bench fleet)"
+                else
+                    violate "$f:$n  R6 bench runner label '$lab' outside the hardware workflow (only $HW_WORKFLOW_NAME may run bench work)"
+                fi
+            done
+        done < <(hw_runs_on_lines "$f")
+    fi
+
     if is_pr_reachable "$f"; then
         # R1a: no bench runner label, and no unverifiable expression-valued runs-on.
         while IFS= read -r hit; do
@@ -255,6 +336,14 @@ for f in "${wf_files[@]}"; do
         yaml_effective "$f" | grep -nE "^[[:space:]]*if:[[:space:]]*(''|\"\")[[:space:]]*$" || true
         yaml_effective "$f" | grep -nEi '^[[:space:]]*if:[[:space:]]*[$]\{\{[^}]*\b(false|off|no|0)\b[^}]*\}\}[[:space:]]*$' || true
     )
+
+    # R3 (folded form): `if: >-` / `if: |` hides its value on the continuation
+    # lines, where a line-anchored regex cannot see it.
+    while IFS= read -r body; do
+        [ -n "$body" ] || continue
+        printf '%s' "$body" | grep -qE "$RE_FALSY_GUARD" || continue
+        violate "$f  R3 disabled job parked behind a folded falsy \`if:\` ($body)"
+    done < <(falsy_folded_if_bodies "$f")
 done
 
 # ---------------------------------------------------------------------------
@@ -326,5 +415,5 @@ if [ "$violations" -eq 0 ]; then
     note "OK — no workflow reachable from pull_request can reach the bench."
     exit 0
 fi
-note "FAILED — $violations violation(s). See rules R1-R5 in $(basename "$0")."
+note "FAILED — $violations violation(s). See rules R1-R6 in $(basename "$0")."
 exit 1
