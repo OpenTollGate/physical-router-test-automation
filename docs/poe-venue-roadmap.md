@@ -114,3 +114,26 @@ candidate) — coordinate before squatting. Proposed split when agreed:
    they land.
 4. Switch daemon health monitoring: the frozen-detector should run as a
    cheap preflight in every PoE scenario, not just on failure paths.
+
+## Phase 3 — labgrid venue (LIVE 2026-09-24)
+
+The physical lab is now a first-class venue: scenarios run unchanged against
+a labgrid place with `TOLLGATE_VENUE=labgrid` (select DUT with
+`TOLLGATE_LABGRID_PLACE`, default `ap-lan2`).
+
+- **Design + S2 findings**: `docs/labgrid-venue-design.md` (thin adapter,
+  subprocess labgrid-client, guarded place binding, env-export into the
+  existing `router` fixture — QEMU/SHC paths untouched).
+- **Proven on ap-lan2** (2026-09-24): `tests/scenarios/test_labgrid_venue.py`
+  green end-to-end — place acquire (per-DUT lock), SSH via inventory
+  key/jump, cold cycle through the place's NetworkPowerPort (conwrt_poe
+  verified-manage underneath; driver-host needs `conwrt_poe.py` installed
+  inside the venv's labgrid package), uptime-reset + firmware-identity
+  proof, clean release. Direct PoE smoke remains the bring-up fallback.
+- **Token dialect note**: deployed backend parses proof `C` as hex; the
+  Sept-21 portal build wants base64 — `lib/cashu.py` `_encode_c()` defaults
+  to hex (backend dialect) with `TOLLGATE_TOKEN_C_BASE64=1` for portal-only
+  flows. QEMU API regression green on the hex default (12/12).
+- **Hardware prerequisites per DUT** (inventory, gitignored): `place`,
+  `keyfile` (ed25519 — 25.x dropbear refuses RSA pubkeys), `jump_host`
+  (pytest hosts off the DUT VLAN), `address`.

@@ -164,6 +164,9 @@ class TestPoeColdCycle:
 
         ctl.assert_delivering(port, timeout_s=30)
 
+        # A preceding admin-control run (off/on) leaves the DUT mid-boot:
+        # PoE Delivering only proves the port, not userspace readiness.
+        _wait_ssh(keyfile, router.address)
         pre_release = _router_ssh(keyfile, router.address, "cat /etc/openwrt_release")
         (tmp_path / "pre-reboot.log").write_text(
             _router_ssh(keyfile, router.address, "logread | tail -40")

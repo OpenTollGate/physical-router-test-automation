@@ -45,6 +45,10 @@ routers:
     mac: "<router-mac>"
     serial: ""
     protected: false
+    place: "<labgrid-place>"  # labgrid venue: place name on the shared coordinator
+                              # (empty = direct-PoE path only, no place acquire)
+    keyfile: ""               # ed25519 key for key auth — 25.x dropbear refuses RSA
+    jump_host: ""             # ProxyJump hop for pytest hosts off the DUT VLAN
     note: "placeholder unit — self-booting"
 
   fragile-unit:

@@ -55,6 +55,9 @@ class RouterEntry:
     serial_console: str = ""
     protected: bool = False
     note: str = ""
+    place: str = ""
+    keyfile: str = ""
+    jump_host: str = ""
 
 
 @dataclass(frozen=True)
@@ -158,6 +161,9 @@ def load_inventory(path: Path | None = None) -> LabInventory:
             serial_console=str(entry.get("serial_console", "") or ""),
             protected=bool(entry.get("protected", False)),
             note=str(entry.get("note", "") or ""),
+            place=str(entry.get("place", "") or ""),
+            keyfile=str(entry.get("keyfile", "") or ""),
+            jump_host=str(entry.get("jump_host", "") or ""),
         )
 
     return LabInventory(
