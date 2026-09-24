@@ -154,14 +154,17 @@ it.
 - **NEVER firstboot** on the SUT (brick-class per conwrt rules; the unit is
   adopted and valuable). Config changes follow uci readback discipline; each
   scenario documents what it changes on the unit and restores it.
-- **Mint reachability — top open risk**: the backend inside the SUT must
-  reach the fakewallet mint. Plan: run `cdk-mintd` on ai-legion (binds
-  `0.0.0.0:8383`, already proven) and point the SUT at the ai-legion address
-  the SWITCH can route to; the SUT's default route is the switch (`.102.1`),
-  which reaches the mgmt LAN. Likely needs one runtime nft accept on the
-  switch for that flow (same pattern as bench-arm's `switch.10*` accept
-  rules) — verify before automating; if the switch firewall refuses the
-  forward, fall back to a mint bound on the switch itself.
+- **Mint reachability — CONFIRMED BLOCKED, fix staged (2026-09-24)**: the
+  SUT's route to an ai-legion-hosted mint (`192.168.102.1` gateway → switch
+  → mgmt LAN) is rejected by the switch's fw4 forward with admin-prohibited
+  (SUT sees `Operation not permitted`). Verified read-only from the SUT.
+  The staged fix — apply ONLY when no labgrid place is acquired (switch-wide
+  mutation class, per the locking table) and prefer folding into
+  `/etc/bench-arm.sh` so it re-arms at boot:
+  `nft insert rule inet fw4 forward iifname "switch.1002" ip daddr <mint-host> tcp dport 8383 accept`
+  (runtime-only as written; survives nothing — that is the safety property).
+  NOTE 2026-09-24 13:33: ap-lan2 was acquired by a parallel session
+  (ai-legion/ubuntu) while this fix was staged — do not apply while held.
 
 ## Sequencing (target: today)
 
