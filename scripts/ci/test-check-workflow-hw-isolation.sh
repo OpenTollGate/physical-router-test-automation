@@ -140,6 +140,21 @@ run_case other-self-hosted 1 'R6 bench runner label' other-self-hosted.yml
 # with `false` on the continuation line) — invisible to a line-anchored regex.
 run_case job-if-folded-false 1 'R3 disabled job parked behind a folded falsy' job-if-folded-false.yml
 
+# RED (round-5 review finding 1, blocker): the ALLOWLISTED basename carrying a
+# bench-SPECIFIC label. A PR can add an allowlisted file and `uses:` it, so the
+# allowlist must excuse only a different self-hosted fleet.
+run_case cloud-lab-runner.yml-bench-label 1 "R6 bench runner label 'tollgate-router'" cloud-lab-runner.yml
+
+# RED (round-5 review finding 2, blocker): valid YAML whose `on:` keys are
+# indented four spaces, so a non-empty `on:` block parses to zero triggers and
+# the file would pass every reachability rule by default.
+run_case on-deep-indent 1 "'on:' section is not readable by the parser" on-deep-indent.yml
+
+# RED (round-5 review finding 2, second half): the hardware workflow's jobs
+# indented away from the two-space form the R4/R5 scanner matches, so `secrets.`
+# without an `environment:` gate would report nothing at all.
+run_case hw-deep-jobs 1 'R4/R5 job structure is not parseable' hw-deep-jobs
+
 echo
 if [ "$cases_failed" -eq 0 ]; then
     echo "PASS — $cases_run/$cases_run guard cases behaved as specified."

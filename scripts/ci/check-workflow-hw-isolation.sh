@@ -52,6 +52,17 @@
 # For that class of PR the mechanical protection is branch protection + the
 # `lint` check being REQUIRED, not this script. See docs/hw-lane-isolation.md.
 #
+# KNOWN RESIDUALS (measured, deliberately not chased — R3's job is to remove the
+# *flipped boolean*, not to be a YAML evaluator):
+#   * `if:` values that are falsy without being spelled as one of the forms R3
+#     matches: `if: !true`, `if: null`, `if: ${{ !inputs.enabled }}`, and any
+#     other expression whose falsiness only exists at evaluation time.
+#   * an `if:` reached through YAML anchors/aliases (`if: *disabled`) is not
+#     resolved.
+#   * this parser is line-form based: forms it cannot read never pass silently
+#     (that is what R1c/R1d/R6's fail-closed branches are for), but it is not a
+#     YAML parser and does not claim to be.
+#
 # Only effective YAML is scanned: full-line and trailing comments are stripped
 # first, so documentation prose (which necessarily names the anti-patterns it
 # bans) cannot trip the guard.
@@ -114,7 +125,7 @@ on_block() {
 triggers_of() {
     on_block "$1" \
         | sed -E 's/(^|[[:space:]])#.*$/\1/' \
-        | sed -n -E 's/^\[(.*)\][[:space:]]*$/\1/p; s/^  ([A-Za-z_][A-Za-z0-9_-]*)[[:space:]]*:.*/\1/p' \
+        | sed -n -E 's/^\[(.*)\][[:space:]]*$/\1/p; s/^  ([A-Za-z_][A-Za-z0-9_-]*)[[:space:]]*:.*/\1/p; s/^[[:space:]]*([A-Za-z_][A-Za-z0-9_-]*)[[:space:]]*$/\1/p' \
         | tr ',' '\n' \
         | tr -d " \"'" \
         | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
@@ -137,6 +148,20 @@ on_flow_mapping_lines() {
     yaml_effective "$1" | grep -nE '^on[[:space:]]*:[[:space:]]*\{' || true
 }
 
+# A reason string when an `on:` section exists but the trigger parser extracts
+# ZERO triggers from it — e.g. the keys indented at four spaces instead of two.
+# Such a file looks exactly like a file with no triggers, so PR-reachability is
+# undecidable and the file must fail closed rather than pass by default.
+on_section_unreadable() {
+    local body trig
+    [ -f "$1" ] || return 0
+    body="$(on_block "$1" | sed -E 's/(^|[[:space:]])#.*$/\1/' | tr -d '[:space:]')"
+    [ -n "$body" ] || return 0
+    trig="$(triggers_of "$1" | tr -d '[:space:]')"
+    [ -z "$trig" ] && printf '%s\n' "a non-empty 'on:' block yielded 0 parsed triggers"
+    return 0
+}
+
 # `runs-on` lines of the hardware workflow, as `lineno:rest-of-line`.
 hw_runs_on_lines() {
     [ -f "$1" ] || return 0
@@ -144,6 +169,13 @@ hw_runs_on_lines() {
 }
 
 # Lowercased runner labels on any file's `runs-on` lines.
+#
+# NOTE: this deliberately DROPS `${{ … }}` values (they are not labels). That is
+# only safe because every caller either checks the file with
+# `hw_runs_on_unverifiable()` first (the hardware workflow / R6) or is guarded by
+# R1a's own expression check. A future caller that uses this function alone would
+# silently shrink the denied set to `self-hosted` — the Y7 defect. If you add a
+# caller, add the unverifiable check with it.
 runs_on_labels() {
     hw_runs_on_lines "$1" \
         | sed -E 's/^[0-9]+:[[:space:]]*runs-on:[[:space:]]*//' \
@@ -243,6 +275,9 @@ if [ -n "$HW_RUNNER_LABELS_EXTRA" ]; then
         | sort -u | grep -v '^$' || true)"
 fi
 
+hw_specific_labels="$(printf '%s\n%s\n' "$(hw_runner_labels "$hw_path" | grep -vx 'self-hosted' || true)" \
+    "$(printf '%s' "$HW_RUNNER_LABELS_EXTRA" | tr ' ' '\n')" | grep -v '^$' || true)"
+
 is_bench_label() {
     local l
     l="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
@@ -260,6 +295,14 @@ for f in "${wf_files[@]}"; do
         [ -n "$hit" ] || continue
         violate "$f:${hit%%:*}  R1 'on:' written as a flow mapping ({...}) is not verifiable by reading — PR-reachability cannot be decided, so the file cannot be proven bench-safe (fail closed)"
     done < <(on_flow_mapping_lines "$f")
+
+    # R1d: an `on:` section the parser cannot read AT ALL (non-empty body, zero
+    # triggers parsed — e.g. keys indented at four spaces) leaves PR-reachability
+    # undecidable. Same class as the flow mapping above, different spelling.
+    while IFS= read -r why; do
+        [ -n "$why" ] || continue
+        violate "$f  R1 'on:' section is not readable by the parser ($why) — PR-reachability cannot be decided, so the file cannot be proven bench-safe (fail closed)"
+    done < <(on_section_unreadable "$f")
 
     # R6: a bench-label runner in ANY file other than the hardware workflow.
     # R1 only arms on files the trigger parser can see as PR-reachable, and R2/R4/
@@ -286,7 +329,15 @@ for f in "${wf_files[@]}"; do
             fi
             for lab in $(printf '%s' "$val" | tr -d "[]\"'" | tr ',' ' '); do
                 is_bench_label "$lab" || continue
-                if [ "$r6_allowed" -eq 1 ]; then
+                ll="$(printf '%s' "$lab" | tr '[:upper:]' '[:lower:]')"
+                # The allowlist excuses a DIFFERENT self-hosted fleet — never a
+                # label that only the hardware workflow declares. A PR controls
+                # an allowlisted file's NAME as much as another file's contents
+                # (a PR can drop `.github/workflows/cloud-lab-runner.yml` in and
+                # add `uses:` for it), so the basename must not authorise
+                # bench-specific routing.
+                if [ "$r6_allowed" -eq 1 ] \
+                   && ! printf '%s\n' "$hw_specific_labels" | grep -qxF "$ll"; then
                     note "  exception: $f:$n  '$lab' allowed by HW_NON_BENCH_SELF_HOSTED_ALLOW (non-bench fleet)"
                 else
                     violate "$f:$n  R6 bench runner label '$lab' outside the hardware workflow (only $HW_WORKFLOW_NAME may run bench work)"
@@ -376,12 +427,16 @@ else
                 if (uses_secrets && !env_ok)
                     printf "VIOLATION %s  R5 job \"%s\" uses `secrets.` without an `environment: %s` approval gate (%s)\n", file, job, wantenv, envdesc()
             }
-            /^  [A-Za-z0-9_-]+:/ {
+            # Scope to the `jobs:` section: without this, a 2-space key anywhere
+            # (a trigger key, a `permissions:` child) is mistaken for a job.
+            /^jobs:[[:space:]]*$/ { in_jobs = 1; next }
+            in_jobs && /^[^[:space:]]/ { in_jobs = 0 }
+            in_jobs && /^  [A-Za-z0-9_-]+:/ {
                 flush()
                 job = $1; sub(/:.*/, "", job)
                 mutating = 0; uses_secrets = 0; env_seen = 0; env_name = ""; env_ok = 0
             }
-            job != "" {
+            job != "" && in_jobs {
                 if ($0 ~ /^    environment:/) {
                     env_seen = 1
                     v = $0
@@ -407,6 +462,20 @@ else
             printf '%s\n' "$line"
             violations=$((violations + 1))
         done <<< "$job_rule_report"
+    fi
+
+    # Fail closed if the job structure was not parseable at all. The awk matches
+    # job keys at exactly two spaces INSIDE the `jobs:` section, so a file whose
+    # jobs are indented differently would silently skip R4/R5 — the same
+    # "unreadable YAML form passes by default" class as the `on:` checks above.
+    jobs_parsed="$(yaml_effective "$hw_path" | awk '
+        /^jobs:[[:space:]]*$/ { f = 1; next }
+        f && /^[^[:space:]]/ { f = 0 }
+        f && /^  [A-Za-z0-9_-]+:/ { n++ }
+        END { print n + 0 }
+    ')"
+    if [ "${jobs_parsed:-0}" -eq 0 ]; then
+        violate "$hw_path  R4/R5 job structure is not parseable at the expected indentation (fail closed)"
     fi
 fi
 
