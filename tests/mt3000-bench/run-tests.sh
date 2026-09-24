@@ -272,6 +272,34 @@ else
   t_begin "the whole deploy path runs under BusyBox ash (the router's shell)"; skip "no fixtures"
 fi
 
+t_begin "the lock fd does not leak into the command, so a detached descendant cannot hold the bench"
+run_cmd "$BENCH_LOCK" exec --purpose "fd-leak-test" -- sh -c 'if [ -e /proc/self/fd/9 ]; then echo FD9_PRESENT; else echo FD9_CLOSED; fi'
+check_contains "fd 9 is closed inside the window (no leak into exec'd children)" "FD9_CLOSED" "$OUT"
+run_cmd "$BENCH_LOCK" exec --purpose "detached-descendant-test" -- sh -c 'setsid sleep 20 >/dev/null 2>&1 &'
+check_rc "window with a detached descendant exits 0" 0 "$RC"
+run_cmd "$BENCH_LOCK" status
+check_rc "the bench is FREE after the window even though a descendant survived" 0 "$RC"
+check_contains "status says FREE" "STATE     FREE" "$OUT"
+pkill -f 'sleep 20' >/dev/null 2>&1 || true
+
+t_begin "the INSTALLED shape works: symlinks on PATH (regression: the live run hit the symlink bug)"
+SYMDIR="$WORK/bin"; mkdir -p "$SYMDIR"
+for s in bench-lock bench-with-lock bench-deploy-apk; do ln -sfn "$BENCH_DIR/$s.sh" "$SYMDIR/$s"; done
+run_cmd "$SYMDIR/bench-lock" status
+check_rc "symlinked bench-lock runs" 0 "$RC"
+check_contains "symlinked bench-lock finds the real lock" "$BENCH_LOCK_PATH" "$OUT"
+run_cmd "$SYMDIR/bench-with-lock" --purpose "symlink-shape" -- true
+check_rc "symlinked bench-with-lock runs (was rc=127 before the symlink fix)" 0 "$RC"
+if [ "$have_fixtures" = 1 ]; then
+  new_router
+  run_cmd "$SYMDIR/bench-with-lock" --purpose "symlink-deploy" -- \
+      "$SYMDIR/bench-deploy-apk" --apk "$APK_B" --sha256 "$SHA_B" --install-timeout 60
+  check_rc "symlinked deploy helper completed a full deploy" 0 "$RC"
+  check_contains "symlinked deploy verified the identity" "INSTALLED VERIFIED" "$OUT"
+else
+  skip "no fixtures for the symlinked deploy"
+fi
+
 lock_kill_all
 rm -f "$BENCH_LOCK_PATH"
 printf '\nworkdir kept for inspection: %s\n' "$WORK"

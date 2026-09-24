@@ -18,5 +18,9 @@
 # See scripts/mt3000-bench/README.md and the tollgate-development skill.
 #
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# resolve the symlink: install.sh puts `bench-with-lock` in ~/.local/bin pointing here, and
+# $BASH_SOURCE is then the SYMLINK - using its dirname would look for bench-lock.sh next to
+# the symlink (measured live: `~/.local/bin/bench-lock.sh: No such file or directory`).
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+HERE="$(cd "$(dirname "$SELF")" && pwd)"
 exec "$HERE/bench-lock.sh" exec "$@"

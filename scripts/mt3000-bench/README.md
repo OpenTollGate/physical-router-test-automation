@@ -147,4 +147,14 @@ the holder's identity, a substituted staged apk is refused before installing, an
   with `wc -c < file`, never `stat -c %s`; `grep -c` exits 1 on zero matches, so pipe it to
   `head -1` before arithmetic.
 * **`apk add` of an equal version is a no-op**, and `apk info -v` prints the *package*
-  version, not the build identity — the payload sha256 is the only real proof.
+  version, not the build identity — only the payload sha256 is proof.
+* **The lock fd must not leak into the command.** `flock` is inherited across `fork` *and*
+  `exec`, so a detached descendant (an install launched with `setsid`, a backgrounded helper)
+  would keep the bench locked after the window closed — the next window is refused by a
+  holder `release` cannot even name, because the holder-line pid is gone. `bench-lock exec`
+  runs the command in a subshell with `exec 9>&-`; if you open the lock fd yourself, close it
+  before spawning anything. Regression tests: `run-tests.sh` test 17 (RED without the fix).
+* **Resolve your own path through symlinks.** `install.sh` links the commands into
+  `~/.local/bin`, so `$BASH_SOURCE` is the *symlink*: `$(dirname "${BASH_SOURCE[0]}")` then
+  points at `~/.local/bin` and the sibling scripts are "not found" (hit live). Use
+  `readlink -f`.

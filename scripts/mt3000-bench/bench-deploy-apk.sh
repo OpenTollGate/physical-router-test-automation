@@ -55,7 +55,7 @@
 #
 set -uo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 LOCK="$HERE/bench-lock.sh"
 
 EX_OK=0
