@@ -281,7 +281,13 @@ cmd_exec() {   # $1=purpose $2=task $3=wait $4=reclaim ; rest = command
   local purpose="$1" task="$2" wait_s="$3" reclaim="$4"; shift 4
   bench_acquire "$purpose" "$task" "$wait_s" "$reclaim"
   trap 'bench_drop_holder_line_if_ours; exit 130' INT TERM
-  ( "$@" )
+  # fd 9 (the flock) must NOT leak into the command or its descendants. It is inherited across
+  # fork AND exec, so a detached child (e.g. an install launched with setsid) would keep the
+  # flock held long after this window closed: the next window is then refused by a holder that
+  # `release` cannot even name, because the holder-line pid is gone. Measured in the suite
+  # (a deploy window closed, the next status still said HELD). Closing fd 9 in the subshell
+  # costs nothing: `require` checks the env marker + a fresh fd, never fd 9.
+  ( exec 9>&- ; "$@" )
   local rc=$?
   bench_drop_holder_line_if_ours
   exit "$rc"
