@@ -71,7 +71,10 @@
 #   bash scripts/ci/check-workflow-hw-isolation.sh [WORKFLOWS_DIR]
 #   Exit 0 = safe. Exit 1 = unsafe (every violation printed as file: R# …).
 #   Env knobs: HW_WORKFLOW_NAME, HW_ENVIRONMENT_NAME, HW_RUNNER_LABELS_EXTRA
-#              (space-separated extra runner labels to deny).
+#              (space-separated extra runner labels to deny),
+#              HW_NON_BENCH_FLEET_LABELS (labels identifying a *different*
+#              self-hosted fleet), HW_BENCH_LABELS_DEFAULT (bench-specific labels
+#              denied even if the hardware workflow stops declaring them).
 #
 # The guard's own RED/GREEN matrix lives in
 # scripts/ci/test-check-workflow-hw-isolation.sh — a guard never seen red is
@@ -89,6 +92,16 @@ HW_TRIGGER_WHITELIST="workflow_dispatch schedule"
 # never silently skipped. R6 still rejects unverifiable `runs-on` targets in
 # them. Default: cloud-lab-runner.yml targets the ephemeral GCP `cloud-lab` VM.
 HW_NON_BENCH_SELF_HOSTED_ALLOW="${HW_NON_BENCH_SELF_HOSTED_ALLOW:-cloud-lab-runner.yml}"
+# Labels that identify a DIFFERENT self-hosted fleet. `self-hosted` on its own is
+# not a fleet — it matches EVERY self-hosted runner, the bench's included — so an
+# allowlisted file may only be excused for it on a `runs-on` line that also names
+# one of these (round-6 review Y1).
+HW_NON_BENCH_FLEET_LABELS="${HW_NON_BENCH_FLEET_LABELS:-cloud-lab}"
+# Bench-specific labels denied even when the hardware workflow stops declaring
+# them. Derived sets live in files a PR controls, so the floor is hardcoded: a PR
+# cannot shrink the denied set by respelling hw-smoke.yml's runner target
+# (round-6 review Y2). `tollgate-router` is the label this card names.
+HW_BENCH_LABELS_DEFAULT="${HW_BENCH_LABELS_DEFAULT:-tollgate-router}"
 
 if [ ! -d "$WF_DIR" ]; then
     echo "FATAL: workflows dir not found: $WF_DIR" >&2
@@ -269,14 +282,24 @@ if [ -f "$hw_path" ]; then
     done < <(hw_runs_on_unverifiable "$hw_path")
 fi
 
-bench_labels="$(printf '%s\n%s\n' "self-hosted" "$(hw_runner_labels "$hw_path")" | sort -u | grep -v '^$' || true)"
+bench_labels="$(printf '%s\n%s\n%s\n' "self-hosted" "$(hw_runner_labels "$hw_path")" \
+    "$(printf '%s' "$HW_BENCH_LABELS_DEFAULT" | tr ' ' '\n')" | sort -u | grep -v '^$' || true)"
 if [ -n "$HW_RUNNER_LABELS_EXTRA" ]; then
     bench_labels="$(printf '%s\n%s\n' "$bench_labels" "$(printf '%s' "$HW_RUNNER_LABELS_EXTRA" | tr ' ' '\n')" \
         | sort -u | grep -v '^$' || true)"
 fi
 
-hw_specific_labels="$(printf '%s\n%s\n' "$(hw_runner_labels "$hw_path" | grep -vx 'self-hosted' || true)" \
-    "$(printf '%s' "$HW_RUNNER_LABELS_EXTRA" | tr ' ' '\n')" | grep -v '^$' || true)"
+# Bench-SPECIFIC labels: what only the bench declares. The hardcoded floor is
+# unioned in because this set is otherwise derived from hw-smoke.yml, which a PR
+# can respell — an empty set would turn every R6 check into a no-op (Y2).
+hw_specific_labels="$(printf '%s\n%s\n%s\n' \
+    "$(hw_runner_labels "$hw_path" | grep -vx 'self-hosted' || true)" \
+    "$(printf '%s' "$HW_BENCH_LABELS_DEFAULT" | tr ' ' '\n')" \
+    "$(printf '%s' "$HW_RUNNER_LABELS_EXTRA" | tr ' ' '\n')" | sort -u | grep -v '^$' || true)"
+
+if [ -z "$hw_specific_labels" ]; then
+    violate "$hw_path  R1 no bench-specific runner label could be derived (the denied set must never shrink to nothing) — set HW_BENCH_LABELS_DEFAULT or fix the runner target"
+fi
 
 is_bench_label() {
     local l
@@ -310,7 +333,9 @@ for f in "${wf_files[@]}"; do
     # (push-triggered, or `workflow_call`-able and therefore reachable from a
     # pull_request-triggered caller) used to pass every rule. Bench work lives in
     # exactly one file; anything else must be named in
-    # HW_NON_BENCH_SELF_HOSTED_ALLOW and is reported as an exception.
+    # HW_NON_BENCH_SELF_HOSTED_ALLOW and is reported as an exception — and even
+    # there a bench-SPECIFIC label is a violation, while the generic
+    # `self-hosted` is excused only next to a label of a different fleet.
     if [ "$f" != "$hw_path" ]; then
         r6_allowed=0
         for _a in $HW_NON_BENCH_SELF_HOSTED_ALLOW; do
@@ -327,18 +352,33 @@ for f in "${wf_files[@]}"; do
                 violate "$f:$n  R6 runs-on outside the hardware workflow is not verifiable by reading (fail closed)"
                 continue
             fi
-            for lab in $(printf '%s' "$val" | tr -d "[]\"'" | tr ',' ' '); do
+            line_labels="$(printf '%s' "$val" | tr -d "[]\"'" | tr ',' ' ')"
+            # `self-hosted` alone names no fleet — it matches EVERY self-hosted
+            # runner, the bench's included — so it may only be excused on a line
+            # that ALSO names a label of a different fleet (round-6 review Y1).
+            fleet_ok=0
+            for fl in $(printf '%s' "$HW_NON_BENCH_FLEET_LABELS" | tr ' ' '\n'); do
+                [ -n "$fl" ] || continue
+                for cand in $line_labels; do
+                    [ "$(printf '%s' "$cand" | tr '[:upper:]' '[:lower:]')" = \
+                      "$(printf '%s' "$fl" | tr '[:upper:]' '[:lower:]')" ] && fleet_ok=1
+                done
+            done
+            for lab in $line_labels; do
                 is_bench_label "$lab" || continue
                 ll="$(printf '%s' "$lab" | tr '[:upper:]' '[:lower:]')"
-                # The allowlist excuses a DIFFERENT self-hosted fleet — never a
-                # label that only the hardware workflow declares. A PR controls
-                # an allowlisted file's NAME as much as another file's contents
-                # (a PR can drop `.github/workflows/cloud-lab-runner.yml` in and
-                # add `uses:` for it), so the basename must not authorise
+                # A bench-SPECIFIC label is never excusable by the allowlist: a PR
+                # controls an allowlisted file's NAME as much as another file's
+                # contents (it can drop `.github/workflows/cloud-lab-runner.yml` in
+                # and add `uses:` for it), so the basename may not authorise
                 # bench-specific routing.
                 if [ "$r6_allowed" -eq 1 ] \
-                   && ! printf '%s\n' "$hw_specific_labels" | grep -qxF "$ll"; then
-                    note "  exception: $f:$n  '$lab' allowed by HW_NON_BENCH_SELF_HOSTED_ALLOW (non-bench fleet)"
+                   && printf '%s\n' "$hw_specific_labels" | grep -qxF "$ll"; then
+                    violate "$f:$n  R6 bench runner label '$lab' outside the hardware workflow, even under HW_NON_BENCH_SELF_HOSTED_ALLOW (that allowlist covers a different self-hosted fleet, not the bench)"
+                elif [ "$r6_allowed" -eq 1 ] && [ "$fleet_ok" -eq 1 ]; then
+                    note "  exception: $f:$n  '$lab' allowed by HW_NON_BENCH_SELF_HOSTED_ALLOW (non-bench fleet: $(printf '%s' "$HW_NON_BENCH_FLEET_LABELS" | tr ' ' '/'))"
+                elif [ "$r6_allowed" -eq 1 ] && [ "$ll" = "self-hosted" ]; then
+                    violate "$f:$n  R6 'self-hosted' alone reaches EVERY self-hosted runner, the bench included — an allowlisted basename cannot excuse it here (name a different fleet label too, e.g. $(printf '%s' "$HW_NON_BENCH_FLEET_LABELS" | tr ' ' '/'))"
                 else
                     violate "$f:$n  R6 bench runner label '$lab' outside the hardware workflow (only $HW_WORKFLOW_NAME may run bench work)"
                 fi

@@ -155,6 +155,18 @@ run_case on-deep-indent 1 "'on:' section is not readable by the parser" on-deep-
 # without an `environment:` gate would report nothing at all.
 run_case hw-deep-jobs 1 'R4/R5 job structure is not parseable' hw-deep-jobs
 
+# RED (round-6 review Y1, blocker): the ALLOWLISTED basename naming ONLY
+# `self-hosted`. GitHub gives EVERY self-hosted runner that label — the bench's
+# included — so an allowlisted basename may not excuse it without a label of a
+# different fleet on the same `runs-on` line.
+run_case cloud-lab-runner.yml-bare-selfhosted 1 "'self-hosted' alone reaches EVERY self-hosted runner" cloud-lab-bare-selfhosted
+
+# RED (round-6 review Y2, same family): the denied label set is derived from
+# hw-smoke.yml, a file a PR can respell to `[self-hosted]`. The hardcoded floor
+# must keep the bench-specific label denied. Fixture = degraded hw-smoke.yml plus
+# another file still carrying `tollgate-router`.
+run_case hw-labels-degraded 1 "R6 bench runner label 'tollgate-router'" hw-labels-degraded
+
 echo
 if [ "$cases_failed" -eq 0 ]; then
     echo "PASS — $cases_run/$cases_run guard cases behaved as specified."

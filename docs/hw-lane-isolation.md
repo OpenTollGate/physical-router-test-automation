@@ -101,16 +101,22 @@ every PR and fails on:
 - **R6** a bench-label runner in any *other* workflow file, whatever its
   triggers — the reusable-workflow path (`workflow_call` reachable from a
   `pull_request` caller). A file that legitimately runs on a different
-  self-hosted fleet must be named in `HW_NON_BENCH_SELF_HOSTED_ALLOW` (default
-  `cloud-lab-runner.yml`, the ephemeral GCP `cloud-lab` VM); the exception is
-  printed on every run and never covers a bench-*specific* label such as
-  `tollgate-router`.
+  self-hosted fleet must be named in HW_NON_BENCH_SELF_HOSTED_ALLOW (default
+  cloud-lab-runner.yml, the ephemeral GCP `cloud-lab` VM). Two limits keep that
+  allowlist from becoming a hole: it never covers a bench-*specific* label such as
+  tollgate-router, and it excuses the generic `self-hosted` label only on a
+  runner line that also names a genuinely different fleet (HW_NON_BENCH_FLEET_LABELS,
+  default cloud-lab). A PR picks an allowlisted file's *name* as freely as its
+  contents, and bare self-hosted matches every self-hosted runner, the bench
+  included. The exception is printed on every run.
 
 Forms the parser cannot read **fail closed** rather than passing by default: a
 flow-mapping `on:`, a non-empty `on:` block that parses to zero triggers
-(mis-indented keys), an expression-valued or block-sequence `runs-on` value, and a
+(mis-indented keys), an expression-valued or block-sequence `runs-on` value, a
 hardware workflow whose job structure is not parseable at the expected
-indentation.
+indentation, and a bench-specific label set that cannot be derived at all (the
+denied set is otherwise read out of hw-smoke.yml, which a PR can respell, so
+HW_BENCH_LABELS_DEFAULT — default tollgate-router — is a hardcoded floor).
 
 The first round of this guard matched the literal `self-hosted` string and only
 checked that an approval-gate key existed; repeated rounds of cold cross-family review
@@ -119,7 +125,7 @@ found each hole in turn — a label-only runner
 target, an expression, a capitalised falsy condition, a typo'd environment name, a
 block-sequence `runs-on`, a derived label set, a flow-mapping `on:`, a folded kill
 switch, and the reusable-workflow path — and the rules above are the fix. Every
-one of them has a RED case. 22 self-test cases cover them one regression at a
+one of them has a RED case. 24 self-test cases cover them one regression at a
 time.
 
 **Limit, stated rather than hidden:** the guard is an in-repo check, so it runs
@@ -134,7 +140,7 @@ the anti-patterns it bans.
 
 `scripts/ci/test-check-workflow-hw-isolation.sh` injects one regression at a time
 into a copy of the real tree and asserts the guard fails with the right rule —
-22 cases, all green. A guard never seen red is decoration, not evidence.
+24 cases, all green. A guard never seen red is decoration, not evidence.
 
 ## Read-only vs mutating locally
 
