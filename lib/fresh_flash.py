@@ -58,6 +58,10 @@ SETUP_MARKER = "/etc/tollgate-setup-done"
 
 ALLOW_NONEMPTY_FLAG = "--allow-nonempty-wallet"
 
+#: Flashing is destructive and destroys real money, so it is doubly gated:
+#: an explicit environment switch AND the wallet gate below.
+FLASH_ENABLE_ENV = "TOLLGATE_ENABLE_SYSUPGRADE_FLASHING"
+
 
 class FlashRefused(RuntimeError):
     """Raised instead of flashing when the prep conditions are not met."""
@@ -216,6 +220,46 @@ def flash_guard(state: WalletState, *, allow_nonempty: bool) -> None:
         f"(prints the Cashu tokens; exit 2 = cancelled and nothing moved), "
         f"then re-run. Pass {ALLOW_NONEMPTY_FLAG} only if you accept losing the funds."
     )
+
+
+def flashing_enabled() -> bool:
+    """Is the destructive flash switch on?  (``TOLLGATE_ENABLE_SYSUPGRADE_FLASHING=true``)"""
+    return os.environ.get(FLASH_ENABLE_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+def flash_enable_gate() -> None:
+    """Refuse unless the operator switched flashing on explicitly.
+
+    ``sysupgrade -n`` wipes the router; a stray cron, a mistyped target or an
+    accidental re-run must not be able to erase the bench on its own.
+    """
+    if flashing_enabled():
+        return
+    raise FlashRefused(
+        f"REFUSING TO FLASH: {FLASH_ENABLE_ENV} is not set to 'true'. Flashing erases "
+        f"{TOLLGATE_DIR} (config, identities and real ecash) and is opt-in only. "
+        f"Re-run with {FLASH_ENABLE_ENV}=true once you have drained the wallet "
+        f"(`{DRAIN_COMMAND}`)."
+    )
+
+
+def flash_preconditions(state: WalletState, *, allow_nonempty: bool = False) -> list[str]:
+    """Everything that must hold before ``sysupgrade`` — empty means go.
+
+    Returns the refusals as strings so callers can report *all* of them at once
+    (the pytest gate prints every blocker instead of the first one).
+    """
+    problems: list[str] = []
+    if not flashing_enabled():
+        problems.append(
+            f"{FLASH_ENABLE_ENV} is not 'true' — the destructive flash switch is off"
+        )
+    if not state.empty and not allow_nonempty:
+        problems.append(
+            f"router wallet is NOT empty ({state.summary()}) — `sysupgrade -n` wipes "
+            f"{TOLLGATE_DIR}, including real ecash; drain first with `{DRAIN_COMMAND}`"
+        )
+    return problems
 
 
 # ---------------------------------------------------------------------------

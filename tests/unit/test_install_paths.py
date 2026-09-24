@@ -63,13 +63,28 @@ def test_package_manager_rejects_garbage():
 
 
 def test_select_artifact_apk_image_picks_the_apk_with_manifest_hash():
-    selection = ip.select_artifact(ip.parse_manifest(MANIFEST_FIXTURE), ip.BENCH_ARCH, "apk")
+    selection = ip.select_artifact(
+        ip.parse_manifest(MANIFEST_FIXTURE),
+        ip.BENCH_ARCH,
+        "apk",
+        release_tag="v0.6.0-alpha4-pre16",
+        version="0.6.0_alpha4_pre16",
+    )
     artifact = selection.require()
     assert artifact.fmt == "apk"
     assert artifact.sha256 == APK_SHA
     assert artifact.filename == "tollgate-wrt_0.6.0_alpha4_pre16_aarch64_cortex-a53.apk"
     assert artifact.url.endswith("/v0.6.0-alpha4-pre16/" + artifact.filename)
     assert not selection.skipped
+
+
+def test_select_artifact_defaults_to_the_pre17_release():
+    """The default release under test must be the one the policy gate can assert."""
+    with pytest.raises(ip.ArtifactNotFound) as excinfo:
+        # the pre16 manifest fixture cannot serve the pre17 default
+        ip.select_artifact(ip.parse_manifest(MANIFEST_FIXTURE), ip.BENCH_ARCH, "apk").require()
+    assert ip.FEED_VERSION_DEFAULT in str(excinfo.value)
+    assert ip.FEED_RELEASE_DEFAULT in str(excinfo.value)
 
 
 def test_select_artifact_opkg_image_is_an_explicit_skip_not_a_pass():
@@ -209,6 +224,193 @@ def test_apk_vs_ipk_hashes_are_never_cross_compared():
     ipk_derived = "5ddda42bf55c3e007ce01016d9aa076661307e604c8df4e3b4d6e11c86c21956"
     problems = ip.identity_violations(apk_derived, ipk_derived, "tollgate-wrt_..._a53.ipk")
     assert problems and "NOT the artifact under test" in problems[0]
+
+
+def test_identity_gate_refuses_a_hash_from_the_sibling_format():
+    """Pinning the trap: same-format only, and a cross-format hash RAISES.
+
+    ``v0.6.0-alpha4-pre16``: the apk payload ``usr/bin/tollgate-wrt`` is
+    12 242 208 B / ``dce8b1f1…``; the ipk payload is 12 295 456 B /
+    ``5ddda42b…``.  Comparing the installed binary against the sibling
+    format's hash is a false failure — the gate must refuse, not compare.
+    """
+    apk_artifact = ip.Artifact(
+        filename="tollgate-wrt_0.6.0_alpha4_pre16_aarch64_cortex-a53.apk",
+        sha256="104e9ce0",
+        fmt="apk",
+        arch="aarch64_cortex-a53",
+        release_tag="v0.6.0-alpha4-pre16",
+    )
+    apk_payload = "dce8b1f1c89a0d04d705aa4ed15071aaf66a658dda791dee0996f99c76fd56bb"
+    ipk_payload = "5ddda42bf55c3e007ce01016d9aa076661307e604c8df4e3b4d6e11c86c21956"
+
+    # the correct invocation: the artifact's own format
+    assert (
+        ip.identity_gate(
+            artifact=apk_artifact,
+            installed_sha256=apk_payload,
+            expected_sha256=apk_payload,
+            expected_format="apk",
+        )
+        == []
+    )
+    # the trap: a hash derived from the sibling .ipk
+    with pytest.raises(ip.CrossFormatIdentityComparison) as excinfo:
+        ip.identity_gate(
+            artifact=apk_artifact,
+            installed_sha256=apk_payload,
+            expected_sha256=ipk_payload,
+            expected_format="ipk",
+        )
+    message = str(excinfo.value)
+    assert "DIFFERENT BUILDS" in message
+    assert "same format" in message
+    # and the gate still gets the *real* comparison wrong when formats agree
+    assert ip.identity_gate(
+        artifact=apk_artifact,
+        installed_sha256=ipk_payload,  # router runs the ipk build
+        expected_sha256=apk_payload,
+        expected_format="apk",
+    )
+    assert ip.sibling_format("apk") == "ipk"
+    assert ip.sibling_format("ipk") == "apk"
+    with pytest.raises(ip.InstallPathError):
+        ip.sibling_format("deb")
+
+
+# ---------------------------------------------------------------------------
+# release ordering + the flash-free POLICY pre-flight (the pre17 floor)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("older", "newer"),
+    [
+        ("v0.6.0-alpha4-pre16", "v0.6.0-alpha4-pre17"),
+        ("v0.6.0-alpha4-pre17", "v0.6.0-alpha4-pre18"),
+        ("v0.6.0-alpha4-pre17", "v0.6.0-alpha4"),  # the alpha itself is later
+        ("v0.6.0-alpha4", "v0.6.0-beta1"),
+        ("v0.6.0-beta1", "v0.6.0-rc1"),
+        ("v0.6.0-rc1", "v0.6.0"),
+        ("v0.6.0-alpha4-pre17", "v0.6.0-alpha5-pre1"),  # "pre17 or newer"
+        ("0.6.0-alpha4-pre16", "v0.6.0-alpha4-pre17"),  # leading v optional
+        ("v0.5.9", "v0.6.0-alpha4-pre1"),
+    ],
+)
+def test_release_rank_orders_pre_releases_before_their_stage(older, newer):
+    assert ip.release_rank(older) < ip.release_rank(newer)
+    assert ip.release_at_least(newer, older)
+    assert not ip.release_at_least(older, newer)
+
+
+def test_release_rank_rejects_garbage():
+    with pytest.raises(ip.InstallPathError):
+        ip.release_rank("nightly")
+    with pytest.raises(ip.InstallPathError):
+        ip.release_rank("")
+
+
+def test_default_release_under_test_is_pre17_or_newer():
+    """The policy assertion's target release defaults to pre17 — never older."""
+    assert ip.FEED_RELEASE_DEFAULT == ip.POLICY_TARGET_RELEASE_DEFAULT
+    assert ip.release_at_least(ip.FEED_RELEASE_DEFAULT, ip.POLICY_MIN_RELEASE_DEFAULT)
+    assert ip.release_at_least(ip.POLICY_TARGET_RELEASE_DEFAULT, "v0.6.0-alpha4-pre17")
+
+
+def test_policy_preflight_flags_pre16_as_unsupported_by_name():
+    """The published pre16 cannot satisfy the guard assertion — say it by name."""
+    result = ip.policy_preflight("v0.6.0-alpha4-pre16")
+    assert result.supported is False
+    assert result.target_release == "v0.6.0-alpha4-pre16"
+    assert result.minimum_release == ip.POLICY_MIN_RELEASE_DEFAULT
+    message = result.message()
+    assert "v0.6.0-alpha4-pre16" in message  # the release is NAMED
+    assert "UNSUPPORTED for the POLICY/guard assertion" in message
+    assert "31-admin-board-not-guest-reachable.nft" in message
+    assert "8090" in message
+    with pytest.raises(ip.PolicyAssertionUnsupported):
+        ip.require_policy_supported("v0.6.0-alpha4-pre16")
+
+
+@pytest.mark.parametrize(
+    "tag", ["v0.6.0-alpha4-pre17", "v0.6.0-alpha4-pre18", "v0.6.0-alpha4", "v0.6.0", "v0.6.1"]
+)
+def test_policy_preflight_accepts_pre17_and_newer(tag):
+    result = ip.policy_preflight(tag)
+    assert result.supported is True
+    assert "supports the POLICY/guard assertion" in result.message()
+    assert ip.require_policy_supported(tag).supported
+
+
+def test_policy_preflight_honours_the_env_and_the_guard_path(monkeypatch):
+    monkeypatch.setenv(ip.POLICY_TARGET_RELEASE_ENV, "v0.6.0-alpha4-pre16")
+    monkeypatch.setenv(ip.POLICY_GUARD_PATH_ENV, "/etc/nftables.d/99-custom-guard.nft")
+    result = ip.policy_preflight()
+    assert result.target_release == "v0.6.0-alpha4-pre16"
+    assert result.guard_path == "/etc/nftables.d/99-custom-guard.nft"
+    assert result.supported is False
+    assert "99-custom-guard.nft" in result.message()
+
+
+def test_guard_path_is_configurable_and_defaults_to_the_566_file(monkeypatch):
+    monkeypatch.delenv(ip.POLICY_GUARD_PATH_ENV, raising=False)
+    assert ip.guard_nft_path() == ip.GUARD_NFT_FILE
+    assert ip.guard_nft_basename() == ip.GUARD_NFT_BASENAME
+    monkeypatch.setenv(ip.POLICY_GUARD_PATH_ENV, "/etc/nftables.d/77-other.nft")
+    assert ip.guard_nft_path() == "/etc/nftables.d/77-other.nft"
+    assert ip.guard_nft_basename() == "77-other.nft"
+    # an override must be honoured by the assertions, not just by the accessor
+    assert ip.guard_nft_path("/root/explicit.nft") == "/root/explicit.nft"
+    problems = ip.policy_violations({22}, guard_present=False, guard_drops_br_lan=False, ssh_alive=True)
+    assert any("77-other.nft" in problem for problem in problems), problems
+
+
+def test_readiness_and_policy_gates_use_the_configured_guard_path(monkeypatch):
+    monkeypatch.setenv(ip.POLICY_GUARD_PATH_ENV, "/etc/nftables.d/77-other.nft")
+    readiness = ip.artifact_policy_readiness(
+        ["etc/nftables.d/77-other.nft"], GUARD_SETUP_SCRIPT
+    )
+    assert readiness["ships_guard_nft"] is True
+    assert readiness["guard_path"] == "/etc/nftables.d/77-other.nft"
+    assert readiness["problems"] == []
+    # the default guard basename would NOT satisfy the override
+    monkeypatch.delenv(ip.POLICY_GUARD_PATH_ENV, raising=False)
+    other = ip.artifact_policy_readiness(["etc/nftables.d/77-other.nft"], GUARD_SETUP_SCRIPT)
+    assert other["ships_guard_nft"] is False
+
+
+def test_fetch_release_manifest_names_an_unpublished_release(monkeypatch):
+    """A 404 on SHA256SUMS is a named outcome, not a mystery HTTPError."""
+    import urllib.error
+    from email.message import Message
+
+    def _boom(_url, **_kwargs):
+        raise urllib.error.HTTPError(_url, 404, "Not Found", Message(), None)
+
+    monkeypatch.setattr(ip, "http_get", _boom)
+    with pytest.raises(ip.ReleaseNotPublished) as excinfo:
+        ip.fetch_release_manifest("v0.6.0-alpha4-pre17")
+    message = str(excinfo.value)
+    assert "v0.6.0-alpha4-pre17" in message and "not published" in message
+
+    # a non-404 must NOT be swallowed
+    def _server_error(_url, **_kwargs):
+        raise urllib.error.HTTPError(_url, 500, "Server Error", Message(), None)
+
+    monkeypatch.setattr(ip, "http_get", _server_error)
+    with pytest.raises(urllib.error.HTTPError):
+        ip.fetch_release_manifest("v0.6.0-alpha4-pre17")
+
+
+def test_opkg_selection_is_always_an_explicit_skip_with_a_reason():
+    """Never a silent pass: the skipped branch carries its reason and refuses."""
+    selection = ip.select_artifact({}, "aarch64_cortex-a53", "opkg")
+    assert selection.skipped is True
+    assert selection.artifact is None
+    assert "v2 package format error" in selection.skip_reason
+    assert "never treated as a pass" in selection.skip_reason
+    with pytest.raises(ip.ArtifactNotFound):
+        selection.require()
 
 
 # ---------------------------------------------------------------------------
@@ -519,12 +721,17 @@ def test_surface_probe_snippet_probes_every_port_and_never_pings():
 
 
 def test_installer_command_is_felixs_documented_form():
-    cmd = ip.installer_command("192.168.1.1", "test123", "felix@coinos.io")
+    cmd = ip.installer_command("192.168.1.1", "lab-secret", "felix@coinos.io")
     assert cmd[0] == "bash" and cmd[1] == "-c"
     shell = cmd[2]
     assert shell.startswith(f"bash <(curl -fsSL {ip.INSTALLER_SCRIPT_URL})")
-    assert "--tag v0.6.0-alpha4-pre16" in shell
-    assert shell.endswith("192.168.1.1 test123 felix@coinos.io")
+    # the default release is the policy-assertable one (pre17), never a silent pin
+    assert f"--tag {ip.FEED_RELEASE_DEFAULT}" in shell
+    assert ip.release_at_least(ip.FEED_RELEASE_DEFAULT, ip.POLICY_MIN_RELEASE_DEFAULT)
+    assert shell.endswith("192.168.1.1 lab-secret felix@coinos.io")
+    # an explicit tag still wins
+    pinned = ip.installer_command("192.168.1.1", "lab-secret", "f@c.io", tag="v0.6.0-alpha4-pre16")[2]
+    assert "--tag v0.6.0-alpha4-pre16" in pinned
 
 
 def test_installer_command_quotes_a_password_with_specials():

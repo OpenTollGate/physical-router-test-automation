@@ -1,6 +1,17 @@
 {
   "checks": [
     {
+      "check": "policy-preflight",
+      "detail": "release v0.6.0-alpha4-pre16 is UNSUPPORTED for the POLICY/guard assertion (needs >= v0.6.0-alpha4-pre17): the release predates the #566 admin-board guard: its installed payload does not contain /etc/nftables.d/31-admin-board-not-guest-reachable.nft and a fresh install leaves `allow tcp port 8090` in the nodogsplash users_to_router allow list, so `:8090` answers 200 from a br-lan client. Pin the release under test to >= v0.6.0-alpha4-pre17 (TOLLGATE_POLICY_TARGET_RELEASE) \u2014 the policy gate is not reachable with this release.",
+      "evidence": {
+        "guard_path": "/etc/nftables.d/31-admin-board-not-guest-reachable.nft",
+        "minimum_release": "v0.6.0-alpha4-pre17",
+        "supported": false,
+        "target_release": "v0.6.0-alpha4-pre16"
+      },
+      "status": "skip"
+    },
+    {
       "check": "release-manifest",
       "detail": "14 entries in v0.6.0-alpha4-pre16/SHA256SUMS",
       "evidence": [
@@ -40,20 +51,14 @@
     },
     {
       "check": "artifact-ships-the-566-policy",
-      "detail": "the artifact payload does not contain 31-admin-board-not-guest-reachable.nft \u2014 the #566 admin-board guard cannot be present after install, so the POLICY assertions are unreachable with this release (the fix must actually ship in the package)",
+      "detail": "UNSUPPORTED (policy pre-flight): release v0.6.0-alpha4-pre16 is UNSUPPORTED for the POLICY/guard assertion (needs >= v0.6.0-alpha4-pre17): the release predates the #566 admin-board guard: its installed payload does not contain /etc/nftables.d/31-admin-board-not-guest-reachable.nft and a fresh install leaves `allow tcp port 8090` in the nodogsplash users_to_router allow list, so `:8090` answers 200 from a br-lan client. Pin the release under test to >= v0.6.0-alpha4-pre17 (TOLLGATE_POLICY_TARGET_RELEASE) \u2014 the policy gate is not reachable with this release.",
       "evidence": {
-        "nftables_d": [
-          "etc/nftables.d/20-nds-enforce.nft",
-          "etc/nftables.d/30-backend-firewall.nft"
+        "problems": [
+          "the artifact payload does not contain 31-admin-board-not-guest-reachable.nft \u2014 the #566 admin-board guard cannot be present after install, so the POLICY assertions are unreachable with this release (the fix must actually ship in the package)"
         ],
-        "payload_files": 87,
-        "setup_removes_admin_ports": {
-          "8090": true,
-          "8443": true
-        },
-        "ships_guard_nft": false
+        "unsupported": true
       },
-      "status": "fail"
+      "status": "skip"
     },
     {
       "check": "sibling-ipk-binary-is-a-different-build",
@@ -84,15 +89,9 @@
     },
     {
       "check": "installer-command-shape",
-      "detail": "bash <(curl -fsSL https://raw.githubusercontent.com/OpenTollGate/tollgate-installer/main/install-and-test.sh) --tag v0.6.0-alpha4-pre16 192.168.1.1 '<router-secret>' felix@coinos.io",
-      "evidence": {
-        "argv": [
-          "bash",
-          "-c",
-          "bash <(curl -fsSL https://raw.githubusercontent.com/OpenTollGate/tollgate-installer/main/install-and-test.sh) --tag v0.6.0-alpha4-pre16 192.168.1.1 '<router-secret>' felix@coinos.io"
-        ]
-      },
-      "status": "pass"
+      "detail": "TOLLGATE_LN_ADDRESS unset \u2014 shape only: bash <(curl -fsSL https://raw.githubusercontent.com/OpenTollGate/tollgate-installer/main/install-and-test.sh) --tag v0.6.0-alpha4-pre16 192.168.1.1 '<router-secret>' '<ln-address>'",
+      "evidence": null,
+      "status": "skip"
     },
     {
       "check": "fresh-flash-image-verified",
@@ -109,16 +108,16 @@
       "evidence": {
         "exit_code": 0,
         "matched_expected": 4,
-        "output_tail": "Listing tests:\n  [desktop-portal] \u203a protocol/captive-portal.spec.mjs:93:2 \u203a captive portal \u2014 happy path \u203a API returns valid advertisement with pricing\n  [desktop-portal] \u203a protocol/captive-portal.spec.mjs:100:2 \u203a captive portal \u2014 happy path \u203a portal shows cashu token input\n  [desktop-portal] \u203a protocol/captive-portal.spec.mjs:106:2 \u203a captive portal \u2014 happy path \u203a portal shows lightning amount input\n  [desktop-portal] \u203a protocol/captive-portal.spec.mjs:113:2 \u203a captive portal \u2014 happy path \u203a portal shows mint selection pricing buttons\nTotal: 4 tests in 1 file\n"
+        "output_tail": "Listing tests:\n  [desktop-portal] \u203a protocol/captive-portal.spec.mjs:96:2 \u203a captive portal \u2014 happy path \u203a API returns valid advertisement with pricing\n  [desktop-portal] \u203a protocol/captive-portal.spec.mjs:103:2 \u203a captive portal \u2014 happy path \u203a portal shows cashu token input\n  [desktop-portal] \u203a protocol/captive-portal.spec.mjs:110:2 \u203a captive portal \u2014 happy path \u203a portal shows lightning amount input\n  [desktop-portal] \u203a protocol/captive-portal.spec.mjs:117:2 \u203a captive portal \u2014 happy path \u203a portal shows mint selection pricing buttons\nTotal: 4 tests in 1 file\n"
       },
       "status": "pass"
     },
     {
       "check": "bench-lock-state",
-      "detail": "free (/home/c03rad0r/.hermes/state/bench-mt3000.lock)",
+      "detail": "HELD by t_aa94ad3b pid=3193038 purpose=install-path_dry_run_(read-only) since=2026-09-25T01:47:12+02:00 task=t_a05094ad host=CobradorWave (/home/c03rad0r/.hermes/state/bench-mt3000.lock)",
       "evidence": {
-        "free": true,
-        "holder": "manager pid=2727422 purpose=policy-convergence-ab t_3ac1bb9d (rerun) since=2026-09-25T00:46:34+02:00"
+        "free": false,
+        "holder": "t_aa94ad3b pid=3193038 purpose=install-path_dry_run_(read-only) since=2026-09-25T01:47:12+02:00 task=t_a05094ad host=CobradorWave"
       },
       "status": "pass"
     },
@@ -212,8 +211,8 @@
     "artifact_bytes": 8361504,
     "bench_installed": "tollgate-wrt-0.6.0_alpha4_pre16-r1",
     "bench_lock": {
-      "free": true,
-      "holder": "manager pid=2727422 purpose=policy-convergence-ab t_3ac1bb9d (rerun) since=2026-09-25T00:46:34+02:00",
+      "free": false,
+      "holder": "t_aa94ad3b pid=3193038 purpose=install-path_dry_run_(read-only) since=2026-09-25T01:47:12+02:00 task=t_a05094ad host=CobradorWave",
       "path": "/home/c03rad0r/.hermes/state/bench-mt3000.lock"
     },
     "bench_policy_snapshot": {
@@ -226,6 +225,7 @@
         "guard file /etc/nftables.d/31-admin-board-not-guest-reachable.nft is missing"
       ]
     },
+    "bench_probe_window": "inside our own bench window (t_aa94ad3b pid=3193038 purpose=install-path_dry_run_(read-only) since=2026-09-25T01:47:12+02:00 task=t_a05094ad host=CobradorWave)",
     "bench_release": "OpenWrt 25.12.5 r33051-f5dae5ece4|aarch64_cortex-a53|mediatek/filogic",
     "expected_binary_sha256": "dce8b1f1c89a0d04d705aa4ed15071aaf66a658dda791dee0996f99c76fd56bb",
     "fresh_flash_image": {
@@ -254,6 +254,7 @@
     "ipk_binary_sha256": "5ddda42bf55c3e007ce01016d9aa076661307e604c8df4e3b4d6e11c86c21956",
     "manifest_entries": 14,
     "payload_policy_readiness": {
+      "guard_path": "/etc/nftables.d/31-admin-board-not-guest-reachable.nft",
       "problems": [
         "the artifact payload does not contain 31-admin-board-not-guest-reachable.nft \u2014 the #566 admin-board guard cannot be present after install, so the POLICY assertions are unreachable with this release (the fix must actually ship in the package)"
       ],
@@ -263,14 +264,26 @@
       },
       "ships_guard_nft": false
     },
+    "policy_preflight": {
+      "guard_path": "/etc/nftables.d/31-admin-board-not-guest-reachable.nft",
+      "minimum_release": "v0.6.0-alpha4-pre17",
+      "supported": false,
+      "target_release": "v0.6.0-alpha4-pre16"
+    },
     "tag": "v0.6.0-alpha4-pre16",
     "version": "0.6.0_alpha4_pre16"
   },
-  "failures": [
-    "artifact-ships-the-566-policy"
-  ],
-  "generated": "20260924T225224Z",
+  "failures": [],
+  "generated": "20260924T234717Z",
   "host": "192.168.1.1",
+  "lock_backend": "/home/c03rad0r/.local/bin/bench-lock",
+  "policy_preflight": {
+    "guard_path": "/etc/nftables.d/31-admin-board-not-guest-reachable.nft",
+    "minimum_release": "v0.6.0-alpha4-pre17",
+    "reason": "the release predates the #566 admin-board guard: its installed payload does not contain /etc/nftables.d/31-admin-board-not-guest-reachable.nft and a fresh install leaves `allow tcp port 8090` in the nodogsplash users_to_router allow list, so `:8090` answers 200 from a br-lan client. Pin the release under test to >= v0.6.0-alpha4-pre17 (TOLLGATE_POLICY_TARGET_RELEASE) \u2014 the policy gate is not reachable with this release.",
+    "supported": false,
+    "target_release": "v0.6.0-alpha4-pre16"
+  },
   "tag": "v0.6.0-alpha4-pre16",
   "version": "0.6.0_alpha4_pre16"
 }

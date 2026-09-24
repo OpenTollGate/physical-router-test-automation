@@ -52,7 +52,13 @@ import pytest
 
 from lib import fresh_flash as ff
 from lib import install_paths as ip
-from lib.bench_lock import BenchBusy, BenchLock
+from lib.bench_lock import (
+    BenchBusy,
+    BenchLock,
+    BenchStale,
+    bench_deploy_apk_cli,
+    deploy_apk_arguments,
+)
 
 pytestmark = [
     pytest.mark.hardware,
@@ -75,11 +81,20 @@ ARTIFACT_DIR = Path(
 LN_ADDRESS = os.environ.get("TOLLGATE_LN_ADDRESS", "")
 CAPTIVE_PORTAL_PORT = os.environ.get("TOLLGATE_CAPTIVE_PORTAL_PORT", "2051")
 ALLOW_NONEMPTY_WALLET = os.environ.get("TOLLGATE_ALLOW_NONEMPTY_WALLET") == "1"
-FLASH_ENABLED = os.environ.get("TOLLGATE_ENABLE_SYSUPGRADE_FLASHING") == "true"
 ALLOW_HAPPY_PATH_SKIP = os.environ.get("TOLLGATE_HAPPY_PATH_ALLOW_SKIP") == "1"
 ENABLED = os.environ.get("TOLLGATE_ENABLE_INSTALL_PATH_E2E") == "1"
 INSTALLER_CHANNEL = os.environ.get("TOLLGATE_INSTALLER_CHANNEL", "")
 INSTALLER_URL = os.environ.get("TOLLGATE_INSTALLER_URL", ip.INSTALLER_SCRIPT_URL)
+
+#: the #566 guard path this run asserts (configurable; default pre17 layout)
+GUARD_PATH = ip.guard_nft_path()
+
+#: the flash-free policy pre-flight, evaluated at import time so every failure
+#: in this module is preceded by a *named* verdict about the release.
+POLICY_PREFLIGHT = ip.policy_preflight(FEED_TAG)
+
+#: how scenario A installs: the sanctioned verifier when it is installed
+DEPLOY_APK_CLI = bench_deploy_apk_cli()
 
 #: state shared between scenario A and scenario B (policy parity)
 SNAPSHOTS: dict[str, Any] = {}
@@ -150,7 +165,7 @@ def _capture_policy(host: str) -> dict:
     uci_out, _ = _ssh(host, ip.uci_show_users_to_router_command(), timeout=30)
     guard_out, _ = _ssh(
         host,
-        f"if [ -f {ip.GUARD_NFT_FILE} ]; then cat {ip.GUARD_NFT_FILE}; echo __rc=0; "
+        f"if [ -f {GUARD_PATH} ]; then cat {GUARD_PATH}; echo __rc=0; "
         "else echo __rc=1; fi",
         timeout=30,
     )
@@ -170,6 +185,7 @@ def _capture_policy(host: str) -> dict:
     )
     hostname, ssid, ln = (choices_out.splitlines() + ["", "", ""])[:3]
     return {
+        "guard_path": GUARD_PATH,
         "users_to_router_ports": sorted(ip.parse_users_to_router_ports(uci_out)),
         "guard_present": guard_present,
         "guard_content": guard_out,
@@ -254,11 +270,52 @@ def bench_lock() -> Iterator[BenchLock]:
     )
     try:
         lock.acquire()
+    except BenchStale as exc:
+        # a dead owner's holder line: explicit recovery only, never a silent takeover
+        pytest.skip(f"bench lock is STALE (previous owner died) — {exc}")
     except BenchBusy as exc:
         pytest.skip(f"bench not available — {exc}")
     SNAPSHOTS["bench_lock_holder"] = lock.holder.raw
+    # the env a child needs for `bench-lock require` / `bench-deploy-apk`
+    SNAPSHOTS["bench_lock_env"] = {
+        "BENCH_LOCK_HELD": "1",
+        "BENCH_LOCK_HOLDER_PID": str(os.getpid()),
+        "BENCH_LOCK_PATH": lock.path,
+        "BENCH_LOCK_PURPOSE": "prta-dual-install-path-e2e",
+        "BENCH_LOCK_TASK": BENCH_TASK_ID,
+    }
     yield lock
     lock.release()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def policy_release_gate():
+    """FAIL-FAST: refuse a release that cannot satisfy the POLICY/guard assertion.
+
+    The published ``v0.6.0-alpha4-pre16`` payload does not ship
+    ``/etc/nftables.d/31-admin-board-not-guest-reachable.nft`` and leaves
+    ``allow tcp port 8090`` in ``nodogsplash users_to_router``, so the policy
+    gates below cannot pass with it — and the reason has nothing to do with the
+    install path under test.  Saying so here, by name, beats a mysterious
+    ``:8090 answered 200`` failure two flash cycles later.
+
+    Opt *into* the unsupported run with ``TOLLGATE_CONTINUE_UNSUPPORTED=1``; the
+    policy gates are then expected to fail, and they are never reported as
+    passed.
+    """
+    if not ENABLED:
+        # an unrelated hardware sweep must SKIP this module (install_path_gate
+        # reports the opt-in), not fail it for a release choice it never made
+        return
+    if POLICY_PREFLIGHT.supported:
+        return
+    message = (
+        "POLICY ASSERTION UNSUPPORTED FOR THIS RELEASE — " + POLICY_PREFLIGHT.message()
+    )
+    if os.environ.get("TOLLGATE_CONTINUE_UNSUPPORTED", "").lower() in ("1", "true", "yes"):
+        print("\n[install-paths] " + message + "\n[install-paths] continuing (explicitly opted in)")
+        return
+    pytest.fail(message)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -382,9 +439,20 @@ class TestFreshFlashPrerequisite:
 
     def test_00_bench_lock_is_held_and_names_us(self, bench_lock):
         assert bench_lock.held
+        # the canonical holder shape the shell helper writes and parses:
+        # <profile> pid=<pid> purpose=<purpose> since=<iso> task=<id|-> host=<host>
+        bench_lock.require()
         line = bench_lock.holder.raw
-        assert BENCH_TASK_ID in line, f"holder line does not name the task: {line}"
+        assert re.match(
+            r"^\S+ pid=\d+ purpose=\S+ since=\S+ task=\S+ host=\S+$", line
+        ), f"holder line is not canonical: {line!r}"
+        assert f"task={BENCH_TASK_ID}" in line, f"holder line does not name the task: {line}"
         assert "purpose=prta-dual-install-path-e2e" in line
+        HOST_FACTS["bench_lock"] = {
+            "holder": line,
+            "path": bench_lock.path,
+            "helper": bench_deploy_apk_cli() or "not installed",
+        }
 
     def test_01_image_is_a_verified_openwrt_25_12_mt3000_sysupgrade(self, tmp_path):
         image = os.environ.get("TOLLGATE_FRESH_FLASH_IMAGE") or None
@@ -412,10 +480,21 @@ class TestFreshFlashPrerequisite:
             "nonempty_ecash_files": state.nonempty_files,
             "summary": state.summary(),
         }
+        # Both gates live in one pre-flight: the explicit destructive switch and
+        # the money gate.  Assert the switch is represented, then apply the
+        # money rule this test exists for.
+        preconditions = ff.flash_preconditions(state, allow_nonempty=ALLOW_NONEMPTY_WALLET)
+        if not ff.flashing_enabled():
+            assert any(ff.FLASH_ENABLE_ENV in blocker for blocker in preconditions), (
+                "flash_preconditions must report the destructive switch when it is off: "
+                f"{preconditions}"
+            )
         if state.empty:
             return
         if ALLOW_NONEMPTY_WALLET:
-            pytest.skip(f"non-empty wallet accepted via TOLLGATE_ALLOW_NONEMPTY_WALLET=1 — {state.summary()}")
+            pytest.skip(
+                f"non-empty wallet accepted via TOLLGATE_ALLOW_NONEMPTY_WALLET=1 — {state.summary()}"
+            )
         pytest.fail(
             f"REFUSING TO FLASH: wallet not empty ({state.summary()}). Drain first: "
             f"`{ff.DRAIN_COMMAND}` (operator step; the tokens are real money), then re-run. "
@@ -424,10 +503,10 @@ class TestFreshFlashPrerequisite:
 
     def test_03_sysupgrade_wipe_flash(self, router_host, package_manager, request):
         """Flash the image with ``sysupgrade -n`` — opt-in, never implicit."""
-        if not FLASH_ENABLED:
+        if not ff.flashing_enabled():
             pytest.skip(
-                "flashing disabled: set TOLLGATE_ENABLE_SYSUPGRADE_FLASHING=true (and have a "
-                "recovery path) to run the two full flash cycles; see docs/install-paths-e2e.md"
+                f"flashing disabled: set {ff.FLASH_ENABLE_ENV}=true (and have a recovery path) "
+                "to run the two full flash cycles; see docs/install-paths-e2e.md"
             )
         try:
             path = ff.resolve_image_path(os.environ.get("TOLLGATE_FRESH_FLASH_IMAGE") or None)
@@ -489,15 +568,52 @@ class TestDirectPackageInstall:
             setup = ip.payload_text(target, artifact.fmt, ip.SETUP_SCRIPT)
         except ip.InstallPathError:
             setup = ""
-        readiness = ip.artifact_policy_readiness(files, setup)
+        readiness = ip.artifact_policy_readiness(files, setup, guard_path=GUARD_PATH)
         HOST_FACTS["payload_policy_readiness"] = {
             **readiness,
             "nftables_d": [f for f in files if "nftables.d" in f],
         }
+        if not POLICY_PREFLIGHT.supported:
+            # the release is unsupported *by name*; never a silent pass
+            pytest.skip("UNSUPPORTED (policy pre-flight): " + POLICY_PREFLIGHT.message())
         assert not readiness["problems"], (
             f"{artifact.filename} ({FEED_TAG}) cannot satisfy the policy assertions: "
             + "; ".join(readiness["problems"])
         )
+
+    def test_a2c_opkg_branch_is_an_explicit_skip_not_a_silent_pass(self, release_manifest, router_arch, package_manager):
+        """The package-manager selection must *record* the opkg case, never skip quietly.
+
+        On the apk-only bench image the opkg branch cannot be executed: an
+        ``.ipk`` is rejected by apk with ``ERROR: v2 package format error``
+        (exit 99).  Selection therefore returns an explicit
+        ``skipped`` + reason (and ``require()`` raises), which is what the
+        direct-install scenario reports — never an empty pass.
+        """
+        if package_manager != "apk":
+            pytest.skip("this guard is about the apk-only bench image")
+        opkg_selection = ip.select_artifact(
+            release_manifest, router_arch, "opkg", release_tag=FEED_TAG, version=FEED_VERSION
+        )
+        assert opkg_selection.skipped, (
+            "selecting an .ipk for an apk-only image must be an explicit skip"
+        )
+        assert opkg_selection.artifact is None
+        assert "v2 package format error" in opkg_selection.skip_reason
+        assert ip.IPK_REJECTION_EXIT == 99
+        with pytest.raises(ip.ArtifactNotFound):
+            opkg_selection.require()
+        # and the apk branch really does select something (the skip is not masking a
+        # total selection failure)
+        apk_selection = ip.select_artifact(
+            release_manifest, router_arch, "apk", release_tag=FEED_TAG, version=FEED_VERSION
+        )
+        assert apk_selection.require().fmt == "apk"
+        HOST_FACTS["opkg_branch"] = {
+            "skipped": True,
+            "reason": opkg_selection.skip_reason,
+            "ipk_rejection_exit": ip.IPK_REJECTION_EXIT,
+        }
 
     def test_a3_ipk_is_rejected_on_an_apk_image(self, router_host, selection, package_manager):
         """Proves the *selection* matters: an .ipk cannot be installed on 25.x."""
@@ -525,8 +641,53 @@ class TestDirectPackageInstall:
         _ssh(router_host, f"rm -f {remote}", timeout=30)
 
     def test_a4_direct_install_pushes_and_installs_the_artifact(self, router_host, artifact):
+        """Install the named artifact — preferring the sanctioned verifier.
+
+        When ``bench-deploy-apk`` is installed it does the whole job: names the
+        artifact + payload sha256, rotates foreign staged apks, refuses a
+        substituted one, installs detached and then **verifies the installed
+        binary against the payload of the artifact it was told to install**
+        (exit 8 on mismatch).  Without it we fall back to a plain ``apk add``
+        plus this repo's own identity gate in ``test_a5`` — never to an
+        unverified install.
+        """
         local = ARTIFACT_DIR / artifact.filename
         remote = f"/tmp/{artifact.filename}"
+
+        deploy_argv = deploy_apk_arguments(
+            apk=str(local),
+            sha256=artifact.sha256,
+            name=artifact.filename,
+            router=router_host,
+            task=BENCH_TASK_ID,
+            extra=["--clear-package-path"],
+        )
+        if deploy_argv:
+            deploy_env = dict(os.environ)
+            deploy_env.setdefault(
+                "BENCH_ROUTER_PASSWORD",
+                os.environ.get("TOLLGATE_SSH_PASSWORD") or os.environ.get("TOLLGATE_LUCI_PASSWORD", ""),
+            )
+            deploy_env.update(SNAPSHOTS.get("bench_lock_env", {}))
+            result = subprocess.run(
+                deploy_argv, capture_output=True, text=True, timeout=900, env=deploy_env
+            )
+            HOST_FACTS["install_A_backend"] = "bench-deploy-apk"
+            HOST_FACTS["install_A_output"] = (result.stdout or "")[-4000:]
+            HOST_FACTS["install_A_exit"] = result.returncode
+            combined = (result.stdout or "") + (result.stderr or "")
+            assert result.returncode == 0, (
+                f"bench-deploy-apk failed (exit {result.returncode}); exit 8 means the INSTALLED "
+                f"identity did not match the named artifact:\n{combined[-3000:]}"
+            )
+            assert "MISMATCH" not in combined.upper(), combined[-2000:]
+            assert "sha256" in combined.lower(), (
+                "the deploy helper did not report the identity it verified:\n" + combined[-2000:]
+            )
+            time.sleep(10)  # postinst restarts network/wifi/nodogsplash/uhttpd
+            return
+
+        HOST_FACTS["install_A_backend"] = "plain apk add + this repo's identity gate"
         proc = subprocess.run(
             ["sshpass", "-e", "scp", "-O", "-o", "StrictHostKeyChecking=no",
              "-o", "UserKnownHostsFile=/dev/null", str(local), f"root@{router_host}:{remote}"],
@@ -546,8 +707,21 @@ class TestDirectPackageInstall:
     def test_a5_artifact_identity_gate(self, router_host, artifact, expected_binary_sha):
         """The installed binary must BE the artifact's binary — not merely 'a' build."""
         installed = _installed_binary_sha(router_host)
-        problems = ip.identity_violations(installed, expected_binary_sha, artifact.filename)
-        HOST_FACTS["identity_A"] = {"installed": installed, "expected": expected_binary_sha}
+        # expected_format pins the gate to the artifact's OWN format: the .apk and
+        # .ipk of one release are DIFFERENT BUILDS, so a cross-format comparison
+        # raises instead of producing a false failure.
+        problems = ip.identity_gate(
+            artifact=artifact,
+            installed_sha256=installed,
+            expected_sha256=expected_binary_sha,
+            expected_format=artifact.fmt,
+        )
+        HOST_FACTS["identity_A"] = {
+            "installed": installed,
+            "expected": expected_binary_sha,
+            "expected_format": artifact.fmt,
+            "artifact_sha256": artifact.sha256,
+        }
         assert not problems, problems
 
     def test_a6_version_string_matches_the_artifact(self, router_host, artifact, package_manager):
@@ -570,6 +744,7 @@ class TestDirectPackageInstall:
             guard_present=policy["guard_present"],
             guard_drops_br_lan=policy["guard_drops_br_lan"],
             ssh_alive=ip.tcp_probe(router_host, 22, timeout=5),
+            guard_path=GUARD_PATH,
         )
         assert not surface_problems, surface_problems
         assert not policy_problems, policy_problems
@@ -628,7 +803,11 @@ class TestInstallerPath:
         cmd = ip.installer_command(
             router_host, password, LN_ADDRESS, tag=FEED_TAG, script_url=INSTALLER_URL
         )
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        # the installer runs inside OUR bench window: export the lock env so any
+        # nested `bench-lock require` / `bench-deploy-apk` accepts this process
+        env = {**os.environ, **SNAPSHOTS.get("bench_lock_env", {})}
+        HOST_FACTS["installer_command"] = " ".join(cmd[:2]) + " <script> --tag ..."
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, env=env)
         HOST_FACTS["install_B_output"] = (result.stdout or "")[-4000:]
         HOST_FACTS["install_B_exit"] = result.returncode
         assert result.returncode == 0, (
@@ -642,8 +821,18 @@ class TestInstallerPath:
 
     def test_b3_artifact_identity_gate(self, router_host, artifact, expected_binary_sha):
         installed = _installed_binary_sha(router_host)
-        problems = ip.identity_violations(installed, expected_binary_sha, artifact.filename)
-        HOST_FACTS["identity_B"] = {"installed": installed, "expected": expected_binary_sha}
+        problems = ip.identity_gate(
+            artifact=artifact,
+            installed_sha256=installed,
+            expected_sha256=expected_binary_sha,
+            expected_format=artifact.fmt,
+        )
+        HOST_FACTS["identity_B"] = {
+            "installed": installed,
+            "expected": expected_binary_sha,
+            "expected_format": artifact.fmt,
+            "artifact_sha256": artifact.sha256,
+        }
         assert not problems, problems
 
     def test_b4_version_surfaces_and_policy(self, router_host, artifact, package_manager):
@@ -662,6 +851,7 @@ class TestInstallerPath:
             guard_present=policy["guard_present"],
             guard_drops_br_lan=policy["guard_drops_br_lan"],
             ssh_alive=ip.tcp_probe(router_host, 22, timeout=5),
+            guard_path=GUARD_PATH,
         )
         assert not surface_problems, surface_problems
         assert not policy_problems, policy_problems
@@ -707,6 +897,12 @@ def test_zz_zz_dump_evidence(tmp_path):
     """Write the raw facts this run collected (evidence for the PR / card)."""
     if not HOST_FACTS:
         pytest.skip("nothing collected")
+    HOST_FACTS["policy_preflight"] = {
+        "target_release": POLICY_PREFLIGHT.target_release,
+        "minimum_release": POLICY_PREFLIGHT.minimum_release,
+        "guard_path": POLICY_PREFLIGHT.guard_path,
+        "supported": POLICY_PREFLIGHT.supported,
+    }
     target = Path(
         os.environ.get("TOLLGATE_INSTALL_PATHS_EVIDENCE") or (tmp_path / "install-paths-evidence.json")
     )

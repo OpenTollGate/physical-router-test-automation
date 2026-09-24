@@ -1038,7 +1038,8 @@ arch-test-full: ## Run all arch E2E tests (~4min)
 
 .PHONY: pytest-smoke pytest-critical pytest-extended pytest-api pytest-phone \
         pytest-test pytest-scenarios pytest-hardware-smoke pymake-help \
-        install-path-dry-run install-path-e2e fresh-flash-check bench-lock-status \
+        install-path-preflight install-path-dry-run install-path-e2e \
+        fresh-flash-check bench-lock-status \
         pytest-smoke-mac pytest-critical-mac pytest-api-mac pytest-test-mac \
         pytest-smoke-linux pytest-api-linux pytest-test-linux \
         pytest-smoke-rust pytest-api-rust pytest-test-rust pytest-critical-rust \
@@ -1072,12 +1073,30 @@ pytest-scenarios: ## Hardware scenario tests (requires lock + routers.env)
 	@TOLLGATE_USE_HARDWARE_LOCK=1 pytest tests/scenarios/ -m hardware -v --tb=short
 
 # --- Dual-install-path e2e (fresh flash -> direct package / installer -> happy path) ---
+#
+# The bench MT3000 is a SINGLE-OWNER resource: every router-touching step runs
+# under the sanctioned bench lock (`bench-with-lock` / `bench-deploy-apk`, see
+# the tollgate-development skill reference `bench-router-single-owner`).  When
+# that helper is not installed the lock is taken in-process by lib/bench_lock.py
+# on the same flock + the same holder-line format.
 
-install-path-dry-run: ## Flash-free dual-install-path checks: artifact fetch+hash, payload policy readiness, installer shape, image verify [python]
-	@PYTHONPATH=. python3 scripts/install-path-e2e.py --dry-run --host $(TOLLGATE_SSH_HOST) \
-		--md-out docs/install-paths-dry-run-report.md
+install-path-preflight: ## Flash-free, network-free: does this release support the POLICY/guard assertion? [exit 3 = unsupported]
+	@PYTHONPATH=. python3 -c "import os; from lib import install_paths as ip; r = ip.policy_preflight(os.environ.get('TOLLGATE_FEED_TAG') or ip.FEED_RELEASE_DEFAULT); print(r.message()); raise SystemExit(0 if r.supported else 3)"
 
-install-path-e2e: ## Locked bench phase: fresh flash + both install paths + happy path (needs TOLLGATE_LN_ADDRESS) [pytest]
+install-path-dry-run: ## Flash-free dual-install-path checks: pre-flight, artifact fetch+hash, same-format payload identity, installer shape, image verify, lock state
+	@if command -v bench-with-lock >/dev/null 2>&1; then \
+		bench-with-lock --purpose "install-path dry run" --task $${TOLLGATE_BENCH_TASK_ID:-t_a05094ad} -- \
+			env PYTHONPATH=. TOLLGATE_APK_TOOL=$${TOLLGATE_APK_TOOL:-$$HOME/.cache/apk-v3/apk.static} \
+			python3 scripts/install-path-e2e.py --dry-run --host $(TOLLGATE_SSH_HOST) \
+			--md-out docs/install-paths-dry-run-report.md; \
+	else \
+		echo "note: bench-with-lock not installed — using the in-process lock (lib/bench_lock.py)"; \
+		env PYTHONPATH=. TOLLGATE_APK_TOOL=$${TOLLGATE_APK_TOOL:-$$HOME/.cache/apk-v3/apk.static} \
+			python3 scripts/install-path-e2e.py --dry-run --host $(TOLLGATE_SSH_HOST) \
+			--md-out docs/install-paths-dry-run-report.md; \
+	fi
+
+install-path-e2e: ## LOCKED bench phase: wallet gate + bench lock + fresh flash + both install paths + happy path (needs TOLLGATE_LN_ADDRESS + TOLLGATE_ENABLE_SYSUPGRADE_FLASHING=true)
 	$(call require_hardware_lock)
 	@PYTHONPATH=. python3 scripts/install-path-e2e.py --flash-and-run --host $(TOLLGATE_SSH_HOST)
 

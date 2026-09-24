@@ -153,6 +153,61 @@ def test_the_drain_command_is_the_documented_cli_form():
 
 
 # ---------------------------------------------------------------------------
+# the two flash gates: the destructive switch AND the money gate
+# ---------------------------------------------------------------------------
+
+
+def test_flashing_is_off_unless_the_operator_switches_it_on(monkeypatch):
+    monkeypatch.delenv(ff.FLASH_ENABLE_ENV, raising=False)
+    assert ff.flashing_enabled() is False
+    with pytest.raises(ff.FlashRefused) as excinfo:
+        ff.flash_enable_gate()
+    message = str(excinfo.value)
+    assert ff.FLASH_ENABLE_ENV in message
+    assert "REFUSING TO FLASH" in message
+    assert ff.DRAIN_COMMAND in message
+
+    for value in ("true", "TRUE", "1", "yes"):
+        monkeypatch.setenv(ff.FLASH_ENABLE_ENV, value)
+        assert ff.flashing_enabled() is True
+        ff.flash_enable_gate()  # must not raise
+
+    for value in ("", "0", "false", "no", "maybe"):
+        monkeypatch.setenv(ff.FLASH_ENABLE_ENV, value)
+        assert ff.flashing_enabled() is False
+
+
+def test_flash_preconditions_reports_every_blocker_at_once(monkeypatch):
+    monkeypatch.delenv(ff.FLASH_ENABLE_ENV, raising=False)
+    money = ff.parse_wallet_state('{"total":7}', "/etc/tollgate/ecash/token-1\n")
+    blockers = ff.flash_preconditions(money, allow_nonempty=False)
+    assert len(blockers) == 2, blockers  # the switch AND the money
+    assert any(ff.FLASH_ENABLE_ENV in blocker for blocker in blockers)
+    assert any("NOT empty" in blocker for blocker in blockers)
+    assert any(ff.DRAIN_COMMAND in blocker for blocker in blockers)
+
+
+def test_flash_preconditions_is_clean_only_with_switch_on_and_empty_wallet(monkeypatch):
+    empty = ff.parse_wallet_state("", "")
+    monkeypatch.delenv(ff.FLASH_ENABLE_ENV, raising=False)
+    blockers = ff.flash_preconditions(empty)
+    assert len(blockers) == 1, blockers  # only the switch blocks it
+    assert ff.FLASH_ENABLE_ENV in blockers[0]
+    monkeypatch.setenv(ff.FLASH_ENABLE_ENV, "true")
+    assert ff.flash_preconditions(empty) == []
+
+
+def test_flash_preconditions_still_refuses_money_with_the_switch_on(monkeypatch):
+    monkeypatch.setenv(ff.FLASH_ENABLE_ENV, "true")
+    money = ff.parse_wallet_state('{"total":7}', "/etc/tollgate/ecash/token-1\n")
+    blockers = ff.flash_preconditions(money, allow_nonempty=False)
+    assert len(blockers) == 1
+    assert "NOT empty" in blockers[0]
+    # ... unless the loss is explicitly accepted
+    assert ff.flash_preconditions(money, allow_nonempty=True) == []
+
+
+# ---------------------------------------------------------------------------
 # flash + post-flash assertions
 # ---------------------------------------------------------------------------
 

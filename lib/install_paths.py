@@ -33,6 +33,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,12 +43,29 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 FEED_REPO = "FreedomTechFeed/packages"
-FEED_RELEASE_DEFAULT = "v0.6.0-alpha4-pre16"
+FEED_RELEASE_DEFAULT = "v0.6.0-alpha4-pre17"
 PACKAGE_NAME = "tollgate-wrt"
 
 #: display version as it appears in asset filenames (tag minus leading "v",
 #: dots in the pre-release part turned into underscores by the CI)
-FEED_VERSION_DEFAULT = "0.6.0_alpha4_pre16"
+FEED_VERSION_DEFAULT = "0.6.0_alpha4_pre17"
+
+#: The release the POLICY/guard assertions are asserted against.  The guard
+#: (``/etc/nftables.d/31-admin-board-not-guest-reachable.nft`` + ``8090``/``8443``
+#: stripped from ``nodogsplash users_to_router``) only ships from pre17 on, so
+#: the target defaults to pre17 — never silently to an older release.
+POLICY_TARGET_RELEASE_ENV = "TOLLGATE_POLICY_TARGET_RELEASE"
+POLICY_TARGET_RELEASE_DEFAULT = "v0.6.0-alpha4-pre17"
+
+#: Hard floor for the policy assertion.  A target older than this cannot
+#: satisfy the assertion at all, and the flash-free pre-flight says so up front
+#: (see :func:`policy_preflight`) instead of failing confusingly later.
+POLICY_MIN_RELEASE_ENV = "TOLLGATE_POLICY_MIN_RELEASE"
+POLICY_MIN_RELEASE_DEFAULT = "v0.6.0-alpha4-pre17"
+
+#: The #566 guard path the policy assertion expects.  Configurable because the
+#: module names it by release (``31-admin-board-not-guest-reachable.nft`` today).
+POLICY_GUARD_PATH_ENV = "TOLLGATE_POLICY_GUARD_PATH"
 
 #: arch of the bench GL-MT3000 (OpenWrt 25.12.5, mediatek/filogic)
 BENCH_ARCH = "aarch64_cortex-a53"
@@ -63,10 +81,22 @@ POLICY_ALLOW_PORTS = frozenset({22, 23, 53, 67, 80, 443, 2050, 2051, 2121, 8080}
 #: ports the policy must NOT expose to guests (the 8090/8443 admin-board pair)
 POLICY_FORBIDDEN_PORTS = frozenset({8090, 8443})
 
-#: the #566 guard written by 99-tollgate-setup
+#: the #566 guard written by 99-tollgate-setup (default; override with
+#: ``POLICY_GUARD_PATH_ENV`` — use :func:`guard_nft_path`)
 GUARD_NFT_FILE = "/etc/nftables.d/31-admin-board-not-guest-reachable.nft"
-#: basename of the same file, for payload listings
+#: basename of the same file, for payload listings (default; see
+#: :func:`guard_nft_basename`)
 GUARD_NFT_BASENAME = "31-admin-board-not-guest-reachable.nft"
+
+
+def guard_nft_path(explicit: str | None = None) -> str:
+    """The configured guard path (env ``TOLLGATE_POLICY_GUARD_PATH``)."""
+    return (explicit or os.environ.get(POLICY_GUARD_PATH_ENV) or GUARD_NFT_FILE).strip()
+
+
+def guard_nft_basename(explicit: str | None = None) -> str:
+    """Basename of the configured guard path (what the payload listing shows)."""
+    return os.path.basename(guard_nft_path(explicit))
 
 #: the setup script must strip the admin-board ports from the NDS allow list
 SETUP_SCRIPT = "/etc/uci-defaults/99-tollgate-setup"
@@ -119,6 +149,151 @@ class InstallPathError(RuntimeError):
 
 class ArtifactNotFound(InstallPathError):
     """No published artifact matches the router's arch + package manager."""
+
+
+class ReleaseNotPublished(InstallPathError):
+    """The release has no published asset manifest yet (HTTP 404 on SHA256SUMS)."""
+
+
+class PolicyAssertionUnsupported(InstallPathError):
+    """The release under test cannot satisfy the POLICY/guard assertion.
+
+    Raised by the fail-fast, flash-free pre-flight so an operator is told the
+    release is unsupported *by name* — instead of watching the policy gates fail
+    later for a reason that has nothing to do with the install path.
+    """
+
+
+# ---------------------------------------------------------------------------
+# Release ordering + the flash-free policy pre-flight
+# ---------------------------------------------------------------------------
+
+_STAGE_RANK = {"alpha": 0, "beta": 1, "rc": 2, "final": 3}
+_STAGE_RE = re.compile(r"^(alpha|beta|rc)\.?(\d+)?$", re.IGNORECASE)
+_PRE_RE = re.compile(r"^(pre|post)\.?(\d+)?$", re.IGNORECASE)
+
+
+def release_rank(tag: str) -> tuple[int, int, int, int, int, int, int]:
+    """Order release tags: ``0.6.0-alpha4-pre16 < …-pre17 < …-alpha4 < 0.6.0``.
+
+    Returns ``(major, minor, patch, stage_rank, stage_num, pre_rank, pre_num)``
+    where ``pre_rank`` is 1 for a release with no ``pre``/``post`` segment (a
+    ``-alpha4`` is newer than any ``-alpha4-pre<N>``).
+    """
+    text = (tag or "").strip()
+    if text.startswith(("v", "V")):
+        text = text[1:]
+    if not text:
+        raise InstallPathError(f"cannot parse release tag {tag!r}")
+    parts = text.split("-")
+    numbers = parts[0].split(".")
+    if not numbers or not numbers[0].isdigit():
+        raise InstallPathError(f"cannot parse release tag {tag!r}")
+    while len(numbers) < 3:
+        numbers.append("0")
+    major, minor, patch = (int(numbers[0]), int(numbers[1]), int(numbers[2]))
+
+    stage_rank, stage_num = _STAGE_RANK["final"], 0
+    pre_rank, pre_num = 1, 0
+    for segment in parts[1:]:
+        stage = _STAGE_RE.match(segment)
+        if stage:
+            stage_rank = _STAGE_RANK[stage.group(1).lower()]
+            stage_num = int(stage.group(2) or 0)
+            continue
+        pre = _PRE_RE.match(segment)
+        if pre:
+            pre_rank = 1 if pre.group(1).lower() == "post" else 0
+            pre_num = int(pre.group(2) or 0)
+    return (major, minor, patch, stage_rank, stage_num, pre_rank, pre_num)
+
+
+def release_at_least(tag: str, minimum: str) -> bool:
+    """Is *tag* the same or newer than *minimum*?"""
+    return release_rank(tag) >= release_rank(minimum)
+
+
+@dataclass(frozen=True)
+class PolicyPreflight:
+    """Outcome of the flash-free policy pre-flight.
+
+    ``supported`` is False when the target release is older than the guard
+    floor; ``reason`` is the operator-facing, named explanation.
+    """
+
+    target_release: str
+    minimum_release: str
+    guard_path: str
+    supported: bool
+    reason: str = ""
+
+    def message(self) -> str:
+        head = (
+            f"release {self.target_release} is UNSUPPORTED for the POLICY/guard assertion "
+            f"(needs >= {self.minimum_release})"
+        )
+        if self.supported:
+            return (
+                f"release {self.target_release} supports the POLICY/guard assertion "
+                f"(guard {self.guard_path}, min {self.minimum_release})"
+            )
+        return f"{head}: {self.reason}"
+
+
+def policy_preflight(
+    target_release: str | None = None,
+    *,
+    minimum: str | None = None,
+    guard_path: str | None = None,
+) -> PolicyPreflight:
+    """Flash-free pre-flight: can this release satisfy the POLICY assertion?
+
+    The published ``v0.6.0-alpha4-pre16`` payload does **not** ship
+    ``/etc/nftables.d/31-admin-board-not-guest-reachable.nft`` (its
+    ``/etc/nftables.d/`` holds only ``20-nds-enforce.nft`` and
+    ``30-backend-firewall.nft``), so after a fresh install the ``:8090`` drop
+    cannot be in place.  Running the policy gates against such a release fails
+    for a reason unrelated to the install path, which is exactly the confusion
+    this check removes.
+    """
+    target = (
+        target_release
+        or os.environ.get(POLICY_TARGET_RELEASE_ENV)
+        or POLICY_TARGET_RELEASE_DEFAULT
+    ).strip()
+    floor = (minimum or os.environ.get(POLICY_MIN_RELEASE_ENV) or POLICY_MIN_RELEASE_DEFAULT).strip()
+    guard = guard_nft_path(guard_path)
+
+    try:
+        ok = release_at_least(target, floor)
+    except InstallPathError as exc:
+        return PolicyPreflight(target, floor, guard, False, f"unparseable release tag ({exc})")
+    if ok:
+        return PolicyPreflight(target, floor, guard, True)
+    return PolicyPreflight(
+        target,
+        floor,
+        guard,
+        False,
+        "the release predates the #566 admin-board guard: its installed payload does not "
+        f"contain {guard} and a fresh install leaves `allow tcp port 8090` in the nodogsplash "
+        "users_to_router allow list, so `:8090` answers 200 from a br-lan client. Pin the release "
+        f"under test to >= {floor} ({POLICY_TARGET_RELEASE_ENV}) — the policy gate is not "
+        "reachable with this release.",
+    )
+
+
+def require_policy_supported(
+    target_release: str | None = None,
+    *,
+    minimum: str | None = None,
+    guard_path: str | None = None,
+) -> PolicyPreflight:
+    """Like :func:`policy_preflight`, but raise :class:`PolicyAssertionUnsupported`."""
+    result = policy_preflight(target_release, minimum=minimum, guard_path=guard_path)
+    if not result.supported:
+        raise PolicyAssertionUnsupported(result.message())
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +609,9 @@ def payload_text(path: str | os.PathLike[str], fmt: str, member: str) -> str:
     raise InstallPathError(f"unknown artifact format {fmt!r}")
 
 
-def artifact_policy_readiness(files: list[str], setup_script: str) -> dict:
+def artifact_policy_readiness(
+    files: list[str], setup_script: str, *, guard_path: str | None = None
+) -> dict:
     """Does this artifact *ship* the #566 policy material?
 
     The policy assertions in the scenario tests are only reachable with an
@@ -445,7 +622,8 @@ def artifact_policy_readiness(files: list[str], setup_script: str) -> dict:
     """
     listing = " ".join(files or [])
     script = setup_script or ""
-    ships_guard = GUARD_NFT_BASENAME in listing
+    guard = guard_nft_path(guard_path)
+    ships_guard = os.path.basename(guard) in listing
     removes_ports = {
         port: f"del_list nodogsplash.@nodogsplash[0].users_to_router='allow tcp port {port}'" in script
         for port in SETUP_SKIP_PORTS
@@ -453,7 +631,7 @@ def artifact_policy_readiness(files: list[str], setup_script: str) -> dict:
     problems: list[str] = []
     if not ships_guard:
         problems.append(
-            f"the artifact payload does not contain {GUARD_NFT_BASENAME} — the #566 admin-board "
+            f"the artifact payload does not contain {os.path.basename(guard)} — the #566 admin-board "
             "guard cannot be present after install, so the POLICY assertions are unreachable with "
             "this release (the fix must actually ship in the package)"
         )
@@ -468,6 +646,7 @@ def artifact_policy_readiness(files: list[str], setup_script: str) -> dict:
         "ships_guard_nft": ships_guard,
         "setup_removes_admin_ports": removes_ports,
         "problems": problems,
+        "guard_path": guard,
     }
 
 
@@ -486,6 +665,53 @@ def identity_violations(installed_sha256: str, expected_sha256: str, artifact_na
             "artifact under test"
         ]
     return []
+
+
+class CrossFormatIdentityComparison(InstallPathError):
+    """The identity gate was handed a hash taken from a *different* package format.
+
+    The ``.apk`` and ``.ipk`` of one release are **different builds**: for
+    ``v0.6.0-alpha4-pre16`` the apk payload ``usr/bin/tollgate-wrt`` is
+    12 242 208 B / ``dce8b1f1…`` while the ipk payload is 12 295 456 B /
+    ``5ddda42b…`` (every non-Go file is byte-identical).  Comparing across the
+    two produces a false failure — or, worse, hides a real swap — so this is a
+    hard error rather than a comparison.
+    """
+
+
+#: the sibling package format of each format (never comparable — see above)
+SIBLING_FORMAT = {"apk": "ipk", "ipk": "apk"}
+
+
+def sibling_format(fmt: str) -> str:
+    if fmt not in SIBLING_FORMAT:
+        raise InstallPathError(f"unknown artifact format {fmt!r}")
+    return SIBLING_FORMAT[fmt]
+
+
+def identity_gate(
+    *,
+    artifact: Artifact,
+    installed_sha256: str,
+    expected_sha256: str,
+    expected_format: str | None = None,
+) -> list[str]:
+    """Artifact-identity gate, pinned to the artifact's own format.
+
+    ``expected_format`` must be the format of the artifact whose payload
+    produced ``expected_sha256``.  Naming the sibling format is the documented
+    false-failure trap, and it raises instead of comparing.
+    """
+    if expected_format and expected_format != artifact.fmt:
+        raise CrossFormatIdentityComparison(
+            f"REFUSING to compare across package formats: the identity gate installs "
+            f"{artifact.filename} (fmt={artifact.fmt}) but the expected hash was derived from a "
+            f"{expected_format} artifact. The .apk and .ipk of one release are DIFFERENT BUILDS "
+            "(only the non-Go files are byte-identical), so this comparison would be a false "
+            f"failure. Derive the expected hash from the {artifact.fmt} artifact — same format, "
+            "same path."
+        )
+    return identity_violations(installed_sha256, expected_sha256, artifact.filename)
 
 
 #: arch tail of a package filename, e.g. "_aarch64_cortex-a53" / "_x86_64" / "_mips_24kc"
@@ -564,8 +790,10 @@ def policy_violations(
     guard_present: bool,
     guard_drops_br_lan: bool,
     ssh_alive: bool,
+    guard_path: str | None = None,
 ) -> list[str]:
     """Assert nodogsplash allow-set equality, the guard file, and SSH survival."""
+    guard = guard_nft_path(guard_path)
     problems: list[str] = []
     missing = sorted(POLICY_ALLOW_PORTS - allowed_ports)
     extra = sorted(allowed_ports & POLICY_FORBIDDEN_PORTS)
@@ -577,9 +805,9 @@ def policy_violations(
     if unexpected:
         problems.append(f"nodogsplash users_to_router has unexpected ports {unexpected}")
     if not guard_present:
-        problems.append(f"guard file {GUARD_NFT_FILE} is missing")
+        problems.append(f"guard file {guard} is missing")
     elif not guard_drops_br_lan:
-        problems.append(f"guard file {GUARD_NFT_FILE} does not drop traffic from br-lan")
+        problems.append(f"guard file {guard} does not drop traffic from br-lan")
     if not ssh_alive:
         problems.append("SSH (port 22) is not alive after the install — the allow rule is gone")
     return problems
@@ -821,10 +1049,26 @@ def download(url: str, destination: str | os.PathLike[str], *, timeout: int = 30
 def fetch_release_manifest(
     tag: str = FEED_RELEASE_DEFAULT, *, repo: str = FEED_REPO, client: object | None = None
 ) -> dict[str, str]:
-    """Download and parse ``SHA256SUMS`` for a feed release."""
+    """Download and parse ``SHA256SUMS`` for a feed release.
+
+    Raises :class:`ReleaseNotPublished` (naming the release) when the manifest
+    is not there yet — an unpublished release is a *named* outcome, not a
+    mystery HTTPError in the middle of the run.
+    """
     del client  # kept for signature symmetry with the github client helper
     url = release_asset_url(tag, "SHA256SUMS", repo)
-    return parse_manifest(http_get(url).decode("utf-8", "replace"))
+    try:
+        body = http_get(url)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise ReleaseNotPublished(
+                f"release {tag} has no published {repo}/releases asset SHA256SUMS yet "
+                f"(HTTP 404 on {url}) — the release is not published, so neither install path can "
+                "be exercised against it. Publish the release (or pin TOLLGATE_FEED_TAG to a "
+                "published release and read the policy pre-flight's UNSUPPORTED verdict)."
+            ) from exc
+        raise
+    return parse_manifest(body.decode("utf-8", "replace"))
 
 
 def tcp_probe(host: str, port: int, *, timeout: float = 5.0) -> bool:

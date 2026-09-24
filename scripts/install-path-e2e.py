@@ -48,15 +48,36 @@ from lib.bench_lock import BenchBusy, BenchLock  # noqa: E402
 REPORT_DIR = PROJECT_ROOT / "reports" / "install-paths"
 DEFAULT_BENCH_HOST = os.environ.get("TOLLGATE_SSH_HOST") or os.environ.get("ROUTER_IP") or "192.168.1.1"
 
+#: exit codes — the pre-flight outcomes are *named*, not folded into "1"
+EXIT_OK = 0
+EXIT_CHECK_FAILED = 1
+EXIT_BENCH_BUSY = 2
+EXIT_POLICY_UNSUPPORTED = 3
+EXIT_RELEASE_NOT_PUBLISHED = 4
+
+#: the board this card's coverage belongs to (recorded in the bench holder line)
+BENCH_TASK_ID = os.environ.get("TOLLGATE_BENCH_TASK_ID", "t_a05094ad")
+
 
 class DryRun:
     """Collects the dry-run checks and renders them as JSON + markdown."""
 
-    def __init__(self, *, tag: str, version: str, host: str, cache: Path) -> None:
+    def __init__(
+        self,
+        *,
+        tag: str,
+        version: str,
+        host: str,
+        cache: Path,
+        preflight: ip.PolicyPreflight | None = None,
+        lock_backend: str = "",
+    ) -> None:
         self.tag = tag
         self.version = version
         self.host = host
         self.cache = cache
+        self.preflight = preflight
+        self.lock_backend = lock_backend
         self.checks: list[dict] = []
         self.artifact: ip.Artifact | None = None
         self.expected_binary_sha = ""
@@ -82,11 +103,20 @@ class DryRun:
         return [c for c in self.checks if c["status"] == "fail"]
 
     def render_markdown(self) -> str:
-        lines = [
+        header = [
             "# Dual-install-path e2e — flash-free dry run",
             "",
             f"- release: `{self.tag}` (artifact version stem `{self.version}`)",
             f"- bench host: `{self.host}`",
+        ]
+        if self.preflight is not None:
+            verdict = "SUPPORTED" if self.preflight.supported else "UNSUPPORTED"
+            header.append(
+                f"- policy pre-flight: **{verdict}** — target `{self.preflight.target_release}`, "
+                f"floor `{self.preflight.minimum_release}`, guard `{self.preflight.guard_path}`"
+            )
+        header += [
+            f"- bench lock backend: `{self.lock_backend or 'unknown'}`",
             f"- generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
             f"- checks: {len(self.checks)} "
             f"({sum(1 for c in self.checks if c['status'] == 'pass')} pass, "
@@ -95,6 +125,7 @@ class DryRun:
             "| check | status | detail |",
             "| --- | --- | --- |",
         ]
+        lines = header
         for check in self.checks:
             detail = str(check["detail"]).replace("|", "\\|").replace("\n", " ")
             # table rows must not arm the markdown credential scan: the
@@ -115,6 +146,18 @@ class DryRun:
                     "tag": self.tag,
                     "version": self.version,
                     "host": self.host,
+                    "policy_preflight": (
+                        {
+                            "target_release": self.preflight.target_release,
+                            "minimum_release": self.preflight.minimum_release,
+                            "guard_path": self.preflight.guard_path,
+                            "supported": self.preflight.supported,
+                            "reason": self.preflight.reason,
+                        }
+                        if self.preflight is not None
+                        else None
+                    ),
+                    "lock_backend": self.lock_backend,
                     "checks": self.checks,
                     "facts": self.facts,
                     "failures": [c["check"] for c in self.failures],
@@ -157,15 +200,99 @@ def _ssh_rc(host: str, command: str, *, timeout: int = 20) -> tuple[str, int]:
     return (result.stdout + result.stderr).strip(), result.returncode
 
 
+def policy_preflight_step(run: DryRun, args: argparse.Namespace) -> int | None:
+    """Step 0 — the fail-fast, flash-free policy pre-flight.
+
+    Returns an exit code when the run must stop, ``None`` when it may continue.
+    """
+    preflight = ip.policy_preflight(
+        run.tag,
+        minimum=args.policy_min_release,
+        guard_path=args.guard_path,
+    )
+    run.preflight = preflight
+    run.facts["policy_preflight"] = {
+        "target_release": preflight.target_release,
+        "minimum_release": preflight.minimum_release,
+        "guard_path": preflight.guard_path,
+        "supported": preflight.supported,
+    }
+    run.record(
+        "policy-preflight",
+        preflight.supported,
+        preflight.message(),
+        evidence={
+            "target_release": preflight.target_release,
+            "minimum_release": preflight.minimum_release,
+            "guard_path": preflight.guard_path,
+            "supported": preflight.supported,
+        },
+        # an unsupported release is its own verdict, not a failed check
+        skipped=not preflight.supported and args.continue_unsupported,
+    )
+    if preflight.supported:
+        return None
+    print(
+        "\n[install-paths] FAIL-FAST: "
+        + preflight.message()
+        + (
+            "\n[install-paths] continuing anyway (--continue-unsupported): the policy/guard "
+            "assertions will be reported as UNSUPPORTED, never as passed."
+            if args.continue_unsupported
+            else "\n[install-paths] the POLICY/guard assertions cannot pass with this release; "
+            "pin a supported release (TOLLGATE_POLICY_TARGET_RELEASE) or pass "
+            "--continue-unsupported to exercise the flash-free checks anyway."
+        )
+    )
+    if args.continue_unsupported:
+        return None
+    run.write(md_out=args.md_out)
+    return EXIT_POLICY_UNSUPPORTED
+
+
+def _probes_allowed(lock) -> tuple[bool, str]:
+    """May this process probe the bench right now?
+
+    Read-only probes are still router-touching: probing a bench that another
+    window owns would report *their* state as if it were ours (the interference
+    class the lock exists to prevent).  Probes are therefore allowed only when
+    the lock is free, or when we are inside the window that holds it.
+    """
+    state = lock.state
+    if state == "free":
+        return True, "bench lock free"
+    if os.environ.get("BENCH_LOCK_HELD") == "1" and os.environ.get(
+        "BENCH_LOCK_HOLDER_PID"
+    ) == lock.holder.pid:
+        return True, f"inside our own bench window ({lock.holder.raw})"
+    return False, f"bench lock is {state.upper()} by {lock.holder.raw or '<unknown>'}"
+
+
 def dry_run(args: argparse.Namespace) -> int:
-    run = DryRun(tag=args.tag, version=args.version, host=args.host, cache=Path(args.cache))
+    from lib.bench_lock import bench_lock_cli
+
+    run = DryRun(
+        tag=args.tag,
+        version=args.version,
+        host=args.host,
+        cache=Path(args.cache),
+        lock_backend=bench_lock_cli() or "in-process flock (scripts/mt3000-bench not installed)",
+    )
     print(f"== dual-install-path dry run (no flash) — release {run.tag} ==")
+
+    # 0. the fail-fast pre-flight (flash-free) --------------------------------
+    stop = policy_preflight_step(run, args)
+    if stop is not None:
+        return stop
 
     # 1. manifest + selection -------------------------------------------------
     try:
-        manifest = ip.parse_manifest(
-            ip.http_get(ip.release_asset_url(run.tag, "SHA256SUMS")).decode("utf-8", "replace")
-        )
+        manifest = ip.fetch_release_manifest(run.tag)
+    except ip.ReleaseNotPublished as exc:
+        run.record("release-manifest", True, str(exc), skipped=True)
+        print(f"\n[install-paths] FAIL-FAST: {exc}")
+        run.write(md_out=args.md_out)
+        return EXIT_RELEASE_NOT_PUBLISHED
     except Exception as exc:  # noqa: BLE001 — reported, not raised
         run.record("release-manifest", False, f"could not fetch SHA256SUMS: {exc}")
         return _finish(run, args)
@@ -235,19 +362,32 @@ def dry_run(args: argparse.Namespace) -> int:
                 setup = ip.payload_text(target, run.artifact.fmt, ip.SETUP_SCRIPT)
             except ip.InstallPathError:
                 pass
-            readiness = ip.artifact_policy_readiness(files, setup)
-            run.record(
-                "artifact-ships-the-566-policy",
-                readiness["ships_guard_nft"] and not readiness["problems"],
-                "; ".join(readiness["problems"])
-                or f"guard {ip.GUARD_NFT_BASENAME} shipped and 8090/8443 removed from users_to_router",
-                evidence={
-                    "payload_files": len(files),
-                    "ships_guard_nft": readiness["ships_guard_nft"],
-                    "setup_removes_admin_ports": readiness["setup_removes_admin_ports"],
-                    "nftables_d": [f for f in files if "nftables.d" in f],
-                },
-            )
+            readiness = ip.artifact_policy_readiness(files, setup, guard_path=args.guard_path)
+            ready = readiness["ships_guard_nft"] and not readiness["problems"]
+            if not ready and run.preflight is not None and not run.preflight.supported:
+                # the release is unsupported by name — record the reason as a
+                # SKIP that says UNSUPPORTED, never as a silent pass
+                run.record(
+                    "artifact-ships-the-566-policy",
+                    True,
+                    "UNSUPPORTED (policy pre-flight): " + run.preflight.message(),
+                    evidence={"problems": readiness["problems"], "unsupported": True},
+                    skipped=True,
+                )
+            else:
+                run.record(
+                    "artifact-ships-the-566-policy",
+                    ready,
+                    "; ".join(readiness["problems"])
+                    or f"guard {ip.guard_nft_basename(args.guard_path)} shipped and 8090/8443 "
+                    "removed from users_to_router",
+                    evidence={
+                        "payload_files": len(files),
+                        "ships_guard_nft": readiness["ships_guard_nft"],
+                        "setup_removes_admin_ports": readiness["setup_removes_admin_ports"],
+                        "nftables_d": [f for f in files if "nftables.d" in f],
+                    },
+                )
             run.facts["payload_policy_readiness"] = readiness
         except ip.InstallPathError as exc:
             run.record("artifact-ships-the-566-policy", False, str(exc))
@@ -383,9 +523,22 @@ def dry_run(args: argparse.Namespace) -> int:
     run.facts["bench_lock"] = {"path": probe.path, "free": free, "holder": holder.raw}
 
     # 9. router reachability, read-only (TCP, never ICMP) -------------------
+    allowed, why = _probes_allowed(probe)
     if args.skip_probe:
         run.record("bench-reachable", True, "probe skipped (--skip-probe)", skipped=True)
+    elif not allowed:
+        # the bench belongs to another window: probing it would report a state
+        # that is not ours (and is the interference class the lock exists for)
+        run.record(
+            "bench-reachable",
+            True,
+            f"probes NOT run — {why}; wrap this in `bench-with-lock --purpose "
+            '"install-path dry run" -- ...` to probe under a window you own',
+            evidence={"lock_state": probe.state, "holder": probe.holder.raw},
+            skipped=True,
+        )
     else:
+        run.facts["bench_probe_window"] = why
         for port in (22, 2050, 2051, 2121, 8080, 8090):
             reachable = ip.tcp_probe(args.host, port, timeout=4)
             run.record(
@@ -411,10 +564,15 @@ def dry_run(args: argparse.Namespace) -> int:
             # here so a stale/partial install cannot be mistaken for a result.
             uci_out, _ = _ssh_rc(args.host, ip.uci_show_users_to_router_command())
             ports = sorted(ip.parse_users_to_router_ports(uci_out))
-            guard_out, _ = _ssh_rc(args.host, f"ls -l {ip.GUARD_NFT_FILE} 2>/dev/null")
-            guard_present = ip.GUARD_NFT_FILE in guard_out
+            guard = ip.guard_nft_path(args.guard_path)
+            guard_out, _ = _ssh_rc(args.host, f"ls -l {guard} 2>/dev/null")
+            guard_present = guard in guard_out
             live_problems = ip.policy_violations(
-                set(ports), guard_present=guard_present, guard_drops_br_lan=guard_present, ssh_alive=True
+                set(ports),
+                guard_present=guard_present,
+                guard_drops_br_lan=guard_present,
+                ssh_alive=True,
+                guard_path=guard,
             )
             run.record(
                 "bench-policy-snapshot",
@@ -439,36 +597,119 @@ def _finish(run: DryRun, args: argparse.Namespace) -> int:
     run.write(md_out=args.md_out)
     if run.failures:
         print(f"\n[install-paths] {len(run.failures)} check(s) FAILED: {[c['check'] for c in run.failures]}")
-        return 1
+        return EXIT_CHECK_FAILED
     print("\n[install-paths] dry run clean (flash-free checks only)")
-    return 0
+    return EXIT_OK
 
 
 def flash_and_run(args: argparse.Namespace) -> int:
-    """The locked bench phase: fresh flash + both install paths (opt-in)."""
-    env = dict(os.environ)
-    env["TOLLGATE_ENABLE_SYSUPGRADE_FLASHING"] = "true"
-    env["TOLLGATE_ENABLE_INSTALL_PATH_E2E"] = "1"
-    env.setdefault("TOLLGATE_FEED_TAG", args.tag)
-    env.setdefault("TOLLGATE_FEED_VERSION", args.version)
-    env.setdefault("TOLLGATE_SSH_HOST", args.host)
-    if args.ln_address:
-        env["TOLLGATE_LN_ADDRESS"] = args.ln_address
-    venv_python = os.environ.get("TOLLGATE_TEST_PYTHON") or sys.executable
-    cmd = [
-        venv_python, "-m", "pytest",
-        "tests/scenarios/test_install_paths.py",
-        "--no-deploy",
-        "-v",
-        "--timeout=3600",
-        "-p", "no:cacheprovider",
-    ]
-    print("[install-paths] full run:", " ".join(cmd))
+    """The locked bench phase: fresh flash + both install paths (opt-in).
+
+    The single documented entry point for the two flash cycles.  It:
+
+      1. runs the flash-free policy pre-flight (fail-fast, names an unsupported
+         release instead of failing later);
+      2. requires an explicit LIGHTNING address (the installer's operator choice);
+      3. refuses unless ``TOLLGATE_ENABLE_SYSUPGRADE_FLASHING=true``;
+      4. takes the bench lock for the whole window (the test module holds it too,
+         but the operator sees the refusal here first);
+      5. checks the router wallet is EMPTY before it lets pytest flash anything;
+      6. runs the reused happy-path suite as part of the same pytest session.
+    """
+    from lib.bench_lock import BenchBusy as _BenchBusy
+    from lib.bench_lock import BenchLock, BenchStale, bench_lock_cli
+
+    # 1. pre-flight ----------------------------------------------------------
+    preflight = ip.policy_preflight(
+        args.tag, minimum=args.policy_min_release, guard_path=args.guard_path
+    )
+    print(f"[install-paths] policy pre-flight: {preflight.message()}")
+    if not preflight.supported:
+        print("[install-paths] FAIL-FAST: refusing to start two flash cycles for a release that "
+              "cannot satisfy the POLICY/guard assertion.")
+        return EXIT_POLICY_UNSUPPORTED
+
+    # 2. the operator choice the installer needs -----------------------------
+    if not args.ln_address:
+        print("[install-paths] TOLLGATE_LN_ADDRESS is required (--ln-address): scenario B runs the "
+              "installer, which needs the operator's lightning address.")
+        return EXIT_CHECK_FAILED
+
+    # 3. the destructive switch ---------------------------------------------
+    if not ff.flashing_enabled():
+        print(
+            "[install-paths] REFUSING: "
+            + f"{ff.FLASH_ENABLE_ENV}=true is required to flash the bench "
+            "(flashing wipes /etc/tollgate, including real ecash). Drain first: "
+            f"`{ff.DRAIN_COMMAND}` on the router."
+        )
+        return EXIT_CHECK_FAILED
+
+    # 4. the single-owner bench lock ---------------------------------------
+    lock = BenchLock(
+        purpose="prta install-path e2e (2 flash cycles)",
+        task_id=BENCH_TASK_ID,
+        path=args.lock,
+        reclaim_stale=args.reclaim_stale,
+    )
+    print(f"[install-paths] bench lock backend: {bench_lock_cli() or 'in-process flock'}")
     try:
-        return subprocess.call(cmd, cwd=str(PROJECT_ROOT), env=env)
-    except BenchBusy as exc:  # pragma: no cover - the module skips, this is belt-and-braces
+        lock.acquire()
+    except BenchStale as exc:
         print(f"[install-paths] {exc}")
-        return 2
+        return EXIT_BENCH_BUSY
+    except _BenchBusy as exc:
+        print(f"[install-paths] {exc}")
+        return EXIT_BENCH_BUSY
+
+    try:
+        print(f"[install-paths] holding {lock.path} as {lock.holder.raw}")
+
+        # 5. wallet gate (a flash destroys money) ---------------------------
+        if not args.skip_wallet_gate:
+            out, _ = _ssh_rc(args.host, ff.WALLET_BALANCE_COMMAND, timeout=60)
+            listing, _ = _ssh_rc(args.host, ff.ECASH_LISTING_COMMAND, timeout=30)
+            state = ff.parse_wallet_state(out, listing)
+            print(f"[install-paths] wallet: {state.summary()}")
+            blockers = ff.flash_preconditions(
+                state, allow_nonempty=args.allow_nonempty_wallet
+            )
+            if blockers:
+                print("[install-paths] REFUSING TO FLASH:")
+                for blocker in blockers:
+                    print(f"  - {blocker}")
+                return EXIT_CHECK_FAILED
+
+        # 6. the reused happy-path suite, in the same pytest session --------
+        env = lock.child_env()
+        env["TOLLGATE_ENABLE_SYSUPGRADE_FLASHING"] = "true"
+        env["TOLLGATE_ENABLE_INSTALL_PATH_E2E"] = "1"
+        env.setdefault("TOLLGATE_FEED_TAG", args.tag)
+        env.setdefault("TOLLGATE_FEED_VERSION", args.version)
+        env.setdefault("TOLLGATE_SSH_HOST", args.host)
+        env["TOLLGATE_LN_ADDRESS"] = args.ln_address
+        env["TOLLGATE_POLICY_TARGET_RELEASE"] = preflight.target_release
+        env["TOLLGATE_POLICY_MIN_RELEASE"] = preflight.minimum_release
+        env["TOLLGATE_POLICY_GUARD_PATH"] = preflight.guard_path
+        venv_python = os.environ.get("TOLLGATE_TEST_PYTHON") or sys.executable
+        cmd = [
+            venv_python, "-m", "pytest",
+            "tests/scenarios/test_install_paths.py",
+            "--no-deploy",
+            "-v",
+            "--timeout=3600",
+            "-p", "no:cacheprovider",
+        ]
+        print("[install-paths] full run:", " ".join(cmd))
+        rc = subprocess.call(cmd, cwd=str(PROJECT_ROOT), env=env)
+        print(
+            "\n[install-paths] NOTE: the two flash cycles must each start from a FRESH image; "
+            "flash again between scenario A and scenario B (see docs/install-paths-e2e.md §2.2)."
+        )
+        return rc
+    finally:
+        lock.release()
+        print(f"[install-paths] released {lock.path}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -489,8 +730,45 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--installer-url", default=ip.INSTALLER_SCRIPT_URL)
     parser.add_argument("--ln-address", default=os.environ.get("TOLLGATE_LN_ADDRESS", ""))
     parser.add_argument("--lock", default=None, help="bench lock path")
+    parser.add_argument(
+        "--reclaim-stale",
+        dest="reclaim_stale",
+        action="store_true",
+        default=os.environ.get("TOLLGATE_BENCH_RECLAIM_STALE", "").lower() in ("1", "true", "yes"),
+        help="take over a bench holder line whose owner died (explicit recovery)",
+    )
     parser.add_argument("--md-out", default=None, help="also write the markdown report here")
     parser.add_argument("--skip-probe", action="store_true", help="do not touch the bench at all")
+    parser.add_argument(
+        "--policy-min-release",
+        default=os.environ.get(ip.POLICY_MIN_RELEASE_ENV, ip.POLICY_MIN_RELEASE_DEFAULT),
+        help="oldest release that can satisfy the POLICY/guard assertion (default pre17)",
+    )
+    parser.add_argument(
+        "--guard-path",
+        default=os.environ.get(ip.POLICY_GUARD_PATH_ENV, ip.GUARD_NFT_FILE),
+        help="the #566 admin-board nft guard path the policy assertion expects",
+    )
+    parser.add_argument(
+        "--continue-unsupported",
+        dest="continue_unsupported",
+        action="store_true",
+        default=os.environ.get("TOLLGATE_CONTINUE_UNSUPPORTED", "").lower() in ("1", "true", "yes"),
+        help="keep going (and report the policy gate as UNSUPPORTED, never PASS) when the "
+        "release cannot satisfy the policy assertion",
+    )
+    parser.add_argument(
+        "--allow-nonempty-wallet",
+        dest="allow_nonempty_wallet",
+        action="store_true",
+        help="accept losing the router's ecash on the flash (you drained nothing)",
+    )
+    parser.add_argument(
+        "--skip-wallet-gate",
+        dest="skip_wallet_gate",
+        action="store_true",
+        help="skip the wallet probe in --flash-and-run (the pytest gate still refuses)",
+    )
     parser.add_argument(
         "--require-apk-tool",
         action="store_true",
