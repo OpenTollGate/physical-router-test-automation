@@ -23,12 +23,23 @@ cause, proven live on ai-legion:
   unit tests still pass). Plus 7 QEMU-lab infra repairs (NAT, ufw, bridge
   DNS, on-VM jq, venv path, playwright, mint lifecycle).
 
-Fix paths (operator decision): (a) run an old-scheme-keyset CDK mint
-(pre-format-switch release) via the runner's `CDK_VER` mechanism; (b) deploy
-the current tollgate-captive-portal-site build to the VM (venue component
-update); (c) accept remote-mint baselines (fragile); (d) treat the QEMU
-portal-payment e2e as out-of-scope for the labgrid-venue arc (venue builds
-on the PoE+SSH+fixture layer, which is S1/S3-green) and proceed to Phase 2.
+Submit-path forensics (2026-09-24, portal bundle): the portal passes proof
+`C` to the backend **verbatim** at submit (`incompleteProofs: proofs.map(o
+=> ({secret, C: o.C, amount}))` — no re-encoding). The portal decoder
+demands base64 `C`; the deployed backend's swap demands hex. With the
+Sept-21 portal build, portal payment is therefore impossible against the
+current backend REGARDLESS of mint choice — options (a) old-keyset mint
+and (c) remote mint cannot fix it. The option space collapses to:
+
+- **(b)** deploy a matched portal+backend pair to the VM (current builds), or
+- **(d)** keep portal-payment e2e out of this arc (venue = PoE+SSH+fixture
+  layer, S1/S3-green — the choice made for this arc).
+
+Phase 3 on the SUT is NOT dialect-blocked: a fresh deploy ships a matched
+pair, and `lib/deploy.py` is verified apk-era-ready (`.apk` artifact
+naming, `apk add --allow-untrusted`, era-aware test deps and format
+selection). Its remaining gates: ap-lan2 released by the parallel session
+(held since 13:33 at diagnosis time) + the staged nft mint rule below.
 
 ## Goal
 
