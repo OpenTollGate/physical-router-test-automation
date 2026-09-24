@@ -1038,6 +1038,7 @@ arch-test-full: ## Run all arch E2E tests (~4min)
 
 .PHONY: pytest-smoke pytest-critical pytest-extended pytest-api pytest-phone \
         pytest-test pytest-scenarios pytest-hardware-smoke pymake-help \
+        install-path-dry-run install-path-e2e fresh-flash-check bench-lock-status \
         pytest-smoke-mac pytest-critical-mac pytest-api-mac pytest-test-mac \
         pytest-smoke-linux pytest-api-linux pytest-test-linux \
         pytest-smoke-rust pytest-api-rust pytest-test-rust pytest-critical-rust \
@@ -1069,6 +1070,22 @@ pytest-test:
 pytest-scenarios: ## Hardware scenario tests (requires lock + routers.env)
 	$(call require_hardware_lock)
 	@TOLLGATE_USE_HARDWARE_LOCK=1 pytest tests/scenarios/ -m hardware -v --tb=short
+
+# --- Dual-install-path e2e (fresh flash -> direct package / installer -> happy path) ---
+
+install-path-dry-run: ## Flash-free dual-install-path checks: artifact fetch+hash, payload policy readiness, installer shape, image verify [python]
+	@PYTHONPATH=. python3 scripts/install-path-e2e.py --dry-run --host $(TOLLGATE_SSH_HOST) \
+		--md-out docs/install-paths-dry-run-report.md
+
+install-path-e2e: ## Locked bench phase: fresh flash + both install paths + happy path (needs TOLLGATE_LN_ADDRESS) [pytest]
+	$(call require_hardware_lock)
+	@PYTHONPATH=. python3 scripts/install-path-e2e.py --flash-and-run --host $(TOLLGATE_SSH_HOST)
+
+fresh-flash-check: ## Read-only fresh-flash preconditions (image hash, wallet drain gate, lock state)
+	@PYTHONPATH=. python3 scripts/fresh-flash.py --check
+
+bench-lock-status: ## Show who holds the shared bench lock (~/.hermes/state/bench-mt3000.lock)
+	@python3 -m lib.bench_lock status
 
 pytest-hardware-smoke: ## Migrated smoke-* scenario subset
 	$(call require_hardware_lock)
