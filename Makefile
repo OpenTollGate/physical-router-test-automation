@@ -243,6 +243,22 @@ test-cashu-payment: ## Run cashu e2e payment Playwright test [playwright]
 	$(call migrated_target,test-cashu-payment)
 
 # ===========================================================================
+#  BENCH LANES — read-only vs mutating (see docs/hw-lane-isolation.md)
+# ===========================================================================
+
+.PHONY: check-workflows hw-readonly
+
+check-workflows: ## Guard: no PR-reachable workflow can reach the bench (+ self-test)
+	@bash scripts/ci/check-workflow-hw-isolation.sh
+	@bash scripts/ci/test-check-workflow-hw-isolation.sh
+
+hw-readonly: ## Read-only bench surface check: no creds, no mutation, no paid traffic
+	@# Deliberately takes NO hardware lock: it mutates nothing, so it must stay
+	@# runnable while another agent holds the bench and while a session is live.
+	@# Host via TOLLGATE_ROUTER_HOST (default 192.168.1.1).
+	@bash scripts/hw-readonly-check.sh
+
+# ===========================================================================
 #  FULL TEST SUITES
 # ===========================================================================
 
