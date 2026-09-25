@@ -1,0 +1,31 @@
+# Rig smoke environment — LOCAL labgrid env (no coordinator).
+#
+# router-alpha = Extreme WS-AP3915i on GS1900-8HP #1 port lan5 (VLAN 1005),
+# OpenWrt 24.10.2, SSH key auth from ai-legion-small (see port-map.md).
+# Power control: tollgate-lab's ZyxelPoEDriver over SSH to the switch
+# (ubus -> realtek-poe; no switch ACL changes, PoE toggle on lan5 only —
+# lan1/lan8 are protected and refused by the driver).
+#
+# Run (dedicated rig venv, documented in tollgate_lab/drivers/zyxel_poe.py):
+#   TOLLGATE_SSH_HOST= ROUTER_IP= TOLLGATE_VIRTUAL_LAB= \
+#   ~/venvs/rig-labgrid/bin/python -m pytest \
+#     --lg-env=configs/labgrid/rig-alpha.yaml --no-deploy \
+#     tests/test_rig_smoke.py -v
+# The target key must be "main": labgrid 25.0.1's pytest `target` fixture only
+# resolves that name in local (non-coordinator) envs. "main" = router-alpha.
+targets:
+  main:
+    resources:
+      ZyxelPoePort:
+        host: "192.168.13.2"
+        port: "lan5"
+      NetworkService:
+        address: "192.168.105.51"
+        username: "root"
+    drivers:
+      ZyxelPoEDriver: {}
+      SSHDriver:
+        connection_timeout: 240.0
+
+tools:
+  ssh: ssh-via-switch.sh
