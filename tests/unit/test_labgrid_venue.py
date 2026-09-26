@@ -89,7 +89,11 @@ def test_missing_coordinator_refused():
         bench_for_router(inv, "ap-lan2")
 
 
-def test_happy_binding_uses_inventory_place():
+def test_happy_binding_uses_inventory_place(monkeypatch):
+    # Hermetic (module docstring contract): the binding must not require the
+    # labgrid-client binary on the test host or in CI. Only the place/coordinator
+    # wiring is asserted, so point the binary resolver at the bare name.
+    monkeypatch.setenv("TOLLGATE_LABGRID_CLIENT", "labgrid-client")
     inv = _inventory(_router(place="ap-lan9"))
     binding = bench_for_router(inv, "ap-lan2")
     assert binding.bench.place == "ap-lan9"
