@@ -81,3 +81,9 @@ tests/report/
 .env.rust-basic-local.bak
 .env.lab-routers-backup
 .env.tunnel
+demo/
+
+# PoE physical-lab inventory — real IPs/MACs/serials never committed
+# (configs/labgrid/inventory.local.yaml.example is the committed schema)
+configs/labgrid/inventory.local.yaml
+configs/labgrid/physical-poe-lab.yaml
