@@ -106,6 +106,9 @@
 #   WATCH_TRIES       6                           gate polls per round (15 s apart)
 #   GATE_STRIKES      2                           consecutive non-204/200 probes = "closed"
 #   PROBE_TRIES       12                          gate polls after a purchase (10 s apart)
+#   SETTLE_BUDGET     180                         PHASE 5b: seconds to wait for the module to settle an
+#                                                 address nodogsplash no longer knows
+#   SETTLE_WINDOW     45                          PHASE 5b: seconds between the two unconfirmed-closes samples
 #   ROUTER_PW_FILE    ~/.tg-e2e/pw                for router-snapshot.sh
 #
 set -uo pipefail
@@ -151,6 +154,8 @@ BURN_PARALLEL="${BURN_PARALLEL:-6}"
 WATCH_TRIES="${WATCH_TRIES:-6}"
 GATE_STRIKES="${GATE_STRIKES:-2}"
 PROBE_TRIES="${PROBE_TRIES:-12}"
+SETTLE_BUDGET="${SETTLE_BUDGET:-180}"
+SETTLE_WINDOW="${SETTLE_WINDOW:-45}"
 BURN_URLS="${BURN_URLS:-https://ash-speed.hetzner.com/100MB.bin https://fsn1-speed.hetzner.com/100MB.bin https://proof.ovh.net/files/100Mb.dat http://ipv4.download.thinkbroadband.com/100MB.zip http://speedtest.tele2.net/100MB.zip https://speed.cloudflare.com/__down?bytes=104857600}"
 
 PURCHASE="${PURCHASE:-0}"
@@ -581,6 +586,198 @@ EOF
   printf '%s\n' "$out"
 }
 
+# ---------------------------------------------------------------- zombie-session convergence helpers
+#
+# Used by PHASE 5b (see the convergence-contract comment below for the measured failure these
+# assertions exist to catch). They live here, before their first use, because the run's shell reads
+# this file top-down: a function defined next to PHASE 5b would not exist when buy#1 is asserted.
+
+# The module lines that mean "this address has been settled".
+settled_pattern() {
+  printf '%s' "already gone|Reconciled the stale binding of $CLIENT_MAC|Removed unmeterable session for $CLIENT_MAC|Removed expired session for $CLIENT_MAC"
+}
+
+# PHASE 5b's evidence window starts at a MARKER written into the router's own log when the phase
+# begins. Everything logged BEFORE it is not this phase's evidence: the exhaustion of buy#1 already
+# logs "Removed expired session for $CLIENT_MAC", an earlier phase may have escalated the client,
+# and a wedge line can survive from a PREVIOUS run. Reading the whole buffer instead is a false
+# PASS generator — the settle search matches the exhaustion and the phase "passes" without the
+# module having done anything. logread here is a ~500-line ring buffer with no epoch and no stable
+# line numbering, so a marker line is the only reliable "since" anchor.
+router_log_mark() {   # $1 = marker token
+  local sh
+  sh="$(mktemp "${TMPDIR:-/tmp}/logmark.XXXXXX")"
+  cat > "$sh" <<EOF
+logger -t tollgate-bench "LOG-ANCHOR $1"
+EOF
+  run_on_router "$sh" >/dev/null 2>&1
+  rm -f "$sh"
+}
+
+# The lines the router logged AFTER the last "LOG-ANCHOR $1" marker, matching grep -E "$2".
+# Identical to router_log_grep otherwise (same transport, same tail), so a caller that needs the
+# whole buffer keeps using router_log_grep.
+router_log_since() {   # $1 = marker token  $2 = grep -E pattern for the payload
+  local sh out
+  sh="$(mktemp "${TMPDIR:-/tmp}/logsince.XXXXXX")"
+  cat > "$sh" <<EOF
+logread 2>/dev/null | awk -v m="LOG-ANCHOR $1" 'index(\$0,m){n=NR} {a[NR]=\$0} END{for(i=n+1;i<=NR;i++) print a[i]}' | grep -iE "$2" | tail -40
+EOF
+  out="$(run_on_router "$sh" 2>&1)"
+  rm -f "$sh"
+  printf '%s\n' "$out"
+}
+
+# The module's running total of unconfirmed closes, read from either log surface: the valve's
+# `unconfirmed_closes=` (logrus, the close machinery) or the merchant's `unconfirmed gate
+# closes=` (the sweep that drives it). 0 when the module reported none, which is the honest
+# reading of "nothing was escalated in this window".
+unconfirmed_total() {
+  local n
+  n="$(printf '%s\n' "$1" | sed -n 's/.*unconfirmed_closes=\([0-9][0-9]*\).*/\1/p' | tail -1)"
+  [ -n "$n" ] || n="$(printf '%s\n' "$1" | sed -n 's/.*unconfirmed gate closes=\([0-9][0-9]*\).*/\1/p' | tail -1)"
+  printf '%s' "${n:-0}"
+}
+
+# How many of those lines name THIS client: a growth caused by another client's session is not
+# this assertion's business, a growth caused by ours is.
+unconfirmed_for_client() {
+  printf '%s\n' "$1" | grep -c "$CLIENT_MAC" 2>/dev/null || true
+}
+
+# The module's error lines, WITHOUT the client MAC in the pattern — so "this window names the
+# client" is a real assertion rather than a tautology.
+grant_error_log() { router_log_grep 'ERROR|error:|error=|failed|not found|UNRESOLVED'; }
+
+# A purchase that was NOT granted must at least say so, specifically, in the module log. The
+# measured failure this guards against is the silent one: `state=PAID`, the merchant wallet +1
+# sat, `access_granted` never true, and the customer staring at a portal with no explanation.
+# Only the invoice lane reports `access_granted`; the token lane's grant evidence is kind:1022.
+assert_grant_not_silent() {   # $1 = label, $2 = the module's error window
+  [ "$LANE" = ln ] || return 0
+  [ "${LN_GRANT:-}" = "true" ] && return 0
+
+  printf -- '--- a purchase was NOT granted (access_granted=%s); the module said:\n%s\n' \
+    "${LN_GRANT:-<none>}" "$2"
+  assert_contains "$1 was a LOUD, specific error naming the client (never a silent no-op)" \
+    "$CLIENT_MAC" "$2"
+}
+
+# ---------------------------------------------------------------- the convergence contract
+#
+# The measured defect (bench MT3000, 2026-09-26, module pin 2796d96c): a client LEAVES nodogsplash
+# while the module still holds its PAID session. `ndsctl deauth` then answers `Client <mac> not
+# found.` and exits 1 — the enforcement layer holds nothing for the MAC, so there is nothing left
+# to close — and the module read that exit status as an UNCONFIRMED close: it kept the session
+# tracked, retried the close at the sweep cadence for ever (`unconfirmed_closes` 113 -> 193 -> 195,
+# monotonic), never retired the session, and logged the false warning "this client may still hold
+# open, unmetered access" for a MAC nodogsplash did not hold. The storm drove ndsctl until its
+# socket died ("Socket is not ready for communication : Bad file descriptor" every ~5 s) and a PAID
+# purchase could then not be authorised at all (state=PAID, merchant wallet +1 sat,
+# access_granted never true) — the operator's "the second purchase showed a new allotment, but no
+# internet". The remedy that restored the box was an operator restart of nodogsplash.
+#
+# So after the client leaves, the module must CONVERGE on that address:
+#   * it RETIRES the binding — or re-establishes the gate deliberately — never the drift state, in
+#     which /balance and the portal keep reporting a session nobody can use;
+#   * it stops driving ndsctl about the address: no unconfirmed-close escalation names the client
+#     inside the window, and the running total does not move across a settle window;
+#   * it never claims the client holds unmetered access, because nodogsplash does not know it;
+#   * it leaves the ndsctl socket ANSWERABLE, which is what the NEXT purchase depends on.
+#
+# The window is anchored with a marker in the router's own log (router_log_mark): the exhaustion of
+# buy#1 ALSO logs "Removed expired session for <mac>", so an unanchored read reports the address as
+# settled without the module having done anything — a false PASS this contract must not have.
+
+# Write the anchor for one convergence window. $1 = token
+converge_window_open() {
+  router_log_mark "$1"
+}
+
+# The module must settle the address within the budget. $1 = label, $2 = token, $3 = budget seconds
+converge_assert_settled() {
+  local label="$1" token="$2" budget="$3" log="" settled=0 waited=0
+
+  while [ "$waited" -le "$budget" ]; do
+    log="$(router_log_since "$token" "$(settled_pattern)")"
+    if printf '%s\n' "$log" | grep -q "$CLIENT_MAC" 2>/dev/null; then settled=1; break; fi
+    sleep 10
+    waited=$((waited + 10))
+  done
+  printf -- '--- %s: module lines that settle %s (waited %ss of %ss; window starts at %s):\n%s\n' \
+    "$label" "$CLIENT_MAC" "$waited" "$budget" "$token" "$log"
+  if [ "$settled" = 1 ]; then
+    printf 'ASSERT PASS  %s: the module settled the address nodogsplash no longer knows\n' "$label"
+  else
+    printf 'ASSERT FAIL  %s: the module never settled the address nodogsplash no longer knows (%ss budget)\n' "$label" "$budget"
+    printf '             a session whose client left can be neither metered nor closed, so it stays\n'
+    printf '             tracked for ever and /balance keeps reporting a session nobody can use\n'
+    printf '             (measured on this bench: 170+ sweeps and unconfirmed_closes 113 -> 193)\n'
+    FAILED=$((FAILED + 1))
+  fi
+}
+
+# The running total is a cumulative gauge, so it is read from the WHOLE buffer (its last line is the
+# current total); how many escalations NAME this client is read from the anchored window, so the
+# assertion covers this window and not the phases that preceded it. $1 = label, $2 = token
+converge_assert_counters() {
+  local label="$1" token="$2" total_a total_b client_a client_b
+
+  total_a="$(unconfirmed_total "$(router_log_grep 'unconfirmed_closes=|unconfirmed gate closes=')")"
+  client_a="$(unconfirmed_for_client "$(router_log_since "$token" 'unconfirmed_closes=|unconfirmed gate closes=')")"
+  sleep "$SETTLE_WINDOW"
+  total_b="$(unconfirmed_total "$(router_log_grep 'unconfirmed_closes=|unconfirmed gate closes=')")"
+  client_b="$(unconfirmed_for_client "$(router_log_since "$token" 'unconfirmed_closes=|unconfirmed gate closes=')")"
+  printf -- '--- %s: unconfirmed closes sample A=%s (naming %s in this window: %s) -> sample B=%s (naming %s in this window: %s)\n' \
+    "$label" "$total_a" "$CLIENT_MAC" "$client_a" "$total_b" "$CLIENT_MAC" "$client_b"
+  assert_eq "$label: unconfirmed_closes did not grow while the address was gone" "$total_a" "$total_b"
+  assert_eq "$label: no unconfirmed-close escalation named the client after it left nodogsplash" "$client_a" "$client_b"
+}
+
+# The wording contract and the socket the gate depends on. For an address nodogsplash does not know,
+# no line may claim the client still holds open, unmetered access: that claim sends an operator (or
+# a reviewer) after free internet this state cannot have. And the measured failure needed an
+# operator restart to clear, so a wedged socket — or a silent one — is a failure of its own.
+# $1 = label, $2 = token
+converge_assert_wording_and_socket() {
+  local label="$1" token="$2" box_id nds_raw
+
+  assert_not_contains "$label: the module does not claim unmetered access for an address nodogsplash does not know" \
+    "may still hold open, unmetered access" "$(router_log_since "$token" 'unmetered access')"
+  assert_not_contains "$label: no wedged ndsctl socket in the settle window" "Socket is not ready for communication" \
+    "$(router_log_since "$token" 'Socket is not ready for communication|Bad file descriptor')"
+
+  box_id="$(box_identity)"
+  nds_raw="$(box_field "$box_id" nds_uptime_raw)"
+  if [ -n "$nds_raw" ]; then
+    printf 'ASSERT PASS  %s: ndsctl still answers after the settle window (nodogsplash uptime %s)\n' "$label" "$nds_raw"
+  else
+    printf 'ASSERT FAIL  %s: ndsctl stopped answering during the settle window: the socket is WEDGED, and a\n' "$label"
+    printf '             wedged socket is the state in which a PAID purchase cannot be authorised at all\n'
+    FAILED=$((FAILED + 1))
+  fi
+}
+
+# The client leaves nodogsplash with a PAID session still open: nodogsplash drops its record for the
+# MAC, the module keeps the session (that IS the drift), and the deauthorization the module will
+# attempt cannot be confirmed, because nodogsplash does not know the address at all.
+#
+# ONE recorded ndsctl step. No service is bounced, so the run's restart guard is untouched, and the
+# box identity is re-checked by the caller at the phase boundary.
+client_leaves_nodsplash() {
+  local sh out
+  sh="$(mktemp "${TMPDIR:-/tmp}/deauth.XXXXXX")"
+  cat > "$sh" <<EOF
+echo "-- ndsctl deauth $CLIENT_MAC (the client leaves; the module's session is NOT told)"
+ndsctl deauth $CLIENT_MAC; echo "rc=\$?"
+sleep 3
+ndsctl json 2>/dev/null | head -c 300; echo
+EOF
+  out="$(run_on_router "$sh" 2>&1)"
+  rm -f "$sh"
+  printf '%s\n' "$out"
+}
+
 # ---------------------------------------------------------------- box identity (the restart guard)
 #
 # The failure this guards against, measured on the bench MT3000 on 2026-09-26: nodogsplash AND
@@ -707,6 +904,7 @@ if [ "$LANE" = token ]; then
   ALLOTMENT_1="$(json_val allotment "$LAST_BODY")"
 else
   assert_eq "buy#1 granted access (access_granted:true)" "true" "${LN_GRANT:-}"
+  assert_grant_not_silent "buy#1" "$(grant_error_log)"
   ALLOTMENT_1="${LN_ALLOT:-}"
 fi
 printf -- '--- allotment#1 = %s bytes\n' "${ALLOTMENT_1:-<none>}"
@@ -835,6 +1033,20 @@ probe_verbose
 probe_verbose
 box_assert_stable "after-phase4-deauth"
 
+# ---------------------------------------------------------------- the convergence check (runs in PHASE 5b)
+
+# The convergence check ("a client that leaves nodogsplash must not leave an unretirable session
+# behind") runs in PHASE 5b, after buy#2 — see the contract there, and
+# tests/mt3000-bench/zombie-settle-control.sh for the offline proof that it can fail.
+#
+# It is deliberately NOT run here, straight after the deauth discriminator. On the measured
+# behaviour the exhaustion of buy#1 has already retired that session ("Removed expired session for
+# $CLIENT_MAC"), so the module holds NOTHING for the address at this point and a check here would
+# have nothing to converge on: the only way it could "pass" is by matching a line logged BEFORE it
+# started. PHASE 5b anchors its window for exactly that reason, and runs while the module holds a
+# PAID session whose client leaves — the drift state the bench measured, and the one a customer can
+# actually be stuck in.
+
 # ---------------------------------------------------------------- PHASE 5
 
 say "PHASE 5 SECOND PURCHASE (the money path: does the gate re-open?)"
@@ -845,6 +1057,7 @@ if [ "$LANE" = token ]; then
   ALLOTMENT_2="$(json_val allotment "$LAST_BODY")"
 else
   assert_eq "buy#2 granted access (access_granted:true)" "true" "${LN_GRANT:-}"
+  assert_grant_not_silent "buy#2" "$(grant_error_log)"
   ALLOTMENT_2="${LN_ALLOT:-}"
 fi
 printf -- '--- allotment#2 = %s bytes (allotment#1 was %s)\n' "${ALLOTMENT_2:-<none>}" "${ALLOTMENT_1:-<none>}"
@@ -859,6 +1072,36 @@ snap "after-second-purchase"
 box_assert_stable "after-phase5-buy2"
 assert_eq "post-buy#2 probe 1 re-opened the gate" "open" "$(norm_probe "$P1")"
 assert_eq "post-buy#2 probe 2 re-opened the gate" "open" "$(norm_probe "$P2")"
+
+# ---------------------------------------------------------------- PHASE 5b
+
+# THE DRIFT, reproduced: the client LEAVES nodogsplash while the module still holds the PAID
+# allotment of buy#2. nodogsplash drops its record for the MAC (one recorded ndsctl step — no
+# service is bounced, so the run's restart guard is untouched), the module keeps the session, and
+# the deauthorization it will attempt cannot be confirmed because nodogsplash does not know the
+# address at all. That is the state measured on this bench on 2026-09-26, and the state in which
+# the retry loop hammered ndsctl until its socket died.
+say "PHASE 5b CONVERGENCE: the client leaves with its PAID allotment still open"
+
+CONVERGE_TOKEN="phase5b-$TS"
+converge_window_open "$CONVERGE_TOKEN"
+printf '%s\n' "$(client_leaves_nodsplash)"
+printf -- '--- the module still reports the session it is holding for %s: %s\n' "$CLIENT_MAC" "$(balance)"
+
+converge_assert_settled "PHASE 5b" "$CONVERGE_TOKEN" "$SETTLE_BUDGET"
+converge_assert_counters "PHASE 5b" "$CONVERGE_TOKEN"
+converge_assert_wording_and_socket "PHASE 5b" "$CONVERGE_TOKEN"
+box_assert_stable "after-phase5b-settle"
+
+# ---------------------------------------------------------------- end of PHASE 5b
+#
+# This terminator is load-bearing, not decoration: the offline control
+# (tests/mt3000-bench/zombie-settle-control.sh) extracts the phase text BETWEEN these two
+# separator lines, so the control can never drift out of sync with the run. A terminator that is
+# a blanket `say "MODULE LOG"` lets the NEXT phase be swallowed into the extracted block: the
+# control then ran its assertions over a neighbour's text (and died on that neighbour's variables)
+# instead of over the settle phase. Keep the pair unique in this file:
+#   start: `# ---- PHASE 5b`   end: `# ---- end of PHASE 5b`
 
 say "MODULE LOG (decisive greps)"
 router_log_grep 'baseline|allotment|closed gate|raced|restore|unconfirmed|grant|authoriz'
