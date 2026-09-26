@@ -1,72 +1,70 @@
-# Rig Port Map — GS1900-8HP #1 (OpenWrt), live discovery 2026-09-25 (rev 2)
+# Rig Port Map — rev 5, FROZEN 2026-09-25 ~14:40Z (agent provision; single source of truth)
 
-Rev 2: corrected identities + credentials from the conwrt handover
-(data/bench/places.json, inventory.jsonl), the wedge incident + recovery,
-and the serial-routing model. Discovery method: `ssh root@192.168.13.2`
-(read-only): `ubus call poe info`, `/etc/config/network`, `ip neigh`, SSH
-probes of each DUT via `-J root@192.168.13.2`. Precedent:
-`conwrt/recipes/extreme-networks/ws-ap3915i/HARDWARE-DISCOVERY.md`.
+Frozen per conductor DoD. Evidence base: direct SSH probes from
+ai-legion-small (wlp4s0 secondaries 102.2/103.2/105.2/108.2), raw cmd=773
+HTML rows (NOT the StockWeb parser — see caveats), stock SSH-CLI MAC table,
+OpenWrt ubus/FDB, serial console (splice RX), WiFi scan, PoE bounce
+correlation. Changes after this freeze go in as rev 6 with a new evidence
+pass.
 
-## Switch identity
+## Stock GS1900-8HP #2 — THE RIG SWITCH (V2.90, web admin 192.168.13.3, sops fleet pw)
 
-| Field | Value |
-|---|---|
-| Model | Zyxel GS1900-8HP **A1** (RTL8380M rev C), PoE MCU ST32F100 fw v17.1 (BCM59121 PSE) |
-| Firmware | OpenWrt **25.12.1** r32768-b21cfa8f8c, kernel 6.12.74, target `realtek/rtl838x`, Amperstrand realtek-poe fork |
-| Mgmt IP | **192.168.13.2** (switch.1 / VLAN 1, gw 192.168.13.1 = ERX house core) |
-| PoE budget | 65 W (typ. consumption 21-22 W fully populated) |
-| Port naming | `lanN` = phys port `p(7+N)`; per-DUT VLAN `100N` on lanN, switch = gateway `192.168.10N.1`, DUTs at `.51` |
-| Known issues | realtek-poe daemon↔MCU wedge (2026-09-25 incident, see below; 25.12.5 upgrade = the planned fix, plan W2). Switch clock drifts ~27 min (NTP unsynced) — matters for log correlation. The September "self-reboots" were the user's bench power cuts, not a fault. |
+| Port | Occupant (evidence) | Status @ freeze |
+|---|---|---|
+| **p1** | lab-LAN uplink | **KILL-SWITCH — never touch** (no serial; factory-reset-only recovery) |
+| **p2** | **ap-lan2 OBSERVER** (dc:b8:08:6c:ea:7f; FDB + SSH @ .102.51 flat) | 5.1 W, healthy; splice SOURCE (its ttyMSM0 → dark unit's console); survived 3 accidental reboots 09-25 (provision p2-misattribution incident — pre-FDB-fix) |
+| **p3** | dark unit's 2nd link per FDB (b4:2d:56:25:79:b1 seen here; unit is power-proven on OpenWrt lan2 → dual-cable or stale entry) | 3.4 W class3 |
+| **p5** | **router-alpha** (b4:2d:56:24:ad:97; SSH-proven @ .105.51) | **PoE-INPUT FAILURE verdict (2026-09-25 ~15:0xZ)**: cycle executed (provision disable + owner enable — provision's enable leg hit the lying-error-page class), re-poll verified **class0/0 mW across a 60 s offered-power window = THIRD independent no-negotiation result**. Sibling fields sane (Low/802.3at — earlier repair held). Remaining discriminator before declaring DUT hardware: **cable move to empty stock p3/p4 or lab injector**. Golden 24.10.8 on disk; unit dark until discriminator |
+| **p7** | NR7101 (78:c5:7d:13:91:9c) | latest pass reads 0 mW (was 5.3 W morning) — flagged, NOT a rig DUT, untouched |
+| p4/p6/p8 | — | free |
 
-## Port map
+Web-API caveats (all live-earned 09-25, runbook in PRTA docs/rig-flash.md):
+cmd=773 partial pages under exporter+client session contention; StockWeb
+row-parser misses page variants (raw `<tr>` parse = truth); set_poe_state
+enable-verify too tight for cold PD boot; enables can stop landing after
+abnormal disable sequences → human web-UI toggle is the escalation.
 
-| Port | VLAN | PoE | DUT | Firmware / state | Mgmt + auth | Notes |
-|---|---|---|---|---|---|---|
-| **lan1** | 1 + 1002-1008 trunk | admin Disabled | — | Lab-LAN uplink | — | **PROTECTED** (uplink + DUT trunk) |
-| **lan2** | 1002 | 5.2 W | **WS-AP3915i** (dc:b8:08:6c:ea:7f) | OpenWrt **25.12.5**, clean overlay | 192.168.102.51, root, pw <secrets:fleet.bench_root_password> (canonical: ~/conwrt-bench) **and** our key (5 keys installed) | **REFERENCE UNIT + serial-listener infrastructure** — held acquired (busy) in labgrid, NOT a DUT. Overlay: no reflash/firstboot until the switch runs 25.12.5. Serial bridge: ai-legion `conwrt_serial_bridge.py` :4003 |
-| **lan3** | 1003 | 5.0 W | **WS-AP3915i** (b4:2d:56:25:47:a2) | OpenWrt **24.10.2** | 192.168.103.51, root, **key-only by design** (password auth disabled 2026-09-23) | Serial splice CURRENTLY ATTACHED here (listener ap-lan2 → console lan3). Default serial-test DUT per owner's routing model |
-| **lan4** | 1004 | 3.4 W | **WS-AP3915i** (b4:2d:56:25:79:b1) | **DARK since 2026-09-24 ~11:03** (was the healthy reference unit; went dark after the switch-reboot PoE cycle; link + ~3.4 W, zero frames since) | none | Serial-gated recovery (plan W1). Was the serial listener for ap-lan2's own console (:4002, now removed). NOT the May-era boot-failure unit |
-| **lan5** | 1005 | 4.9 W | **WS-AP3915i** (b4:2d:56:24:ad:97) | OpenWrt **24.10.2**, flash-boots post-#61 (CFG1 env-identity fix) | 192.168.105.51, root, **our key** (key auth proven) | **PRTA rig smoke-test DUT** (`router-alpha`). Survived: 3 power cycles + the 2026-09-25 wedge-dark episode (recovered via daemon restart) |
-| **lan6** | 1006 | 3.5 W | never identified (no MAC ever learned) | **DARK, zero frames EVER** incl. bootloader; "boots STOCK" (#79: boot_net env repair = plan W1) | none | Serial-gated ("zero frames ever" class). `reset_allowed=true` but do NOT lottery-cycle |
-| **lan7** | 1007 | Searching | — | empty | — | spare |
-| **lan8** | 1008 | Other fault (expected: non-PD link partner) | — | **cascade to GS1900-8HP #2 (stock V2.90)** | — | **PROTECTED**. Stock #2's old mgmt 192.168.1.1 is DEAD; now on the lab LAN at an unknown 192.168.13.x address (herdr agent `stock-poe` finding it; report → ~/stock-2.90-investigation.md) |
+## OpenWrt GS1900-8HP #1 (192.168.13.2, 25.12.1 r32768 + poe-fix daemon @bb9c792)
 
-## Serial-routing model (owner directive)
+| Port | Occupant (evidence) | Status @ freeze |
+|---|---|---|
+| **lan1** | uplink + 1002-1008 trunk | **PROTECTED** |
+| **lan2** | **DARK UNIT b4:2d:56:25:79:b1** (serial identity + bounce-power correlation) | 2.6-3.6 W; chronic boot-staller: PBL→SBL1→U-Boot (NAND/ESS/eth0 init seen) then SILENT pre-kernel since ≥09-24; splice RX watches it (TX dead — cable suspect); W1 recovery = interactive U-Boot once TX fixed |
+| lan3/4/5/6/7 | empty | carrier 0 |
+| **lan8** | UNKNOWN: 4.6 W, carrier 1, L2-silent for hours, no FDB | **prime candidate for the missing lan3 DUT** (b4:2d:56:25:47:a2 — RS-unresponsive on flat, no beacons, no FDB anywhere); owner cable-trace pending; **NEVER TOGGLE (mission rule)** |
 
-ap-lan2 (reference unit) is **dedicated labgrid infrastructure**: its
-/dev/ttyMSM0 listens on the RJ45 null-modem splice, wired to whichever DUT
-needs serial. **Default splice position: lan3.** Moves are manual (owner's
-hands) + `scripts/bench_serial_route.py <place>` on ai-legion flips the
-bridge instance + exporter stanza + restart in one shot. Exactly ONE
-NetworkSerialPort stanza active in the exporter at a time.
+- Daemon fix (poe-fix lane, 14:22Z): UART-framing resync + LED-map OOB
+  write; verified live at 14:37Z — `mcu_comm: age 17 s, stale:false,
+  384 ok / 0 bad / 0 rejects`.
+- 12:26Z mystery reboot: attribution hang→watchdog-reset, trigger unproven
+  → ~/conwrt-bench/docs/POE-WEDGE-ROOT-CAUSE.md.
+- Wedge model (corrected 09-25): flock'd daemon restart clears liveness +
+  efficacy; manage reflection takes 15-30 s (`poll_interval` 30000);
+  rc=0 is never evidence.
+- 25.12.5 upgrade: staged + gated (`scripts/rig-flash.sh switch-upgrade
+  --confirm` + phone-agent gate); window = T+15 min after alpha recovery;
+  in-window: fresh post-fix poe backup, poll_interval→2000, keep-settings
+  preserves the daemon fix via overlay.
 
-## labgrid topology (post-consolidation)
+## Missing unit
 
-- **Canonical coordinator: 192.168.13.208:20408 (ai-legion)** — conwrt bench
-  places `ap-lan2..8` (live power/serial exports) + embedded-family places
-  (migrated from 221). Power backend convergence:
-  labgrid/POE-BACKEND-DECISION.md (conwrt repo). Adoption sketch:
-  ~/src/physical-router-test-automation/docs/labgrid-rig-exporter-adoption.md.
-- 192.168.13.221:20408 (small) — retired during consolidation; its stale
-  ap-lan2..8 duplicates deleted.
-- Local (no-coordinator) env for the PRTA smoke lane:
-  `configs/labgrid/rig-alpha.yaml` + `tools: ssh:` ProxyJump wrapper.
+**lan3 DUT / router-beta (b4:2d:56:25:47:a2)** — golden 24.10.8 flashed
+09-25 morning, then went unlocatable after the owner's rewire: no v4/v6/
+NDP/ARP anywhere (103/105/13.x swept + 192.168.1.1), no FDB on either
+switch, no WiFi beacons, RS-unresponsive on the flat L2. Recovery = one
+owner action: trace the OpenWrt lan8 cable; if it is the DUT, move to stock
+p4/p6 → golden keys SSH → normalize (target 105.x doctrine) → proofs.
 
-## Incident log: 2026-09-25 PoE daemon wedge
+## labgrid (canonical coordinator 192.168.13.208:20408)
 
-- Driver-detected: `poe manage` silently dropped (rc=0) while `poe info`
-  served a byte-identical frozen snapshot; no daemon log lines. Earlier
-  tell: 07:12 logread "MCU rejected command: not-ready".
-- Effect: lan5 port state stale → its AP went network-dark ~10:29.
-- Recovery (user-approved, bench rule): release places → `/tmp/amperstrand-bench`
-  flock → `/etc/init.d/poe restart` → control verified. Observed: healthy
-  PDs did NOT blip (lan2/lan3 uptimes continuous); only the wedged lan5
-  renegotiated → dark AP recovered.
-- Hardening now in `ZyxelPoEDriver` (tollgate-lab): manage + poll-verify,
-  settling tolerance, frozen-digest DROPPED detection, bounded retry for
-  the not-ready transient class.
+- Stock power: `StockZyxelPoePort` via `ai-legion-small-stock` exporter
+  (PAUSED during the p5 incident — restart after the owner toggle) +
+  client registration `~/venvs/rig-labgrid/.../tollgate_lab_stock_poe.pth`
+  (labgrid 25.0.1 has no entry-point hook). Proven: `power get` "on" +
+  place-driven cycle on ap-lan5 (09-25).
+- PRTA envs: rig-alpha.yaml (direct .105.51), rig-beta.yaml (holder;
+  DUT pending).
 
-## PROTECTED (never PoE-toggle, never reboot switch)
+## PROTECTED (never toggle, never reboot)
 
-**lan1** (uplink + trunk), **lan8** (cascade to stock #2), the switch itself
-(a switch reboot cold-cycles every PD — documented in conwrt recipes).
+OpenWrt #1: **lan1, lan8**, the switch. Stock #2: **p1**, the switch.
