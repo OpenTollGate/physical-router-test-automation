@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install the bench tooling onto PATH as `bench-lock`, `bench-with-lock`, `bench-deploy-apk`.
+# Install the bench tooling onto PATH as `bench-lock`, `bench-with-lock`, `bench-deploy-apk`,
+# `router-snapshot` and `bench-token`.
 #
 # It SYMLINKS into ~/.local/bin (or $BENCH_BIN_DIR) so there is exactly one copy of the
 # code — no drift between a checkout and an installed copy. Run it from whichever checkout
@@ -15,10 +16,14 @@ BIN_DIR="${BENCH_BIN_DIR:-$HOME/.local/bin}"
 mkdir -p "$BIN_DIR" || exit 1
 
 rc=0
-for s in bench-lock bench-with-lock bench-deploy-apk; do
+for s in bench-lock bench-with-lock bench-deploy-apk router-snapshot; do
   chmod +x "$HERE/$s.sh" || true
   ln -sfn "$HERE/$s.sh" "$BIN_DIR/$s" && printf 'linked %s -> %s\n' "$BIN_DIR/$s" "$HERE/$s.sh" || rc=1
 done
+# the token tool is Python (and resolves the repo through its own symlink)
+chmod +x "$HERE/bench-token.py" || true
+ln -sfn "$HERE/bench-token.py" "$BIN_DIR/bench-token" \
+  && printf 'linked %s -> %s\n' "$BIN_DIR/bench-token" "$HERE/bench-token.py" || rc=1
 
 printf '\n'
 case ":$PATH:" in

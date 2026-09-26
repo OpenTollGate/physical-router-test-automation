@@ -13,6 +13,12 @@
 #   * ... and FAILS LOUDLY when a different build is what actually got installed
 #     (install build A while naming build B — the card's evidence gate)
 #   * a substituted apk already staged under our name is refused BEFORE installing
+#   * the second-purchase e2e is dry-run by default, refuses a paid run it cannot pay for,
+#     and is refused (naming the holder) while another window owns the bench — without
+#     ever probing the router or taking a transcript
+#   * the router-side snapshot refuses without a window, and its payload (render mode) is
+#     accepted by both `sh -n` and BusyBox `ash -n` — the router's own shell
+#   * the token tool mints nothing without --yes and refuses to check an absent token
 #
 # The "router" is a throw-away directory; ssh/scp/apk are PATH test doubles in
 # harness/bin/. The remote scripts are the production ones — only TG_TMP/TG_BIN/TG_ETC/
@@ -70,6 +76,11 @@ new_router() {   # fresh harness router root with both payloads mapped
   harness_payload_map "$APK_A" "$PAY_A"
   harness_payload_map "$APK_B" "$PAY_B"
 }
+
+# The scripts under test by section 4 (paths live here, not in the shared harness lib).
+SECOND_PURCHASE="$BENCH_DIR/second-purchase-e2e.sh"
+ROUTER_SNAPSHOT="$BENCH_DIR/router-snapshot.sh"
+BENCH_TOKEN="$BENCH_DIR/bench-token.py"
 
 deploy_in_window() {   # $1=purpose ; rest = deploy args
   local purpose="$1"; shift
@@ -300,7 +311,93 @@ else
   skip "no fixtures for the symlinked deploy"
 fi
 
+# ================================================= 4. second-purchase e2e + snapshot + tokens
+# Offline only, like the rest of this suite: the paid path is exercised with the lock
+# REFUSING, and the router-side snapshot is checked as text (render mode) rather than run.
+# Live NUT-07 / mint checks belong to `make bench-token-verify`, not to a hermetic suite.
+
+t_begin "the second-purchase e2e DEFAULTS to a dry run: nothing bought, no lock, no router"
+run_cmd "$SECOND_PURCHASE"
+check_rc "dry run exits 0" 0 "$RC"
+check_contains "dry run is labelled" "mode=DRY-RUN" "$OUT"
+check_contains "dry run promises nothing was spent" "nothing was purchased" "$OUT"
+check_contains "dry run prints the phases it would run" "ndsctl deauth discriminator" "$OUT"
+check_not_contains "dry run never took the bench lock" "taking the single-owner bench lock" "$OUT"
+
+t_begin "the second-purchase e2e refuses a paid run it cannot pay for (usage, no router)"
+run_cmd "$SECOND_PURCHASE" --purchase
+check_rc "paid run without TOKEN_1 refused" 2 "$RC"
+check_contains "refusal names the missing variable" "TOKEN_1 is required" "$OUT"
+
+TOKDIR="$WORK/tokens"
+mkdir -p "$TOKDIR"
+printf 'cashuAfake-not-a-real-token\n' > "$TOKDIR/tok1.txt"
+printf 'cashuAfake-not-a-real-token\n' > "$TOKDIR/tok2.txt"
+run_cmd env TOKEN_1="$TOKDIR/tok1.txt" TOKEN_2="$TOKDIR/tok1.txt" "$SECOND_PURCHASE" --purchase
+check_rc "the same file for both tokens refused" 2 "$RC"
+check_contains "refusal explains why" "the second purchase needs a fresh token" "$OUT"
+
+t_begin "a PAID run is refused while another window holds the bench — and never probes the router"
+BENCH_PROFILE=alpha "$BENCH_LOCK" take --purpose "e2e-refusal-holder" --hold 12 >"$WORK/holder2.out" 2>&1 &
+HOLD2=$!
+sleep 1
+rm -rf "$WORK/e2e-logs"
+run_cmd env BENCH_PROFILE=beta \
+  TOKEN_1="$TOKDIR/tok1.txt" TOKEN_2="$TOKDIR/tok2.txt" \
+  LOG_DIR="$WORK/e2e-logs" \
+  "$SECOND_PURCHASE" --purchase --nic lo --client-ip 127.0.0.2
+check_rc "paid run refused (bench-lock exit 3)" 3 "$RC"
+check_contains "refusal names the holder's purpose" "e2e-refusal-holder" "$OUT"
+check_not_contains "refusal happened before the router liveness probe" "preflight: backend reports" "$OUT"
+check_not_contains "and before any purchase was attempted" "PURCHASE buy#1" "$OUT"
+if [ -e "$WORK/e2e-logs" ]; then
+  fail "the refused run created $WORK/e2e-logs — it got past the lock"
+else
+  pass "no transcript directory was created: the run stopped at the lock"
+fi
+wait "$HOLD2" 2>/dev/null
+"$BENCH_LOCK" release --force >/dev/null 2>&1 || true
+
+t_begin "the router-side snapshot: no lock without a window, and a payload the router's sh accepts"
+run_cmd "$ROUTER_SNAPSHOT" snapshot
+check_rc "snapshot without a bench window refused (bench-lock require)" 4 "$RC"
+check_contains "refusal explains the sanctioned invocation" "must run as" "$OUT"
+
+run_cmd "$ROUTER_SNAPSHOT" render --label phase0-fresh
+check_rc "render mode runs with no lock and no ssh" 0 "$RC"
+PAYLOAD="$WORK/snapshot-payload.sh"
+printf '%s\n' "$OUT" > "$PAYLOAD"
+check_contains "payload interpolates the label" 'LABEL="phase0-fresh"' "$OUT"
+check_contains "payload reads the data-allotment guard chain" "nds_enforce_forward" "$OUT"
+check_contains "payload reads the admin-board guard chain" "admin_board_input_guard" "$OUT"
+check_contains "payload reads balance as the router sees it" "127.0.0.1:2121/balance" "$OUT"
+check_contains "payload still ends with its completion marker" "SNAP_DONE" "$OUT"
+
+run_cmd sh -n "$PAYLOAD"
+check_rc "sh -n accepts the payload" 0 "$RC"
+if command -v busybox >/dev/null 2>&1; then
+  run_cmd busybox ash -n "$PAYLOAD"
+  check_rc "busybox ash -n accepts the payload (the router's own shell)" 0 "$RC"
+else
+  skip "no busybox on this host"
+fi
+
+t_begin "the token tool is dry-run safe and refuses to check a token that is not there"
+run_cmd "$BENCH_TOKEN" mint --amount 64 --out "$WORK/never-written.txt"
+check_rc "mint without --yes is a dry run (exit 0)" 0 "$RC"
+check_contains "dry run says it minted nothing" "nothing minted" "$OUT"
+if [ -e "$WORK/never-written.txt" ]; then
+  fail "the dry run wrote a token file"
+else
+  pass "no token file was written"
+fi
+
+run_cmd "$BENCH_TOKEN" verify --token-file "$WORK/definitely-absent.txt"
+check_rc "verify on a missing token file refused" 2 "$RC"
+check_contains "refusal names the path" "definitely-absent.txt" "$OUT"
+
 lock_kill_all
 rm -f "$BENCH_LOCK_PATH"
 printf '\nworkdir kept for inspection: %s\n' "$WORK"
 summary
+
