@@ -44,10 +44,20 @@ SCRIPT="${1:-$HERE/../../scripts/mt3000-bench/second-purchase-e2e.sh}"
 HELPERS="$(awk '/^# ------.* zombie-session convergence helpers/{f=1} /^# ------.* box identity \(the restart guard\)/{f=0} f' "$SCRIPT")"
 # The settle phase is delimited by its OWN pair of separator lines — `PHASE 5b` opens it and
 # `end of PHASE 5b` closes it — never by a neighbouring phase's `say`. The blanket end marker
-# this used to carry (`say "MODULE LOG`) let PHASE 5 be swallowed into the extracted block, so
-# the control died on an unbound TOKEN_2 (PHASE 5's `buy "$TOKEN_2" "buy#2"`) instead of
-# exercising the assertions — a control that errors out proves nothing about what it drives.
-PHASE="$(awk '/^# ------.* PHASE 5b$/{f=1} /^# ------.* end of PHASE 5b/{f=0} f' "$SCRIPT")"
+# this used to carry (`say "MODULE LOG`) spanned the phase AFTER its own as well, so the control
+# ran its assertions over a neighbour's text and died on that neighbour's unbound TOKEN_2
+# (PHASE 5's `buy "$TOKEN_2" "buy#2"`) before it asserted anything — a control that errors out
+# proves nothing about what it drives.
+#
+# The terminator is consumed by its OWN rule (`next`), not by falling through to the print: both
+# markers end in `... PHASE 5b`, so the start pattern matches the END line as well, and a form
+# whose rules merely happened to evaluate in this order re-opens the block on its own terminator
+# and swallows everything after it. With `next` the end line can only CLOSE the block.
+PHASE="$(awk '
+  /^# ------.* end of PHASE 5b$/ { f = 0; next }
+  /^# ------.* PHASE 5b$/        { f = 1 }
+  f
+' "$SCRIPT")"
 # Only the assertion helpers, and only the functions the phase uses: the run's argument parsing
 # and its client setup sit between them, and sourcing those would execute them here.
 ASERTS="$(awk '/^assert_eq\(\) \{/{f=1} /^# ------.* args/{f=0} f' "$SCRIPT")"
@@ -186,6 +196,12 @@ SETTLE_BUDGET=90
 SETTLE_WINDOW=45
 # The run's own timestamp: PHASE 5b builds its log-anchor token from it.
 TS=20260926T104402Z
+# The phase text is EXTRACTED from the run, so it can name the run's own placeholders. Should a
+# future edit ever widen that extraction, the guards ABOVE must be what fails: they inspect the
+# text and run before any of it is evaluated. Dying on an unbound variable here instead would
+# kill the control before it asserted anything — which is exactly how it first broke. PHASE 5's
+# `buy "$TOKEN_2" "buy#2"` is the neighbour's reference this defends against.
+TOKEN_1="${TOKEN_1:-}"; TOKEN_2="${TOKEN_2:-}"
 say() { printf '\n########## %s ##########\n' "$*"; }
 # shellcheck disable=SC1090
 eval "$ASERTS"
