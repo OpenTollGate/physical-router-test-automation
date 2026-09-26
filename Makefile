@@ -257,6 +257,40 @@ hw-readonly: ## Read-only bench surface check: no creds, no mutation, no paid tr
 	@# runnable while another agent holds the bench and while a session is live.
 	@# Host via TOLLGATE_ROUTER_HOST (default 192.168.1.1).
 	@bash scripts/hw-readonly-check.sh
+#  DEMO RECORDING (docs/demo-recording.md)
+# ===========================================================================
+
+.PHONY: record-demo-clientd
+
+TOLLGATE_LAB_COMPOSE ?= ../tollgate-module-basic-go/tests/cloud-lab/docker-compose.yml
+
+record-demo-clientd: ## Record clientd auto-top-up demo vs cloud lab → evidence/ [demo]
+	@test -f "$(TOLLGATE_LAB_COMPOSE)" || { echo "cloud-lab compose not found: $(TOLLGATE_LAB_COMPOSE) — set TOLLGATE_LAB_COMPOSE"; exit 1; }
+	@mkdir -p /tmp/tollgate-demo-wallet
+	docker compose -f $(TOLLGATE_LAB_COMPOSE) run --rm --entrypoint cdk-cli \
+		-v /tmp/tollgate-demo-wallet:/w client -w /w mint http://mint:8085 100
+	docker compose -f $(TOLLGATE_LAB_COMPOSE) restart upstream
+	python3 scripts/record-demo.py \
+		--clientd-cmd "docker compose -f $(TOLLGATE_LAB_COMPOSE) run --rm --entrypoint python3 \
+			-v /tmp/tollgate-demo-wallet:/w -v $(CURDIR)/scripts:/prta:ro client \
+			/prta/tollgate-clientd.py --gateway upstream --mac 02:00:00:00:00:20 \
+			--wallet cdk-cli --wallet-dir /w --steps 1 --renew-below 45s --interval 1" \
+		--log-source docker:tg-upstream \
+		--duration 45 \
+		--out evidence/$(shell date +%F)-clientd-demo \
+		--title "PRTA laptop lane — clientd auto-top-up (cloud lab)" \
+		--export-video --export-speed 2
+
+.PHONY: test-laptop-clientd
+
+# tests/laptop/ — clientd from this host against a real TollGate router
+# (real ARP + NoDogSplash MAC registration). Requires provisioning, see
+# docs/tollgate-clientd.md "The laptop lane": LAPTOP_GATEWAY (router IP),
+# a funded cdk-cli wallet reachable in PATH, and SSH to the router.
+test-laptop-clientd: ## [hardware] clientd vs real router: ARP + NDS MAC lane (tests/laptop/)
+	$(call require_hardware_lock)
+	@test -n "$${LAPTOP_GATEWAY:-}" || { echo "$(RED)Set LAPTOP_GATEWAY (e.g. 10.99.99.1)$(RESET)"; exit 1; }
+	LAPTOP_GATEWAY="$${LAPTOP_GATEWAY}" $(PYTHON) -m pytest tests/laptop/ -v $(PYTEST_ARGS)
 
 # ===========================================================================
 #  FULL TEST SUITES

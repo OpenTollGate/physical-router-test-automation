@@ -37,7 +37,7 @@ if IS_MOCK_MODE:
 # Register the auto-minting Cashu fixture module so its `minted_token` fixture
 # (lib/cashu_fixture.py, Part A of WD6) is discoverable by any test by name.
 # Fixtures defined in a non-conftest module are otherwise invisible to pytest.
-pytest_plugins = ["lib.cashu_fixture"]
+pytest_plugins = ["lib.cashu_fixture", "lib.film_recorder"]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -224,9 +224,9 @@ def pytest_addoption(parser):
                      help="Skip portal deploy before phone tests")
     parser.addoption("--results", default=None,
                      help="Custom results directory path")
-    parser.addoption("--client", default="adb",
-                     choices=["adb", "mac", "linux", "container"],
-                     help="WiFi client mode: adb (Android phone), mac (macOS), linux (NetworkManager/nmcli), or container (Docker via SSH)")
+    parser.addoption("--client", default=os.environ.get("TOLLGATE_CLIENT", "adb"),
+                     choices=["adb", "cuttlefish", "mac", "linux", "container"],
+                     help="WiFi client mode: adb (Android phone), cuttlefish (Android VM on a remote host, e.g. ai-legion), mac (macOS), linux (NetworkManager/nmcli), or container (Docker via SSH). Default also honors TOLLGATE_CLIENT.")
     parser.addoption("--publish", action="store_true",
                      help="Publish mode: only include screenshots from @pytest.mark.publish_screenshot tests in report")
     parser.addoption("--quick-phone", action="store_true",

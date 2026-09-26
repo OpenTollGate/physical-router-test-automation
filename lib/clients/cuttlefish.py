@@ -32,16 +32,23 @@ class CuttlefishClient:
                      "-o", "ClearAllForwardings=yes",
                      "-o", "BatchMode=yes",
                      "-o", "ConnectTimeout=5", self.host]
-        self._adb = f"~/cf/bin/adb -s {self.serial}"
+        adb_bin = os.environ.get("TOLLGATE_CF_ADB", "adb")
+        self._adb = f"{adb_bin} -s {self.serial}"
 
     def _exec(self, cmd: str, timeout: int = 30) -> str:
-        """Run a command via SSH on the Cuttlefish host."""
+        """Run a command via SSH on the Cuttlefish host.
+
+        The command must not contain single quotes: it is single-quoted
+        for the remote shell, and embedded quotes silently truncate it."""
         remote = f"{self._adb} shell '{cmd}'"
         try:
             r = subprocess.run(
                 self._ssh + [remote],
                 capture_output=True, text=True, timeout=timeout,
             )
+            if r.returncode != 0:
+                log.warning("cuttlefish exec rc=%d: %s", r.returncode,
+                            r.stderr.strip()[:200])
             return r.stdout.strip()
         except (subprocess.TimeoutExpired, Exception) as e:
             log.warning("cuttlefish exec failed: %s", e)
@@ -76,10 +83,12 @@ class CuttlefishClient:
     # ── ADBDevice interface ─────────────────────────────────────────
 
     def wifi_mac(self) -> str:
-        return self._exec("ip addr show wlan0 2>/dev/null | grep 'link/ether' | awk '{print $2}'")
+        out = self._exec("ip addr show wlan0 2>/dev/null | grep link/ether")
+        return out.split()[1] if out else ""
 
     def wifi_ip(self) -> str:
-        return self._exec("ip -f inet addr show wlan0 2>/dev/null | grep inet | awk '{print $2}' | cut -d/ -f1")
+        out = self._exec("ip -f inet addr show wlan0 2>/dev/null | grep inet")
+        return out.split()[1].split("/")[0] if out else ""
 
     def shell(self, cmd: str, timeout: int = 30) -> str:
         return self._exec(cmd, timeout)
@@ -126,18 +135,52 @@ class CuttlefishClient:
     def swipe(self, x1: int, y1: int, x2: int, y2: int, ms: int = 300):
         self._exec(f"input swipe {x1} {y1} {x2} {y2} {ms}")
 
-    def start_activity(self, action: str = "", component: str = "", data: str = ""):
+    def start_activity(self, action: str = None, data_uri: str = None, component: str = None):
         cmd = "am start"
         if action:
             cmd += f" -a {action}"
         if component:
             cmd += f" -n {component}"
-        if data:
-            cmd += f" -d {data}"
+        if data_uri:
+            cmd += f" -d {data_uri}"
         self._exec(cmd)
 
     def force_stop(self, package: str):
         self._exec(f"am force-stop {package}")
+
+    def force_stop_browser(self):
+        """Kill browser apps to clean up stale tabs between tests."""
+        self.shell("am force-stop com.sec.android.app.sbrowser")
+        self.shell("am force-stop com.android.chrome")
+
+    def is_wifi_connected(self, ssid: str) -> bool:
+        out = self.shell("dumpsys wifi 2>/dev/null | grep mWifiInfo")
+        return ssid in out
+
+    def input_text(self, text: str):
+        self.text(text)
+
+    def press_key(self, key: str):
+        self.key(key)
+
+    def tap_bounds(self, bounds_str: str):
+        nums = re.findall(r"\d+", bounds_str)
+        if len(nums) >= 4:
+            x1, y1, x2, y2 = [int(n) for n in nums[:4]]
+            self.tap((x1 + x2) // 2, (y1 + y2) // 2)
+
+    def is_screen_locked(self) -> bool:
+        out = self.shell("dumpsys window policy 2>/dev/null | grep showing= | head -1")
+        return "showing=true" in out
+
+    def wake_and_unlock(self):
+        self.press_key("KEYCODE_WAKEUP")
+        time.sleep(0.3)
+        self.swipe(540, 2000, 540, 500)
+        time.sleep(1)
+        self.swipe(540, 2000, 540, 500)
+        time.sleep(0.5)
+        return True
 
     def is_package_installed(self, package: str) -> bool:
         out = self._exec(f"pm list packages {package}")
@@ -153,6 +196,7 @@ class CuttlefishClient:
 
     def screen_record_start(self, path: str = "/sdcard/film.mp4", bitrate: int = 6000000):
         """Start screen recording (non-blocking)."""
+        self._record_path = path
         remote = (f"nohup {self._adb} shell "
                   f"'screenrecord --bit-rate {bitrate} --time-limit 180 {path}' "
                   f">/dev/null 2>&1 &")
@@ -162,7 +206,8 @@ class CuttlefishClient:
         """Stop recording and pull the file."""
         self._exec("pkill -l INT screenrecord", timeout=5)
         time.sleep(2)
-        return self._adb_pull("/sdcard/film.mp4", local_path)
+        return self._adb_pull(getattr(self, "_record_path", "/sdcard/film.mp4"),
+                              local_path)
 
     def _adb_pull(self, remote_path: str, local_path: str) -> bool:
         os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
@@ -189,12 +234,13 @@ class CuttlefishClient:
             self._exec(f"cmd wifi connect-network {ssid} open")
 
     def get_wifi_ssid(self) -> str:
-        out = self._exec("cmd wifi status | grep -o 'SSID: [^,]*' | head -1")
-        return out.replace("SSID: ", "").strip('"') if out else ""
+        out = self._exec("cmd wifi status | grep WifiInfo: | head -1")
+        m = re.search(r'"([^"]+)"', out)
+        return m.group(1) if m else ""
 
     def dismiss_keyguard(self):
         self._exec("input keyevent KEYCODE_WAKEUP")
         self._exec("wm dismiss-keyguard")
 
     def open_url(self, url: str):
-        self._exec(f"am start -a android.intent.action.VIEW -d '{url}'")
+        self._exec(f"am start -a android.intent.action.VIEW -d {url}")
