@@ -1106,6 +1106,43 @@ fresh-flash-check: ## Read-only fresh-flash preconditions (image hash, wallet dr
 bench-lock-status: ## Show who holds the shared bench lock (~/.hermes/state/bench-mt3000.lock)
 	@python3 -m lib.bench_lock status
 
+# --- Second-purchase bench lanes (procedure + measured result: docs/second-purchase-bench.md)
+#
+# Every router-touching step rides the sanctioned single-owner bench lock; the e2e takes it
+# itself (re-exec under `bench-lock.sh exec`) unless it is already inside a window.
+# NOTHING HERE SPENDS ANYTHING unless you pass ARGS=--purchase (the e2e) or ARGS=--yes (mint).
+
+SECOND_PURCHASE_ARGS ?=
+BENCH_TOKEN_AMOUNT   ?= 64
+BENCH_TOKEN_ARGS     ?=
+TOKEN_FILE           ?=
+
+.PHONY: second-purchase-e2e second-purchase-detached bench-snapshot bench-snapshot-payload \
+        bench-token-mint bench-token-verify bench-tests
+
+second-purchase-e2e: ## Second purchase on the bench: DRY RUN default (ARGS=--purchase TOKEN_1=.. TOKEN_2=.. spends)
+	@bash scripts/mt3000-bench/second-purchase-e2e.sh $(SECOND_PURCHASE_ARGS)
+
+second-purchase-detached: ## Launch the long second-purchase run detached (systemd-run --user), then poll the journal
+	@systemd-run --user --collect --unit=tg-second-purchase-$$(date +%s) \
+		bash scripts/mt3000-bench/second-purchase-e2e.sh $(SECOND_PURCHASE_ARGS)
+
+bench-snapshot: ## Router-side snapshot: ndsctl, nft guard counters, /balance, module log (needs the bench window)
+	@bash scripts/mt3000-bench/router-snapshot.sh snapshot --label "make bench-snapshot"
+
+bench-snapshot-payload: ## Print the on-router snapshot payload locally (no ssh, no lock) — review what runs on the box
+	@bash scripts/mt3000-bench/router-snapshot.sh render
+
+bench-token-mint: ## Mint one token for the bench (DRY RUN; ARGS=--yes to actually mint)
+	@scripts/mt3000-bench/bench-token.py mint --amount $(BENCH_TOKEN_AMOUNT) $(BENCH_TOKEN_ARGS)
+
+bench-token-verify: ## NUT-07: TOKEN_FILE must read back fully UNSPENT before it is spent (exit 1 if not)
+	@test -n "$(TOKEN_FILE)" || { echo "set TOKEN_FILE=<path to a cashu token file>"; exit 1; }
+	@scripts/mt3000-bench/bench-token.py verify --token-file $(TOKEN_FILE) $(BENCH_TOKEN_ARGS)
+
+bench-tests: ## Offline negative-control suite for the bench lock, the e2e lanes and the snapshot payload (no router)
+	@bash tests/mt3000-bench/run-tests.sh
+
 pytest-hardware-smoke: ## Migrated smoke-* scenario subset
 	$(call require_hardware_lock)
 	@TOLLGATE_USE_HARDWARE_LOCK=1 ./scripts/pymake.py smoke-degraded --router $(ROUTER)
