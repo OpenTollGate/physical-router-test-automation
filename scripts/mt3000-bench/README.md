@@ -30,6 +30,9 @@ single-owner and make "what got installed" a verified fact instead of an assumpt
 | `bench-lock.sh` | the flock lock: `status` / `take` / `exec` / `require` / `release` |
 | `bench-with-lock.sh` | the sanctioned wrapper: acquire the lock, run your command, release |
 | `bench-deploy-apk.sh` | deploy ONE named apk; rotate stale staged apks; verify the installed binary |
+| `router-snapshot.sh` | read-only router state dump (`snapshot`), the ssh transport for any local script (`run`), and `render` — the payload printed locally, no ssh, no lock |
+| `second-purchase-e2e.sh` | does a SECOND purchase re-open the gate? fresh-MAC buy → exhaust → post-exhaustion → `ndsctl deauth` → buy again. **Dry run by default** |
+| `bench-token.py` | `mint` (unsigned NUT-04 quote, no `20008`) and `verify` (NUT-07: every proof must be UNSPENT) |
 
 ## The lock
 
@@ -120,19 +123,43 @@ time passed — a verified install was reverted four minutes later on 2026-09-24
 credential in this repo, and the lab password is documented in the `tollgate-development`
 skill, not here.
 
+## The second-purchase lane
+
+The reported product bug (a client buys, exhausts its allotment, and the gate never re-opens
+for a second purchase) has one reproducible lane here. Procedure, the measured pre17 result
+and the traps: **`docs/second-purchase-bench.md`**.
+
+```sh
+make second-purchase-e2e                     # DRY RUN: prints the plan, touches nothing
+make second-purchase-e2e SECOND_PURCHASE_ARGS="--purchase" TOKEN_1=... TOKEN_2=...   # spends
+make second-purchase-detached SECOND_PURCHASE_ARGS="--purchase" TOKEN_1=... TOKEN_2=...
+make bench-snapshot                          # read-only state dump, inside the window
+make bench-snapshot-payload                  # what the snapshot will run on the router
+make bench-token-mint BENCH_TOKEN_ARGS=--yes # 64-sat test-mint token
+make bench-token-verify TOKEN_FILE=...       # NUT-07: is it still UNSPENT?
+```
+
+The e2e takes the bench lock itself (re-exec under `bench-lock.sh exec`) and every purchase is
+POSTed **through the client's own interface** — the module authorises the MAC of the requesting
+socket, so a purchase sent from the bench host authenticates the host, not the client.
+
 ## Tests (no router required)
 
 ```sh
 tests/mt3000-bench/run-tests.sh
 ```
 
-15 tests / 0 skips on a host with `busybox`, `apk.static` (`~/.cache/apk-v3/`) and two real
+23 tests / 0 skips on a host with `busybox`, `apk.static` (`~/.cache/apk-v3/`) and two real
 fixture apks (`BENCH_TEST_APK_A` / `BENCH_TEST_APK_B` override the defaults). It builds a
 throw-away "router root", puts PATH doubles for `ssh`/`scp`/`apk` in front (so the
 production transport code is exercised), and runs the production remote scripts — optionally
 under **BusyBox ash**. The negative controls are the point: a second owner is refused with
 the holder's identity, a substituted staged apk is refused before installing, and
-*installing build A while naming build B* fails loudly with both hashes.
+*installing build A while naming build B* fails loudly with both hashes. The suite also covers
+the second-purchase lane offline: the e2e is dry-run by default, a paid run without tokens is
+refused, a paid run is refused (naming the holder) while another window owns the bench, the
+snapshot payload is accepted by `sh -n` **and** BusyBox `ash -n`, and the token tool mints
+nothing without `--yes`.
 
 ## Pitfalls this path has already paid for
 
