@@ -302,6 +302,22 @@ def router(request, backend):
         )
         return mock
 
+    if os.environ.get("TOLLGATE_VENUE") == "labgrid":
+        from lib.lab_inventory import InventoryError, load_inventory
+        from lib.labgrid_venue import LabgridBenchError, apply_venue_env, bench_for_router
+
+        try:
+            labgrid_inv = load_inventory()
+            binding = bench_for_router(
+                labgrid_inv, os.environ.get("TOLLGATE_LABGRID_PLACE", "ap-lan2")
+            )
+        except (InventoryError, LabgridBenchError) as e:
+            pytest.exit(f"labgrid venue unavailable: {e}", returncode=4)
+        binding.bench.acquire()
+        request.addfinalizer(binding.bench.release)
+        apply_venue_env(binding.entry)
+        log.info("labgrid venue: acquired place %s", binding.entry.place)
+
     host = os.environ.get("TOLLGATE_SSH_HOST") or os.environ.get("ROUTER_IP")
     identity_file = os.environ.get("TOLLGATE_SSH_KEY", "")
     jump_host = os.environ.get("TOLLGATE_SSH_JUMP_HOST", "")
