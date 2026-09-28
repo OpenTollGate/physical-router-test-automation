@@ -150,6 +150,14 @@ else
   echo "[router-vm] WARN: no backend binary at $BIN — tests will fail (no :2121)"
 fi
 
+# ── captive portal (nodogsplash) assets ─────────────────────────────────────
+# The smoke suite checks /etc/nodogsplash/htdocs/ + splash.html. Install
+# nodogsplash (its default htdocs) and ensure a splash page exists.
+vm_ssh "opkg update >/dev/null 2>&1; opkg install nodogsplash >/dev/null 2>&1" || true
+vm_ssh "mkdir -p /etc/nodogsplash/htdocs; \
+  [ -s /etc/nodogsplash/htdocs/splash.html ] || \
+  printf '%s' '<html><head><title>TollGate</title></head><body>TollGate captive portal</body></html>' > /etc/nodogsplash/htdocs/splash.html" || true
+
 # ── router/backend env for pytest (mirrors run-local-tests.sh) ──────────────
 export TOLLGATE_SSH_HOST="$VM_IP"
 export TOLLGATE_SSH_PASSWORD="$PASSWORD"
