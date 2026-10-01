@@ -139,7 +139,26 @@ ERROR: tollgate-wrt-0.6.0_alpha4_pre21-r1: No space left on device
 4.6 MB free; the **Go binary alone** does not fit. So on both package managers,
 on both arches, in both directions, the payload loses to the flash.
 
-## 5. Defect — a FAILED install leaves the router half-migrated
+## 5. Defect — on the **apk lane** a failed install leaves the router half-migrated
+
+**SCOPE CORRECTION (measured after the first run).** This is true for the
+apk / OpenWrt 25.12 lane and was **not** observed on the opkg / 24.10 lane. The
+same failure left the GL-AR300M16 (opkg) untouched — `uhttpd.main.listen_http`
+still `0.0.0.0:80`, no `commonname` override, `/etc/tollgate` **absent**, nothing
+written. Do not read this section as lane-independent.
+
+The likely mechanism, and it fits every observation:
+
+- **opkg** refuses **before doing anything**:
+  `verify_pkg_installable: Only have 8016kb available … needs 23850` is a
+  pre-check, so nothing is unpacked and no maintainer script runs.
+- **apk** has no equivalent pre-check. It runs the package's `pre-install`
+  hook, starts extracting, and dies mid-way —
+  `Executing tollgate-wrt-…-r1.pre-install` then
+  `failed to extract usr/bin/tollgate-wrt: No space left on device`. So the
+  package's own scripts have already executed on a device that ends up with
+  nothing installed.
+
 
 After the failure the device is not unchanged. On the Cudy:
 
