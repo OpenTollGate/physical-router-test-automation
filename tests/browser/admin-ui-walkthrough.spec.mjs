@@ -14,7 +14,12 @@
  */
 import { test, expect } from '@playwright/test';
 
-const ADMIN_URL = process.env.ADMIN_URL || 'http://192.168.1.1:8090';
+// TOLLGATE_ROUTER_HOST lets the hw-smoke dispatch lane (and any other runner)
+// point this spec at the bench without editing the file; the hardcoded
+// 192.168.1.1 default is the bench LAN address this spec was written against.
+const HOST = process.env.TOLLGATE_ROUTER_HOST || '192.168.1.1';
+const ADMIN_URL = process.env.ADMIN_URL || `http://${HOST}:8090`;
+const LUCI_URL = process.env.LUCI_URL || `http://${HOST}:8080`;
 
 test.describe.configure({ mode: 'serial' });
 
@@ -87,7 +92,7 @@ test('4. Final admin overview screenshot', async ({ page }) => {
 
 test('5. Compare with LuCI (port 8080) — side by side concept', async ({ page }) => {
 	// Show LuCI for comparison
-	await page.goto('http://192.168.1.1:8080/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+	await page.goto(LUCI_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
 	await page.waitForTimeout(2000);
 	await page.screenshot({ path: 'test-results/admin-05-luci-comparison.png' });
 });

@@ -31,11 +31,12 @@ is skipped is itself skipped. A dead cascade, with no error to notice.
 | `ci.yml` | `push: main`, `pull_request: main`, `workflow_dispatch` | `ubuntu-latest` only | no |
 | `hw-smoke.yml` | `workflow_dispatch` + `schedule` (dormant) | `[self-hosted, tollgate-router]` | no — the workflow has no PR trigger |
 
-`hw-smoke.yml` has three lanes:
+`hw-smoke.yml` has four lanes:
 
 | lane | needs | approval | mutating? |
 |---|---|---|---|
 | `readonly-surface` | — | none | no: no secrets, no credentials, no payment, no writes |
+| `hw-dispatch-smoke` | `readonly-surface` | none (dispatch = write access) | minimal: zero-secret admin-UI walkthrough; runs under the **machine-global bench lease** with the idle gate armed |
 | `mutating-e2e` | `readonly-surface` | `bench-hardware` environment | yes; paid-traffic specs are **off** unless opted into per dispatch |
 | `destructive-e2e` | `readonly-surface` | `bench-hardware` environment + `include_destructive` input | yes: firmware flash / reboot |
 
@@ -43,6 +44,37 @@ Every mutating lane runs `scripts/hw-readonly-check.sh` **first**: the read-only
 gate is a precondition, not a parallel nicety. `concurrency: hw-bench` serialises
 all bench work and never cancels (`cancel-in-progress: false`) — a half-finished
 mutating lane leaves the router transitional.
+
+### The one machine-global bench lease
+
+GitHub's `concurrency:` only serialises GitHub-side runs. The thing that stops
+a local agent window (a `make` target, a pytest session, a cron) from driving
+the router while a lane is live is the **bench lease**:
+`scripts/hw-bench-lease` (wrapping `lib/bench_lock.BenchLock` — the same
+flock on `~/.hermes/state/bench-mt3000.lock` that
+`scripts/mt3000-bench/bench-lock.sh` takes, holder line included).
+
+- `make lock` / `make unlock` / `make lock-status` / `make force-unlock` are
+  thin wrappers over it, and the Makefile's `require_hardware_lock` guard now
+  asserts the lease instead of a repo-local `hardware.lock` file.
+- `lib/hardware_lock.py` and `lib/router_lock.py` delegate to the same lease
+  (the /tmp JSON lock and `routers.lock` are retired).
+- The `--check-idle` flag wires in the read-only primitive
+  `lib.session_verify.check_balance_api`: a run REFUSES to start while a
+  paying session is live on the bench, and fails closed when the balance API
+  is not probeable.
+- The dispatch fallback (bench-side cron pulling a queue and posting commit
+  statuses) composes the same lease: see `scripts/hw-dispatch/README.md`.
+
+### Fallback dispatch (no runner)
+
+If no self-hosted runner can be registered, the bench-side queue keeps the
+"CI-like trigger, unattended hardware run" property:
+`scripts/hw-dispatch/enqueue.sh <sha>` drops a job, a cron'd
+`scripts/hw-dispatch/poll-queue.sh` runs the walkthrough under the lease
+(`flock` + `nice`) and posts `hw-smoke/bench` statuses via
+`gh api repos/<repo>/statuses/<sha>`. Install one consumer at a time —
+runner or queue, never both.
 
 ## Enabling hardware CI (operator checklist)
 
