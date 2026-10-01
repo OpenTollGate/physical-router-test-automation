@@ -1,0 +1,346 @@
+#!/usr/bin/env python3
+"""hw-bench-lease — the ONE machine-global bench lease (PRTA-REVIVE).
+
+This is the single sanctioned entry point every bench-driving surface shares:
+
+  * ``make lock`` / ``make unlock`` / ``make lock-status`` / ``make force-unlock``
+    and the ``require_hardware_lock`` guard in the Makefile;
+  * the ``hw-smoke.yml`` dispatch lanes on the self-hosted bench runner;
+  * the bench-side queue poller (scripts/hw-dispatch/poll-queue.sh);
+  * any interactive agent session (``scripts/hw-bench-lease hold``).
+
+The mechanism is lib.bench_lock.BenchLock — the same ``flock`` on the same
+machine-global file (``~/.hermes/state/bench-mt3000.lock``) with the same
+holder-line shape as scripts/mt3000-bench/bench-lock.sh — so shell tooling,
+Python scenarios and this CLI all agree on who owns the bench. It replaces the
+three inconsistent legacy guards (Makefile ``hardware.lock`` presence check,
+lib/hardware_lock.py's /tmp JSON, lib/router_lock.py's routers.lock), none of
+which were machine-global or flock-authoritative.
+
+The idle gate (--check-idle) wires in the existing read-only primitive
+``lib.session_verify.check_balance_api`` (via an HTTP-only router shim): a
+mutating run REFUSES to start while a paying session is live on the bench, and
+fails closed when the balance API cannot be probed.
+
+Exit codes
+    0   ok (command ran; status/require/hold succeeded)
+    1   ``require``: bench free (nothing held)
+    2   bench BUSY — another live window holds the flock
+    3   bench STALE — holder line with no flock; re-run with --reclaim-stale
+    4   idle gate REFUSED — an active session is live on the bench
+    5   idle gate UNREACHABLE — balance API not probeable (fail closed)
+    64  usage error
+    *   ``exec`` otherwise propagates the child command's exit code
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from lib.bench_lock import (  # noqa: E402 - path setup above
+    BenchBusy,
+    BenchLock,
+    BenchStale,
+    bench_state,
+    read_holder,
+)
+
+RC_FREE = 1
+RC_BUSY = 2
+RC_STALE = 3
+RC_IDLE_REFUSED = 4
+RC_IDLE_UNREACHABLE = 5
+RC_USAGE = 64
+
+
+# --------------------------------------------------------------------------- #
+# idle gate: lib.session_verify.check_balance_api over plain HTTP
+# --------------------------------------------------------------------------- #
+
+
+class HttpBalanceRouter:
+    """Duck-typed Router giving lib.session_verify.check_balance_api HTTP legs.
+
+    ``check_balance_api`` only needs ``phone_ip``, ``backend_url()`` and
+    ``backend_curl_xff()``; this shim serves them without SSH credentials —
+    the same read-only GET scripts/hw-readonly-check.sh's G2 performs. We
+    deliberately reuse the library primitive (its session-active parsing) so
+    the lease and the readonly surface check can never disagree.
+    """
+
+    def __init__(self, host: str, port: int, timeout: float = 8.0) -> None:
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.phone_ip = None  # check_balance_api falls back to it only if ip=None
+
+    def backend_url(self, path: str = "/") -> str:
+        return f"http://{self.host}:{self.port}{path}"
+
+    def backend_curl_xff(self, url: str, ip: str | None = None, **_: object) -> str:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "hw-bench-lease/1.0"}
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            return resp.read().decode("utf-8", "replace")
+
+
+def probe_idle(host: str, port: int, timeout: float) -> tuple[bool, str, str]:
+    """Return ``(refused, reason, evidence)`` using check_balance_api."""
+    from lib.session_verify import check_balance_api
+
+    router = HttpBalanceRouter(host, port, timeout=timeout)
+    active, evidence = check_balance_api(router)
+    if active:
+        return True, "active session on the bench", evidence
+    if evidence.startswith("<"):
+        # check_balance_api reports probe failures as sentinel-quoted evidence
+        # ("<balance error: ...>", "<empty balance response>", ...) — fail
+        # closed rather than assume idle.
+        return (
+            True,
+            f"balance API not probeable (fail closed): {evidence}",
+            evidence,
+        )
+    return False, "bench idle", evidence
+
+
+# --------------------------------------------------------------------------- #
+# CLI plumbing
+# --------------------------------------------------------------------------- #
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str):  # pragma: no cover - argparse plumbing
+        self.print_usage(sys.stderr)
+        print(f"hw-bench-lease: error: {message}", file=sys.stderr)
+        raise SystemExit(RC_USAGE)
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    state = bench_state()
+    holder = read_holder()
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "check": "hw-bench-lease",
+                    "state": state,
+                    "path": str(_lock_path()),
+                    "holder": {
+                        "profile": holder.profile,
+                        "pid": holder.pid,
+                        "purpose": holder.purpose,
+                        "since": holder.since,
+                        "task": holder.task,
+                        "host": holder.host,
+                    },
+                }
+            )
+        )
+        return 0
+    print(f"bench lease : {state}")
+    print(f"lock file   : {_lock_path()}")
+    print(f"holder      : {holder.describe()}")
+    if state == "held":
+        print("the bench is owned by the holder above; wait or coordinate")
+    elif state == "stale":
+        print(
+            "stale holder line (owner gone): inspect, then release it with "
+            "`scripts/hw-bench-lease release` or pass --reclaim-stale"
+        )
+    else:
+        print("bench free — take it with `make lock` or hw-bench-lease exec/hold")
+    return 0
+
+
+def cmd_require(_args: argparse.Namespace) -> int:
+    state = bench_state()
+    holder = read_holder()
+    if state == "held":
+        print(f"bench lease held: {holder.describe()}")
+        return 0
+    if state == "stale":
+        print(f"bench lease STALE (owner gone): {holder.describe()}")
+        print("recovery is explicit: `scripts/hw-bench-lease release` or --reclaim-stale")
+        return RC_STALE
+    print("bench lease NOT held — take it first: `make lock PHASE=\"description\"`")
+    print("(scripts/hw-bench-lease exec --purpose <p> -- <cmd> wraps a whole run)")
+    return RC_FREE
+
+
+def _acquire(args: argparse.Namespace) -> BenchLock:
+    lock = BenchLock(
+        purpose=args.purpose if getattr(args, "purpose", None) else "ad-hoc",
+        task_id=getattr(args, "task", None),
+        reclaim_stale=bool(getattr(args, "reclaim_stale", False)),
+    )
+    lock.acquire()
+    return lock
+
+
+def cmd_hold(args: argparse.Namespace) -> int:
+    lock = _acquire(args)
+    print(f"bench lease acquired (Ctrl-C to release): {read_holder().describe()}")
+
+    def _release_and_exit(signum: int, _frame: object) -> None:
+        lock.release()
+        print(f"bench lease released (signal {signum})")
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, _release_and_exit)
+    signal.signal(signal.SIGTERM, _release_and_exit)
+    signal.pause()
+    return 0  # unreachable; keeps type-checkers calm
+
+
+def cmd_release(args: argparse.Namespace) -> int:
+    # A live flock cannot be stolen — release() only clears a stale/own line by
+    # taking the lock non-blockingly for an instant.
+    try:
+        lock = BenchLock(
+            purpose="release",
+            reclaim_stale=True,
+        )
+        lock.acquire(reclaim_stale=True)
+        lock.release()
+        print("bench lease released (holder line cleared)")
+        return 0
+    except BenchBusy as exc:
+        print(f"bench lease is LIVE and cannot be force-released: {exc}")
+        print("the flock drops automatically when the holder's process exits.")
+        return RC_BUSY
+
+
+def cmd_exec(args: argparse.Namespace) -> int:
+    if not args.cmd:
+        print("hw-bench-lease exec: -- requires a command", file=sys.stderr)
+        return RC_USAGE
+    try:
+        lock = _acquire(args)
+    except BenchStale as exc:
+        print(str(exc), file=sys.stderr)
+        return RC_STALE
+    except BenchBusy as exc:
+        print(str(exc), file=sys.stderr)
+        return RC_BUSY
+    try:
+        if args.check_idle:
+            refused, reason, evidence = probe_idle(
+                args.host, args.api_port, args.probe_timeout
+            )
+            print(f"idle gate: {reason} [{evidence}]")
+            if refused:
+                if "not probeable" in reason:
+                    print(
+                        "REFUSING to run: cannot prove the bench is idle (fail closed).",
+                        file=sys.stderr,
+                    )
+                    return RC_IDLE_UNREACHABLE
+                print(
+                    "REFUSING to run: a live session owns the bench right now.",
+                    file=sys.stderr,
+                )
+                return RC_IDLE_REFUSED
+        completed = subprocess.run(
+            args.cmd,
+            env=lock.child_env(),
+            cwd=os.getcwd(),
+        )
+        return completed.returncode
+    finally:
+        lock.release()
+
+
+def _lock_path() -> str:
+    from lib.bench_lock import lock_path
+
+    return lock_path()
+
+
+def build_parser() -> _Parser:
+    parser = _Parser(
+        prog="hw-bench-lease",
+        description="machine-global bench lease (flock + holder line + idle gate)",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    def common(p: argparse.ArgumentParser, *, purpose: bool = True) -> None:
+        if purpose:
+            p.add_argument("--purpose", required=True, help="what this window is for")
+        p.add_argument("--task", default=None, help="task/card id for the holder line")
+        p.add_argument(
+            "--reclaim-stale",
+            action="store_true",
+            help="take over a stale holder line (owner gone) explicitly",
+        )
+
+    p_status = sub.add_parser("status", help="show bench lease state + holder")
+    p_status.add_argument("--json", action="store_true")
+    p_status.set_defaults(func=cmd_status)
+
+    p_require = sub.add_parser(
+        "require", help="exit 0 iff the bench lease is currently held"
+    )
+    p_require.set_defaults(func=cmd_require)
+
+    p_hold = sub.add_parser("hold", help="acquire and block (interactive windows)")
+    common(p_hold)
+    p_hold.set_defaults(func=cmd_hold)
+
+    p_release = sub.add_parser(
+        "release", help="clear a stale holder line (cannot steal a live flock)"
+    )
+    p_release.set_defaults(func=cmd_release)
+
+    p_exec = sub.add_parser(
+        "exec", help="acquire, run CMD, release (the lane entry point)"
+    )
+    common(p_exec)
+    p_exec.add_argument(
+        "--check-idle",
+        action="store_true",
+        help="refuse to run while a paying session is live (session_verify wiring)",
+    )
+    p_exec.add_argument(
+        "--host",
+        default=os.environ.get("TOLLGATE_ROUTER_HOST", "192.168.1.1"),
+        help="bench router host for --check-idle (default TOLLGATE_ROUTER_HOST)",
+    )
+    p_exec.add_argument(
+        "--api-port",
+        type=int,
+        default=int(os.environ.get("TOLLGATE_API_PORT", "2121")),
+        help="tollgate API port for --check-idle (default 2121)",
+    )
+    p_exec.add_argument(
+        "--probe-timeout",
+        type=float,
+        default=8.0,
+        help="per-probe connect timeout for --check-idle (default 8s)",
+    )
+    p_exec.add_argument("cmd", nargs=argparse.REMAINDER, help="command after --")
+    p_exec.set_defaults(func=cmd_exec)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if getattr(args, "cmd", None) and args.cmd and args.cmd[0] == "--":
+        args.cmd = args.cmd[1:]
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
