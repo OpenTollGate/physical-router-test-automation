@@ -104,7 +104,7 @@ try {
     last = await page.locator('body').innerText();
     if (++tick % 5 === 0) say(`[deploy ${Math.round((Date.now() - (deadline - 28 * 60 * 1000)) / 1000)}s] ` + last.replace(/\n+/g, ' | ').slice(-500));
     if (/Deployment complete|installed successfully|TollGate is installed|complete!/i.test(last)) { terminal = true; break; }
-    if (/Deployment failed|failed:/i.test(last)) { terminal = true; break; }
+    if (/Deployment failed|failed:|Setup failed|Package installation failed|Installation failed/i.test(last)) { terminal = true; break; }
     await page.waitForTimeout(3000);
   }
   result.steps.push({ step: 'deploy-done', terminal });
@@ -120,7 +120,7 @@ try {
   result.generatedCredential = cred;
   say('generated credential element: ' + JSON.stringify(cred));
 
-  result.verdict = /Deployment failed|failed:/i.test(last) ? 'FAIL'
+  result.verdict = /Deployment failed|failed:|Setup failed|Package installation failed|Installation failed/i.test(last) ? 'FAIL'
     : terminal ? 'SUCCESS' : 'TIMEOUT';
 } catch (e) {
   result.verdict = 'ERROR';

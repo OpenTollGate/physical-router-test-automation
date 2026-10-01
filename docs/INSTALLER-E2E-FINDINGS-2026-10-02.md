@@ -123,3 +123,56 @@ TG_ROUTER_IP=<router> TG_LNURL=<addr> TG_OUT=<dir> node tests/installer-wizard-r
 ssh root@<router> 'opkg install /tmp/tollgate-wrt.ipk'   # opkg/ipk lane
 ssh root@<router> 'df -h /overlay'
 ```
+
+## 4. Second lane — same wall, and it is the BINARY, not the total
+
+Cudy WR3000 v1, OpenWrt 25.12.5, `aarch64_cortex-a53`, apk lane:
+
+```
+(1/1) Installing tollgate-wrt (0.6.0_alpha4_pre21-r1)
+  Executing tollgate-wrt-0.6.0_alpha4_pre21-r1.pre-install
+ERROR: tollgate-wrt-0.6.0_alpha4_pre21-r1: failed to extract usr/bin/tollgate-wrt: No space left on device
+ERROR: tollgate-wrt-0.6.0_alpha4_pre21-r1: No space left on device
+1 error; 19.4 MiB in 181 packages
+```
+
+4.6 MB free; the **Go binary alone** does not fit. So on both package managers,
+on both arches, in both directions, the payload loses to the flash.
+
+## 5. Defect — a FAILED install leaves the router half-migrated
+
+After the failure the device is not unchanged. On the Cudy:
+
+- `uhttpd.main.listen_http` moved from `0.0.0.0:80` to **`0.0.0.0:8080`**
+- `uhttpd.main.commonname` set to `TollGate`
+- `/etc/tollgate/install.json` written
+- the `/etc/uci-defaults/` marker consumed (directory empty)
+
+Consequences an operator hits immediately:
+
+1. the admin UI **silently moves off `:80`** to `:8080`/`:443` while nothing is
+   installed — `http://<router>/` simply stops answering (000);
+2. because the setup marker was consumed, a **retry takes a different path** and
+   skips the uci-defaults stage that a fresh device would run.
+
+`/etc/tollgate/install.json` on the test unit carried `install_time`
+`1790897522` — **91 minutes before this run**, i.e. the device had already been
+through a failed installer attempt and was handed to this run already
+half-migrated. A rollback that only removes packages (what was done here to
+restore the bench) does **not** restore the uhttpd config or the marker.
+
+Rolled-back state, verified: deps purged (`apk del`, world entry for
+`tollgate-wrt` removed first — the aborted install left it in `/etc/apk/world`,
+which makes a plain `apk del <dep>` fail to resolve), no nds/tollgate init
+scripts, no tollgate/nodogsplash nft references, admin answering on `:8080`
+(200) and `:443` (403 = auth required, normal). The GL-AR300M16 control was
+restored fully stock: deps gone, `listen_http` back on `:80`, `200` with no
+redirect, no `/etc/tollgate`.
+
+## 6. Harness defect (ours, disclosed)
+
+`tests/installer-wizard-run.mjs` first reported `VERDICT=TIMEOUT` for a deploy
+that had plainly failed: the terminal-state matcher looked for `failed:` with a
+colon, but the wizard renders "Setup failed" / "Package installation failed".
+Fixed here to match both. A harness that cannot tell "failed" from "still
+running" would have hidden exactly the result this run exists to surface.
