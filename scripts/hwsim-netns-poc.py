@@ -157,29 +157,19 @@ def _hwsim_phys(r: Runner) -> list[str]:
     the driver's own devlink path is the discriminator. This run must never
     touch a radio it did not create.
     """
-    out = r.run(
-        [
-            "bash",
-            "-lc",
-            "for p in /sys/class/ieee80211/*; do "
-            "printf '%s %s\\n' \"$(basename \"$p\")\" \"$(readlink -f \"$p\")\"; done",
-        ]
-    ).stdout
-    phys: list[str] = []
-    refused: list[str] = []
-    for line in out.splitlines():
-        parts = line.split()
-        if len(parts) != 2:
-            continue
-        name, devpath = parts
-        (phys if "/virtual/mac80211_hwsim/" in devpath else refused).append(name)
+    names = {
+        Path(p).name: "/virtual/mac80211_hwsim/" in p
+        for p in r.run(["bash", "-lc", "readlink -f /sys/class/ieee80211/*"]).stdout.split()
+        if Path(p).name.startswith("phy")
+    }
+    refused = [n for n, ours in names.items() if not ours]
     if refused:
         print(
             f"hwsim-netns: ignoring non-hwsim radio(s) {refused} — this run only "
             "touches PHYs it created (mac80211_hwsim)",
             file=sys.stderr,
         )
-    return phys
+    return [n for n, ours in names.items() if ours]
 
 
 def _move_phys_to_namespaces(r: Runner) -> None:

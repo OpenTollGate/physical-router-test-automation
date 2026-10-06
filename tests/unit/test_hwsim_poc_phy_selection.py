@@ -36,22 +36,23 @@ def _load_poc() -> ModuleType:
 
 
 # A realistic listing on a host that HAS a WiFi card: the hardware radio sorts
-# first (phy0), the simulator radios the run just created sort after it.
+# first (phy0), the simulator radios the run just created sort after it. This is
+# `readlink -f /sys/class/ieee80211/*` verbatim.
 LISTING_WITH_HARDWARE_RADIO = "\n".join(
     [
-        "phy0 /sys/devices/pci0000:00/0000:00:1c.2/0000:3a:00.0/ieee80211/phy0",
-        "phy13 /sys/devices/virtual/mac80211_hwsim/hwsim0/ieee80211/phy13",
-        "phy14 /sys/devices/virtual/mac80211_hwsim/hwsim1/ieee80211/phy14",
-        "phy15 /sys/devices/virtual/mac80211_hwsim/hwsim2/ieee80211/phy15",
+        "/sys/devices/pci0000:00/0000:00:1c.2/0000:3a:00.0/ieee80211/phy0",
+        "/sys/devices/virtual/mac80211_hwsim/hwsim0/ieee80211/phy13",
+        "/sys/devices/virtual/mac80211_hwsim/hwsim1/ieee80211/phy14",
+        "/sys/devices/virtual/mac80211_hwsim/hwsim2/ieee80211/phy15",
     ]
 )
 
 # The same host with no WiFi card: every phy is ours.
 LISTING_HWSIM_ONLY = "\n".join(
     [
-        "phy3 /sys/devices/virtual/mac80211_hwsim/hwsim0/ieee80211/phy3",
-        "phy4 /sys/devices/virtual/mac80211_hwsim/hwsim1/ieee80211/phy4",
-        "phy5 /sys/devices/virtual/mac80211_hwsim/hwsim2/ieee80211/phy5",
+        "/sys/devices/virtual/mac80211_hwsim/hwsim0/ieee80211/phy3",
+        "/sys/devices/virtual/mac80211_hwsim/hwsim1/ieee80211/phy4",
+        "/sys/devices/virtual/mac80211_hwsim/hwsim2/ieee80211/phy5",
     ]
 )
 
@@ -99,8 +100,7 @@ def test_negative_control_blind_slice_would_touch_hardware(poc) -> None:
     If this ever stops holding, the fixture no longer exercises the defect and
     ``test_never_selects_a_hardware_radio`` would pass for the wrong reason.
     """
-    lines = [line.strip() for line in LISTING_WITH_HARDWARE_RADIO.splitlines() if line.strip()]
-    old_selection = [line.split()[0] for line in lines[:3]]
+    old_selection = [Path(p).name for p in LISTING_WITH_HARDWARE_RADIO.splitlines()[:3]]
     assert old_selection == ["phy0", "phy13", "phy14"], old_selection
     assert poc._hwsim_phys(_FakeRunner(LISTING_WITH_HARDWARE_RADIO)) != old_selection
 
@@ -110,15 +110,21 @@ def test_hwsim_only_host_is_unchanged(poc) -> None:
     assert poc._hwsim_phys(_FakeRunner(LISTING_HWSIM_ONLY)) == ["phy3", "phy4", "phy5"]
 
 
-def test_malformed_lines_are_ignored(poc) -> None:
-    """readlink noise must not be mistaken for a phy name."""
+def test_malformed_input_is_ignored(poc) -> None:
+    """readlink noise must not be mistaken for a radio.
+
+    The unexpanded glob (`readlink -f` of a pattern that matched nothing) and
+    any non-`phy*` path are dropped, so a host with no phys yields an empty
+    list and the caller's own "expected >=3 hwsim phys" error fires — rather
+    than a bogus phy name reaching `iw`.
+    """
     listing = "\n".join(
         [
-            "phy13 /sys/devices/virtual/mac80211_hwsim/hwsim0/ieee80211/phy13",
-            "garbage-with-no-second-field",
+            "/sys/devices/virtual/mac80211_hwsim/hwsim0/ieee80211/phy13",
+            "/sys/class/ieee80211/*",
             "",
-            "phy14 /sys/devices/virtual/mac80211_hwsim/hwsim1/ieee80211/phy14",
-            "phy3 /sys/devices/virtual/mac80211_hwsim/hwsim0/ieee80211/phy3",
+            "garbage",
+            "/sys/devices/virtual/mac80211_hwsim/hwsim1/ieee80211/phy14",
         ]
     )
-    assert poc._hwsim_phys(_FakeRunner(listing)) == ["phy13", "phy14", "phy3"]
+    assert poc._hwsim_phys(_FakeRunner(listing)) == ["phy13", "phy14"]
