@@ -843,23 +843,23 @@ if ! up 'echo ok' >/dev/null 2>&1; then
   exit 1
 fi
 
-sshpass -p {pwd} scp -O -o StrictHostKeyChecking=no "$pkg" "root@$vm:/tmp/pkg" \\
+sshpass -p {pwd} scp -O -o StrictHostKeyChecking=no "$pkg" "root@$vm:/tmp/lane-pkg" \\
   || {{ printf 'install-package: copying the artifact into the VM failed\\n' >&2; exit 1; }}
 
 printf 'install-package: installing %s (manager auto-detected)\\n' {quoted_name}
 if ! up 'command -v apk >/dev/null 2>&1'; then
   # 24.10 generation: opkg. A locally-installed previous copy must go first,
   # or opkg refuses to overwrite it.
-  up 'opkg remove tollgate-wrt 2>/dev/null || true; opkg install /tmp/pkg' \\
+  up 'opkg remove tollgate-wrt 2>/dev/null || true; opkg install /tmp/lane-pkg' \\
     || {{ printf 'install-package: opkg install failed\\n' >&2; exit 1; }}
 else
   # 25.12 generation: apk. --allow-untrusted matches the lane's artifact
   # provenance (built by us, not signed by the OpenWrt release key).
-  up 'apk add --allow-untrusted /tmp/pkg' \\
+  up 'ext=${{pkg##*.}}; cp /tmp/lane-pkg /tmp/tollgate-wrt-artifact.$ext; apk add --allow-untrusted /tmp/tollgate-wrt-artifact.$ext' \\
     || {{ printf 'install-package: apk add failed\\n' >&2; exit 1; }}
 fi
 
-up 'rm -f /tmp/pkg; /etc/init.d/tollgate-wrt enable >/dev/null 2>&1 || true; /etc/init.d/tollgate-wrt restart' \\
+up 'rm -f /tmp/lane-pkg /tmp/tollgate-wrt-artifact.*; /etc/init.d/tollgate-wrt enable >/dev/null 2>&1 || true; /etc/init.d/tollgate-wrt restart' \\
   || {{ printf 'install-package: service restart failed\\n' >&2; exit 1; }}
 
 printf 'install-package: waiting for the backend on :2121...\\n'
