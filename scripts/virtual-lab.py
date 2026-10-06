@@ -144,6 +144,8 @@ def _update_env_file(password):
 
 
 POC_PASSWORD = _generate_password()
+# The POC OpenWrt VM's bridge IP (set by the serial provisioning template).
+POC_OPENWRT_IP = "10.99.99.1"
 _save_credentials(POC_PASSWORD)
 _update_env_file(POC_PASSWORD)
 _ensure_ssh_key()
@@ -587,6 +589,12 @@ fi
 if [ ! -f openwrt-base.qcow2 ]; then
   qemu-img convert -f raw -O qcow2 {shlex.quote(image_name)} openwrt-base.qcow2
   qemu-img resize openwrt-base.qcow2 2G
+  printf '%s' {shlex.quote(version)} > openwrt-base.version
+elif [ "$(cat openwrt-base.version 2>/dev/null || echo unknown)" != {shlex.quote(version)} ]; then
+  printf 'openwrt-base.qcow2 in this workdir was built from %s, not %s.\n' "$(cat openwrt-base.version 2>/dev/null || echo unknown)" {shlex.quote(version)} >&2
+  printf 'Use a separate --workdir per OpenWrt generation (the dual-OS lanes do):\n' >&2
+  printf '  e.g. ~/tollgate-virtual-lab-2410 and ~/tollgate-virtual-lab-2512\n' >&2
+  exit 1
 fi
 for router in seller reseller; do
   overlay="$workdir/overlays/${{router}}.qcow2"
@@ -728,6 +736,108 @@ fi
 printf 'Prepared Debian nocloud client image\\n'
 qemu-img info "$overlay"
 '''
+    return _print_result(run_remote(host, quote_script(script), timeout=600))
+
+
+def install_package(args: argparse.Namespace) -> int:
+    """Copy a tollgate-wrt artifact into the running POC VM and install it.
+
+    The manager is chosen by what the VM itself ships — opkg on the 24.10
+    generation, apk on 25.12 — because that is the only difference the lane
+    should care about: the artifact format already encodes the era (.ipk vs
+    .apk), and version-sniffing the image would duplicate that knowledge.
+    After install: enable + restart the service, then wait for :2121 to
+    answer, so a failed install fails HERE with the VM's own error output
+    instead of inside the first test that needs the backend.
+    """
+    host = cast(str, args.host)
+    workdir = cast(str, args.workdir)
+    package = os.path.expanduser(args.package)
+    name = os.path.basename(package)
+    if not os.path.isfile(package):
+        print(f"install-package: {package} does not exist", file=sys.stderr)
+        return 1
+    if not (name.endswith(".apk") or name.endswith(".ipk")):
+        print(
+            "install-package: expected a .apk (25.12 era) or .ipk (24.10 era) artifact, "
+            f"got {name}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Stage the artifact on the lab host (no-op when running host-local).
+    stage = (
+        "set -eu\n"
+        "workdir=" + shlex.quote(workdir) + "\n"
+        'workdir=$(eval printf \'%s\' "$workdir")\n'
+        'mkdir -p "$workdir/images/packages"\n'
+    )
+    rc = _print_result(run_remote(host, quote_script(stage), timeout=30))
+    if rc != 0:
+        return rc
+    if host not in {"", "local", "localhost", "127.0.0.1"}:
+        import shutil
+        remote_path = f"{workdir}/images/packages/{name}"
+        if shutil.which("scp") is None:
+            print("install-package: scp not found for host staging", file=sys.stderr)
+            return 1
+        proc = subprocess.run(
+            ["scp", "-q", package, f"{host}:{remote_path}"],
+            capture_output=True, text=True, timeout=300, check=False,
+        )
+        if proc.returncode != 0:
+            print(f"install-package: scp to {host} failed: {proc.stderr.strip()}", file=sys.stderr)
+            return 1
+
+    pwd = shlex.quote(POC_PASSWORD)
+    quoted_name = shlex.quote(name)
+    script = f"""
+set -eu
+workdir={shlex.quote(workdir)}
+workdir=$(eval printf '%s' "$workdir")
+pkg="$workdir/images/packages/{quoted_name}"
+vm={POC_OPENWRT_IP}
+
+up() {{
+  sshpass -p {pwd} ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@$vm" "$1"
+}}
+
+if ! up 'echo ok' >/dev/null 2>&1; then
+  printf 'install-package: OpenWrt VM not reachable at %s — is the POC lab running?\\n' "$vm" >&2
+  exit 1
+fi
+
+sshpass -p {pwd} scp -o StrictHostKeyChecking=no "$pkg" "root@$vm:/tmp/pkg" \\
+  || {{ printf 'install-package: copying the artifact into the VM failed\\n' >&2; exit 1; }}
+
+printf 'install-package: installing %s (manager auto-detected)\\n' {quoted_name}
+if ! up 'command -v apk >/dev/null 2>&1'; then
+  # 24.10 generation: opkg. A locally-installed previous copy must go first,
+  # or opkg refuses to overwrite it.
+  up 'opkg remove tollgate-wrt 2>/dev/null || true; opkg install /tmp/pkg' \\
+    || {{ printf 'install-package: opkg install failed\\n' >&2; exit 1; }}
+else
+  # 25.12 generation: apk. --allow-untrusted matches the lane's artifact
+  # provenance (built by us, not signed by the OpenWrt release key).
+  up 'apk add --allow-untrusted /tmp/pkg' \\
+    || {{ printf 'install-package: apk add failed\\n' >&2; exit 1; }}
+fi
+
+up 'rm -f /tmp/pkg; /etc/init.d/tollgate-wrt enable >/dev/null 2>&1 || true; /etc/init.d/tollgate-wrt restart' \\
+  || {{ printf 'install-package: service restart failed\\n' >&2; exit 1; }}
+
+printf 'install-package: waiting for the backend on :2121...\\n'
+for i in $(seq 1 30); do
+  if up 'wget -qO- --timeout=2 http://127.0.0.1:2121/ >/dev/null 2>&1' \\
+     || up 'nc -z 127.0.0.1 2121 2>/dev/null'; then
+    printf 'install-package: backend is up — %s installed and serving\\n' {quoted_name}
+    exit 0
+  fi
+  sleep 2
+done
+printf 'install-package: backend did not answer on :2121 within 60s — check the serial log\\n' >&2
+exit 1
+"""
     return _print_result(run_remote(host, quote_script(script), timeout=600))
 
 
@@ -1490,6 +1600,15 @@ def build_parser() -> argparse.ArgumentParser:
     _ = prepare_debian_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = prepare_debian_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
     prepare_debian_parser.set_defaults(func=prepare_debian)
+
+    pkg_parser = subparsers.add_parser(
+        "install-package",
+        help="Install a tollgate-wrt .apk/.ipk into the running POC VM (manager auto-detected)",
+    )
+    _ = pkg_parser.add_argument("--package", required=True, help="Path to the tollgate-wrt .apk or .ipk artifact")
+    _ = pkg_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
+    _ = pkg_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    _ = pkg_parser.set_defaults(func=install_package)
 
     provision_debian_parser = subparsers.add_parser("provision-debian", help="Install Chromium + Playwright in Debian client VM")
     _ = provision_debian_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
