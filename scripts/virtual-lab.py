@@ -63,7 +63,29 @@ DEBIAN_MAC = "de:54:4e:91:49:da"
 POC_OPENWRT_MAC = "52:54:00:12:34:56"
 DEBIAN_CLIENT_IP = "10.99.99.100"
 POC_GATEWAY = "10.99.99.1"
+POC_DEBIAN_HOST_BRIDGE_IP = "10.99.99.2"
 POC_HOST_BRIDGE_IP = "10.99.99.2/24"
+
+
+def apply_net_id(net_id):
+    """Rebind the lab's network identity for --net-id N (dual-OS lanes run
+    concurrently: one lab per workdir AND per net-id). N=0/None keeps the
+    historical names so every existing flow is unchanged."""
+    global POC_BRIDGE, POC_TAP, DEBIAN_TAP, POC_SUBNET, POC_GATEWAY, POC_HOST_BRIDGE_IP, DEBIAN_CLIENT_IP, POC_OPENWRT_IP
+    if net_id in (None, 0):
+        return
+    if not (1 <= int(net_id) <= 254):
+        raise SystemExit(f"--net-id must be 1..254 (a 10.99.N.0/24 octet), got {net_id}")
+    n = str(int(net_id))
+    POC_BRIDGE = f"tg-poc{n}-br"
+    POC_TAP = f"tg-poc{n}-tap"
+    DEBIAN_TAP = f"tg-poc{n}-tap2"
+    POC_SUBNET = f"10.99.{n}.0/24"
+    POC_GATEWAY = f"10.99.{n}.1"
+    POC_HOST_BRIDGE_IP = f"10.99.{n}.2/24"
+    POC_DEBIAN_HOST_BRIDGE_IP = f"10.99.{n}.2"
+    POC_OPENWRT_IP = f"10.99.{n}.1"
+    globals()["DEBIAN_CLIENT_IP"] = f"10.99.{n}.100"
 
 
 def _generate_password():
@@ -144,6 +166,9 @@ def _update_env_file(password):
 
 
 POC_PASSWORD = _generate_password()
+# The POC OpenWrt VM's bridge IP (set by the serial provisioning template;
+# rebound by apply_net_id for --net-id lanes).
+POC_OPENWRT_IP = "10.99.99.1"
 _save_credentials(POC_PASSWORD)
 _update_env_file(POC_PASSWORD)
 _ensure_ssh_key()
@@ -241,13 +266,22 @@ send_and_wait(s, 'uci commit dropbear', wait=2)
 send_and_wait(s, '/etc/init.d/dropbear restart', wait=3)
 
 # --- Inject SSH public key ---
+# The key goes in base64-chunked: a single ~700-char echo line wedged the
+# 25.12 busybox console into continuation mode (measured: the shell showed
+# '>' prompts for every later command and the network config never ran),
+# while the 24.10 console took it fine. base64 -d is present in both
+# generations' busybox and keeps the line short regardless of key size.
+import base64
 ssh_key_path = os.path.expanduser("~/.ssh/id_ed25519.pub")
 if not os.path.exists(ssh_key_path):
     ssh_key_path = os.path.expanduser("~/.ssh/id_rsa.pub")
 if os.path.exists(ssh_key_path):
     ssh_pubkey = open(ssh_key_path).read().strip()
+    key_b64 = base64.b64encode(ssh_pubkey.encode()).decode()
     print('Injecting SSH public key...')
-    send_and_wait(s, f"mkdir -p /etc/dropbear && echo '{ssh_pubkey}' > /etc/dropbear/authorized_keys && chmod 600 /etc/dropbear/authorized_keys", wait=2)
+    send_and_wait(s, "mkdir -p /etc/dropbear && chmod 700 /etc/dropbear", wait=2)
+    send_and_wait(s, "echo " + key_b64 + " | base64 -d > /etc/dropbear/authorized_keys", wait=2)
+    send_and_wait(s, "chmod 600 /etc/dropbear/authorized_keys", wait=2)
 
 # --- Add WAN SSH firewall rule ---
 print('Adding WAN SSH firewall rule...')
@@ -261,9 +295,9 @@ send_and_wait(s, 'uci commit firewall', wait=2)
 send_and_wait(s, 'fw4 restart', wait=5)
 
 print('Configuring LAN IP and internet access via host bridge...')
-send_and_wait(s, "uci set network.lan.ipaddr='10.99.99.1'", wait=2)
+send_and_wait(s, "uci set network.lan.ipaddr='__GATEWAY__'", wait=2)
 send_and_wait(s, "uci set network.lan.netmask='255.255.255.0'", wait=2)
-send_and_wait(s, "uci set network.lan.gateway='10.99.99.2'", wait=2)
+send_and_wait(s, "uci set network.lan.gateway='__HOST_BRIDGE_IP__'", wait=2)
 send_and_wait(s, "uci set network.lan.dns='8.8.8.8'", wait=2)
 send_and_wait(s, 'uci commit network', wait=2)
 send_and_wait(s, '/etc/init.d/network restart', wait=5)
@@ -363,19 +397,19 @@ send_and_wait(s, 'cloud-init status --wait 2>/dev/null || true', wait=30)
 # --- Configure networking (static IP) ---
 print('Configuring networking...')
 send_and_wait(s, 'ip link set ens3 up', wait=2)
-send_and_wait(s, 'ip addr add 10.99.99.100/24 dev ens3', wait=2)
-send_and_wait(s, 'ip route add default via 10.99.99.1', wait=2)
-send_and_wait(s, 'echo "nameserver 10.99.99.2" > /etc/resolv.conf', wait=2)
+send_and_wait(s, f'ip addr add {DEBIAN_CLIENT_IP}/24 dev ens3', wait=2)
+send_and_wait(s, f'ip route add default via {POC_GATEWAY}', wait=2)
+send_and_wait(s, f'echo "nameserver {POC_HOST_BRIDGE_IP.split("/")[0]}" > /etc/resolv.conf', wait=2)
 # Persist as netplan: this image uses netplan+systemd-networkd and has no
 # /etc/network/interfaces. Overwrite the DHCP match-all default — a separate
 # higher-numbered file loses to it because netplan emits both with the same
 # prefix and networkd picks the lexicographically-first match. Without
 # persistence every reboot comes up network-less and serial provisioning
 # becomes mandatory again on each start-poc.
-send_and_wait(s, "printf 'network:\\n  version: 2\\n  ethernets:\\n    ens3:\\n      addresses:\\n        - 10.99.99.100/24\\n      routes:\\n        - to: default\\n          via: 10.99.99.1\\n      nameservers:\\n        addresses: [10.99.99.2]\\n' > /etc/netplan/90-default.yaml && chmod 600 /etc/netplan/90-default.yaml", wait=3)
+send_and_wait(s, f"printf 'network:\\n  version: 2\\n  ethernets:\\n    ens3:\\n      addresses:\\n        - {DEBIAN_CLIENT_IP}/24\\n      routes:\\n        - to: default\\n          via: {POC_GATEWAY}\\n      nameservers:\\n        addresses: [{POC_HOST_BRIDGE_IP.split('/')[0]}]\\n' > /etc/netplan/90-default.yaml && chmod 600 /etc/netplan/90-default.yaml", wait=3)
 send_and_wait(s, "printf '[Unit]\\nDescription=Regenerate networkd config from netplan at boot\\nDefaultDependencies=no\\nBefore=systemd-networkd.service\\n[Service]\\nType=oneshot\\nExecStart=/usr/sbin/netplan generate\\nRemainAfterExit=yes\\n[Install]\\nWantedBy=multi-user.target\\n' > /etc/systemd/system/netplan-generate-boot.service && systemctl enable netplan-generate-boot.service", wait=4)
 send_and_wait(s, 'rm -f /etc/systemd/system/systemd-networkd.service.d/10-netplan.conf; rmdir --ignore-fail-on-non-empty /etc/systemd/system/systemd-networkd.service.d 2>/dev/null', wait=2)
-send_and_wait(s, 'sleep 5 && ping -c 1 -W 5 10.99.99.1', wait=10)
+send_and_wait(s, f'sleep 5 && ping -c 1 -W 5 {POC_GATEWAY}', wait=10)
 
 print('Installing openssh-server...')
 send_and_wait(s, 'apt-get update -qq', wait=60)
@@ -587,6 +621,12 @@ fi
 if [ ! -f openwrt-base.qcow2 ]; then
   qemu-img convert -f raw -O qcow2 {shlex.quote(image_name)} openwrt-base.qcow2
   qemu-img resize openwrt-base.qcow2 2G
+  printf '%s' {shlex.quote(version)} > openwrt-base.version
+elif [ "$(cat openwrt-base.version 2>/dev/null || echo unknown)" != {shlex.quote(version)} ]; then
+  printf 'openwrt-base.qcow2 in this workdir was built from %s, not %s.\n' "$(cat openwrt-base.version 2>/dev/null || echo unknown)" {shlex.quote(version)} >&2
+  printf 'Use a separate --workdir per OpenWrt generation (the dual-OS lanes do):\n' >&2
+  printf '  e.g. ~/tollgate-virtual-lab-2410 and ~/tollgate-virtual-lab-2512\n' >&2
+  exit 1
 fi
 for router in seller reseller; do
   overlay="$workdir/overlays/${{router}}.qcow2"
@@ -731,6 +771,112 @@ qemu-img info "$overlay"
     return _print_result(run_remote(host, quote_script(script), timeout=600))
 
 
+def install_package(args: argparse.Namespace) -> int:
+    """Copy a tollgate-wrt artifact into the running POC VM and install it.
+
+    The manager is chosen by what the VM itself ships — opkg on the 24.10
+    generation, apk on 25.12 — because that is the only difference the lane
+    should care about: the artifact format already encodes the era (.ipk vs
+    .apk), and version-sniffing the image would duplicate that knowledge.
+    After install: enable + restart the service, then wait for :2121 to
+    answer, so a failed install fails HERE with the VM's own error output
+    instead of inside the first test that needs the backend.
+    """
+    host = cast(str, args.host)
+    workdir = cast(str, args.workdir)
+    package = os.path.expanduser(args.package)
+    name = os.path.basename(package)
+    if not os.path.isfile(package):
+        print(f"install-package: {package} does not exist", file=sys.stderr)
+        return 1
+    if not (name.endswith(".apk") or name.endswith(".ipk")):
+        print(
+            "install-package: expected a .apk (25.12 era) or .ipk (24.10 era) artifact, "
+            f"got {name}",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Stage the artifact on the lab host (no-op when running host-local).
+    stage = (
+        "set -eu\n"
+        "workdir=" + shlex.quote(workdir) + "\n"
+        'workdir=$(eval printf \'%s\' "$workdir")\n'
+        'mkdir -p "$workdir/images/packages"\n'
+    )
+    stage += (
+        "cp " + shlex.quote(os.path.abspath(package)) + " "
+        + '"$workdir/images/packages/' + shlex.quote(name) + '"\n'
+    )
+    rc = _print_result(run_remote(host, quote_script(stage), timeout=120))
+    if rc != 0:
+        return rc
+    if host not in {"", "local", "localhost", "127.0.0.1"}:
+        import shutil
+        remote_path = f"{workdir}/images/packages/{name}"
+        if shutil.which("scp") is None:
+            print("install-package: scp not found for host staging", file=sys.stderr)
+            return 1
+        proc = subprocess.run(
+            ["scp", "-q", package, f"{host}:{remote_path}"],
+            capture_output=True, text=True, timeout=300, check=False,
+        )
+        if proc.returncode != 0:
+            print(f"install-package: scp to {host} failed: {proc.stderr.strip()}", file=sys.stderr)
+            return 1
+
+    pwd = shlex.quote(POC_PASSWORD)
+    quoted_name = shlex.quote(name)
+    script = f"""
+set -eu
+workdir={shlex.quote(workdir)}
+workdir=$(eval printf '%s' "$workdir")
+pkg="$workdir/images/packages/{quoted_name}"
+vm={POC_OPENWRT_IP}
+
+up() {{
+  sshpass -p {pwd} ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@$vm" "$1"
+}}
+
+if ! up 'echo ok' >/dev/null 2>&1; then
+  printf 'install-package: OpenWrt VM not reachable at %s — is the POC lab running?\\n' "$vm" >&2
+  exit 1
+fi
+
+sshpass -p {pwd} scp -O -o StrictHostKeyChecking=no "$pkg" "root@$vm:/tmp/lane-pkg" \\
+  || {{ printf 'install-package: copying the artifact into the VM failed\\n' >&2; exit 1; }}
+
+printf 'install-package: installing %s (manager auto-detected)\\n' {quoted_name}
+if ! up 'command -v apk >/dev/null 2>&1'; then
+  # 24.10 generation: opkg. A locally-installed previous copy must go first,
+  # or opkg refuses to overwrite it.
+  up 'opkg remove tollgate-wrt 2>/dev/null || true; opkg install /tmp/lane-pkg' \\
+    || {{ printf 'install-package: opkg install failed\\n' >&2; exit 1; }}
+else
+  # 25.12 generation: apk. --allow-untrusted matches the lane's artifact
+  # provenance (built by us, not signed by the OpenWrt release key).
+  up 'ext=${{pkg##*.}}; cp /tmp/lane-pkg /tmp/tollgate-wrt-artifact.$ext; apk add --allow-untrusted /tmp/tollgate-wrt-artifact.$ext' \\
+    || {{ printf 'install-package: apk add failed\\n' >&2; exit 1; }}
+fi
+
+up 'rm -f /tmp/lane-pkg /tmp/tollgate-wrt-artifact.*; /etc/init.d/tollgate-wrt enable >/dev/null 2>&1 || true; /etc/init.d/tollgate-wrt restart' \\
+  || {{ printf 'install-package: service restart failed\\n' >&2; exit 1; }}
+
+printf 'install-package: waiting for the backend on :2121...\\n'
+for i in $(seq 1 30); do
+  if up 'wget -qO- --timeout=2 http://127.0.0.1:2121/ >/dev/null 2>&1' \\
+     || up 'nc -z 127.0.0.1 2121 2>/dev/null'; then
+    printf 'install-package: backend is up — %s installed and serving\\n' {quoted_name}
+    exit 0
+  fi
+  sleep 2
+done
+printf 'install-package: backend did not answer on :2121 within 60s — check the serial log\\n' >&2
+exit 1
+"""
+    return _print_result(run_remote(host, quote_script(script), timeout=600))
+
+
 def _poc_paths(workdir: str) -> tuple[str, str, str]:
     """Return (pidfile, serial_sock, disk) as shell-expanded path expressions."""
     expanded = "$(eval printf '%s' " + shlex.quote(workdir) + ")"
@@ -751,7 +897,13 @@ def _client_paths(workdir: str) -> tuple[str, str]:
 def _generate_provision_script(workdir: str) -> str:
     pwd = POC_PASSWORD.replace("'", "'\\''")
     wdir = workdir.replace("'", "'\\''")
-    return _PROVISION_TEMPLATE.replace("__WORKDIR__", wdir).replace("__PASSWORD__", pwd)
+    return (
+        _PROVISION_TEMPLATE
+        .replace("__WORKDIR__", wdir)
+        .replace("__PASSWORD__", pwd)
+        .replace("__GATEWAY__", POC_GATEWAY)
+        .replace("__HOST_BRIDGE_IP__", POC_HOST_BRIDGE_IP.split("/")[0])
+    )
 
 
 def _generate_ssh_key_inject_script(workdir: str) -> str:
@@ -1453,26 +1605,31 @@ def build_parser() -> argparse.ArgumentParser:
                                        "on stop-poc, guaranteeing a pristine client per cycle. Requires an "
                                        "already-provisioned overlay (provision first without this flag); "
                                        "provision_debian changes (playwright/chromium) will not persist.")
+    _ = start_parser.add_argument("--net-id", type=int, default=None, help="Rebind the lab to 10.99.N.0/24 with suffixed link names (dual-OS lanes run concurrently)")
     start_parser.set_defaults(func=start_poc)
 
     stop_parser = subparsers.add_parser("stop-poc", help="Stop the POC VMs and clean up")
     _ = stop_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = stop_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    _ = stop_parser.add_argument("--net-id", type=int, default=None, help="Must match the net-id the lab was started with")
     stop_parser.set_defaults(func=stop_poc)
 
     status_parser = subparsers.add_parser("status-poc", help="Show POC VM status")
     _ = status_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = status_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    _ = status_parser.add_argument("--net-id", type=int, default=None, help="Must match the net-id the lab was started with")
     status_parser.set_defaults(func=status_poc)
 
     smoke_parser = subparsers.add_parser("smoke-poc", help="Verify Debian client VM reaches OpenWrt gateway")
     _ = smoke_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = smoke_parser.add_argument("--timeout", type=int, default=120)
+    _ = smoke_parser.add_argument("--net-id", type=int, default=None, help="Must match the net-id the lab was started with")
     smoke_parser.set_defaults(func=smoke_poc)
 
     debug_parser = subparsers.add_parser("debug-poc", help="Comprehensive mid-flight debug of the virtual lab")
     _ = debug_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = debug_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    _ = debug_parser.add_argument("--net-id", type=int, default=None, help="Must match the net-id the lab was started with")
     debug_parser.set_defaults(func=debug_poc)
 
     reseller_parser = subparsers.add_parser(
@@ -1490,6 +1647,16 @@ def build_parser() -> argparse.ArgumentParser:
     _ = prepare_debian_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     _ = prepare_debian_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
     prepare_debian_parser.set_defaults(func=prepare_debian)
+
+    pkg_parser = subparsers.add_parser(
+        "install-package",
+        help="Install a tollgate-wrt .apk/.ipk into the running POC VM (manager auto-detected)",
+    )
+    _ = pkg_parser.add_argument("--package", required=True, help="Path to the tollgate-wrt .apk or .ipk artifact")
+    _ = pkg_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
+    _ = pkg_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    _ = pkg_parser.add_argument("--net-id", type=int, default=None, help="Must match the net-id the lab was started with")
+    _ = pkg_parser.set_defaults(func=install_package)
 
     provision_debian_parser = subparsers.add_parser("provision-debian", help="Install Chromium + Playwright in Debian client VM")
     _ = provision_debian_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
@@ -1531,6 +1698,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    apply_net_id(getattr(args, 'net_id', None))
     if hasattr(args, "workdir") and args.workdir:
         if host_is_remote(getattr(args, "host", "")):
             pass

@@ -186,3 +186,42 @@ python3 scripts/cloud-lab.py cleanup-stale
 # Remove ALL cloud lab VMs
 python3 scripts/cloud-lab.py cleanup-all
 ```
+
+## Dual-OS lanes (24.10 + 25.12)
+
+The lab runs one OpenWrt generation per **workdir**; the base image in each
+workdir is stamped with the version it was built from, and `prepare-image`
+refuses to rebuild it from a different one (use a new workdir instead).
+
+```bash
+# 24.10 lane (the long-standing default workdir)
+python3 scripts/virtual-lab.py prepare-image --host <lab> --openwrt-version 24.10.1
+python3 scripts/virtual-lab.py start-poc --host <lab>
+
+# 25.12 lane — its own workdir, same flow
+python3 scripts/virtual-lab.py prepare-image --host <lab> \
+    --openwrt-version 25.12.5 --workdir ~/tollgate-virtual-lab-2512
+python3 scripts/virtual-lab.py start-poc --host <lab> \
+    --workdir ~/tollgate-virtual-lab-2512
+```
+
+### Installing the package (either era)
+
+`install-package` copies a `.apk`/`.ipk` artifact into the running POC VM,
+installs it with whichever package manager the VM ships (opkg on 24.10,
+apk on 25.12 — auto-detected, not version-sniffed), restarts the service,
+and waits for `:2121`:
+
+```bash
+python3 scripts/virtual-lab.py install-package --host <lab> \
+    --workdir ~/tollgate-virtual-lab-2512 \
+    --package /path/to/tollgate-wrt_<ver>_x86_64.apk
+```
+
+### Feed notes for the 25.12 lane
+
+The 25.12 indexes are `packages.adb` (apk-tools 3) — apk 2.x tooling resolves
+nothing against them. If `apk add` inside the VM reports missing `iptables-*`
+names, check `/etc/apk/repositories` lists the target feed
+(`releases/25.12.x/targets/x86/64/packages`) alongside the arch sections —
+see module issue #552 and its Phase 0 verdict for the measured details.
