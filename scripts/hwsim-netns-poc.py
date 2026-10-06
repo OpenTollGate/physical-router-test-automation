@@ -143,10 +143,49 @@ def _write_wpa_config(path: Path, ssid: str) -> None:
     )
 
 
+def _hwsim_phys(r: Runner) -> list[str]:
+    """PHYs backed by mac80211_hwsim, in `ls` order.
+
+    `ls /sys/class/ieee80211` sorts alphabetically, so on a host that has a
+    physical Wi-Fi card `phy0` — the hardware radio — sorts FIRST. The previous
+    selection took the first three entries blindly, so the AP/STA interfaces
+    were created on real silicon: measured on the fleet host CobradorWave
+    (2026-10-06), a run left ``alpha-ap`` on the Intel card
+    (``phy0 -> /sys/devices/pci0000:00/0000:00:1c.2/0000:3a:00.0/ieee80211/phy0``)
+    and the "alpha" AP never came up, which is what made the POC red. Every
+    hwsim devlink resolves under ``/sys/devices/virtual/mac80211_hwsim/``, so
+    the driver's own devlink path is the discriminator. This run must never
+    touch a radio it did not create.
+    """
+    out = r.run(
+        [
+            "bash",
+            "-lc",
+            "for p in /sys/class/ieee80211/*; do "
+            "printf '%s %s\\n' \"$(basename \"$p\")\" \"$(readlink -f \"$p\")\"; done",
+        ]
+    ).stdout
+    phys: list[str] = []
+    refused: list[str] = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        name, devpath = parts
+        (phys if "/virtual/mac80211_hwsim/" in devpath else refused).append(name)
+    if refused:
+        print(
+            f"hwsim-netns: ignoring non-hwsim radio(s) {refused} — this run only "
+            "touches PHYs it created (mac80211_hwsim)",
+            file=sys.stderr,
+        )
+    return phys
+
+
 def _move_phys_to_namespaces(r: Runner) -> None:
     r.run(["modprobe", "-r", "mac80211_hwsim"], check=False)
     r.run(["modprobe", "mac80211_hwsim", "radios=3"], timeout=10)
-    phys = [line.strip() for line in r.run(["bash", "-lc", "ls /sys/class/ieee80211"]).stdout.splitlines() if line.strip()]
+    phys = _hwsim_phys(r)
     if len(phys) < 3:
         raise PocError(f"expected >=3 hwsim phys, found {phys}")
     for ns in (NS_ALPHA, NS_BRAVO, NS_CLIENT):
@@ -231,29 +270,78 @@ def _dhcp_client(r: Runner, iface: str) -> tuple[str, list[str]]:
     return "udhcpc", ["udhcpc", "-i", iface, "-n", "-q"]
 
 
+def _wpa_status(r: Runner) -> str:
+    """`wpa_cli status`, or "" when the control socket is absent or unresponsive.
+
+    A stale ``ctrl_interface`` socket left behind by the previous probe makes
+    wpa_cli block; ``subprocess.run`` then raises ``TimeoutExpired``, which
+    escapes ``Runner.run`` and aborts the whole run (measured on the fleet host
+    CobradorWave, where the "bravo" probe died with
+    ``wpa_cli ... status timed out after 5 seconds``).
+    """
+    try:
+        return r.ns(
+            NS_CLIENT,
+            ["wpa_cli", "-p", "/tmp/wpa_supplicant", "-i", "client-wlan", "status"],
+            timeout=5,
+            check=False,
+        ).stdout
+    except subprocess.TimeoutExpired:
+        return ""
+
+
 def _associate_and_probe(r: Runner, *, ssid: str, gateway: str) -> dict[str, Any]:
-    r.run(["pkill", "-f", f"ip netns exec {NS_CLIENT} wpa_supplicant"], check=False)
+    # `ip netns exec` execs the target, so the child's argv has no "ip netns
+    # exec ..." prefix: the old pkill pattern never matched and the PREVIOUS
+    # SSID's wpa_supplicant kept running, so every probe after the first stayed
+    # associated to the first AP (measured: the "bravo" probe was served by
+    # ALPHA's dnsmasq and reported ALPHA's lease). Kill it by interface, and
+    # drop its control socket so the next probe cannot talk to a dead daemon.
+    r.run(["pkill", "-f", "wpa_supplicant -i client-wlan"], check=False)
+    r.ns(NS_CLIENT, ["rm", "-rf", "/tmp/wpa_supplicant"], check=False)
     r.ns(NS_CLIENT, ["ip", "addr", "flush", "dev", "client-wlan"], check=False)
     wpa_conf = r.tmp / f"client-{ssid}.conf"
     _write_wpa_config(wpa_conf, ssid)
     r.popen_ns(NS_CLIENT, ["wpa_supplicant", "-i", "client-wlan", "-c", str(wpa_conf), "-D", "nl80211"])
     associated = False
     for _ in range(20):
-        status = r.ns(NS_CLIENT, ["wpa_cli", "-i", "client-wlan", "status"], timeout=5, check=False).stdout
+        # -p names the ctrl_interface the config set (/tmp/wpa_supplicant); the
+        # default /var/run/wpa_supplicant has no socket here, so the query used
+        # to fail and a client that HAD associated and taken a lease still
+        # reported associated=false.
+        status = _wpa_status(r)
         if "wpa_state=COMPLETED" in status or f"ssid={ssid}" in status:
             associated = True
             break
         time.sleep(1)
 
     dhcp_tool, dhcp_cmd = _dhcp_client(r, "client-wlan")
-    dhcp = r.ns(NS_CLIENT, dhcp_cmd, timeout=20, check=False)
-    addr = r.ns(NS_CLIENT, ["ip", "-4", "addr", "show", "client-wlan"], timeout=5, check=False).stdout
-    got_dhcp = "inet " in addr
+    # One 20 s dhclient races the association and, on a loaded host, times the
+    # whole run out (measured: 2 of 4 runs on the fleet host CobradorWave died
+    # here, and subprocess.run's TimeoutExpired escapes Runner.run and aborts
+    # run_poc). Retry, and treat a timeout as a failed attempt rather than a
+    # dead run.
+    dhcp_rc = -1
+    addr = ""
+    got_dhcp = False
+    for attempt in range(3):
+        try:
+            dhcp = r.ns(NS_CLIENT, dhcp_cmd, timeout=30, check=False)
+            dhcp_rc = dhcp.returncode
+        except subprocess.TimeoutExpired:
+            dhcp_rc = -1
+            if r.verbose:
+                print(f"+ dhclient attempt {attempt + 1} timed out", file=sys.stderr)
+        addr = r.ns(NS_CLIENT, ["ip", "-4", "addr", "show", "client-wlan"], timeout=5, check=False).stdout
+        if "inet " in addr:
+            got_dhcp = True
+            break
+        time.sleep(2)
     http = r.ns(NS_CLIENT, ["curl", "-fsS", "--max-time", "5", f"http://{gateway}:8080/"], timeout=10, check=False)
     return {
         "associated": associated,
         "dhcp_tool": dhcp_tool,
-        "dhcp_rc": dhcp.returncode,
+        "dhcp_rc": dhcp_rc,
         "dhcp": got_dhcp,
         "addr": addr,
         "http_rc": http.returncode,
