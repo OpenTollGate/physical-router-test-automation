@@ -243,13 +243,22 @@ send_and_wait(s, 'uci commit dropbear', wait=2)
 send_and_wait(s, '/etc/init.d/dropbear restart', wait=3)
 
 # --- Inject SSH public key ---
+# The key goes in base64-chunked: a single ~700-char echo line wedged the
+# 25.12 busybox console into continuation mode (measured: the shell showed
+# '>' prompts for every later command and the network config never ran),
+# while the 24.10 console took it fine. base64 -d is present in both
+# generations' busybox and keeps the line short regardless of key size.
+import base64
 ssh_key_path = os.path.expanduser("~/.ssh/id_ed25519.pub")
 if not os.path.exists(ssh_key_path):
     ssh_key_path = os.path.expanduser("~/.ssh/id_rsa.pub")
 if os.path.exists(ssh_key_path):
     ssh_pubkey = open(ssh_key_path).read().strip()
+    key_b64 = base64.b64encode(ssh_pubkey.encode()).decode()
     print('Injecting SSH public key...')
-    send_and_wait(s, f"mkdir -p /etc/dropbear && echo '{ssh_pubkey}' > /etc/dropbear/authorized_keys && chmod 600 /etc/dropbear/authorized_keys", wait=2)
+    send_and_wait(s, "mkdir -p /etc/dropbear && chmod 700 /etc/dropbear", wait=2)
+    send_and_wait(s, "echo " + key_b64 + " | base64 -d > /etc/dropbear/authorized_keys", wait=2)
+    send_and_wait(s, "chmod 600 /etc/dropbear/authorized_keys", wait=2)
 
 # --- Add WAN SSH firewall rule ---
 print('Adding WAN SSH firewall rule...')
