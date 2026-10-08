@@ -2399,3 +2399,38 @@ the ai-legion lab: check for foreign processes (dnsmasq omarchy-tb,
 socat :7301/:7171, live provisioning in serial.log) and yield if
 present. (The 2026-09-28 omarchy handoff etiquette generalizes: the
 lab fabric is multi-lane.)
+
+## Credentials doctrine (learned from #7 — the router-password leak)
+
+Secrets have exactly three legal homes in this ecosystem. Anything else is a bug:
+
+1. **sops** (`conwrt-bench`, `secrets/`) — the vault for infrastructure secrets
+   (switch admin passwords, API keys). Reference by path in docs, never paste
+   the value.
+2. **Untracked local env files** (`.env`, `*/routers.env`, `*/boards.env`,
+   `credentials/`) — machine-local connection details. Tracked files must
+   carry ONLY `.example`/`.template` variants with placeholder values. A
+   tracked env file with real values is an incident: untrack it, rotate, and
+   add an allowlist-scoped note — see below.
+3. **The device/lab itself** — anything that must exist on a router/phone
+   (root passwords, PINs) lives there and in the operator's password manager.
+
+Rules that prevent the #7 class:
+- **Never copy a live env file into the repo tree**, not even "temporarily",
+  not even renamed, not even as `*-backup`. That exact move shipped the leak.
+- `.gitignore` covers the whole `.env.*` / `*routers.env` / `*boards.env`
+  class; tracked files override ignore rules, so the FIRST commit of any env
+  file must be its `.example` twin.
+- The pre-commit hook runs **gitleaks over your staged diff** — if it fires,
+  rotate/remove the secret. A false positive gets a scoped `.gitleaks.toml`
+  allowlist entry with a comment naming why it is safe; never weaken the
+  ruleset (the config must always EXTEND gitleaks' defaults — a bare config
+  scans with zero rules, which is how the early allowlist era saw nothing).
+- Weekly full-history scan (`gitleaks git --redact`) runs in CI (PRTA#22);
+  re-run it manually after any incident-class change.
+- Agents (opencode/codex/herdr lanes) are bound by all of the above and in
+  addition never invent, echo, or paste credential values into issues, PRs,
+  or logs — shape descriptions only ("24-char mixed-case", not the value).
+- Honest limitation: pattern scanners catch FORMAT-shaped secrets (sk-…, key=…).
+  The #7 password was formatless — for that class, the env-file rules above and
+  the gitignore are the primary defense; the scanner is the second net, not the first.
