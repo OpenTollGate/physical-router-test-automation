@@ -33,3 +33,13 @@ regexes = [
   '''0279110f[a-f0-9]*''',
   '''aB3xK9mQ2pR7vN5tW1cY''',
 ]
+
+# --- Incident #7 allowlist (ROTATED 2026-10: values are dead; history retains
+# them until the optional coordinated purge). Path-scoped so any NEW appearance
+# of these filenames outside history still trips the scanner.
+[[allowlist]]
+description = "Incident #7: leaked lab-router env backup (rotated; history-only)"
+paths = [
+  '''\.env\.lab-routers-backup''',
+  '''(^|/)mint-health/routers\.env$''',
+]
