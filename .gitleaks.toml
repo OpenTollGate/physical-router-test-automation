@@ -9,9 +9,16 @@
 useDefault = true
 
 
+# Commit-scoping doctrine for incident entries: the finding is silenced in
+# exactly the commit that introduced it, so the PATH stays armed — a re-added
+# file under the same name trips the scanner again (verified on gitleaks
+# 8.30.1, OpenTollGate/tollgate-module-basic-go#764 / issue #202).
+# mint-health/routers.env carries no entry: its values are formatless
+# (invisible to pattern rules) — the gitignore env-class rules are the
+# primary defense for that file.
 [[allowlists]]
-description = "Historical backup of lab router credentials, committed 2026-07-01 (9571be288) and removed from tracking 2026-09-04. RISK-ACCEPTED by owner 2026-10-09 (issue #7): test-unit lab fleet, no rotation — the value is dead weight, not a live secret, per the owner's decision. 7 of 15 exposing branch tips deleted 2026-10-08; repo archived read-only 2026-10-08 with 8 superseded tips remaining. Path-scoped: no secret material appears at HEAD; the tradeoff (a re-added file under this name would scan silent) is accepted because the filename is a backup artifact that should never exist again."
-paths = ['''(^|/)\.env\.lab-routers-backup$''']
+description = "Incident: historical backup of lab router credentials, committed 2026-07-01 (9571be288) and untracked since (b26cd111). The password is publicly retrievable from git history until the lab routers are verified/rotated — tracked in the audit issue. Commit-scoped to the introduction commit: a re-added .env.lab-routers-backup anywhere flags again."
+commits = ['''9571be288faf9805d6f0218f41100844765dbbe9''']
 
 [[allowlists]]
 description = "Cashu test fixtures: literal fake tokens and base64 demo payloads in unit/API tests and scripts (verify-issue5-v4.mjs TEST_TOKEN, secret-scanner fixtures, portal demoToken, compat-matrix classification strings)."
@@ -32,14 +39,4 @@ regexes = [
   '''dGhlIHNhbXBsZSBub25jZQ==''',
   '''0279110f[a-f0-9]*''',
   '''aB3xK9mQ2pR7vN5tW1cY''',
-]
-
-# --- Incident #7 allowlist (ROTATED 2026-10: values are dead; history retains
-# them until the optional coordinated purge). Path-scoped so any NEW appearance
-# of these filenames outside history still trips the scanner.
-[[allowlist]]
-description = "Incident #7: leaked lab-router env backup (rotated; history-only)"
-paths = [
-  '''\.env\.lab-routers-backup''',
-  '''(^|/)mint-health/routers\.env$''',
 ]
