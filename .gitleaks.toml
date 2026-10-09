@@ -10,7 +10,7 @@ useDefault = true
 
 
 [[allowlists]]
-description = "Historical backup of lab router credentials, committed 2026-07-01 (9571be288) and removed from tracking since. The password is publicly retrievable from git history until the lab routers are verified/rotated — tracked in the audit issue. Path-scoped: no secret material appears at HEAD; the tradeoff (a re-added file under this name would scan silent) is accepted because the filename is a backup artifact that should never exist again."
+description = "Historical backup of lab router credentials, committed 2026-07-01 (9571be288) and removed from tracking 2026-09-04. RISK-ACCEPTED by owner 2026-10-09 (issue #7): test-unit lab fleet, no rotation — the value is dead weight, not a live secret, per the owner's decision. 7 of 15 exposing branch tips deleted 2026-10-08; repo archived read-only 2026-10-08 with 8 superseded tips remaining. Path-scoped: no secret material appears at HEAD; the tradeoff (a re-added file under this name would scan silent) is accepted because the filename is a backup artifact that should never exist again."
 paths = ['''(^|/)\.env\.lab-routers-backup$''']
 
 [[allowlists]]
