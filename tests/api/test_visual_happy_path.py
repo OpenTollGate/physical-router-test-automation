@@ -82,11 +82,16 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     if client != "container":
         pytest.skip("visual test requires --client=container")
 
-    # IPv6 on br-lan bypasses Nodogsplash's IPv4-only captive portal.
-    # Without this, the container reaches the internet via IPv6 and the
-    # Playwright recording never sees auth markers (ok=False).
+    # IPv6 on br-lan bypasses Nodogsplash's IPv4-only captive portal, so this
+    # test needs v6 off — but the ROUTER must ship that itself (#148/#160,
+    # asserted below); the framework force-disabling it here masked package
+    # regressions (#783). PRTA_FORCE_IPV6_OFF=1 restores the legacy force for
+    # deliberate old-firmware experiments.
     # See: https://github.com/OpenTollGate/physical-router-test-automation/issues/30
-    router.disable_ipv6_on_lan()
+    if os.environ.get("PRTA_FORCE_IPV6_OFF") == "1":
+        router.disable_ipv6_on_lan()
+    else:
+        router.assert_ipv6_disabled_on_lan()
 
     gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "10.99.99.1")
     client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")

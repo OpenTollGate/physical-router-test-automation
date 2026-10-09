@@ -65,7 +65,16 @@ class WiFi:
 
     def _ensure_phone_can_connect(self):
         self.router.fix_nodogsplash_dhcp()
-        self.router.disable_ipv6_on_lan()
+        # Assert the router disables v6 itself; forcing it here historically
+        # MASKED package-side regressions of the #148/#160 fix (#783).
+        if os.environ.get("PRTA_FORCE_IPV6_OFF") == "1":
+            log.warning(
+                "PRTA_FORCE_IPV6_OFF=1: force-disabling IPv6 on LAN — legacy mode "
+                "that masks captive-portal v6 regressions (#148/#783)"
+            )
+            self.router.disable_ipv6_on_lan()
+        else:
+            self.router.assert_ipv6_disabled_on_lan()
 
     def _resolve_ssid(self, fallback: str) -> str:
         """Pick the router's captive SSID by matching ANY configured prefix.
