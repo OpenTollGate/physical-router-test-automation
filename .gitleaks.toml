@@ -9,9 +9,16 @@
 useDefault = true
 
 
+# Commit-scoping doctrine for incident entries: the finding is silenced in
+# exactly the commit that introduced it, so the PATH stays armed — a re-added
+# file under the same name trips the scanner again (verified on gitleaks
+# 8.30.1, OpenTollGate/tollgate-module-basic-go#764 / issue #202).
+# mint-health/routers.env carries no entry: its values are formatless
+# (invisible to pattern rules) — the gitignore env-class rules are the
+# primary defense for that file.
 [[allowlists]]
-description = "Historical backup of lab router credentials, committed 2026-07-01 (9571be288) and removed from tracking since. The password is publicly retrievable from git history until the lab routers are verified/rotated — tracked in the audit issue. Path-scoped: no secret material appears at HEAD; the tradeoff (a re-added file under this name would scan silent) is accepted because the filename is a backup artifact that should never exist again."
-paths = ['''(^|/)\.env\.lab-routers-backup$''']
+description = "Incident: historical backup of lab router credentials, committed 2026-07-01 (9571be288) and untracked since (b26cd111). The password is publicly retrievable from git history until the lab routers are verified/rotated — tracked in the audit issue. Commit-scoped to the introduction commit: a re-added .env.lab-routers-backup anywhere flags again."
+commits = ['''9571be288faf9805d6f0218f41100844765dbbe9''']
 
 [[allowlists]]
 description = "Cashu test fixtures: literal fake tokens and base64 demo payloads in unit/API tests and scripts (verify-issue5-v4.mjs TEST_TOKEN, secret-scanner fixtures, portal demoToken, compat-matrix classification strings)."
