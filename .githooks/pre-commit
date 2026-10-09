@@ -33,3 +33,7 @@ if ! shellcheck -s bash -S warning "${staged_sh_files[@]}"; then
 fi
 
 exit 0
+
+# --- Secret scanning (issue #7 class): gitleaks over the staged diff -----------
+# Runs after shellcheck; refuses the commit when a secret pattern is staged.
+"$(dirname "$0")/../scripts/secret-scan.sh"
