@@ -482,6 +482,41 @@ class Router:
         except Exception as e:
             log.warning(f"Could not disable IPv6 on LAN: {e}")
 
+    def ipv6_lan_state(self) -> dict:
+        """Read the router's LAN IPv6-off keys (uci state, one of the axes the
+        v6-captive campaign pins dynamically — see tollgate-module-basic-go
+        #783 and tests/vm-campaign/v6_captive_regression.py)."""
+        out = self.ssh(
+            "for k in dhcp.lan.ra dhcp.lan.dhcpv6 network.lan.ip6assign; do "
+            "uci -q get $k 2>/dev/null || echo MISSING; done",
+            timeout=10,
+        )
+        vals = [line.strip() for line in (out or "").splitlines() if line.strip()]
+        return dict(zip(("ra", "dhcpv6", "ip6assign"), vals))
+
+    def assert_ipv6_disabled_on_lan(self):
+        """Fail unless the ROUTER ITSELF ships IPv6-off on the captive LAN.
+
+        The framework historically called disable_ipv6_on_lan() itself before
+        connecting clients — which masks package-side regressions of the
+        #148/#160 fix: hardware tests keep passing while the router has
+        stopped disabling v6 on its own (the exact blind spot behind
+        tollgate-module-basic-go #783). Assert instead; the force path stays
+        available behind PRTA_FORCE_IPV6_OFF=1 for deliberate old-firmware
+        experiments only."""
+        want = {"ra": "disabled", "dhcpv6": "disabled", "ip6assign": "0"}
+        state = self.ipv6_lan_state()
+        bad = {k: state.get(k, "UNREAD") for k, v in want.items() if state.get(k, "UNREAD") != v}
+        if bad:
+            detail = ", ".join(f"{k}={got!r} (want {want[k]!r})" for k, got in bad.items())
+            raise AssertionError(
+                f"Router does not disable IPv6 on the captive LAN by itself: {detail}. "
+                "This is a captive-portal bypass regression (#148/#160 fix regressed) — "
+                "fix the package, or set PRTA_FORCE_IPV6_OFF=1 to force-disable for an "
+                "old-firmware experiment (masks the regression)."
+            )
+        log.info("Router disables IPv6 on LAN by itself (ra/dhcpv6/ip6assign verified)")
+
     def _use_ssh_for_api(self) -> bool:
         """Whether API calls must go through SSH (ndsRTR blocks port 2121 on LAN)."""
         return bool(self.jump_host) or bool(os.environ.get("TOLLGATE_VIRTUAL_LAB"))
