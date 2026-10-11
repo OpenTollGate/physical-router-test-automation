@@ -51,7 +51,7 @@ on:
         options: [go, rust]
         default: go
       repo:
-        description: "Override artifact repo (e.g. Amperstrand/tollgate-module-basic-go)"
+        description: "Override artifact repo (e.g. OpenTollGate/tollgate-module-basic-go)"
         required: false
         default: ""
       publish:
