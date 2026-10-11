@@ -61,6 +61,12 @@ REMOTE_SCRIPT=""
 KEEPALIVE_TEMPLATE=""
 MANIFEST=""
 PKG_DIR=""
+# Operator-provided TollGate credentials. The package no longer generates an
+# admin/private-WiFi credential (a password the operator never chose is how
+# routers got locked out), so these are staged to the router as root-only files
+# and exported to the package's postinst. File, or the env var, or neither.
+ADMIN_PW_FILE=""
+WIFI_PW_FILE=""
 TMP=""
 
 GATES=""
@@ -128,6 +134,14 @@ options:
                        MAC of the interface that routes to the router)
   --iface IFACE        interface whose MAC is trusted (default: autodetect)
   --password-file FILE read the router password from FILE instead of argv
+  --admin-password-file FILE
+                       read the TollGate ADMIN password from FILE. REQUIRED for
+                       a served admin board: the package no longer generates or
+                       prints one. Without it the package refuses to serve the
+                       board (fail closed). Env: TOLLGATE_ADMIN_PASSWORD.
+  --wifi-password-file FILE
+                       read the private-WiFi passphrase from FILE. Env:
+                       TOLLGATE_PRIVATE_WIFI_PASSWORD.
   --report FILE        write the machine-readable report here
                        (default: ./offline-install-report.json)
   --dry-run            laptop-side checks + print the ordered plan; touches nothing
@@ -145,6 +159,8 @@ while [ $# -gt 0 ]; do
         --trust-mac) TRUST_MAC="$2"; shift 2 ;;
         --iface) IFACE="$2"; shift 2 ;;
         --password-file) PASSWORD_FILE="$2"; shift 2 ;;
+        --admin-password-file) ADMIN_PW_FILE="$2"; shift 2 ;;
+        --wifi-password-file) WIFI_PW_FILE="$2"; shift 2 ;;
         --report) REPORT_OUT="$2"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         --version) echo "install-offline.sh $TGOFFLINE_VERSION"; exit 0 ;;
@@ -167,6 +183,22 @@ fi
 [ -n "$PASSWORD" ] || [ -n "$HARNESS_ROOT" ] || {
     usage >&2; echo "the router password is required (argv or --password-file)" >&2; exit 2
 }
+# The operator's TollGate admin/private-WiFi credentials (env or file). The
+# package no longer generates one, so a missing admin password means the board
+# is refused; warn loudly rather than install a boardless router silently.
+ADMIN_PW="${TOLLGATE_ADMIN_PASSWORD:-}"
+if [ -n "$ADMIN_PW_FILE" ]; then
+    [ -r "$ADMIN_PW_FILE" ] || { echo "admin password file not readable: $ADMIN_PW_FILE" >&2; exit 2; }
+    ADMIN_PW="$(cat "$ADMIN_PW_FILE")"
+fi
+WIFI_PW="${TOLLGATE_PRIVATE_WIFI_PASSWORD:-}"
+if [ -n "$WIFI_PW_FILE" ]; then
+    [ -r "$WIFI_PW_FILE" ] || { echo "wifi password file not readable: $WIFI_PW_FILE" >&2; exit 2; }
+    WIFI_PW="$(cat "$WIFI_PW_FILE")"
+fi
+if [ -n "$ADMIN_PW" ] && [ "${#ADMIN_PW}" -lt 8 ]; then
+    echo "the TollGate admin password must be at least 8 characters" >&2; exit 2
+fi
 BUNDLE_DIR="$(cd "$BUNDLE_DIR" && pwd)" || { echo "no such bundle directory" >&2; exit 2; }
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/tgoffline.XXXXXX")" || exit 2
 GATES="$TMP/gates"; : > "$GATES"
@@ -400,6 +432,36 @@ if ! rssh_stdin "$TMP/seeded/99z-mgmt-keepalive" "cat > '$(RP "$STAGE")'/99z-mgm
 fi
 gate_pass keepalive_staged "staged $STAGE/99z-mgmt-keepalive over an ssh stdin redirect (no scp)"
 
+# ------------------------------------------------------------------ operator credentials
+# The package refuses to serve the admin board without an operator-chosen admin
+# password (it never generates one). Stage the values as ROOT-ONLY files on the
+# router — never argv, where `ps` on the router would expose them — and never
+# echo them. install-router.sh reads them into the install environment.
+if [ -n "$ADMIN_PW" ]; then
+    printf '%s' "$ADMIN_PW" > "$TMP/admin-pw"; chmod 600 "$TMP/admin-pw"
+    if ! rssh_stdin "$TMP/admin-pw" "cat > '$(RP "$STAGE")'/tollgate-admin-password && chmod 600 '$(RP "$STAGE")'/tollgate-admin-password"; then
+        gate_fail staged_admin_password "staging the TollGate admin password failed"
+        echo "REFUSED(10): staging the TollGate admin password failed." >&2
+        exit 10
+    fi
+    rm -f "$TMP/admin-pw"
+    gate_pass staged_admin_password "operator admin password staged root-only, not echoed"
+else
+    gate_info staged_admin_password "no admin password provided — the package will REFUSE to serve the admin board"
+    echo "WARNING: no TollGate admin password provided (--admin-password-file / TOLLGATE_ADMIN_PASSWORD)."
+    echo "         The package no longer generates one, so the admin board will NOT be served."
+fi
+if [ -n "$WIFI_PW" ]; then
+    printf '%s' "$WIFI_PW" > "$TMP/wifi-pw"; chmod 600 "$TMP/wifi-pw"
+    if ! rssh_stdin "$TMP/wifi-pw" "cat > '$(RP "$STAGE")'/tollgate-wifi-password && chmod 600 '$(RP "$STAGE")'/tollgate-wifi-password"; then
+        gate_fail staged_wifi_password "staging the private-WiFi password failed"
+        echo "REFUSED(10): staging the private-WiFi password failed." >&2
+        exit 10
+    fi
+    rm -f "$TMP/wifi-pw"
+    gate_pass staged_wifi_password "private-WiFi passphrase staged root-only, not echoed"
+fi
+
 # ------------------------------------------------------------------ 2. stage the closure
 echo ""
 echo "=== (2) stage the bundle contents (ssh stdin redirect) ==="
@@ -433,6 +495,10 @@ remote_out="$(rssh "sh '$(RP "$STAGE")'/install-router.sh --staging-dir '$STAGE'
 remote_rc=$?
 printf '%s\n' "$remote_out"
 fact remote_exit_code "$remote_rc"
+
+# The credentials were consumed by the package's postinst while install-router.sh
+# ran; drop the staged copies so a secret does not linger on the router.
+rssh "rm -f '$(RP "$STAGE")'/tollgate-admin-password '$(RP "$STAGE")'/tollgate-wifi-password" 2>/dev/null || true
 
 remote_report="$(rssh "cat '$(RP "$STAGE")'/report.json" 2>/dev/null)"
 if ! printf '%s' "$remote_report" | grep -q 'TGOFFLINE-REPORT'; then
