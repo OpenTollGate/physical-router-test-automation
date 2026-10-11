@@ -632,6 +632,28 @@ assert_keepalive_live || {
 }
 gate_pass keepalive_live "trust live immediately before the package install"
 
+# ------------------------------------------------------------------ credentials
+# The package NEVER generates an admin credential any more: a password the
+# operator never chose is how routers got locked out (the installer generated
+# one while the module generated another; the operator held neither). The
+# laptop driver stages the operator's chosen passwords as ROOT-ONLY files in
+# the staging dir (`tollgate-admin-password`, `tollgate-wifi-password`); read +
+# EXPORT them here so only the package's postinst sees them, through the
+# environment — never on a command line, where `ps` would expose them.
+if [ -r "$STAGE/tollgate-admin-password" ]; then
+    TOLLGATE_ADMIN_PASSWORD="$(cat "$STAGE/tollgate-admin-password")"
+    export TOLLGATE_ADMIN_PASSWORD
+fi
+if [ -r "$STAGE/tollgate-wifi-password" ]; then
+    TOLLGATE_PRIVATE_WIFI_PASSWORD="$(cat "$STAGE/tollgate-wifi-password")"
+    export TOLLGATE_PRIVATE_WIFI_PASSWORD
+fi
+if [ -n "${TOLLGATE_ADMIN_PASSWORD:-}" ]; then
+    gate_pass tollgate_admin_password "operator admin password staged (the board uses it; nothing is generated)"
+else
+    gate_info tollgate_admin_password "no operator admin password staged: the package will REFUSE to serve the admin board (it never generates a password). Re-run the driver with --admin-password-file."
+fi
+
 # same `$?`-inside-`if !` accounting as the dependency stage above.
 apk_pkg_rc=0
 apk add --no-network --allow-untrusted --force-missing-repositories "$PKG_APK" || apk_pkg_rc=$?
