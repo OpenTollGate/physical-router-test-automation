@@ -25,11 +25,14 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 PW="${TOLLGATE_LUCI_PASSWORD:-benchpw2026}"
 SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
           -o ConnectTimeout=10 -o PreferredAuthentications=password
-          -o PubkeyAuthentication=no)
+          -o PubkeyAuthentication=no
+          # The package re-addresses the box mid-install; drop a dead
+          # connection fast instead of hanging on TCP.
+          -o ServerAliveInterval=10 -o ServerAliveCountMax=3)
 [ -n "${BENCH_SSH_OPTS:-}" ] && SSH_OPTS+=($BENCH_SSH_OPTS)
 
 ROUTER=""; LANE=""; IMAGE=""; PKG=""; NO_FLASH=0; CONFIRM=""
-LOCK="$HOME/.hermes/state/bench.lock"; RESULT=""; STATIC_IP=""
+LOCK="$HOME/.hermes/state/bench.lock"; RESULT=""; STATIC_IP=""; GATEWAY_IFACE="${BENCH_GATEWAY_IFACE:-}"
 
 usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -42,6 +45,7 @@ while [ $# -gt 0 ]; do
     --lock)   LOCK="$2";   shift 2 ;;
     --result) RESULT="$2"; shift 2 ;;
     --static-ip) STATIC_IP="$2"; shift 2 ;;
+    --gateway-iface) GATEWAY_IFACE="$2"; shift 2 ;;
     --no-flash) NO_FLASH=1; shift ;;
     --confirm) CONFIRM="$2"; shift 2 ;;
     -h|--help) usage ;;
@@ -99,6 +103,8 @@ if [ "$NO_FLASH" = 0 ] && [ -n "$IMAGE" ]; then
   scp_r "$IMAGE" /tmp/fw.bin || { json failed skipped skipped 10; exit 10; }
   ssh_r "sysupgrade -n /tmp/fw.bin" >/dev/null 2>&1 || true
   sleep 20
+  # A bench image bakes the LAN IP, so the box comes back at --static-ip.
+  [ -n "$STATIC_IP" ] && ROUTER="$STATIC_IP"
   wait_ssh || { log "router did not come back after flash"; json done skipped skipped 10; exit 10; }
   FLASH=ok
 fi
@@ -110,15 +116,34 @@ if [ -n "$PKG" ]; then
   case "$LANE" in
     24/ipk) ssh_r "TOLLGATE_ADMIN_PASSWORD='$PW' opkg install --force-reinstall /tmp/pkg.pkg" ;;
     25/apk|otg) ssh_r "apk add --allow-untrusted --force-overwrite /tmp/pkg.pkg" ;;
-  esac >/dev/null 2>&1 && INSTALL=ok || INSTALL=failed
+  esac >/dev/null 2>&1 || true
+fi
+
+# The package re-addresses the box on install; rediscover it as the .1 of
+# the bench link's subnet (the box is the DHCP server/gateway there).
+if [ -n "$GATEWAY_IFACE" ]; then
+  net="$(ip -o -4 addr show dev "$GATEWAY_IFACE" 2>/dev/null | awk '{print $4}' | head -1)"
+  base="$(printf '%s' "$net" | cut -d/ -f1 | cut -d. -f1-3)"
+  [ -n "$base" ] && { ROUTER="$base.1"; log "rediscovered router at $ROUTER (bench link $GATEWAY_IFACE)"; }
+fi
+
+# Verify the install on the (possibly re-addressed) box: the SSH exit above
+# is unreliable because the package re-addresses mid-install.
+if [ -n "$PKG" ] && [ "$INSTALL" != "scp_failed" ]; then
+  if ssh_r "apk info -e tollgate-wrt >/dev/null 2>&1 || opkg list-installed 2>/dev/null | grep -q '^tollgate-wrt'" 2>/dev/null; then
+    INSTALL=ok
+  else
+    INSTALL=failed
+  fi
 fi
 
 # ── 2b. pin a stable LAN IP (the package re-addresses the box on install) ──
 if [ -n "$STATIC_IP" ]; then
   log "pinning LAN to $STATIC_IP"
-  ssh_r "uci set network.lan.ipaddr=$STATIC_IP; uci set network.lan.netmask=255.255.255.0; uci commit network" >/dev/null 2>&1 || true
-  ssh_r "/etc/init.d/network reload" >/dev/null 2>&1 || true
-  sleep 8
+  # The cabled port is not always in br-lan (e.g. the TollGate admin path is
+  # br-private); pin whichever section owns a PHY-backed bridge port.
+  ssh_r "ip=$STATIC_IP; sec=''; for s in lan private; do d=\$(uci get network.\$s.device 2>/dev/null) || continue; for p in \$(ls /sys/class/net/\$d/brif 2>/dev/null); do [ -e /sys/class/net/\$p/device ] && { sec=\$s; break 2; }; done; done; sec=\${sec:-lan}; uci set network.\$sec.ipaddr=\$ip; uci set network.\$sec.netmask=255.255.255.0; uci commit network; echo pinned network.\$sec.ipaddr=\$ip; /etc/init.d/network reload" >/dev/null 2>&1 || true
+  sleep 10
   ROUTER="$STATIC_IP"
   wait_ssh || { log "router not reachable at $STATIC_IP after pin"; json "$FLASH" "$INSTALL" ip_pin_failed 20; exit 20; }
 fi
