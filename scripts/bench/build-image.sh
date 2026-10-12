@@ -2,12 +2,11 @@
 # build-image.sh <LAN_IP> [PROFILE] [OUTNAME] [IMAGEBUILDER_DIR]
 #
 # Build a bench lab image with the OpenWrt ImageBuilder. It bakes:
-#   * a fixed LAN IP (so the box is reachable at a known address after a flash),
-#   * the documented bench root password (so the SSH cycle needs no console),
-#   * radios OFF by default  (a late /etc/rc.local hook, so it survives the
-#     wifi config being generated later in boot — the uci-defaults run too early),
+#   * a fixed LAN IP (applied by /etc/rc.local to the bridge that owns the
+#     physical port — br-lan vs br-private differs per board),
+#   * the documented bench root password (SSH cycle needs no console),
+#   * radios OFF by default (same late rc.local hook),
 #   * socat (the serial-into-Linux fallback's transport tool).
-#
 # One image per lane (the LAN IP differs by lane/board).
 set -euo pipefail
 LAN_IP="${1:?usage: build-image.sh <LAN_IP> [PROFILE] [OUTNAME] [IB_DIR]}"
@@ -22,15 +21,13 @@ rm -rf files
 mkdir -p files/etc/uci-defaults
 cp -r "$HERE/image-files/." files/
 
-cat > files/etc/uci-defaults/99-bench-lab <<EOF
+# Only the root password here (the IP is applied late by rc.local).
+cat > files/etc/uci-defaults/99-bench-lab <<'EOF'
 #!/bin/sh
-# Bench lab defaults: fixed LAN IP + documented root password.
-uci set network.lan.ipaddr=$LAN_IP
-uci set network.lan.netmask=255.255.255.0
-uci commit network
 printf '%s\n' 'benchpw2026' 'benchpw2026' | passwd root >/dev/null 2>&1
 exit 0
 EOF
+printf '%s\n' "$LAN_IP" > files/etc/bench-lan-ip
 chmod +x files/etc/uci-defaults/99-bench-lab files/etc/rc.local
 
 echo "=== building $PROFILE lan=$LAN_IP ==="
