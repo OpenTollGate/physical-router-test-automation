@@ -25,7 +25,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 PW="${TOLLGATE_LUCI_PASSWORD:-benchpw2026}"
 SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
           -o ConnectTimeout=10 -o PreferredAuthentications=password
-          -o PubkeyAuthentication=no)
+          -o PubkeyAuthentication=no
+          # The package re-addresses the box mid-install; drop a dead
+          # connection fast instead of hanging on TCP.
+          -o ServerAliveInterval=10 -o ServerAliveCountMax=3)
 [ -n "${BENCH_SSH_OPTS:-}" ] && SSH_OPTS+=($BENCH_SSH_OPTS)
 
 ROUTER=""; LANE=""; IMAGE=""; PKG=""; NO_FLASH=0; CONFIRM=""
