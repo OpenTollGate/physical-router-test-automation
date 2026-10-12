@@ -113,7 +113,7 @@ if [ -n "$PKG" ]; then
   case "$LANE" in
     24/ipk) ssh_r "TOLLGATE_ADMIN_PASSWORD='$PW' opkg install --force-reinstall /tmp/pkg.pkg" ;;
     25/apk|otg) ssh_r "apk add --allow-untrusted --force-overwrite /tmp/pkg.pkg" ;;
-  esac >/dev/null 2>&1 && INSTALL=ok || INSTALL=failed
+  esac >/dev/null 2>&1 || true
 fi
 
 # The package re-addresses the box on install; rediscover it as the .1 of
@@ -122,6 +122,16 @@ if [ -n "$GATEWAY_IFACE" ]; then
   net="$(ip -o -4 addr show dev "$GATEWAY_IFACE" 2>/dev/null | awk '{print $4}' | head -1)"
   base="$(printf '%s' "$net" | cut -d/ -f1 | cut -d. -f1-3)"
   [ -n "$base" ] && { ROUTER="$base.1"; log "rediscovered router at $ROUTER (bench link $GATEWAY_IFACE)"; }
+fi
+
+# Verify the install on the (possibly re-addressed) box: the SSH exit above
+# is unreliable because the package re-addresses mid-install.
+if [ -n "$PKG" ] && [ "$INSTALL" != "scp_failed" ]; then
+  if ssh_r "apk info -e tollgate-wrt >/dev/null 2>&1 || opkg list-installed 2>/dev/null | grep -q '^tollgate-wrt'" 2>/dev/null; then
+    INSTALL=ok
+  else
+    INSTALL=failed
+  fi
 fi
 
 # ── 2b. pin a stable LAN IP (the package re-addresses the box on install) ──
