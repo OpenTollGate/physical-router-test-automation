@@ -29,7 +29,7 @@ SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
 [ -n "${BENCH_SSH_OPTS:-}" ] && SSH_OPTS+=($BENCH_SSH_OPTS)
 
 ROUTER=""; LANE=""; IMAGE=""; PKG=""; NO_FLASH=0; CONFIRM=""
-LOCK="$HOME/.hermes/state/bench.lock"; RESULT=""; STATIC_IP=""
+LOCK="$HOME/.hermes/state/bench.lock"; RESULT=""; STATIC_IP=""; GATEWAY_IFACE="${BENCH_GATEWAY_IFACE:-}"
 
 usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -42,6 +42,7 @@ while [ $# -gt 0 ]; do
     --lock)   LOCK="$2";   shift 2 ;;
     --result) RESULT="$2"; shift 2 ;;
     --static-ip) STATIC_IP="$2"; shift 2 ;;
+    --gateway-iface) GATEWAY_IFACE="$2"; shift 2 ;;
     --no-flash) NO_FLASH=1; shift ;;
     --confirm) CONFIRM="$2"; shift 2 ;;
     -h|--help) usage ;;
@@ -113,6 +114,14 @@ if [ -n "$PKG" ]; then
     24/ipk) ssh_r "TOLLGATE_ADMIN_PASSWORD='$PW' opkg install --force-reinstall /tmp/pkg.pkg" ;;
     25/apk|otg) ssh_r "apk add --allow-untrusted --force-overwrite /tmp/pkg.pkg" ;;
   esac >/dev/null 2>&1 && INSTALL=ok || INSTALL=failed
+fi
+
+# The package re-addresses the box on install; rediscover it as the .1 of
+# the bench link's subnet (the box is the DHCP server/gateway there).
+if [ -n "$GATEWAY_IFACE" ]; then
+  net="$(ip -o -4 addr show dev "$GATEWAY_IFACE" 2>/dev/null | awk '{print $4}' | head -1)"
+  base="$(printf '%s' "$net" | cut -d/ -f1 | cut -d. -f1-3)"
+  [ -n "$base" ] && { ROUTER="$base.1"; log "rediscovered router at $ROUTER (bench link $GATEWAY_IFACE)"; }
 fi
 
 # ── 2b. pin a stable LAN IP (the package re-addresses the box on install) ──
