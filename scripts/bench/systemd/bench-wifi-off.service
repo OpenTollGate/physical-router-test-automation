@@ -1,0 +1,9 @@
+[Unit]
+Description=Bench idle WiFi-off watchdog (radios OFF whenever the bench is idle)
+Documentation=https://github.com/OpenTollGate/physical-router-test-automation
+
+[Service]
+Type=oneshot
+# BENCH_ROUTERS / TOLLGATE_LUCI_PASSWORD / BENCH_LOCK come from this env file.
+EnvironmentFile=-%h/.hermes/state/bench-watchdog.env
+ExecStart=%h/.hermes/scripts/bench-wifi-off-watchdog.sh

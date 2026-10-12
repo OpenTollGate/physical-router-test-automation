@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically assert bench routers have their WiFi APs OFF while idle
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
