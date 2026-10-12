@@ -37,10 +37,12 @@ for b64 in "${LANES[@]}"; do
   router="$(printf '%s' "$row" | jq -r .router)"
   image="$(printf '%s' "$row" | jq -r '.image // empty')"
   pkg="$(printf '%s' "$row" | jq -r '.pkg // empty')"
+  static_ip="$(printf '%s' "$row" | jq -r '.static_ip // empty')"
 
   args=(--router "$router" --lane "$lane")
   [ -n "$image" ] && args+=(--image "$image" --confirm WIPE)
   [ -n "$pkg" ] && args+=(--pkg "$pkg")
+  [ -n "$static_ip" ] && args+=(--static-ip "$static_ip")
   log="$(mktemp)"; resf="$(mktemp)"
 
   echo "[bench-lanes] lane=$lane router=$router" >&2

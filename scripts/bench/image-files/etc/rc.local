@@ -1,0 +1,14 @@
+#!/bin/sh
+# /etc/rc.local — runs late in boot, after the wireless config is generated.
+# Bench lab rule: radios stay OFF until a run enables them (the idle watchdog
+# re-asserts off). This is the reliable hook; the uci-defaults run too early to
+# see the wifi-device sections.
+for r in $(uci show wireless 2>/dev/null | sed -n "s/^\(wireless\.[^.]*\)\.=wifi-device$/\1/p"); do
+	uci set "$r.disabled=1"
+done
+for i in $(uci show wireless 2>/dev/null | sed -n "s/^\(wireless\.[^.]*\)\.=wifi-iface$/\1/p"); do
+	uci set "$i.disabled=1"
+done
+uci commit wireless
+wifi down 2>/dev/null || true
+exit 0

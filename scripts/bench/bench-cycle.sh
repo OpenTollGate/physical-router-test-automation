@@ -13,7 +13,7 @@
 # Usage:
 #   bench-cycle.sh --router IP --lane 24/ipk|25/apk|otg \
 #       [--image FILE] [--pkg FILE] [--no-flash] [--confirm WIPE] \
-#       [--lock FILE] [--result FILE]
+#       [--static-ip IP] [--lock FILE] [--result FILE]
 #
 # Env:  TOLLGATE_LUCI_PASSWORD  (default: benchpw2026)
 #       BENCH_SSH_OPTS          (extra ssh opts)
@@ -29,7 +29,7 @@ SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
 [ -n "${BENCH_SSH_OPTS:-}" ] && SSH_OPTS+=($BENCH_SSH_OPTS)
 
 ROUTER=""; LANE=""; IMAGE=""; PKG=""; NO_FLASH=0; CONFIRM=""
-LOCK="$HOME/.hermes/state/bench.lock"; RESULT=""
+LOCK="$HOME/.hermes/state/bench.lock"; RESULT=""; STATIC_IP=""
 
 usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -41,6 +41,7 @@ while [ $# -gt 0 ]; do
     --pkg)    PKG="$2";    shift 2 ;;
     --lock)   LOCK="$2";   shift 2 ;;
     --result) RESULT="$2"; shift 2 ;;
+    --static-ip) STATIC_IP="$2"; shift 2 ;;
     --no-flash) NO_FLASH=1; shift ;;
     --confirm) CONFIRM="$2"; shift 2 ;;
     -h|--help) usage ;;
@@ -110,6 +111,16 @@ if [ -n "$PKG" ]; then
     24/ipk) ssh_r "TOLLGATE_ADMIN_PASSWORD='$PW' opkg install --force-reinstall /tmp/pkg.pkg" ;;
     25/apk|otg) ssh_r "apk add --allow-untrusted --force-overwrite /tmp/pkg.pkg" ;;
   esac >/dev/null 2>&1 && INSTALL=ok || INSTALL=failed
+fi
+
+# ── 2b. pin a stable LAN IP (the package re-addresses the box on install) ──
+if [ -n "$STATIC_IP" ]; then
+  log "pinning LAN to $STATIC_IP"
+  ssh_r "uci set network.lan.ipaddr=$STATIC_IP; uci set network.lan.netmask=255.255.255.0; uci commit network" >/dev/null 2>&1 || true
+  ssh_r "/etc/init.d/network reload" >/dev/null 2>&1 || true
+  sleep 8
+  ROUTER="$STATIC_IP"
+  wait_ssh || { log "router not reachable at $STATIC_IP after pin"; json "$FLASH" "$INSTALL" ip_pin_failed 20; exit 20; }
 fi
 
 # ── 3. smoke ────────────────────────────────────────────────────────────────
