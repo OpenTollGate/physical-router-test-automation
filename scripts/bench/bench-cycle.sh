@@ -116,9 +116,10 @@ fi
 # ── 2b. pin a stable LAN IP (the package re-addresses the box on install) ──
 if [ -n "$STATIC_IP" ]; then
   log "pinning LAN to $STATIC_IP"
-  ssh_r "uci set network.lan.ipaddr=$STATIC_IP; uci set network.lan.netmask=255.255.255.0; uci commit network" >/dev/null 2>&1 || true
-  ssh_r "/etc/init.d/network reload" >/dev/null 2>&1 || true
-  sleep 8
+  # The cabled port is not always in br-lan (e.g. the TollGate admin path is
+  # br-private); pin whichever section owns a PHY-backed bridge port.
+  ssh_r "ip=$STATIC_IP; sec=''; for s in lan private; do d=\$(uci get network.\$s.device 2>/dev/null) || continue; for p in \$(ls /sys/class/net/\$d/brif 2>/dev/null); do [ -e /sys/class/net/\$p/device ] && { sec=\$s; break 2; }; done; done; sec=\${sec:-lan}; uci set network.\$sec.ipaddr=\$ip; uci set network.\$sec.netmask=255.255.255.0; uci commit network; echo pinned network.\$sec.ipaddr=\$ip; /etc/init.d/network reload" >/dev/null 2>&1 || true
+  sleep 10
   ROUTER="$STATIC_IP"
   wait_ssh || { log "router not reachable at $STATIC_IP after pin"; json "$FLASH" "$INSTALL" ip_pin_failed 20; exit 20; }
 fi
