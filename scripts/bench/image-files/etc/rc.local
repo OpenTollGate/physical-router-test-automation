@@ -18,6 +18,8 @@ if [ -n "$IP" ]; then
 	uci set network.$sec.ipaddr=$IP
 	uci set network.$sec.netmask=255.255.255.0
 	uci commit network
+	# The uci change alone does not move the running interface; apply it now.
+	/etc/init.d/network reload >/dev/null 2>&1
 fi
 
 for r in $(uci show wireless 2>/dev/null | sed -n "s/^\(wireless\.[^.]*\)\.=wifi-device$/\1/p"); do
