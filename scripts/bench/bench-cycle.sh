@@ -99,6 +99,8 @@ if [ "$NO_FLASH" = 0 ] && [ -n "$IMAGE" ]; then
   scp_r "$IMAGE" /tmp/fw.bin || { json failed skipped skipped 10; exit 10; }
   ssh_r "sysupgrade -n /tmp/fw.bin" >/dev/null 2>&1 || true
   sleep 20
+  # A bench image bakes the LAN IP, so the box comes back at --static-ip.
+  [ -n "$STATIC_IP" ] && ROUTER="$STATIC_IP"
   wait_ssh || { log "router did not come back after flash"; json done skipped skipped 10; exit 10; }
   FLASH=ok
 fi
