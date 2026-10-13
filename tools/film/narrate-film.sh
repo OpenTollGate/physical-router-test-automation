@@ -18,6 +18,7 @@
 #   TTS_ENGINE    say | kokoro | espeak (default: say on macOS, kokoro elsewhere)
 #   T0_OFFSET_MS  recording-start anchor correction (default 1500)
 #   RATE_CLAMP    max time-stretch factor (default 1.45)
+#   NARRATION_GAP silence kept between two spoken lines, seconds (default 0.25)
 #   KOKORO_BIN    kokoro command (default: kokoro-tts on PATH; bare checkouts
 #                 set it to tools/kokoro-tts.py with kokoro-onnx on PATH)
 #   KOKORO_MODEL  model path, passed through to kokoro-tts.py
@@ -29,6 +30,7 @@ OUT=${3:?mp4-out required}
 VOICE=${4:-}
 T0_OFFSET_MS=${T0_OFFSET_MS:-1500}
 RATE_CLAMP=${RATE_CLAMP:-1.45}
+NARRATION_GAP=${NARRATION_GAP:-0.25}
 TTS_ENGINE=${TTS_ENGINE:-$( [ "$(uname -s)" = Darwin ] && echo say || echo kokoro )}
 KOKORO_BIN=${KOKORO_BIN:-kokoro-tts}
 WORK=$(mktemp -d /tmp/narrate-film.XXXXXX)
@@ -65,16 +67,23 @@ synth() {
 case "$TTS_ENGINE" in say) RAWEXT=aiff ;; *) RAWEXT=wav ;; esac
 echo "==> film: ${DUR}s · engine: $TTS_ENGINE · voice: ${VOICE:-default}"
 
-python3 - "$TL" "$T0_OFFSET_MS" > "$WORK/plan.txt" <<'PY'
+python3 - "$TL" "$T0_OFFSET_MS" "$NARRATION_GAP" > "$WORK/plan.txt" <<'PY'
 import json, sys
 tl = json.load(open(sys.argv[1]))
 t0 = float(sys.argv[2])
-for e in tl["entries"]:
-    if not e.get("say"):
-        continue
-    start = max(0, e["start"] - t0) / 1000.0
-    end = min(e.get("end", e["start"] + 4000), 10**9) / 1000.0
-    window = max(1.0, end - start - 0.3)
+gap = float(sys.argv[3])
+spoken = [e for e in tl["entries"] if e.get("say")]
+for i, e in enumerate(spoken):
+    start = max(0.0, e["start"] - t0) / 1000.0
+    card_end = min(e.get("end", e["start"] + 4000), 10**9)
+    # Never let a line run into the next line: two voices overlapping is the
+    # failure this clamps away, whatever the timeline says. The window is the
+    # smaller of the card's spoken span and the gap to the next line's start.
+    window = max(0.0, (card_end - t0) / 1000.0 - start)
+    if i + 1 < len(spoken):
+        next_start = max(0.0, spoken[i + 1]["start"] - t0) / 1000.0
+        window = min(window, next_start - start - gap)
+    window = max(0.3, window)
     print(f"{start:.3f}\t{window:.3f}\t{e['say']}")
 PY
 

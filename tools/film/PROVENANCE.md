@@ -6,8 +6,8 @@ project-agnostic methodology repository for the film practice.
 
 | File | Origin | Pin |
 |---|---|---|
-| `narrate-film.sh` | `tools/narrate-film.sh` | `23c0660` |
-| `kokoro-tts.py` | `tools/kokoro-tts.py` | `23c0660` |
+| `narrate-film.sh` | `tools/narrate-film.sh` | `8c2a618` |
+| `kokoro-tts.py` | `tools/kokoro-tts.py` | `8c2a618` |
 
 Both files are generic; this repository holds a copy so the narration lane
 works without a second checkout.
