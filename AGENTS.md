@@ -1571,7 +1571,7 @@ Operational notes:
 
 ## AI Agent Rules
 
-- **Bug reports filed by AI agents must go to the Amperstrand fork only** ([Amperstrand/tollgate-module-basic-go](https://github.com/Amperstrand/tollgate-module-basic-go)), NOT the upstream OpenTollGate repo. This avoids noise for upstream maintainers. Filing on OpenTollGate is acceptable only when a human explicitly requests it.
+- **Bug reports filed by AI agents go to the upstream repo** ([OpenTollGate/tollgate-module-basic-go](https://github.com/OpenTollGate/tollgate-module-basic-go)). The former working fork (`Amperstrand/tollgate-module-basic-go`) was archived on 2026-10-11 after all content was verified merged upstream — its issue tracker is read-only, so filing there is no longer possible. Historical fork issue numbers (#1–#108) predate the upstream numbering and must not be conflated with it.
 - AI agents should not review PR #86 or ask @c0brador to merge it.
 
 ## Security Notes

@@ -653,7 +653,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--commit", default=None)
         p.add_argument("--backend", default="go", choices=list(BACKEND_CHOICES_CLI))
         p.add_argument("--repo", default=None,
-                        help="Override the artifact repo (e.g. Amperstrand/tollgate-module-basic-go for fork branches)")
+                        help="Override the artifact repo (the fork Amperstrand/tollgate-module-basic-go was archived 2026-10-11)")
 
     up = sub.add_parser("up", help="Create/start GCP VM from snapshot")
     common(up)

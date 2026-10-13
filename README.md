@@ -43,7 +43,7 @@ Fire-and-forget testing on an SHC cloud VM. Identical to GCP but uses the SHC pr
 ./scripts/cloud-lab.py submit --pr 42 --backend rust-basic --publish
 
 # Test a fork branch
-./scripts/cloud-lab.py submit --pr 42 --repo Amperstrand/tollgate-module-basic-go
+./scripts/cloud-lab.py submit --pr 42 --repo OpenTollGate/tollgate-module-basic-go
 
 # Check run status
 ./scripts/cloud-lab.py status-run --run-id <run-id>
