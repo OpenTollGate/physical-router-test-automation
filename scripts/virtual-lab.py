@@ -731,6 +731,8 @@ packages:
   - curl
   - iputils-ping
   - iproute2
+  - chromium
+  - python3-pip
 ssh_authorized_keys:
   - $pubkey
 write_files:
@@ -774,6 +776,8 @@ write_files:
 runcmd:
   - systemctl enable netplan-generate-boot.service
   - systemctl restart ssh
+  - pip3 install --break-system-packages playwright
+  - playwright install chromium --with-deps
 UD
   cat > meta-data <<MD
 instance-id: debian-client-local-01
@@ -1693,7 +1697,8 @@ def build_parser() -> argparse.ArgumentParser:
                                   help="Run the Debian client with QEMU -snapshot: writes are discarded "
                                        "on stop-poc, guaranteeing a pristine client per cycle. Requires an "
                                        "already-provisioned overlay (provision first without this flag); "
-                                       "provision_debian changes (playwright/chromium) will not persist.")
+                                       "post-boot provision-debian changes will not persist, but the "
+                                       "NoCloud seed bakes playwright/chromium into fresh overlays.")
     _ = start_parser.add_argument("--net-id", type=int, default=None, help="Rebind the lab to 10.99.N.0/24 with suffixed link names (dual-OS lanes run concurrently)")
     start_parser.set_defaults(func=start_poc)
 
