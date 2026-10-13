@@ -839,6 +839,12 @@ def install_package(args: argparse.Namespace) -> int:
         )
         return 1
 
+    ext = name.rsplit(".", 1)[-1]
+    # Remote staging name KEEPS the extension: opkg (like apk3, measured
+    # 2026-10-13 re-soak) refuses extensionless local files — "Unknown
+    # package /tmp/lane-pkg" — so the opkg lane broke with a bare name.
+    remote_pkg = f"/tmp/tollgate-wrt-lane.{ext}"
+
     # Stage the artifact on the lab host (no-op when running host-local).
     stage = (
         "set -eu\n"
@@ -877,7 +883,7 @@ pkg="$workdir/images/packages/{quoted_name}"
 vm={POC_OPENWRT_IP}
 
 up() {{
-  sshpass -p {pwd} ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@$vm" "$1"
+  sshpass -p {pwd} ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 "root@$vm" "$1"
 }}
 
 if ! up 'echo ok' >/dev/null 2>&1; then
@@ -885,23 +891,23 @@ if ! up 'echo ok' >/dev/null 2>&1; then
   exit 1
 fi
 
-sshpass -p {pwd} scp -O -o StrictHostKeyChecking=no "$pkg" "root@$vm:/tmp/lane-pkg" \\
+sshpass -p {pwd} scp -O -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$pkg" "root@$vm:{remote_pkg}" \\
   || {{ printf 'install-package: copying the artifact into the VM failed\\n' >&2; exit 1; }}
 
 printf 'install-package: installing %s (manager auto-detected)\\n' {quoted_name}
 if ! up 'command -v apk >/dev/null 2>&1'; then
   # 24.10 generation: opkg. A locally-installed previous copy must go first,
   # or opkg refuses to overwrite it.
-  up 'opkg remove tollgate-wrt 2>/dev/null || true; opkg install /tmp/lane-pkg' \\
+  up 'opkg remove tollgate-wrt 2>/dev/null || true; opkg install {remote_pkg}' \\
     || {{ printf 'install-package: opkg install failed\\n' >&2; exit 1; }}
 else
   # 25.12 generation: apk. --allow-untrusted matches the lane's artifact
   # provenance (built by us, not signed by the OpenWrt release key).
-  up 'ext=${{pkg##*.}}; cp /tmp/lane-pkg /tmp/tollgate-wrt-artifact.$ext; apk add --allow-untrusted /tmp/tollgate-wrt-artifact.$ext' \\
+  up 'apk add --allow-untrusted {remote_pkg}' \\
     || {{ printf 'install-package: apk add failed\\n' >&2; exit 1; }}
 fi
 
-up 'rm -f /tmp/lane-pkg /tmp/tollgate-wrt-artifact.*; /etc/init.d/tollgate-wrt enable >/dev/null 2>&1 || true; /etc/init.d/tollgate-wrt restart' \\
+up 'rm -f {remote_pkg}; /etc/init.d/tollgate-wrt enable >/dev/null 2>&1 || true; /etc/init.d/tollgate-wrt restart' \\
   || {{ printf 'install-package: service restart failed\\n' >&2; exit 1; }}
 
 printf 'install-package: waiting for the backend on :2121...\\n'
