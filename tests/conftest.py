@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import inspect
 import json
 import os
@@ -329,7 +330,7 @@ def router(request, backend):
 
     if os.environ.get("TOLLGATE_VENUE") == "labgrid":
         from lib.lab_inventory import InventoryError, load_inventory
-        from lib.labgrid_venue import LabgridBenchError, apply_venue_env, bench_for_router
+        from lib.labgrid_venue import LabgridBenchError, apply_venue_env, bench_for_router, venue_mutex
 
         try:
             labgrid_inv = load_inventory()
@@ -338,10 +339,17 @@ def router(request, backend):
             )
         except (InventoryError, LabgridBenchError) as e:
             pytest.exit(f"labgrid venue unavailable: {e}", returncode=4)
-        binding.bench.acquire()
-        request.addfinalizer(binding.bench.release)
+        # Transition invariant (#232): hold the repo file lock AND the place,
+        # so venue sessions exclude legacy Make/pymake sessions on the DUT.
+        phase = request.config.getoption("--lock-phase") or f"labgrid-venue {binding.entry.place}"
+        stack = contextlib.ExitStack()
+        try:
+            stack.enter_context(venue_mutex(binding, phase))
+        except RuntimeError as e:
+            pytest.exit(f"labgrid venue mutex unavailable: {e}", returncode=4)
+        request.addfinalizer(stack.close)
         apply_venue_env(binding.entry)
-        log.info("labgrid venue: acquired place %s", binding.entry.place)
+        log.info("labgrid venue: acquired place %s + hardware lock", binding.entry.place)
 
     host = os.environ.get("TOLLGATE_SSH_HOST") or os.environ.get("ROUTER_IP")
     identity_file = os.environ.get("TOLLGATE_SSH_KEY", "")

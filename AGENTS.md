@@ -1591,6 +1591,7 @@ The Makefile enforces a hardware lock (`hardware.lock`) to prevent concurrent ac
 - `make lock PHASE="description"` creates `hardware.lock` with session info (user, hostname, branch, timestamp, phase)
 - All hardware test targets call `require_hardware_lock` and fail if the lock is missing
 - Python runners (pymake, release-matrix, pytest `--lock-phase`) gate on the **same** `./hardware.lock` via `lib/hardware_lock.py` — the module re-targets `tollgate_lab`'s canonical implementation at the repo-root lock file (its own path derivation points into site-packages when installed non-editably) and its standalone fallback mirrors the Makefile's key-value format
+- The labgrid venue (`TOLLGATE_VENUE=labgrid`) takes **both** mutexes — the place AND `./hardware.lock` — via `lib/labgrid_venue.venue_mutex` (the #232 transition invariant), so venue sessions and legacy Make/pymake sessions exclude each other
 - `make unlock` removes the lock
 - `make force-unlock` force-releases (use with caution)
 - ESP32 boards have separate per-board locks (`esp32/locks/board-a.lock`, etc.)
