@@ -126,7 +126,8 @@ wait_for_vm() {
         # gate the portal is silently dead and every tier fails opaquely.
         ssh -i \$K -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@10.99.99.1 \
         \"[ -s /usr/bin/nodogsplash ] || { echo NDS-BINARY-EMPTY; exit 1; }; ndsctl status >/dev/null 2>&1 || { echo NDSCTL-DEAD; netstat -tln | grep 2050 || true; exit 1; }; curl -s -m 5 http://127.0.0.1:2121/ | head -c 120\""' \
-      2>&1 | tee "$OUT/deploy.log" | tail -4
+      2>&1 | tee "$OUT/deploy.log" | tail -4 \
+      || fail "deploy health gate failed — see $OUT/deploy.log (dead portal / wedged VM class; retry with FRESH_DUT=1)"
   else
     echo "== no ipk at $IPK — falling back to deploy-local-vm.sh (needs VM key auth)"
     ssh -o BatchMode=yes ai-legion \
@@ -159,12 +160,18 @@ run_tier_local() {
   local tier="$1"
   echo "== tier: $tier (virtual, via run-local-tests.sh) ${STORIES:+stories=$STORIES }${PATHS:+paths=$PATHS}"
   local rc=0
+  # Evidence integrity: a tier that dies before pytest writes junit must not
+  # scoop a previous run's file (2026-10-13: week-old junit was presented as
+  # current results). Remove before running; warn when no fresh junit lands.
+  ssh -o BatchMode=yes ai-legion 'sudo rm -f /tmp/local-suite-junit.xml'
   ssh -o BatchMode=yes ai-legion \
     "sudo bash -c 'cd /root/src/physical-router-test-automation && \
      scripts/run-local-tests.sh tests/ -m \"${tier}${PATH_EXPR}\" ${select_args[*]:-}'" \
       2>&1 | tee "$OUT/raw/output-${tier}.log" | tail -3 || rc=1
   ssh -o BatchMode=yes ai-legion 'sudo cat /tmp/local-suite-junit.xml 2>/dev/null' \
       > "$OUT/raw/junit-${tier}.xml" || true
+  [ -s "$OUT/raw/junit-${tier}.xml" ] \
+      || echo "extensive-test: WARNING: no fresh junit for tier '$tier' (died before pytest?)" >&2
   return $rc
 }
 
