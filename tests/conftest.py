@@ -463,6 +463,19 @@ def chain_routers(backend):
         r.close()
 
 
+def _degrade_session_to_skips(request, reason: str) -> None:
+    """Flag the session degraded: router-dependent tests skip with `reason`.
+
+    Loud by contract (issue #138): one session-level error line up front, then
+    named skips — never silence. The milestone-4 outcome gate still converts
+    a skipped `required` test into a FAILED "NOT VERIFIED", so release lanes
+    cannot quietly green themselves through the degraded path.
+    """
+    request.session._tollgate_backend_unreachable_reason = reason
+    log.error("DEGRADED SESSION: %s — router-dependent tests will skip", reason)
+    print(f"\n*** DEGRADED SESSION: {reason} — router-dependent tests will skip ***\n", flush=True)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def deploy_session(request, router, backend):
     if IS_MOCK_MODE:
@@ -509,6 +522,15 @@ def deploy_session(request, router, backend):
         yield
         return
 
+    # Hard-abort only when the operator explicitly asked for a deploy
+    # (--binary / --tollgate-branch / --tollgate-run-id): a requested deploy
+    # that never comes up is a genuine session failure. Otherwise a backend
+    # that is down may be a freshly installed router — exactly the state
+    # install/upgrade suites test — so the session degrades to named skips
+    # instead of dying (issue #138).
+    deploy_requested = bool(binary or tg_branch or tg_run_id)
+    degraded_reason = None
+
     if binary:
         subprocess.run(
             ["bash", os.path.join(SCRIPT_DIR, "scripts", "deploy.sh"), binary, "--restart"],
@@ -539,20 +561,32 @@ def deploy_session(request, router, backend):
     if not no_deploy:
         code = router.api_status("/")
         if code != 200:
-            pytest.exit(f"Backend not reachable at {router.host}:2121 (HTTP {code})", returncode=1)
-
-        router.enable_debug_portal()
-        router.ensure_test_mint()
-        router.replace_mints([TEST_MINT_URL], force=True)
-        for _ in range(60):
-            if router.api_status("/") == 200:
-                break
-            time.sleep(1)
+            if deploy_requested:
+                pytest.exit(f"Backend not reachable at {router.host}:2121 (HTTP {code})", returncode=1)
+            degraded_reason = (
+                f"backend unreachable at {router.host}:2121 (HTTP {code}) — no deploy requested"
+            )
         else:
-            pytest.exit(f"Backend not reachable after test mint setup at {router.host}:2121", returncode=1)
+            router.enable_debug_portal()
+            router.ensure_test_mint()
+            router.replace_mints([TEST_MINT_URL], force=True)
+            for _ in range(60):
+                if router.api_status("/") == 200:
+                    break
+                time.sleep(1)
+            else:
+                if deploy_requested:
+                    pytest.exit(f"Backend not reachable after test mint setup at {router.host}:2121", returncode=1)
+                degraded_reason = (
+                    f"backend unreachable after test mint setup at {router.host}:2121 "
+                    "— no deploy requested"
+                )
 
-        if _is_container_client(request.config) and os.environ.get("TOLLGATE_CLIENT_MAC"):
-            _prepare_container_nds_client(router)
+            if _is_container_client(request.config) and os.environ.get("TOLLGATE_CLIENT_MAC"):
+                _prepare_container_nds_client(router)
+
+    if degraded_reason:
+        _degrade_session_to_skips(request, degraded_reason)
 
     if _is_container_client(request.config) and os.environ.get("TOLLGATE_VIRTUAL_LAB"):
         container_host = os.environ.get("TOLLGATE_CONTAINER_HOST", "")
@@ -577,7 +611,7 @@ def deploy_session(request, router, backend):
         if restore:
             print("\n[deploy] Restoring previous binary")
     finally:
-        if not no_deploy:
+        if not no_deploy and degraded_reason is None:
             router.disable_debug_portal()
         router.close()
 
@@ -814,6 +848,14 @@ def screenshot_raw(adb, results_dir):
 
 
 def pytest_runtest_setup(item):
+    # Degraded session (issue #138): skip router-dependent tests before any
+    # fixture setup — module/session-scoped fixtures (e.g. a module-level
+    # `discovery` fetch) would otherwise run and error against the dead
+    # backend before a function-scoped gate could fire.
+    degraded_reason = getattr(item.session, "_tollgate_backend_unreachable_reason", None)
+    if degraded_reason and "router" in item.fixturenames:
+        pytest.skip(degraded_reason)
+
     backend_type = item.config.getoption("--backend", default=None) or os.environ.get("TOLLGATE_BACKEND", "go")
 
     if "go_only" in item.keywords and backend_type == "rust":
@@ -1214,6 +1256,29 @@ def _auto_portal_video(item, report, results_dir, adb):
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
+
+    # Degraded session (issue #138): the first router-dependent item sets up
+    # its session fixtures in the same phase where deploy_session flags the
+    # backend unreachable, so its setup can fail before the
+    # pytest_runtest_setup gate sees the flag. Re-attribute that failure to
+    # the dead backend. Must run BEFORE the required-gate below so a skipped
+    # required test still becomes NOT VERIFIED.
+    _degraded = getattr(item.session, "_tollgate_backend_unreachable_reason", None)
+    if (
+        _degraded
+        and report.when == "setup"
+        and report.outcome == "failed"
+        and "router" in item.fixturenames
+    ):
+        first_line = str(report.longrepr).splitlines()[0][:300] if report.longrepr else ""
+        report.outcome = "skipped"
+        # Skipped reports must carry the (path, lineno, reason) tuple —
+        # pytest's terminal reporter asserts that shape.
+        report.longrepr = (
+            str(item.fspath),
+            item.location[1] or 0,
+            f"{_degraded} (setup failed against degraded backend: {first_line})",
+        )
 
     # The fail-closed outcome gate: a REQUIRED test that skips is reported
     # as FAILED "NOT VERIFIED" instead — a skipped required check is never
