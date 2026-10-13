@@ -140,11 +140,20 @@ def test_discovery_advertisement_content_type_is_json(router):
 
 def _compare_versions(router, tool: str, left: str, op: str, right: str) -> bool | None:
     if tool == "opkg":
-        out = router.ssh(f"opkg compare-versions '{left}' {op} '{right}' 2>/dev/null; echo RC=$?")
-        # opkg prints 0/1 for false/true and always succeeds
-        if "RC=0" not in out:
-            return None
-        return out.splitlines()[0].strip() == "1"
+        # The operator MUST be quoted: bare `<<` is a shell heredoc, opkg
+        # then reads stdin and exits 255 — the comparator "unavailable"
+        # eternal skip (found on the 2026-10-13 re-soak).
+        out = router.ssh(f"opkg compare-versions '{left}' '{op}' '{right}' 2>/dev/null; echo RC=$?")
+        # OpenWrt's opkg prints NOTHING and encodes the verdict in the exit
+        # status (0=true, 1=false); some builds print 0/1 as well. Accept both.
+        lines = out.splitlines()
+        printed = lines[0].strip() if lines else ""
+        if printed in ("0", "1") and len(lines) > 1:
+            return printed == "1"
+        rc = out.strip().rpartition("RC=")[2].strip()
+        if rc in ("0", "1"):
+            return rc == "0"
+        return None
     # apk-tools 3.x: `apk version -t A B` prints '<', '=', or '>'
     out = router.ssh(f"apk version -t '{left}' '{right}' 2>/dev/null").strip()
     if out not in ("<", "=", ">"):
