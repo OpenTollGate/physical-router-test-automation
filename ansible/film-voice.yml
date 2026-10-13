@@ -1,0 +1,9 @@
+---
+# Provision the offline Kokoro-82M narration backend on the controller, so any
+# test lane can narrate its recording (see docs/film-lane.md).
+#   ansible-playbook -i ansible/inventory.ini ansible/film-voice.yml
+- name: Provision the film voice backend
+  hosts: local
+  gather_facts: true
+  roles:
+    - film_voice

@@ -92,3 +92,7 @@ configs/labgrid/physical-poe-lab.yaml
 # AGENTS.md "Cross-Repository Engineering Ownership"): never authoritative,
 # never committed.
 src/
+
+# Film voice backend — the model and voice pack are fetched, never committed.
+*.onnx
+voices-*.bin
