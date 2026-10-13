@@ -87,3 +87,8 @@ demo/
 # (configs/labgrid/inventory.local.yaml.example is the committed schema)
 configs/labgrid/inventory.local.yaml
 configs/labgrid/physical-poe-lab.yaml
+
+# Untracked convenience checkout of an implementation repo (see
+# AGENTS.md "Cross-Repository Engineering Ownership"): never authoritative,
+# never committed.
+src/
