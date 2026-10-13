@@ -14,12 +14,14 @@ coordinator at all.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
 from dataclasses import dataclass
-from typing import Callable, Mapping
+from typing import Callable, Iterator, Mapping
 
+from lib import hardware_lock
 from lib.lab_inventory import LabInventory, RouterEntry
 
 _RUN_TIMEOUT = 60
@@ -141,3 +143,27 @@ def venue_env(entry: RouterEntry) -> dict[str, str]:
 def apply_venue_env(entry: RouterEntry, environ: Mapping[str, str] = os.environ) -> None:
     for key, value in venue_env(entry).items():
         environ[key] = value
+
+
+@contextlib.contextmanager
+def venue_mutex(binding: "VenueBinding", phase: str) -> Iterator[LabgridBench]:
+    """Transition invariant (#232): a venue session holds BOTH mutexes.
+
+    Legacy participants (Make targets, pymake, release-matrix) take only the
+    repo file lock; foreign labgrid sessions may take only the place. Taking
+    both — file lock first, then place, released in reverse — makes venue
+    and legacy sessions exclude each other, and the fixed order means two
+    PRTA sessions can never wait on each other circularly (they serialize on
+    the cheap local lock before any coordinator round-trip). Shed the
+    file-lock half when #232's exit criteria hold; until then removing it
+    reopens the venue-vs-legacy race on shared DUTs.
+    """
+    hardware_lock.acquire_hardware_lock(phase)
+    try:
+        binding.bench.acquire()
+        try:
+            yield binding.bench
+        finally:
+            binding.bench.release()
+    finally:
+        hardware_lock.release_hardware_lock()
