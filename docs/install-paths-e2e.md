@@ -24,9 +24,9 @@ this document claims a run that did not happen.
 
 ---
 
-## 1. What the two scenarios do
+## 1. What the three scenarios do
 
-Both start from a **freshly flashed** OpenWrt 25.12.x image and end with the same
+Both install scenarios start from a **freshly flashed** OpenWrt 25.12.x image and end with the same
 five gates.  Only the install step differs.
 
 | # | gate | assertion |
@@ -75,6 +75,16 @@ five gates.  Only the install step differs.
 4. `test_b6` **policy parity**: the two snapshot dicts must agree on the policy
    components; the only tolerated difference is the operator *choices*
    (hostname, guest SSID, LN address) — the card's actual claim.
+
+**Scenario U — the apk-era upgrade path** (opt-in via
+`TOLLGATE_UPGRADE_FROM_TAG`): its own fresh flash → install the *older*
+published release → seed operator state (mint list, identities hash, a
+marker under `/etc/tollgate` — the conffiles surface a flash would wipe)
+→ `apk`-upgrade to the release under test → assert the state survived,
+the `#899` uhttpd listener invariant holds on the **upgraded** device,
+services and policy converged → reboot → assert all of it again after
+the new package's uci-defaults have run a second time. This is the
+upgrade surface the legacy fleet only ever covered on the opkg era.
 
 Every run writes `install-paths-evidence.json` (raw outputs, hashes, snapshots,
 the policy pre-flight verdict) next to the pytest temp dir, or to
@@ -326,6 +336,7 @@ restarts the backend — that is not a clean install, and it would invalidate th
 | var | meaning |
 |---|---|
 | `TOLLGATE_FEED_TAG` / `TOLLGATE_FEED_VERSION` | release under test (default `v0.6.0-alpha4-pre17` / `0.6.0_alpha4_pre17`) |
+| `TOLLGATE_UPGRADE_FROM_TAG` / `TOLLGATE_UPGRADE_FROM_VERSION` | scenario U only: the published release the upgrade starts from (unset ⇒ the scenario skips with that reason) |
 | `TOLLGATE_POLICY_TARGET_RELEASE` | release the policy assertion is asserted against (default: `TOLLGATE_FEED_TAG`) |
 | `TOLLGATE_POLICY_MIN_RELEASE` | oldest release that can satisfy the guard assertion (default `v0.6.0-alpha4-pre17`) |
 | `TOLLGATE_POLICY_GUARD_PATH` | the expected nft guard path (default `/etc/nftables.d/31-admin-board-not-guest-reachable.nft`) |
