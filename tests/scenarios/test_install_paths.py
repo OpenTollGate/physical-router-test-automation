@@ -971,6 +971,236 @@ class TestInstallerPath:
         assert diff["policy"] == {"users_to_router": True, "guard_present": True, "guard_drops_br_lan": True}
 
 
+# ---------------------------------------------------------------------------
+# U. the upgrade path (apk-era): older release -> release under test -> reboot
+# ---------------------------------------------------------------------------
+
+#: the published release the upgrade STARTS from — the scenario is opt-in
+#: per release pair (like LN_ADDRESS for scenario B), never a silent default.
+UPGRADE_FROM_TAG = os.environ.get("TOLLGATE_UPGRADE_FROM_TAG", "")
+UPGRADE_FROM_VERSION = os.environ.get("TOLLGATE_UPGRADE_FROM_VERSION", "")
+#: per-release artifact cache, mirroring ARTIFACT_DIR's layout
+ARTIFACT_FROM_DIR = Path(
+    os.environ.get(
+        "TOLLGATE_ARTIFACT_FROM_DIR",
+        Path.home() / ".cache" / "prta-install-paths" / (UPGRADE_FROM_TAG or "unset"),
+    )
+)
+
+
+@pytest.fixture(scope="class")
+def upgrade_from_release(request) -> str:
+    if not UPGRADE_FROM_TAG:
+        pytest.skip(
+            "upgrade scenario is opt-in: set TOLLGATE_UPGRADE_FROM_TAG (and optionally "
+            "TOLLGATE_UPGRADE_FROM_VERSION) to the published release the upgrade starts "
+            "from — e.g. TOLLGATE_UPGRADE_FROM_TAG=v0.6.0-alpha4-pre16"
+        )
+    return UPGRADE_FROM_TAG
+
+
+@pytest.fixture(scope="class")
+def from_artifact(router_arch, package_manager, upgrade_from_release) -> ip.Artifact:
+    """The older release's artifact, verified against its own manifest."""
+    text = ip.http_get(ip.release_asset_url(UPGRADE_FROM_TAG, "SHA256SUMS")).decode("utf-8", "replace")
+    manifest = ip.parse_manifest(text)
+    if not manifest:
+        pytest.fail(f"empty manifest for {UPGRADE_FROM_TAG}")
+    art = ip.select_artifact(
+        manifest, router_arch, package_manager,
+        release_tag=UPGRADE_FROM_TAG, version=UPGRADE_FROM_VERSION,
+    ).require()
+    ARTIFACT_FROM_DIR.mkdir(parents=True, exist_ok=True)
+    target = ARTIFACT_FROM_DIR / art.filename
+    if not target.exists():
+        ip.download(art.url, target)
+    ok, actual = ip.verify_sha256(target, art.sha256)
+    if not ok:
+        pytest.fail(f"{art.filename}: sha256 {actual} != manifest {art.sha256}")
+    HOST_FACTS["upgrade_from"] = {"tag": UPGRADE_FROM_TAG, "filename": art.filename, "sha256": art.sha256}
+    return art
+
+
+class TestUpgradePath:
+    """fresh flash -> OLDER release -> seeded state -> apk upgrade -> gates -> reboot -> gates.
+
+    The upgrade surface the legacy fleet never covered on the apk era: the
+    #899 tear re-arms on upgrade and credential-recovery paths, so the
+    uhttpd listener invariant and the policy state are asserted on the
+    UPGRADED device and again after the post-upgrade reboot (when the new
+    package's uci-defaults run a second time).
+    """
+
+    def test_u00_wallet_gate_then_fresh_flash(self, router_host, package_manager, from_artifact):
+        if not ff.flashing_enabled():
+            pytest.skip(
+                f"flashing disabled: set {ff.FLASH_ENABLE_ENV}=true to run the upgrade "
+                "scenario's fresh-flash cycle (see docs/install-paths-e2e.md)"
+            )
+        balance_out, balance_rc = _ssh(router_host, ff.WALLET_BALANCE_COMMAND, timeout=60)
+        listing_out, _ = _ssh(router_host, ff.ECASH_LISTING_COMMAND, timeout=30)
+        state = ff.parse_probed_wallet_state(balance_out, listing_out, balance_exit_code=balance_rc)
+        if not state.probed:
+            if ALLOW_NONEMPTY_WALLET:
+                pytest.skip("unprobed wallet accepted via TOLLGATE_ALLOW_NONEMPTY_WALLET=1")
+            pytest.fail(f"REFUSING TO FLASH: wallet probe did not answer ({state.summary()})")
+        if not state.empty and not ALLOW_NONEMPTY_WALLET:
+            pytest.fail(f"REFUSING TO FLASH: wallet not empty ({state.summary()}). Drain first: {ff.DRAIN_COMMAND}")
+        image = ff.resolve_image_path(os.environ.get("TOLLGATE_FRESH_FLASH_IMAGE") or None)
+        assert not ff.verify_image(image), "image must be verified before flashing"
+        remote = ff.remote_image_path(os.path.basename(image))
+        _stage_over_scp(router_host, Path(image), remote, timeout=900)
+        cmd = ff.sysupgrade_command(remote)
+        _ssh(router_host, cmd, timeout=30)  # connection drops; expected
+        assert _wait_for_router(router_host), "router did not come back after sysupgrade"
+
+    def test_u01_image_is_fresh(self, router_host, package_manager):
+        release, _ = _ssh(router_host, ip.openwrt_release_command(), timeout=20)
+        assert not ff.fresh_image_ready_violations(release), release
+        installed, _ = _ssh(router_host, ip.package_version_command(package_manager), timeout=30)
+        listing, _ = _ssh(router_host, f"ls {ff.TOLLGATE_DIR} 2>/dev/null", timeout=20)
+        marker, _ = _ssh(router_host, ff.setup_marker_command(), timeout=20)
+        assert not ff.no_tollgate_state_violations(
+            installed, listing, setup_marker_present=bool(marker.strip())
+        ), f"not a fresh image: installed={installed!r} dir={listing!r} marker={marker!r}"
+
+    def test_u10_install_older_release(self, router_host, package_manager, from_artifact, upgrade_from_release):
+        local = ARTIFACT_FROM_DIR / from_artifact.filename
+        remote = f"/tmp/{from_artifact.filename}"
+        subprocess.run(
+            ["sshpass", "-e", "scp", "-O", "-o", "StrictHostKeyChecking=no",
+             "-o", "UserKnownHostsFile=/dev/null", str(local), f"root@{router_host}:{remote}"],
+            capture_output=True, text=True, timeout=600,
+            env={**os.environ, "SSHPASS": os.environ.get("TOLLGATE_SSH_PASSWORD", "")},
+        ).check_returncode()
+        out, rc = _ssh(router_host, ip.install_command("apk", remote), timeout=600)
+        HOST_FACTS["upgrade_from_install"] = {"exit": rc, "tail": out[-500:]}
+        assert rc == 0, f"apk add of the older release failed:\n{out}"
+        time.sleep(10)
+        version = _installed_version(router_host, package_manager)
+        assert not ip.version_violations(version, from_artifact.filename), (
+            f"older release did not install cleanly: version={version!r} vs {from_artifact.filename}"
+        )
+
+    def test_u20_seed_operator_state(self, router_host):
+        """State an operator owns that the upgrade must preserve: the mint
+        list, the identities file, and a marker under /etc/tollgate (the
+        conffiles surface — the flash-vs-upgrade distinction of §6)."""
+        SNAPSHOTS["U_before"] = {
+            "mints": _ssh(
+                router_host,
+                "jq -c '.accepted_mints[].url' /etc/tollgate/config.json 2>/dev/null",
+                timeout=30,
+            )[0],
+            "identities_sha256": _ssh(
+                router_host, "sha256sum /etc/tollgate/identities.json 2>/dev/null | awk '{print $1}'", timeout=30
+            )[0],
+        }
+        _ssh(router_host, "echo ic-upgrade-marker > /etc/tollgate/upgrade-marker", timeout=20)
+        HOST_FACTS["upgrade_state_before"] = dict(SNAPSHOTS["U_before"])
+
+    def test_u30_upgrade_to_release_under_test(self, router_host, package_manager, artifact):
+        local = ARTIFACT_DIR / artifact.filename
+        remote = f"/tmp/{artifact.filename}"
+        subprocess.run(
+            ["sshpass", "-e", "scp", "-O", "-o", "StrictHostKeyChecking=no",
+             "-o", "UserKnownHostsFile=/dev/null", str(local), f"root@{router_host}:{remote}"],
+            capture_output=True, text=True, timeout=600,
+            env={**os.environ, "SSHPASS": os.environ.get("TOLLGATE_SSH_PASSWORD", "")},
+        ).check_returncode()
+        out, rc = _ssh(router_host, ip.install_command("apk", remote), timeout=900)
+        HOST_FACTS["upgrade_install"] = {"exit": rc, "tail": out[-800:]}
+        assert rc == 0, f"apk upgrade to the release under test failed:\n{out}"
+        time.sleep(10)
+        version = _installed_version(router_host, package_manager)
+        assert not ip.version_violations(version, artifact.filename), (
+            f"upgrade did not take: version={version!r} vs {artifact.filename}"
+        )
+
+    def test_u40_upgrade_preserves_operator_state(self, router_host):
+        before = SNAPSHOTS["U_before"]
+        mints_after = _ssh(
+            router_host,
+            "jq -c '.accepted_mints[].url' /etc/tollgate/config.json 2>/dev/null",
+            timeout=30,
+        )[0]
+        identities_after = _ssh(
+            router_host, "sha256sum /etc/tollgate/identities.json 2>/dev/null | awk '{print $1}'", timeout=30
+        )[0]
+        marker, _ = _ssh(router_host, "cat /etc/tollgate/upgrade-marker 2>/dev/null", timeout=20)
+        HOST_FACTS["upgrade_state_after"] = {
+            "mints": mints_after,
+            "identities_sha256": identities_after,
+            "marker_present": bool(marker.strip()),
+        }
+        assert mints_after == before["mints"], (
+            f"accepted_mints changed across the upgrade: {before['mints']} -> {mints_after}"
+        )
+        assert identities_after == before["identities_sha256"], "identities.json changed across the upgrade"
+        assert marker.strip() == "ic-upgrade-marker", "/etc/tollgate content did not survive the upgrade"
+
+    def test_u41_uhttpd_listener_invariant(self, router_host):
+        """The #899 class on the UPGRADE path: no uhttpd section may end the
+        upgrade listenerless (the tear re-armed on upgrades and credential
+        recovery — every section must keep at least one listener)."""
+        sections_out, _ = _ssh(
+            router_host,
+            "uci show uhttpd 2>/dev/null | sed -n 's/^uhttpd\\.\\([^.]*\\)\\..*/\\1/p'",
+            timeout=30,
+        )
+        listening_out, _ = _ssh(
+            router_host,
+            "uci show uhttpd 2>/dev/null | grep -E \"listen_(http|https)=\" "
+            "| sed -n 's/^uhttpd\\.\\([^.]*\\)\\..*/\\1/p'",
+            timeout=30,
+        )
+        sections = set(sections_out.split())
+        bare = sections - set(listening_out.split())
+        HOST_FACTS["upgrade_uhttpd"] = {"sections": sorted(sections), "listenerless": sorted(bare)}
+        assert sections, "uci show uhttpd produced no sections — cannot verify the listener invariant"
+        assert not bare, f"listenerless uhttpd section(s) after upgrade (the #899 tear): {sorted(bare)}"
+
+    def test_u42_services_and_policy(self, router_host):
+        status, _ = _ssh(router_host, "/etc/init.d/tollgate-wrt status 2>/dev/null | head -1", timeout=30)
+        assert "running" in status, f"tollgate-wrt not running after upgrade: {status!r}"
+        codes = _surface_codes(router_host)
+        policy = _capture_policy(router_host)
+        SNAPSHOTS["U"] = {"surfaces": codes, "policy": policy}
+        assert not ip.surface_violations(codes), ip.surface_violations(codes)
+        assert not ip.policy_violations(
+            set(policy["users_to_router_ports"]),
+            guard_present=policy["guard_present"],
+            guard_drops_br_lan=policy["guard_drops_br_lan"],
+            ssh_alive=ip.tcp_probe(router_host, 22, timeout=5),
+            guard_path=GUARD_PATH,
+        ), "policy regressed across the upgrade"
+
+    def test_u50_reboot_then_reassert(self, router_host):
+        before = SNAPSHOTS["U_before"]
+        _ssh(router_host, "sync; reboot", timeout=30)
+        assert _wait_for_router(router_host), "router did not return after the post-upgrade reboot"
+        mints = _ssh(
+            router_host,
+            "jq -c '.accepted_mints[].url' /etc/tollgate/config.json 2>/dev/null",
+            timeout=30,
+        )[0]
+        marker, _ = _ssh(router_host, "cat /etc/tollgate/upgrade-marker 2>/dev/null", timeout=20)
+        status, _ = _ssh(router_host, "/etc/init.d/tollgate-wrt status 2>/dev/null | head -1", timeout=30)
+        assert mints == before["mints"], "accepted_mints changed across the post-upgrade reboot"
+        assert marker.strip() == "ic-upgrade-marker", "/etc/tollgate content lost across the reboot"
+        assert "running" in status, f"tollgate-wrt did not auto-start after the reboot: {status!r}"
+        codes = _surface_codes(router_host)
+        policy = _capture_policy(router_host)
+        assert not ip.surface_violations(codes), ip.surface_violations(codes)
+        assert not ip.policy_violations(
+            set(policy["users_to_router_ports"]),
+            guard_present=policy["guard_present"],
+            guard_drops_br_lan=policy["guard_drops_br_lan"],
+            ssh_alive=ip.tcp_probe(router_host, 22, timeout=5),
+            guard_path=GUARD_PATH,
+        ), "policy regressed across the post-upgrade reboot"
+
+
 def test_zz_zz_dump_evidence(tmp_path):
     """Write the raw facts this run collected (evidence for the PR / card)."""
     if not HOST_FACTS:
