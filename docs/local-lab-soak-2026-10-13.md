@@ -58,3 +58,81 @@ current build (CI is frozen; use `packaging/local-build-ipk.sh` per the
 2026-10-06 AGENTS.md lesson) to the VM would let the contract tests and
 train scenarios run for real — that, plus the physical bench, is the
 remaining validation debt for the PR wave.
+
+---
+
+# Re-soak — same day, current build deployed
+
+Artifact: tmbg main `7fec9e34` built locally as
+`tollgate-wrt_v0.6.0-rc4-local_x86_64.ipk` (pinned inputs honored: node
+22.17.0 sha-verified tarball, GOTOOLCHAIN go1.26.8, portal SHA `6c25834`,
+`SOURCE_DATE_EPOCH` normalization). Installed onto a **fresh** (`--fresh`)
+DUT overlay via `virtual-lab.py install-package`; fresh bases need
+`opkg update` first (pristine 24.10 lacks nodogsplash/jq/ca-bundle — the
+declared DEPENDS pull cleanly once feeds are current).
+
+## Contract movement vs the morning soak
+
+| Test | Morning (old artifact) | Re-soak (rc4-local) | Reading |
+|---|---|---|---|
+| content-type is JSON | SKIP (unparseable) | **PASS** | current artifact serves `application/json` (#730/#628 honored live) |
+| version ordering | SKIP (comparator "unavailable") | **PASS** | after fixing two PRTA bugs in `_compare_versions` (below) — the target's own opkg agrees with the `~` topology (#738) |
+| entry_ui port mapping | SKIP (contract absent) | **FAIL** | real drift signal — see classification below |
+| postinst fail-loud (destructive) | SKIP (not opted in) | **FAIL** (empty capture) | genuine #715-class upstream signal — see below |
+| train scenarios (×3) | SKIP (drift signal) | SKIP (correct) | the stop-ship train (#782-#786) is not in main's ipk — these await the train package by design |
+| happy path | FAIL (environmental) | **clean SKIP** | #234's `skip_if_no_client_playwright` works; persisted Debian overlay predates its seeding |
+| time-metering e2e | PASS | **PASS** | payment rail green on the current artifact too |
+| health / portal suites | PASS | PASS | |
+
+## Two PRTA test bugs found and fixed (the eternal-skip class)
+
+1. **`_compare_versions` heredoc + stdout assumption**
+   (`tests/api/test_deployed_contracts.py`): the operator was interpolated
+   *unquoted* — `opkg compare-versions 'a' << 'b'` is a shell HEREDOC, opkg
+   reads stdin, exits 255, and the test read "comparator unavailable"
+   forever. Quoted, the second half surfaced: OpenWrt's opkg prints
+   NOTHING and encodes the verdict in the exit status; the test assumed
+   printed 0/1. Fixed to accept both. The #738 contract had never actually
+   executed before this fix.
+2. **`install-package` staged the artifact extensionless**
+   (`scripts/virtual-lab.py`): opkg (like apk3, which #192 measured)
+   refuses extensionless local files — "Unknown package /tmp/lane-pkg".
+   The staging name now keeps the artifact's extension on both lanes.
+
+Plus one environment-robustness fix, same root: **fresh-cycle host-key
+poisoning**. A `--fresh` overlay gives the VM a new host key; ssh calls
+with `StrictHostKeyChecking=no` but a real `known_hosts` still hard-fail
+on CHANGED keys. `install-package`'s probe and all 11 runner ssh calls in
+`run-local-tests.sh` now pass `-o UserKnownHostsFile=/dev/null` (the
+pattern the rest of PRTA already used).
+
+## entry_ui FAIL — classification: venue/packaging drift, not a test bug
+
+`entry_ui=board` config demands uhttpd pairs (8080,443)+(8090,8443). The
+VM converged to 8080/443/2051 only. Mechanism (serial + logread): the
+ipk-only install lacks the captive-portal feed marker
+(`92-tollgate-admin-setup`, FreedomTechFeed) that board-mode port mapping
+requires; `99-tollgate-setup` converges legacy mapping at install time,
+and only afterwards does the backend populate the `entry_ui=board`
+DEFAULT into config.json ("Populated entry_ui default (board) on
+upgrade", 19:29:05). The contract test correctly flags config-vs-reality.
+Follow-ups: local venue should install the feed package for board-mode
+soaks; upstream may want the default to refuse board when the marker is
+absent.
+
+## postinst husk FAIL — a real #715-class upstream signal
+
+With `TOLLGATE_DESTRUCTIVE=1` (disposable VM venue), the husk test ran
+for the first time: husked nodogsplash (`: > /usr/bin/nodogsplash`),
+`opkg install --force-reinstall` — the postinst did NOT fail loud with a
+remediation message. It proceeded, and the rc4 setup moved eth0 off
+br-lan onto **br-private** (kernel log proof in the serial console) —
+severing the lab network mid-install; ssh died, the capture came back
+empty, and the VM stranded itself off 10.99.99.x. Two consequences:
+  - **Upstream (tmbg, #715)**: install over a dead portal neither refuses
+    nor names the husk — it re-architects networking. The fail-loud
+    contract is not honored by rc4.
+  - **PRTA follow-up**: the husk test cannot observe its verdict when the
+    channel dies mid-install — it needs `RouterUnreachable`-aware retry
+    (TOLLGATE_ALLOW_ROUTER_MOVE + re-target) or a serial-console capture
+    path. Recovery was `stop-poc && start-poc --fresh` + redeploy.
