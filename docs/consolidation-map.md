@@ -78,13 +78,13 @@ Updated 2026-10-13. Statuses are facts about trackers, not aspirations.
    ngit announce workflow, fetching the built x86_64 `.apk` from its
    shard build record. First live release run is the remaining evidence;
    until it merges and runs, nothing behavioral blocks an announcement.
-2. **M3-proper: fold `tests/stories/` into the scenarios+markers
-   scheme** — a real migration, not a move: `config/make-pytest-map.yaml`
-   maps 8+ targets to story files, `release-test.sh` and
-   `config/labgrid-env.yaml` invoke `tests/stories/`, and
-   `tests/scenarios/*` auto-adds the `hardware` marker — per-file marker
-   decisions required so virtual-lab skip semantics do not change
-   silently.
+2. **M3: stories tree consolidated** — landed as
+   `tests/scenarios/stories/` (subtree move, conftest scoping preserved,
+   29/29 collection equivalence, `test_story_evidence` 9/9 green; the
+   path-based `hardware` rule now covers the stories — named skips in the
+   virtual lab instead of fixture failures, inclusion in bench
+   `-m hardware` sweeps). **Remaining from M3**: reduce `release-test.sh`
+   to a thin profile over `run-profile.sh` / `test-pr.sh`.
 3. **M2 remainder: apk-era upgrade + reboot scenario** on the
    install-path lane (scenario A′), and the installer-contract lane
    wired per-rc (`release-check.sh` optional lane + one runbook line).

@@ -34,7 +34,7 @@ def _ssh_router(cmd: str) -> str:
 @pytest.mark.skipif(not DEBIAN_HOST, reason="TOLLGATE_DEBIAN_HOST not set")
 def test_phone_and_vm_pay_simultaneously(tollgate_ssid, rate_limiter):
     """A phone and a Debian VM pay at the same time — both get internet."""
-    from tests.stories.conftest import get_client_device
+    from tests.scenarios.stories.conftest import get_client_device
 
     phone = get_client_device("android-phone")
     vm = get_client_device("debian-vm")

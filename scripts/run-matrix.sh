@@ -68,7 +68,7 @@ for i in "${!DUT_NAMES[@]}"; do
 
     # Run the stories
     cd "$REPO_ROOT"
-    if "$VENV/bin/python" -m pytest tests/stories/ \
+    if "$VENV/bin/python" -m pytest tests/scenarios/stories/ \
         --no-deploy --timeout-method=signal -v --tb=line \
         2>&1 | tee "$logfile"; then
         echo "✅ $name: ALL STORIES PASSED"
@@ -85,7 +85,7 @@ echo "| Story | ${DUT_NAMES[*]} |"
 echo "|-------|${DUT_NAMES[@]/#/|---|} |"
 
 # Extract results per DUT
-for story_file in "$REPO_ROOT"/tests/stories/test_*.py; do
+for story_file in "$REPO_ROOT"/tests/scenarios/stories/test_*.py; do
     story_name=$(basename "$story_file" .py)
     # Skip conftest
     [[ "$story_name" == "conftest" ]] && continue

@@ -1,6 +1,6 @@
 """Unit tests for the story evidence recorder (hardware-free).
 
-Exercises tests/stories/conftest.py's StoryRecorder visual-assessment
+Exercises tests/scenarios/stories/conftest.py's StoryRecorder visual-assessment
 logic: blank detection, duplicate detection, state sidecars, and the
 attach() rename away from the "unknown" artifacts dir. The recorder is
 what keeps the "film well" principle honest — a black or byte-identical
@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 _spec = importlib.util.spec_from_file_location(
-    "story_conftest", REPO_ROOT / "tests" / "stories" / "conftest.py")
+    "story_conftest", REPO_ROOT / "tests" / "scenarios" / "stories" / "conftest.py")
 assert _spec is not None and _spec.loader is not None
 story_conftest = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(story_conftest)

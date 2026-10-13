@@ -1,7 +1,7 @@
 # Labgrid environment — TollGate test rig on ai-legion
 #
 # Defines all devices (physical + virtual) as labgrid targets.
-# Usage: pytest --lg-env config/labgrid-env.yaml tests/stories/
+# Usage: pytest --lg-env config/labgrid-env.yaml tests/scenarios/stories/
 #
 # Topology:
 #   ┌─────────────────────────────────────────────────────┐

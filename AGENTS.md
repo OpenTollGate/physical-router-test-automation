@@ -2106,8 +2106,8 @@ stories against every device.
 
 - `config/behavior-contract.json` — versioned expected-behavior registry
 - `lib/contract.py` — helpers for reading the contract from tests
-- `tests/stories/` — device-agnostic user-story tests
-- `tests/stories/conftest.py` — ClientDevice protocol + adapters
+- `tests/scenarios/stories/` — device-agnostic user-story tests
+- `tests/scenarios/stories/conftest.py` — ClientDevice protocol + adapters
 - `lib/clients/ssid.py` — SSID auto-resolution from router
 - `lib/labgrid_topology.py` — virtual topology manager (bridges, hwsim, QEMU)
 - `config/labgrid-env.yaml` — labgrid targets for all rig devices
@@ -2128,7 +2128,7 @@ TOLLGATE_SSH_HOST=192.168.13.124 \
 TOLLGATE_SSID=TollGate \
 PHONE_SERIAL=ZY326DPC7R \
 TOLLGATE_TEST_MINT_URL=http://192.168.13.221:8383 \
-pytest tests/stories/ --no-deploy --timeout-method=signal -v
+pytest tests/scenarios/stories/ --no-deploy --timeout-method=signal -v
 ```
 
 ### Labgrid Infrastructure
@@ -2176,7 +2176,7 @@ Four test-rail root causes from building the release kit against NR7101
    workaround class) that `ndsctl deauth` does not track. NDS showed
    `State: Preauthenticated` while the mark kept the gate open. Diagnosis:
    compare `ndsctl status | grep <mac>` with `iptables -t mangle -S ndsOUT
-   | grep <mac>`. `tests/stories/conftest.py:_deauth_device()` now removes
+   | grep <mac>`. `tests/scenarios/stories/conftest.py:_deauth_device()` now removes
    those rules on every deauth.
 
    **Resolved 2026-09-28 — not a firmware bug.** The Go backend has no
@@ -2194,7 +2194,7 @@ Four test-rail root causes from building the release kit against NR7101
 2. **The global `--timeout=60` killed phone-driving stories.** Story tests
    carry `slow`, not `phone`, so the pytest.ini cap applied — a wifi-cycle
    revalidation nudge alone runs 40s. The mid-flow kill also wedged the
-   phone and contaminated the NEXT test (join failure). `tests/stories/
+   phone and contaminated the NEXT test (join failure). `tests/scenarios/stories/
    conftest.py` now stamps `timeout(300)` on every collected story via
    `pytest_collection_modifyitems`. Rule: any test that drives the phone
    needs phone-tier timeouts regardless of its marker.

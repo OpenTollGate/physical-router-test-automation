@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 
-from tests.stories.conftest import get_client_device
+from tests.scenarios.stories.conftest import get_client_device
 
 log = logging.getLogger("tollgate.story.degraded_mode")
 

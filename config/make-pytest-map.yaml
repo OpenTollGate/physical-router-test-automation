@@ -322,7 +322,7 @@ fips-exit-smoke:
   # ─── User stories (device-agnostic, contract-driven) ──────────────────
   pytest-stories:
     runner: pytest
-    pytest: tests/stories/
+    pytest: tests/scenarios/stories/
     status: migrated
     lock: hardware
     markers: slow
@@ -331,7 +331,7 @@ fips-exit-smoke:
 
   pytest-story-pay:
     runner: pytest
-    pytest: tests/stories/test_user_pays_and_gets_internet.py
+    pytest: tests/scenarios/stories/test_user_pays_and_gets_internet.py
     status: migrated
     lock: hardware
     markers: slow
@@ -340,7 +340,7 @@ fips-exit-smoke:
 
   pytest-story-expiry:
     runner: pytest
-    pytest: tests/stories/test_session_expiry_and_repayment.py
+    pytest: tests/scenarios/stories/test_session_expiry_and_repayment.py
     status: migrated
     lock: hardware
     markers: slow
@@ -349,7 +349,7 @@ fips-exit-smoke:
 
   pytest-story-degraded:
     runner: pytest
-    pytest: tests/stories/test_degraded_mode.py
+    pytest: tests/scenarios/stories/test_degraded_mode.py
     status: migrated
     lock: none
     markers: slow
@@ -358,7 +358,7 @@ fips-exit-smoke:
 
   pytest-story-v4:
     runner: pytest
-    pytest: tests/stories/test_v4_token.py
+    pytest: tests/scenarios/stories/test_v4_token.py
     status: migrated
     lock: hardware
     markers: slow

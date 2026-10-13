@@ -146,7 +146,7 @@ export TOLLGATE_TEST_MINT_URL="${TOLLGATE_TEST_MINT_URL:-http://192.168.13.221:8
 cd "$REPO_ROOT"
 STORY_RESULT=0
 PORTAL_RESULT=0
-if "$VENV/bin/python" -m pytest tests/stories/ \
+if "$VENV/bin/python" -m pytest tests/scenarios/stories/ \
     --no-deploy --timeout-method=signal -v --tb=short \
     2>&1 | tee "$REPORT_DIR/stories.log"; then
     log "✓ All stories passed"
