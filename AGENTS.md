@@ -2503,3 +2503,91 @@ Rules that prevent the #7 class:
 - Honest limitation: pattern scanners catch FORMAT-shaped secrets (sk-…, key=…).
   The #7 password was formatless — for that class, the env-file rules above and
   the gitignore are the primary defense; the scanner is the second net, not the first.
+
+## Lessons Learned — 2026-10-13 official-install-path + lean-venue session
+
+### The official install path is the tollgate-installer + FreedomTechFeed feed, not (only) Nostr
+
+`tollgate-installer` (OpenTollGate, Go binary — the old Electron README is
+stale) serves a wizard at :8099, discovers vanilla OpenWrt routers on LAN, and
+drives flash → root password → uplink → install → brand → portal → LNURL →
+health over SSH. Package source is **feed-first**: `FreedomTechFeed/packages`
+GitHub releases at deterministic per-arch URLs (`.apk` for OpenWrt 25+,
+`.ipk` for ≤24.x, offline tarballs, signed SHA256SUMS), with GitHub-release
+fallback for `aarch64_cortex-a53` only. **2026-10-08 club-scope decision:**
+the feed publishes only `aarch64_cortex-a53` (GL-MT3000/MT6000) and
+`mips_24kc` (AR300M); `x86_64` and `mipsel_24kc` are parked (404). The last
+x86_64-carrying tag is **v0.6.0-rc1-pre25** — pin it via
+`TOLLGATE_FEED_RELEASE_TAG` to run the official installer against QEMU
+venues. The headless harness is `install-and-test.sh` (curl|bash) and the
+canonical procedure is the installer repo's `docs/install-runbook.md` (§0
+resolve-newest-tag first — never paste a stale tag). Release cadence is fast:
+rc1→rc4 shipped in two days (2026-10-11..13). The Nostr kind-1063 channel
+remains the tollgate-os image lane; `lib/deploy.py`'s blossom resolver is NOT
+the installer's package path.
+
+### The lean official-installer venue (br-laneA pattern)
+
+Testing the official installer needs no full lab: one OpenWrt x86_64 QEMU on
+an isolated host-only bridge is enough (the wizard's verification is
+self-contained). Recipe (built on ai-legion-small, ~15 min, rogue-DHCP-safe
+by construction):
+
+- `br-laneA` 10.99.150.1/24 + tap + `ip_forward=1` + MASQUERADE NAT +
+  FORWARD accepts. **Scoped ufw rule for the mint** (`allow from
+  10.99.150.0/24 to any port 8383`) — small's ufw is default-deny INPUT;
+  without it the VM→mint path dies silently.
+- QEMU: `-enable-kvm -m 512 -drive …img,if=virtio -netdev tap …
+  -serial unix:console.sock,server=on,wait=off -monitor unix:…` (QEMU ≥8.2
+  rejects legacy `server=nowait`). The **ext4 combined image persists** —
+  installed packages + config survive VM restarts, so venue re-bring-up is a
+  plain relaunch.
+- Provision over the serial socket with one-shot `socat` writes (output with
+  no attached client is dropped — empty reads ≠ dead guest; ICMP is the
+  liveness truth). Set LAN static (VM gw = host bridge IP).
+- Run the harness headless: it needs `TOLLGATE_ADMIN_PASSWORD` (≥8 chars,
+  else deploy 400s), and pre-trust the VM's host key via
+`TOLLGATE_TRUST_HOST_KEY=$(ssh-keyscan …)`. **The wizard sets root =
+adminPassword mid-deploy** — the harness's own post-verify then fails
+spuriously with the old password (filed upstream); use the admin password
+afterward.
+
+### ai-legion "lab instability" is often host memory contention
+
+Bring-up cycles failing with guests freezing exactly at
+`/etc/init.d/network restart` (serial silent, no panic text, qemu alive but
+<200 MB touched) + a memcg OOM-killed lab QEMU in dmesg = the HOST is
+thrashing (that day: 7 root opencode sessions ≈ 6-7 GB + java + cuttlefish,
+19/32 GB used, 13 GB swap). Before debugging the lab or blaming issue-#21
+classes, run `free -m` + `ps -eo rss,user,comm --sort=-rss | head` and check
+dmesg for `Memory cgroup out of memory`. Yield to foreign lanes; ai-legion-small
+had 17 GB free the same day and ran the whole campaign.
+
+### rc4-era payment behaviors (verified live, 2026-10-13, lean venue + fakewallet)
+
+- **Consume-before-gate is fixed on the client-not-registered path**: paying
+  before the client touched the portal returns `kind:21023,
+  code:"client-not-registered"` WITHOUT consuming the token — the same token
+  paid (`kind:1022`, allotment 88080384, session metered `1024/88080384`,
+  NDS client tracked) after one portal fetch. The 2026-09-01
+  "every failed submit burns the token" class no longer applies here.
+- Double-spend of a paid token rejects with `kind:21023,
+  code:"payment-received-grant-pending"`.
+- Both belong in `config/behavior-contract.json` + a regression test (issue
+  filed).
+- Paying-client attribution works with the pytest/lab host on the router's
+  LAN (ARP path) — no Debian client VM needed for API-level payment rails.
+
+### accepted_mints is object-format (config v0.0.10) and malformed values fall back SILENTLY
+
+`accepted_mints` takes MintConfig objects: `url, min_balance,
+balance_tolerance_percent, payout_interval_seconds, min_payout_amount,
+price_per_step, price_unit, purchase_min_steps` (struct:
+`src/config_manager/config_manager_config.go`). Writing a plain string array
+is **silently ignored** — the backend boots with a 7-public-mint default
+list (coinos, minibits, lnserver, macadamia, westernbtc, kashu, cuba).
+Dangerous on commissioned routers (silent money-path swap; same class as the
+#103 replace_mints incident). Filed upstream; until fixed, always jq-edit
+with full objects and verify via `logread | grep "Accepted Mints"`.
+
+
