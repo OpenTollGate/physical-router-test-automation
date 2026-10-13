@@ -43,8 +43,8 @@ echo "$NFT" | grep -qE 'ip saddr 10\.99\.99\.0/24.*masquerade'; ck "nft masquera
 # 6. NDS running with preauth rules for :2121/:2051
 $SSH "ndsctl status 2>/dev/null | head -3" > /tmp/pf-nds.txt 2>/dev/null || true; grep -q NoDogSplash /tmp/pf-nds.txt; ck "NDS running" $? "/etc/init.d/nodogsplash start"
 $SSH "iptables-save 2>/dev/null | grep -E '^-A ndsRTR'" > /tmp/pf-ndsfw.txt 2>/dev/null || true
-grep -q 2121 /tmp/pf-ndsfw.txt; ck "NDS preauth allows :2121" $? "see TESTING.md NDS preauth rules"
-grep -q 2051 /tmp/pf-ndsfw.txt; ck "NDS preauth allows :2051" $? "see TESTING.md NDS preauth rules"
+grep -q 2121 /tmp/pf-ndsfw.txt; ck "NDS preauth allows :2121" $? "see docs/TESTING.md NDS preauth rules"
+grep -q 2051 /tmp/pf-ndsfw.txt; ck "NDS preauth allows :2051" $? "see docs/TESTING.md NDS preauth rules"
 
 # 7. mint reachable + latency (signut latency blips cascade into degraded mode)
 MT0=$(date +%s%N); MRESP=$(curl -s -m 10 "$MINT/v1/info" | head -c 40); MT1=$(date +%s%N)
