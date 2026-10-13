@@ -29,7 +29,7 @@ python3 scripts/virtual-lab.py start-poc --host localhost
 python3 scripts/virtual-lab.py stop-poc --host localhost
 ```
 
-See [LOCAL-VM-TESTING.md](LOCAL-VM-TESTING.md) for the full guide including troubleshooting, deploying captive portal changes, and NDS/fw4 enforcement testing.
+See [docs/LOCAL-VM-TESTING.md](docs/LOCAL-VM-TESTING.md) for the full guide including troubleshooting, deploying captive portal changes, and NDS/fw4 enforcement testing.
 
 ### SHC — Sovereign Hybrid Compute (cloud VM)
 

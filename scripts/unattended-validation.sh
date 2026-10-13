@@ -2,11 +2,11 @@
 # unattended-tests.sh — runs the full 0.6.0 validation suite against the
 # QEMU OpenWrt 24.10 lab on ai-legion. No LLM babysitting needed.
 #
-# PREREQUISITES (must be done once, see TESTING.md):
+# PREREQUISITES (must be done once, see docs/TESTING.md):
 #   1. QEMU lab started: python3 scripts/virtual-lab.py start-poc --host ai-legion
 #   2. tollgate-wrt deployed to the VM (bash /tmp/deploy3.sh on ai-legion)
-#   3. NAT + forwarding configured (see TESTING.md "QEMU Lab Complete Fix")
-#   4. NDS pre-auth rules for :2121/:2051 added (see TESTING.md)
+#   3. NAT + forwarding configured (see docs/TESTING.md "QEMU Lab Complete Fix")
+#   4. NDS pre-auth rules for :2121/:2051 added (see docs/TESTING.md)
 #
 # This script:
 #   Phase 1: Preflight checks (router reachable, daemon serving, mint accessible)
