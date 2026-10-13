@@ -68,13 +68,16 @@ Updated 2026-10-13. Statuses are facts about trackers, not aspirations.
 | 11 | Deployed-artifact contract tests (entry_ui ports, version ordering…) | PRTA [#196](https://github.com/OpenTollGate/physical-router-test-automation/pull/196) | PRTA | **open proposal** |
 | 12 | Train-topology stop-ship scenarios + image-doctor preflight | PRTA [#201](https://github.com/OpenTollGate/physical-router-test-automation/pull/201) | PRTA | **open proposal** |
 | 13 | Module shipping-package decommission (feed becomes sole shipping path) | module [#914](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/914) direction | module + feed | **proposed** — needs operator decision + feed parity proof |
+| 14 | Behavioral gate before announce (happy-path on the built x86_64 .apk, ngit-native artifact fetch) | module [#924](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/924) | module | **open — sign-off**; step-level validation done, first live release run owed |
 
 ## Milestones ahead (smallest effective first)
 
-1. **Enforce behavior at publication** — port the fail-closed happy-path
-   gate into the live ngit lane and add it to `announce`'s `needs:`. The
-   dead GitHub lane already contains the pattern; today nothing
-   behavioral blocks a release announcement.
+1. **Enforce behavior at publication** — implemented as module
+   [#924](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/924)
+   (open, pending sign-off): the fail-closed happy-path gate inside the
+   ngit announce workflow, fetching the built x86_64 `.apk` from its
+   shard build record. First live release run is the remaining evidence;
+   until it merges and runs, nothing behavioral blocks an announcement.
 2. **M3-proper: fold `tests/stories/` into the scenarios+markers
    scheme** — a real migration, not a move: `config/make-pytest-map.yaml`
    maps 8+ targets to story files, `release-test.sh` and
