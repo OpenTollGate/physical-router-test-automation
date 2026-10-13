@@ -116,6 +116,10 @@ for a green result.
 
 ## 4. Migration status (do not relitigate, do not mark incomplete work done)
 
+> Live status — the per-workstream board, the PR queue and the milestone
+> sequencing — lives in [consolidation-map.md](consolidation-map.md).
+> The table below records the states this policy was written against.
+
 | Item | State |
 | --- | --- |
 | Runner consolidation M1 (PRTA #216) | **merged** — blocking verdicts, shared deploy path, fleet migration audit |
