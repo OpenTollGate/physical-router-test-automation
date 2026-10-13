@@ -69,6 +69,8 @@ Updated 2026-10-13. Statuses are facts about trackers, not aspirations.
 | 12 | Train-topology stop-ship scenarios + image-doctor preflight | PRTA [#201](https://github.com/OpenTollGate/physical-router-test-automation/pull/201) | PRTA | **open proposal** |
 | 13 | Module shipping-package decommission (feed becomes sole shipping path) | module [#914](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/914) direction | module + feed | **proposed** — needs operator decision + feed parity proof |
 | 14 | Behavioral gate before announce (happy-path on the built x86_64 .apk, ngit-native artifact fetch) | module [#924](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/924) | module | **open — sign-off**; step-level validation done, first live release run owed |
+| 15 | apk-era upgrade + reboot scenario (state preservation, #899 listener invariant on upgrade) | PRTA [#225](https://github.com/OpenTollGate/physical-router-test-automation/pull/225) | PRTA | **merged**; first bench execution owed |
+| 16 | Installer-contract lane wired per-rc into release-check + runbook | module [#925](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/925) | module | **open — sign-off** |
 
 ## Milestones ahead (smallest effective first)
 
@@ -85,9 +87,12 @@ Updated 2026-10-13. Statuses are facts about trackers, not aspirations.
    virtual lab instead of fixture failures, inclusion in bench
    `-m hardware` sweeps). **Remaining from M3**: reduce `release-test.sh`
    to a thin profile over `run-profile.sh` / `test-pr.sh`.
-3. **M2 remainder: apk-era upgrade + reboot scenario** on the
-   install-path lane (scenario A′), and the installer-contract lane
-   wired per-rc (`release-check.sh` optional lane + one runbook line).
+3. **M2 remainder — landed**: the apk-era upgrade + reboot scenario is
+   PRTA [#225](https://github.com/OpenTollGate/physical-router-test-automation/pull/225)
+   (merged; first bench execution owed — flash/drain guards refuse
+   fail-closed until then), and the per-rc wiring is module
+   [#925](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/925)
+   (open, sign-off).
 4. **NOT_VERIFIED everywhere** — pytest collection in PRTA still reports
    skips as green at the job level; adopt the lane's fail-closed outcome
    semantics suite-wide.
