@@ -1,3 +1,4 @@
+import os
 import re
 import time
 import json
@@ -217,6 +218,86 @@ def skip_if_no_luci(router):
             pytest.skip("LuCI admin UI not available on port 8080")
     except Exception:
         pytest.skip("Cannot check LuCI availability")
+
+
+# Client-side Playwright capability detection (issue #104)
+
+_PW_PROBE_OK_MARKER = "PW_OK"
+_client_pw_probe_cache: dict[str, tuple[bool, str]] = {}
+
+
+def _client_pw_probe_cmd() -> str:
+    """Build the remote probe: import playwright, start it, launch headless Chromium.
+
+    Verifies BOTH the python package and a runnable browser — the old inline
+    check only imported the package and missed missing browsers.
+
+    TOLLGATE_PLAYWRIGHT_CHROMIUM_PATH overrides the launched executable
+    (custom browser, or a nonexistent path to force the probe absent in
+    tests). Values containing quotes/backslashes are ignored (shell-safety).
+    """
+    exe = os.environ.get("TOLLGATE_PLAYWRIGHT_CHROMIUM_PATH", "").strip()
+    if exe and not re.search(r"[\"'\\]", exe):
+        launch = (
+            "p.chromium.launch(headless=True, args=[\"--no-sandbox\"], "
+            f"executable_path=\"{exe}\")"
+        )
+    else:
+        launch = "p.chromium.launch(headless=True, args=[\"--no-sandbox\"])"
+    return (
+        "python3 -c 'from playwright.sync_api import sync_playwright; "
+        "p = sync_playwright().start(); "
+        f"b = {launch}; "
+        "b.close(); p.stop(); print(\"PW_OK\")' 2>&1"
+    )
+
+
+def client_playwright_functional(client) -> tuple[bool, str]:
+    """Probe once per session whether the client can run Playwright + Chromium.
+
+    Returns ``(functional, diag)``; ``diag`` carries the probe output on
+    failure (import errors, missing browser, launch failures).
+    """
+    ident = getattr(client, "_client_ip", None) or "client"
+    cached = _client_pw_probe_cache.get(ident)
+    if cached is not None:
+        return cached
+
+    cmd = _client_pw_probe_cmd()
+    try:
+        if hasattr(client, "exec"):
+            out = client.exec(cmd, timeout=60)
+        elif hasattr(client, "_exec"):
+            out = client._exec(cmd, timeout=60)
+        else:
+            result = (False, "client adapter has no remote exec")
+            _client_pw_probe_cache[ident] = result
+            return result
+    except Exception as exc:
+        result = (False, f"probe failed: {exc}")
+        _client_pw_probe_cache[ident] = result
+        return result
+
+    out = (out or "").strip()
+    # A line EQUAL to the marker only — never a substring match: a failing
+    # probe's traceback echoes the source line, which contains print("PW_OK").
+    ok = any(line.strip() == _PW_PROBE_OK_MARKER for line in out.splitlines())
+    result = (ok, "ok" if ok else out.replace("\n", " ")[:160])
+    _client_pw_probe_cache[ident] = result
+    return result
+
+
+def skip_if_no_client_playwright(client) -> None:
+    """Skip browser-driven visual tests when client Playwright is not usable.
+
+    Feature-detection gate (AGENTS.md "Test Gating Strategies"): visual portal
+    tests SKIP with a named reason instead of FAILING when the client VM lacks
+    a functional Playwright/Chromium (issue #104). Probe result is cached per
+    session — installing Playwright mid-session requires a rerun.
+    """
+    functional, diag = client_playwright_functional(client)
+    if not functional:
+        pytest.skip(f"Playwright not functional in this environment ({diag})")
 
 
 INCIDENTS_URL = "https://github.com/OpenTollGate/tollgate-knowledgebase/tree/main/incidents"

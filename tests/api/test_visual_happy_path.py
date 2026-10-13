@@ -7,7 +7,12 @@ from typing import Any
 import pytest
 
 from lib.constants import TOKEN_DEFAULT
-from lib.helpers import assert_deauthenticated, metering_test_setup, wait_expiry_and_verify_cutoff
+from lib.helpers import (
+    assert_deauthenticated,
+    metering_test_setup,
+    skip_if_no_client_playwright,
+    wait_expiry_and_verify_cutoff,
+)
 
 pytestmark = [pytest.mark.story("P5"),pytest.mark.api, pytest.mark.virtual_lab, pytest.mark.publish_screenshot]
 
@@ -82,6 +87,8 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     if client != "container":
         pytest.skip("visual test requires --client=container")
 
+    skip_if_no_client_playwright(adb)
+
     # IPv6 on br-lan bypasses Nodogsplash's IPv4-only captive portal, so this
     # test needs v6 off — but the ROUTER must ship that itself (#148/#160,
     # asserted below); the framework force-disabling it here masked package
@@ -99,14 +106,6 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"[visual] gateway={gateway} client_mac={client_mac}")
-
-    # Pre-check: verify Playwright is functional in the container
-    try:
-        pw_check = adb._exec("python3 -c 'from playwright.sync_api import sync_playwright; print(\"PW_OK\")' 2>&1", timeout=15)
-        if "PW_OK" not in pw_check:
-            pytest.fail(f"Playwright not functional in container: {pw_check[:200]}")
-    except Exception as exc:
-        pytest.fail(f"Cannot check Playwright in container: {exc}")
 
     portal_url = f"http://{gateway}/"
     code = ""

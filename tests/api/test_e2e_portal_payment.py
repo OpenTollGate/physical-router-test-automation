@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from lib.constants import TOKEN_DEFAULT
-from lib.helpers import is_degraded
+from lib.helpers import is_degraded, skip_if_no_client_playwright
 
 pytestmark = [
     pytest.mark.story("G2"),
@@ -52,6 +52,8 @@ def test_e2e_portal_payment(adb, cashu, router, results_dir, request):
     client = request.config.getoption("--client", default="adb")
     if client != "container":
         pytest.skip("e2e visual flow requires --client=container")
+
+    skip_if_no_client_playwright(adb)
 
     gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "10.99.99.1")
     assert adb.ping(gateway, count=1, timeout=3), "client must reach gateway"

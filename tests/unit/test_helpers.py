@@ -1,8 +1,9 @@
 """Unit tests for lib/helpers.py — pure-function helpers that need no router.
 
 Tests the data-parsing and decision functions (is_session_event, is_mac_lookup_failure,
-parse_json_or_fail, gate_bug_fix, is_full_merchant, is_degraded) using mock data.
-Router-dependent functions (pay_and_wait, skip_if_no_*) are excluded — they're
+parse_json_or_fail, gate_bug_fix, is_full_merchant, is_degraded, assert_internet,
+client playwright gate) using mock data. Router-dependent functions (pay_and_wait,
+skip_if_no_cli_socket and siblings that need a live router) are excluded — they're
 integration-test territory.
 """
 from __future__ import annotations
@@ -298,3 +299,140 @@ class TestMintUrlPort:
     def test_bare_ip_with_port(self):
         from lib.helpers import _mint_url_port
         assert _mint_url_port("http://10.99.99.2:8385") == 8385
+
+
+class TestClientPlaywrightProbe:
+    """skip_if_no_client_playwright gate (issue #104): probe command shape,
+    env override shell-safety, session caching, and skip semantics."""
+
+    def setup_method(self):
+        from lib import helpers
+        helpers._client_pw_probe_cache.clear()
+
+    def test_probe_cmd_default(self):
+        from lib.helpers import _client_pw_probe_cmd, _PW_PROBE_OK_MARKER
+        cmd = _client_pw_probe_cmd()
+        assert _PW_PROBE_OK_MARKER in cmd
+        assert "executable_path" not in cmd
+        assert "chromium.launch" in cmd
+
+    def test_probe_cmd_env_override(self, monkeypatch):
+        from lib.helpers import _client_pw_probe_cmd
+        monkeypatch.setenv("TOLLGATE_PLAYWRIGHT_CHROMIUM_PATH", "/nonexistent/chromium")
+        cmd = _client_pw_probe_cmd()
+        assert 'executable_path="/nonexistent/chromium"' in cmd
+
+    @pytest.mark.parametrize("evil", ['"/bin/evil"', "a'b", "x\\y"])
+    def test_probe_cmd_ignores_unsafe_override(self, monkeypatch, evil):
+        from lib.helpers import _client_pw_probe_cmd
+        monkeypatch.setenv("TOLLGATE_PLAYWRIGHT_CHROMIUM_PATH", evil)
+        assert "executable_path" not in _client_pw_probe_cmd()
+
+    def test_functional_true_on_pw_ok(self):
+        from lib.helpers import client_playwright_functional
+        calls = []
+
+        class Client:
+            _client_ip = "10.99.99.100"
+
+            def exec(self, cmd, timeout=30):
+                calls.append(cmd)
+                return "PW_OK"
+
+        ok, diag = client_playwright_functional(Client())
+        assert ok is True
+        assert len(calls) == 1
+
+    def test_traceback_echo_does_not_count_as_ok(self):
+        """A failing probe's traceback echoes print("PW_OK") in the source
+        line — substring matching would report a browser-less client as
+        functional (found while validating issue #104)."""
+        from lib.helpers import client_playwright_functional
+
+        class Client:
+            _client_ip = "10.99.99.104"
+
+            def exec(self, cmd, timeout=30):
+                return (
+                    'Traceback (most recent call last):\n'
+                    '  File "<string>", line 1, in <module>\n'
+                    '    from playwright.sync_api import sync_playwright; '
+                    'print("PW_OK")\n'
+                    'ModuleNotFoundError: No module named \'playwright\''
+                )
+
+        ok, diag = client_playwright_functional(Client())
+        assert ok is False
+        assert "Traceback" in diag
+
+    def test_pw_ok_with_leading_noise_still_ok(self):
+        from lib.helpers import client_playwright_functional
+
+        class Client:
+            _client_ip = "10.99.99.105"
+
+            def exec(self, cmd, timeout=30):
+                return "playwright deprecation warning\nPW_OK"
+
+        ok, diag = client_playwright_functional(Client())
+        assert ok is True
+        assert diag == "ok"
+
+    def test_probe_cached_per_client(self):
+        from lib.helpers import client_playwright_functional
+        calls = []
+
+        class Client:
+            _client_ip = "10.99.99.100"
+
+            def exec(self, cmd, timeout=30):
+                calls.append(cmd)
+                return "ModuleNotFoundError: No module named 'playwright'"
+
+        ok, _ = client_playwright_functional(Client())
+        ok2, _ = client_playwright_functional(Client())
+        assert ok is False and ok2 is False
+        assert len(calls) == 1
+
+    def test_failure_diag_captured(self):
+        from lib.helpers import client_playwright_functional
+
+        class Client:
+            _client_ip = "10.99.99.101"
+
+            def exec(self, cmd, timeout=30):
+                return "Executable doesn't exist at /root/.cache/ms-playwright/..."
+
+        ok, diag = client_playwright_functional(Client())
+        assert ok is False
+        assert "Executable" in diag
+
+    def test_skip_when_absent(self):
+        from lib.helpers import skip_if_no_client_playwright
+
+        class Client:
+            _client_ip = "10.99.99.102"
+
+            def exec(self, cmd, timeout=30):
+                return "ModuleNotFoundError: No module named 'playwright'"
+
+        with pytest.raises(pytest.skip.Exception, match="Playwright not functional"):
+            skip_if_no_client_playwright(Client())
+
+    def test_no_skip_when_functional(self):
+        from lib.helpers import skip_if_no_client_playwright
+
+        class Client:
+            _client_ip = "10.99.99.103"
+
+            def exec(self, cmd, timeout=30):
+                return "PW_OK"
+
+        skip_if_no_client_playwright(Client())
+
+    def test_no_exec_adapter_reports_absent(self):
+        from lib.helpers import client_playwright_functional
+
+        ok, diag = client_playwright_functional(object())
+        assert ok is False
+        assert "no remote exec" in diag
