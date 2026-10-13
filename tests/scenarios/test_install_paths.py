@@ -51,6 +51,7 @@ from typing import Any
 import pytest
 
 from lib import fresh_flash as ff
+from lib import credential_defaults as cred
 from lib import install_paths as ip
 from lib.bench_lock import (
     BenchBusy,
@@ -887,6 +888,63 @@ class TestInstallerPath:
         }
         problems = result.violations(allow_skip=ALLOW_HAPPY_PATH_SKIP)
         assert not problems, problems
+
+    def test_b6_credential_contract_after_installer(self, router_host):
+        """The installer leaves a USABLE admin credential — the operator's own.
+
+        The installer authenticated with ``TOLLGATE_SSH_PASSWORD``, so that
+        password must SURVIVE the deploy: the rc4 package PRESERVES an existing
+        credential and never silently rewrites it. The CLI chooses no admin
+        credential, so no PROVISIONAL admin marker may be written — and the
+        management WiFi, which the CLI does not set either, falls back to the
+        fixed default with its own marker.
+        """
+        password = os.environ.get("TOLLGATE_SSH_PASSWORD") or os.environ.get(
+            "TOLLGATE_LUCI_PASSWORD", ""
+        )
+        if not password:
+            pytest.skip("TOLLGATE_SSH_PASSWORD is required to check the preserved credential")
+
+        out, _ = _ssh(
+            router_host,
+            "awk -F: '$1==\"root\"{print $2; exit}' /etc/shadow",
+            timeout=15,
+        )
+        hash_field = out.strip()
+        assert hash_field, "root has NO credential after the installer — the router is unusable"
+        # SUPPLIED WINS: the operator's own password is what stands afterwards.
+        assert cred.hash_matches(password, hash_field), (
+            "the operator's admin password did NOT survive the installer deploy"
+        )
+        # ...and a WRONG password is REJECTED (the control: an empty/permissive
+        # hash would accept it).
+        assert not cred.login_works(router_host, "definitely-not-the-password"), (
+            "a WRONG password authenticated — the root hash is not really set"
+        )
+        # The CLI chose no admin credential, so nothing is provisional for it.
+        marker, _ = _ssh(
+            router_host,
+            "test -f /etc/tollgate/admin-credential-provisional && echo y || echo n",
+            timeout=10,
+        )
+        assert marker.strip() == "n", (
+            "an admin provisional marker was written although the operator's own credential was preserved"
+        )
+        # The management WiFi (unset by the CLI) fell back to the fixed default.
+        key, _ = _ssh(router_host, "uci -q get wireless.private_radio0.key 2>/dev/null", timeout=10)
+        key = key.strip()
+        if key and key != cred.DEFAULT_CREDENTIAL:
+            pytest.skip("the operator chose a private-WiFi key; not the CLI-default path")
+        assert key == cred.DEFAULT_CREDENTIAL, (
+            f"private WiFi key is {key!r}, not the fixed default {cred.DEFAULT_CREDENTIAL!r}"
+        )
+        wifi_marker, _ = _ssh(
+            router_host,
+            "test -f /etc/tollgate/private-wifi-credential-provisional && echo y || echo n",
+            timeout=10,
+        )
+        assert wifi_marker.strip() == "y", "private-WiFi provisional marker missing"
+
 
     def test_b6_policy_is_identical_to_the_package_only_install(self):
         """The card's claim: the two paths differ in CHOICES, not in policy."""
