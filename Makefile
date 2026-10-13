@@ -1453,3 +1453,12 @@ story-report:
 
 extensive-test: ## One-command extensive-test sweep (see docs/extensive-test.md)
 	@bash scripts/extensive-test.sh
+
+# --- Film narration (attach a narrated video to any test lane) ---
+
+.PHONY: film-narrate film-publish
+film-narrate: ## Narrate a recording: make film-narrate VIDEO=clip.mp4 TIMELINE=narration.json OUT=film.mp4 [ENGINE=kokoro VOICE=af_heart]
+	@python3 scripts/film-narrate.py --video $(VIDEO) --timeline $(TIMELINE) --out $(OUT) $(if $(ENGINE),--engine $(ENGINE),) $(if $(VOICE),--voice $(VOICE),)
+
+film-publish: ## Publish film artifacts to Blossom: make film-publish RUN=results/films/<id>
+	@python3 scripts/publish-film.py --run $(RUN) $(if $(SERVER),--server $(SERVER),)
