@@ -31,7 +31,10 @@ Rules for agents working here:
   hierarchy (source / virtual integration / physical / release acceptance),
   and the agent operating principles — is
   [docs/engineering-policy.md](docs/engineering-policy.md). Read it before
-  adding any runner, fixture or "temporary" test path.
+  adding any runner, fixture or "temporary" test path. The live status of
+  the consolidation program — the workstream board and what tracks next —
+  is [docs/consolidation-map.md](docs/consolidation-map.md); update the
+  board in the same PR as the work it describes.
 - Verification evidence for router-visible behavior belongs here, bound to
   the exact artifact sha256 and source SHAs; a required check that was
   skipped or never run is reported `NOT RUN`/`NOT_VERIFIED`, never PASS.
