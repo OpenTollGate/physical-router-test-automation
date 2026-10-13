@@ -733,6 +733,9 @@ packages:
   - iproute2
   - chromium
   - python3-pip
+apt:
+  conf: |
+    APT::Get::Lock-Timeout {{ "120"; }};
 ssh_authorized_keys:
   - $pubkey
 write_files:
@@ -772,7 +775,7 @@ write_files:
               - to: default
                 via: {POC_GATEWAY}
             nameservers:
-              addresses: [{POC_HOST_BRIDGE_IP.split('/')[0]}]
+              addresses: [{POC_HOST_BRIDGE_IP.split('/')[0]}, 1.1.1.1]
 runcmd:
   - systemctl enable netplan-generate-boot.service
   - systemctl restart ssh
@@ -793,7 +796,7 @@ ethernets:
       - to: default
         via: {POC_GATEWAY}
     nameservers:
-      addresses: [{POC_HOST_BRIDGE_IP.split('/')[0]}]
+      addresses: [{POC_HOST_BRIDGE_IP.split('/')[0]}, 1.1.1.1]
 NC
   mkisobin=$(command -v genisoimage || command -v mkisofs)
   "$mkisobin" -output seed.iso -volid cidata -rational-rock -joliet \\
