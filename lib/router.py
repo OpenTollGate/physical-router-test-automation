@@ -62,6 +62,44 @@ def remove_nds_auth_mark_rules(run_ssh, client_mac: str | None = None) -> int:
     return removed
 
 
+class RouterUnreachable(RuntimeError):
+    """The router stopped answering on its configured host.
+
+    The TollGate install MOVES the wired LAN port OFF ``br-lan`` onto
+    ``br-private`` (the management subnet), so a run that started at the LAN
+    address (``192.168.1.1``) loses the router mid-install and — before this
+    guard — every later ``ssh()`` spun on the dead address instead of failing.
+    This is raised once a run of consecutive CONNECT-level failures proves the
+    host is GONE (not merely a slow command), naming the likely cause and the
+    address to re-target at.
+    """
+
+
+# stderr fragments that mean "the HOST is gone", not "this command failed".
+_UNREACHABLE_MARKERS = (
+    "Connection timed out",
+    "No route to host",
+    "Connection refused",
+    "Connection reset",
+)
+# How many consecutive connect-level failures before we stop and raise.
+_MAX_CONSECUTIVE_UNREACHABLE = 5
+
+
+def _wired_network_hint() -> str:
+    """The host's global IPv4 networks — the router's NEW address is on one of
+    them once it has moved (its br-private is that network's .1)."""
+    try:
+        out = subprocess.run(
+            ["ip", "-4", "-o", "addr", "scope", "global"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+        nets = re.findall(r"inet ((?:10|192\.168|172)\.\d+\.\d+)\.\d+/\d+", out)
+        return ", ".join(f"{n}.1" for n in dict.fromkeys(nets)) or "unknown"
+    except Exception:
+        return "unknown"
+
+
 class Router:
     def __init__(self, host: str, phone_ip: str, phone_mac: str, domain: str,
                  identity_file: str | None = None, jump_host: str | None = None,
@@ -78,6 +116,10 @@ class Router:
         self.port = port
         self.backend = backend or BackendConfig()
         self._ssh_pw = os.environ.get("TOLLGATE_SSH_PASSWORD") or os.environ.get("TOLLGATE_LUCI_PASSWORD")
+        # Consecutive connect-level failures; reset on any successful call. See
+        # RouterUnreachable — the install moves the wired LAN port, so this is how
+        # a run that lost the router FAILS instead of hanging on the dead address.
+        self._consecutive_unreachable = 0
 
         self._control_dir = tempfile.mkdtemp(prefix="tollgate-ssh-")
         self._control_path = os.path.join(self._control_dir, "control")
@@ -293,18 +335,55 @@ class Router:
             # The client timed out, but the wedged ControlMaster is the
             # culprit: kill it and retry once on a fresh connection.
             self._kill_control_master()
-            r = subprocess.run(
-                self._ssh_base + [cmd],
-                capture_output=True, text=True, timeout=timeout,
-                env=self._ssh_env(),
-            )
+            try:
+                r = subprocess.run(
+                    self._ssh_base + [cmd],
+                    capture_output=True, text=True, timeout=timeout,
+                    env=self._ssh_env(),
+                )
+            except subprocess.TimeoutExpired:
+                # The retry timed out too: preserve the long-standing contract
+                # (this RAISES) — but count it first, so a run of them also
+                # arms the RouterUnreachable guard with its helpful message.
+                self._note_unreachable(f"timed out after {timeout}s twice")
+                raise
+        noise = re.compile(r"Warning:.*Permanently added[^\n]*")
+        cleaned = noise.sub("", r.stderr).strip()
         if r.returncode != 0:
-            noise = re.compile(r"Warning:.*Permanently added[^\n]*")
-            cleaned = noise.sub("", r.stderr).strip()
-            if cleaned:
+            if any(marker in cleaned for marker in _UNREACHABLE_MARKERS):
+                self._note_unreachable(cleaned[:200])
+            elif cleaned:
                 log.warning("ssh returned %d: %s", r.returncode, cleaned[:200])
+        else:
+            self._consecutive_unreachable = 0
         out = r.stdout.strip()
         return re.sub(r"Warning:.*Permanently added[^\n]*\n?", "", out).strip()
+
+    def _note_unreachable(self, why: str) -> None:
+        """Count a connect-level failure; FAIL FAST once the host is clearly gone.
+
+        A single miss is noise (a flapping link, a busy command). A RUN of them
+        means the router is not there any more — overwhelmingly because the
+        install moved the wired LAN port onto br-private — and continuing would
+        just spin on a dead address (the 2026-10-13 rc4 live run hung for
+        minutes this way). Set ``TOLLGATE_ALLOW_ROUTER_MOVE=1`` to keep the old
+        spin-forever behaviour.
+        """
+        self._consecutive_unreachable += 1
+        log.warning(
+            "ssh unreachable (%d/%d) on %s: %s",
+            self._consecutive_unreachable, _MAX_CONSECUTIVE_UNREACHABLE, self.host, why,
+        )
+        if os.environ.get("TOLLGATE_ALLOW_ROUTER_MOVE") == "1":
+            return
+        if self._consecutive_unreachable >= _MAX_CONSECUTIVE_UNREACHABLE:
+            raise RouterUnreachable(
+                f"router {self.host} unreachable {self._consecutive_unreachable} times in a row "
+                f"({why}). The TollGate install MOVES the wired LAN port off br-lan onto "
+                "br-private, so the LAN IP stops answering. The router is now on the management "
+                f"subnet — try {_wired_network_hint()} (check `ip -br addr`), and re-target the "
+                "run there. (TOLLGATE_ALLOW_ROUTER_MOVE=1 keeps the old behaviour.)"
+            )
 
     def write_remote_text(self, remote_path: str, content: str, timeout: int = 15):
         result = self.ssh_stdin(f"cat > {shlex.quote(remote_path)}", content, timeout=timeout)
