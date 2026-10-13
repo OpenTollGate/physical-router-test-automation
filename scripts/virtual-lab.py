@@ -1056,6 +1056,7 @@ def start_poc(args: argparse.Namespace) -> int:
     fresh = bool(getattr(args, "fresh", False))
     workdir = cast(str, args.workdir)
     pidfile, _serial_sock, disk = _poc_paths(workdir)
+    min_mem_mb = int(os.environ.get("TOLLGATE_VLAB_MIN_MEM_MB", "2048"))
 
     # --fresh cannot be honored on a live VM (qemu owns the overlay file);
     # the guard below reports that instead of silently skipping the purge.
@@ -1082,6 +1083,20 @@ pidfile={pidfile}
 if [ ! -f "$base" ]; then
   printf 'OpenWrt base image missing. Run prepare-image first.\\n' >&2
   exit 1
+fi
+
+# Host memory preflight (PRTA #239): guests frozen mid-provisioning with a
+# silent serial console were host-side starvation, not guest bugs.
+avail_mb=$(awk '/^MemAvailable:/ {{print int($2/1024)}}' /proc/meminfo)
+if [ {min_mem_mb} -gt "$avail_mb" ]; then
+  printf 'Host memory too low to boot the lab VMs: MemAvailable=%sMB (need {min_mem_mb}MB). Top consumers:\\n' "$avail_mb" >&2
+  ps -eo rss,user,comm --sort=-rss | head -6 >&2
+  printf 'Free memory (or lower TOLLGATE_VLAB_MIN_MEM_MB) and retry.\\n' >&2
+  exit 3
+fi
+swap_used_pct=$(awk '/^SwapTotal:/ {{t=$2}} /^SwapFree:/ {{f=$2}} END {{if (t>0) printf "%d", 100*(t-f)/t; else print 0}}' /proc/meminfo)
+if [ "$swap_used_pct" -ge 50 ]; then
+  printf 'WARNING: host swap is %s%% used — lab guests have frozen under swap thrash before (PRTA #239).\\n' "$swap_used_pct" >&2
 fi
 
 if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
