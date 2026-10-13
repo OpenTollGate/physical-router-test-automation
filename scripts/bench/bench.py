@@ -8,8 +8,10 @@ must NOT hand-copy this logic (2026-09-19 lesson: four copies, bugs fixed in
 one persisted in the others; two false product-broken verdicts).
 
 Runs on the bench host (ai-legion-small) with the pyenv that has coincurve
-(HttpMinter). Shaped as the labgrid seam: a future LabgridBench subclass
-swaps SSH/QEMU control for labgrid places; scenarios never touch raw ssh/curl.
+(HttpMinter). Shaped as the labgrid seam: lib/labgrid_venue.LabgridBench
+wraps place acquire/power/release and venue_mutex composes it with the repo
+file lock (the #232 transition invariant); scenarios never touch raw
+ssh/curl.
 """
 from __future__ import annotations
 
