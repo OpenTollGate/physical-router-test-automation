@@ -49,7 +49,7 @@ def test_spent_token_rejected():
     by the backend's client-class firewall on some implementations.
     """
     from lib.cashu import HttpMinter
-    from tests.stories.conftest import get_client_device
+    from tests.scenarios.stories.conftest import get_client_device
 
     device = get_client_device("android-phone")
     mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL",

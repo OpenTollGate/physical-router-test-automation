@@ -9,7 +9,7 @@ import subprocess
 import pytest
 
 from lib.contract import backend_port, min_token_sats
-from tests.stories.conftest import (
+from tests.scenarios.stories.conftest import (
     get_client_device, story_client_name, _deauth_device,
 )
 

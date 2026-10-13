@@ -18,7 +18,7 @@ MINT="${TOLLGATE_TEST_MINT_URL:-http://192.168.13.221:8383}"
 PHONE="${PHONE_SERIAL:-}"
 SSID="${TOLLGATE_SSID:-TollGate}"
 VENV="${TOLLGATE_PYTHON_VENV:-$HOME/venvs/rig-labgrid}"
-STORY_PATH="tests/stories/"
+STORY_PATH="tests/scenarios/stories/"
 STORY_TIMEOUT="${STORY_TIMEOUT:-300}"
 
 while [[ $# -gt 0 ]]; do

@@ -12,7 +12,7 @@ import pytest
 
 from lib.contract import min_token_sats
 from lib.cashu import HttpMinter
-from tests.stories.conftest import _deauth_device
+from tests.scenarios.stories.conftest import _deauth_device
 
 log = logging.getLogger("tollgate.story.session_expiry")
 

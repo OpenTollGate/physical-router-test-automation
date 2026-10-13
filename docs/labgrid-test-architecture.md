@@ -8,7 +8,7 @@ labgrid. Adding a new device = adding a labgrid resource + a thin adapter,
 not writing new tests.
 
 ```
-tests/stories/test_user_pays_and_gets_internet.py
+tests/scenarios/stories/test_user_pays_and_gets_internet.py
   ├── runs against: Android phone (via labgrid ADB)
   ├── runs against: Debian VM (via labgrid SSH)
   ├── runs against: Arch/omarchy VM (via labgrid SSH)
