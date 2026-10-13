@@ -17,7 +17,6 @@ except ImportError:
     html_extras = None
 
 from lib.router import Router
-from lib.router_lock import RouterLock
 from lib.cashu import CashuMint, MintUnavailableError, TokenPool, create_minter
 from lib.clients.adb import ADBDevice
 from lib.clients.wifi import WiFi
@@ -1366,7 +1365,6 @@ def pytest_runtest_makereport(item, call):
                     pass
 
 
-_session_lock: RouterLock | None = None
 _hardware_lock_acquired: bool = False
 
 
@@ -1416,7 +1414,7 @@ def _run_preflight_session(session) -> dict | None:
 
 
 def pytest_sessionstart(session):
-    global _session_lock, _hardware_lock_acquired
+    global _hardware_lock_acquired
     try:
         session._tollgate_preflight_snapshot = _run_preflight_session(session)
     except Exception as exc:
@@ -1427,29 +1425,17 @@ def pytest_sessionstart(session):
         lock_phase
         or os.environ.get("TOLLGATE_USE_HARDWARE_LOCK", "").lower() in ("1", "true", "yes")
     )
-    if use_hardware:
-        from lib.hardware_lock import acquire_hardware_lock, require_hardware_lock
-        try:
-            if lock_phase:
-                acquire_hardware_lock(lock_phase)
-                _hardware_lock_acquired = True
-            else:
-                require_hardware_lock()
-        except RuntimeError as exc:
-            pytest.exit(f"Cannot use hardware lock: {exc}", returncode=1)
+    if not use_hardware:
         return
-
-    if not lock_phase:
-        return
-    from lib.router_lock import RouterLock
-    router_id = os.environ.get("TOLLGATE_ROUTER_ID", "default")
-    branch = os.environ.get("TOLLGATE_BRANCH", "unknown")
-    lock = RouterLock()
+    from lib.hardware_lock import acquire_hardware_lock, require_hardware_lock
     try:
-        lock.acquire(router_id=router_id, phase=lock_phase, branch=branch)
+        if lock_phase:
+            acquire_hardware_lock(lock_phase)
+            _hardware_lock_acquired = True
+        else:
+            require_hardware_lock()
     except RuntimeError as exc:
-        pytest.exit(f"Cannot acquire router lock: {exc}", returncode=1)
-    _session_lock = lock
+        pytest.exit(f"Cannot use hardware lock: {exc}", returncode=1)
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -1458,14 +1444,11 @@ def pytest_sessionfinish(session, exitstatus):
     if IS_MOCK_MODE:
         return
 
-    global _session_lock, _hardware_lock_acquired
+    global _hardware_lock_acquired
     if _hardware_lock_acquired:
         from lib.hardware_lock import release_hardware_lock
         release_hardware_lock()
         _hardware_lock_acquired = False
-    if _session_lock is not None:
-        _session_lock.release()
-        _session_lock = None
 
     # Always collect router logs at session end (not just on failure).
     # Uses bundle="session-end" to avoid overwriting per-failure bundles.
