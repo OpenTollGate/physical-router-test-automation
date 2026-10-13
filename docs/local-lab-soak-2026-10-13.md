@@ -136,3 +136,14 @@ empty, and the VM stranded itself off 10.99.99.x. Two consequences:
     channel dies mid-install — it needs `RouterUnreachable`-aware retry
     (TOLLGATE_ALLOW_ROUTER_MOVE + re-target) or a serial-console capture
     path. Recovery was `stop-poc && start-poc --fresh` + redeploy.
+
+**Post-script (same day, follow-up run on an overlay without a private
+network — there the br-private move degrades to a warning and the channel
+survives): the full capture closed every caveat. The postinst printed
+"Post-installation script completed successfully" and opkg exited RC=0
+over the zero-byte nodogsplash — the silent-death class proven outright.
+Filed on tmbg #715 (both comments) and tmbg #928 (the entry_ui
+default-vs-convergence sibling). The PRTA test now classifies the
+severed-channel case as its own loud failure naming the mechanism,
+instead of tripping on an empty capture; its teardown tolerates an
+unreachable router so recovery cannot mask the verdict.**

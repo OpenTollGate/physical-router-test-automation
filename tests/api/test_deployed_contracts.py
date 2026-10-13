@@ -225,7 +225,23 @@ def test_postinst_fails_loud_over_husked_portal(router):
 
     try:
         router.ssh(": > /usr/bin/nodogsplash")  # the husk: zero bytes
-        out = router.ssh("opkg install --force-reinstall /tmp/tollgate-wrt*.ipk 2>&1; echo RC=$?")
+        try:
+            out = router.ssh("opkg install --force-reinstall /tmp/tollgate-wrt*.ipk 2>&1; echo RC=$?")
+        except Exception as exc:  # noqa: BLE001 — the verdict IS the exception class
+            pytest.fail(
+                f"the install over a husked portal severed the session before any verdict "
+                f"was observable ({type(exc).__name__}: {exc}) — rc4's setup moves eth0 off "
+                "br-lan onto br-private mid-install (tmbg #715 evidence 2026-10-13, #906); "
+                "recovery on a VM venue is stop-poc + start-poc --fresh"
+            )
+        if not out.strip():
+            pytest.fail(
+                "the install over a husked portal returned an EMPTY capture — ssh died "
+                "mid-command (rc4 moves eth0 off br-lan onto br-private; tmbg #715 "
+                "evidence 2026-10-13, #906): no fail-loud refusal was observable, and the "
+                "channel-severance itself is the finding. VM-venue recovery: stop-poc + "
+                "start-poc --fresh"
+            )
         assert "RC=0" not in out, (
             "postinst reported SUCCESS over a zero-byte nodogsplash — the silent-death "
             "class is back (#715, fork #93/#109)"
@@ -236,4 +252,10 @@ def test_postinst_fails_loud_over_husked_portal(router):
     finally:
         # Restore a functional nodogsplash; a failed assert above leaves
         # the router with the husk, and this recovery must not be skippable.
-        router.ssh("opkg update >/dev/null 2>&1; opkg install --force-reinstall nodogsplash >/dev/null 2>&1 || true")
+        # With the network moved (the severed-channel class), the restore ssh
+        # dies too — the teardown must not mask the verdict with its own error.
+        try:
+            router.ssh("opkg update >/dev/null 2>&1; opkg install --force-reinstall nodogsplash >/dev/null 2>&1 || true")
+        except Exception as exc:  # noqa: BLE001 — teardown must never mask the verdict
+            print(f"\n[husk-contract] nodogsplash restore unreachable ({type(exc).__name__}) — "
+                  "the router likely moved off its LAN bridge; rebuild the venue")
