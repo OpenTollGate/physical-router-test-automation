@@ -176,6 +176,17 @@ No gating. Runs against every firmware. Use for baseline API tests (health, conf
 
 ### Backend-Aware Skipping
 
+**Required tests are never silently skipped.** A test marked `required`
+carries release-relevant outcome semantics: if it skips, the run reports
+it as **FAILED "NOT VERIFIED"** (`tests/conftest.py`'s report gate) — a
+skipped required check is never a PASS, matching the installer-contract
+lane's outcome model. The one by-design exception mirrors the collection
+rule: in the virtual lab / cloud worker, `hardware`-marked tests without
+`virtual_lab` stay skippable (out of scope in that venue). Mark tests
+`required` deliberately — the health baseline (`tests/api/test_health.py`)
+is the seed; growing the set is curation, not a default.
+
+
 Tests marked `@pytest.mark.go_only` skip when `--backend=rust`. Tests marked `@pytest.mark.rust_only` skip when `--backend=go`. This is handled in `conftest.py` `pytest_collection_modifyitems`.
 
 `BackendConfig` (`lib/backend.py`) provides feature flags that differ between backends:

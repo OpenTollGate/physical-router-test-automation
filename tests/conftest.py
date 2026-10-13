@@ -1215,6 +1215,26 @@ def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
 
+    # The fail-closed outcome gate: a REQUIRED test that skips is reported
+    # as FAILED "NOT VERIFIED" instead — a skipped required check is never
+    # a PASS (the installer-contract lane's semantics, applied suite-wide;
+    # consolidation-map milestone 4). Venue rule mirrors the collection
+    # skip in pytest_collection_modifyitems: in the virtual lab / cloud
+    # worker, hardware tests without the virtual_lab marker stay
+    # skippable by design — out of scope there, not not-verified.
+    if (
+        report.outcome == "skipped"
+        and report.when in ("setup", "call")
+        and "required" in item.keywords
+        and not (
+            os.environ.get("TOLLGATE_VIRTUAL_LAB")
+            and "hardware" in item.keywords
+            and "virtual_lab" not in item.keywords
+        )
+    ):
+        report.outcome = "failed"
+        report.longrepr = f"NOT VERIFIED — required test skipped: {str(report.longrepr)}"
+
     screenshot_extras = getattr(item, "_screenshot_extras", None)
     if screenshot_extras and report.when == "call" and html_extras is not None:
         extras = list(getattr(report, "extras", []))
