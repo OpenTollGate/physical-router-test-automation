@@ -96,3 +96,15 @@ src/
 # Film voice backend — the model and voice pack are fetched, never committed.
 *.onnx
 voices-*.bin
+
+# --- Credentials hygiene (issue #7 class): ANY env variant beyond the template ---
+# .env and .env.bak were already ignored; the 2026-07 leak was .env.lab-routers-backup
+# — a class the narrow patterns missed. Ignore every dot-env variant except the
+# tracked example templates.
+.env.*
+!.env.example
+**/.env.*
+!**/.env.example
+*.env-backup
+*env-backup
+.env.backup
