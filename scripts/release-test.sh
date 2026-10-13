@@ -6,11 +6,19 @@
 #
 # Phases:
 #   1. Preflight — verify DUT reachable, labgrid place available
-#   2. Flash (optional) — deploy the release candidate
+#   2. Install (optional) — deploy the release candidate package
 #   3. Stories — run the full story suite
 #   4. Edge cases — error paths, invalid inputs
 #   5. Benchmarks — payment latency, portal load time
 #   6. Report — markdown summary with evidence links
+#
+# Consolidation note (2026-10 verification audit): this runner is the frozen
+# opkg-era release lane. Package deployment goes through the shared harness
+# (lib.deploy.deploy — era-aware, health-checked); portal and labgrid-lock
+# failures are blocking. The long-term decision and the milestone plan that
+# fold this lane into the profile runners live in
+# docs/authoritative-test-suite.md → "Runner consolidation". Do not add new
+# deploy/install logic here.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && dirname "$0")"
@@ -66,7 +74,10 @@ if [[ "$SKIP_LABGRID" == "false" ]]; then
         LOCKED_PLACE="nr7101-router"
         log "✓ Labgrid place 'nr7101-router' locked"
     else
-        log "⚠ Could not lock labgrid place (may be in use) — proceeding without mutex"
+        log "❌ Could not lock labgrid place 'nr7101-router' (in use, or coordinator unreachable at $LABGRID_COORD)"
+        log "   A release run without the mutex is not attributable — refusing."
+        log "   Retry when the place is free, or pass --skip-labgrid explicitly."
+        exit 1
     fi
 else
     log "Phase 1: Preflight (labgrid skipped)"
@@ -86,23 +97,41 @@ log "✓ Current version: $CURRENT"
 log ""
 
 # ═══════════════════════════════════════════════════════════════
-# Phase 2: Flash (optional)
+# Phase 2: Install (optional)
 # ═══════════════════════════════════════════════════════════════
 if [[ "$NO_FLASH" == "false" && -n "$IPK_PATH" ]]; then
-    log "Phase 2: Flashing $IPK_PATH"
-    if scp -O -o ConnectTimeout=10 "$IPK_PATH" "root@$ROUTER:/tmp/release.ipk" \
-        && ssh -o ConnectTimeout=10 "root@$ROUTER" \
-            "opkg install --force-overwrite /tmp/release.ipk && /etc/init.d/tollgate-wrt restart" \
-            2>&1 | tee -a "$REPORT_DIR/pipeline.log"; then
-        log "✓ Flashed and restarted"
+    log "Phase 2: Installing $IPK_PATH (via lib.deploy.deploy)"
+    DEPLOY_LOG="$REPORT_DIR/deploy.log"
+    # The standard harness path (transfer, era-aware apk/opkg install, service
+    # restart, :2121 health check) — replaces the hand-copied scp+opkg that
+    # lived here (docs/authoritative-test-suite.md → "Runner consolidation").
+    if (cd "$REPO_ROOT" && "$VENV/bin/python" - "$ROUTER" "$IPK_PATH" <<'PY'
+import sys
+from pathlib import Path
+
+from lib.deploy import deploy
+from lib.router import Router
+
+router = Router(host=sys.argv[1], phone_ip="", phone_mac="", domain="")
+result = deploy(router, Path(sys.argv[2]), reboot=False)
+print(
+    f"version={result.get('installed_version')} "
+    f"health={result.get('health_code')} success={result.get('success')}"
+)
+sys.exit(0 if result.get("success") else 1)
+PY
+    ) >"$DEPLOY_LOG" 2>&1; then
+        tail -n 1 "$DEPLOY_LOG" | tee -a "$REPORT_DIR/pipeline.log"
+        log "✓ Package installed, service healthy"
     else
-        log "❌ Flash failed"
+        tail -n 20 "$DEPLOY_LOG" >&2 || true
+        log "❌ Package install failed (see $DEPLOY_LOG)"
         [[ -n "$LOCKED_PLACE" ]] && "$VENV/bin/labgrid-client" -x "$LABGRID_COORD" -p "$LOCKED_PLACE" release 2>/dev/null || true
         exit 1
     fi
     sleep 10
 else
-    log "Phase 2: Skipping flash (--no-flash or no --ipk)"
+    log "Phase 2: Skipping install (--no-flash or no --ipk)"
 fi
 
 # ═══════════════════════════════════════════════════════════════
@@ -116,6 +145,7 @@ export TOLLGATE_TEST_MINT_URL="${TOLLGATE_TEST_MINT_URL:-http://192.168.13.221:8
 
 cd "$REPO_ROOT"
 STORY_RESULT=0
+PORTAL_RESULT=0
 if "$VENV/bin/python" -m pytest tests/stories/ \
     --no-deploy --timeout-method=signal -v --tb=short \
     2>&1 | tee "$REPORT_DIR/stories.log"; then
@@ -139,7 +169,8 @@ if [[ "$PORTAL_CODE" == "200" ]]; then
         2>&1 | tee "$REPORT_DIR/portal.log" | tail -3; then
         log "✓ Portal tests passed"
     else
-        log "⚠ Portal tests failed"
+        log "❌ Portal tests failed"
+        PORTAL_RESULT=1
     fi
 else
     log "Phase 4: Skipping portal tests (HTTP $PORTAL_CODE)"
@@ -151,6 +182,8 @@ log ""
 # ═══════════════════════════════════════════════════════════════
 log "Phase 5: Generating report"
 
+OVERALL=$(( STORY_RESULT | PORTAL_RESULT ))
+
 STORY_PASSED=$(grep -c "PASSED" "$REPORT_DIR/stories.log" 2>/dev/null || echo 0)
 STORY_FAILED=$(grep -c "FAILED" "$REPORT_DIR/stories.log" 2>/dev/null || echo 0)
 STORY_SKIPPED=$(grep -c "SKIPPED" "$REPORT_DIR/stories.log" 2>/dev/null || echo 0)
@@ -160,7 +193,7 @@ cat > "$REPORT_DIR/report.md" <<REPORT
 
 **Date**: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 **DUT**: $ROUTER (was running $CURRENT)
-**Result**: $([ $STORY_RESULT -eq 0 ] && echo "✅ PASS" || echo "❌ FAIL")
+**Result**: $([ $OVERALL -eq 0 ] && echo "✅ PASS" || echo "❌ FAIL")
 
 ## Story Suite
 
@@ -196,4 +229,4 @@ fi
 log "═══ Release test complete ═══"
 log "Report: $REPORT_DIR/report.md"
 
-exit $STORY_RESULT
+exit $OVERALL

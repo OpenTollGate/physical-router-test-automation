@@ -159,3 +159,66 @@ regression; a cell that was always ✗ is a known gap.
 - `tests/browser/portal-tab-copy.spec.mjs` — first behavior-based browser test
 - `tests/phone/test_rig_phone_payment.py` — phone E2E (needs user-story naming)
 - `docs/release-cache-purge.md` — cross-implementation design doc precedent
+
+## Runner consolidation (2026-10 decision)
+
+**Decision.** PRTA is the single source of truth for router-test runners.
+No runner in either repository may carry its own deploy/install logic or a
+soft-fail verdict; deployment goes through `lib/deploy.py`, flashing through
+`scripts/build-firmware.py` / `flash-routers.mjs`, and every failure that a
+lane reports must affect its exit code. The
+`tollgate-module-basic-go` hardware fleet (`tests/test_*.py` +
+`conftest.py` + `flash_routers.py`) is **retired pending migration**: marked
+deprecated in that repo's `tests/README.md`, deleted only when each mapping
+row below is proven green on hardware once (the deletion gate). The
+`scripts/release-test.sh` lane is frozen as the opkg-era release lane and
+folds into the profile runners per the milestones below.
+
+**What landed in M1** (gate hardening + dedup, 2026-10):
+
+- `scripts/release-test.sh` — labgrid-lock failure refuses instead of
+  proceeding without the mutex; portal tab-copy failures set the exit code;
+  the inline `scp -O` + `opkg install` phase replaced by
+  `lib.deploy.deploy` (era-aware apk/opkg, service restart, `:2121` health
+  check).
+- `tests/destructive/reboot-recovery.spec.mjs` — service-not-running after
+  reboot is now a test failure, not a `console.log` WARN.
+
+**Migration audit: main-repo fleet → PRTA equivalent.** Re-verified against
+both checkouts on 2026-10-13. The striking finding: most fleet "tests"
+assert nothing — they are wrappers around fixtures or interactive scripts —
+so the migration risk is operational plumbing, not lost assertions.
+
+| Main-repo file | What it actually does | PRTA equivalent | Deletion gate |
+|---|---|---|---|
+| `tests/test_copy_images.py` | no-op wrapper ("passes as long as the fixture completes") | `Router.scp_to`, `scripts/build-firmware.py` staging | green run using `scp_to` path |
+| `tests/test_install_images.py` | flash via fixture; waits with `ping` (the ICMP anti-pattern) | `build-firmware.py --flash`, `flash-routers.mjs`, `uboot-recover.py`; post-flash state asserted by `tests/scenarios/test_install_paths.py` | one documented flash cycle |
+| `tests/test_install_packages.py` | no-op wrapper, no assertions | `lib/deploy.deploy` + `tests/scenarios/test_feed_package.py` (era-aware, asserts version/identity/health) | `test_feed_package.py` green on both eras |
+| `tests/test_network_configuration.py` | bespoke sshpass wait loop for upstream connectivity | `tests/scenarios/test_upstream_wifi.py`, `upstream-wifi/` targets, `Router` wait helpers | `test_upstream_wifi.py` green on hardware |
+| `tests/test_ecash_payment.py` | interactive `input()`-prompted manual e2e | `tests/api/test_e2e_portal_payment.py`, `test_local_payment.py`, `tests/stories/`, `tests/protocol/payment-lifecycle.spec.mjs` | api payment suite green on a release |
+| `tests/test_ecash_functionality.py` | cdk-cli wallet ops against public testnut | `tests/api/test_cli_wallet.py`, `test_cashu_compat_matrix.py`, `lib/cashu.py` (HttpMinter) | compat-matrix green |
+| `tests/test_data_measurement.py` | interactive `input()` + curl download metering | `tests/phone/test_data_metering.py`, `test_time_metering.py`, `tests/protocol/data-allotment.spec.mjs` | data-allotment spec green once |
+| `tests/test_teardown.py` | `assert True` placeholder | `test-pr.sh --reset` (`firstboot_reset`), `Router.reset_state` | none needed (no assertions) |
+
+Known non-migrated behavior (recorded, not lost): the fleet's conftest
+auto-discovery sweep over nearby TollGate SSIDs. It selected routers by
+scanning, PRTA selects by inventory (`config/routers.json`). If
+discovery-driven runs are ever wanted again, that is new PRTA
+functionality, not a reason to keep the fleet.
+
+**Milestones.**
+
+- **M1 (landed).** Gate hardening, deploy dedup, fleet marked deprecated,
+  this mapping recorded.
+- **M2.** apk-era upgrade + reboot scenario in `tests/scenarios/`
+  (`test_install_paths.py` scenario A′) and the installer-contract lane
+  (`tollgate-module-basic-go` PR #892) merged and run per release
+  candidate — together these supersede the fleet's install coverage on
+  25.x.
+- **M3.** Fold `tests/stories/` into the `tests/scenarios/` + markers
+  scheme; reduce `scripts/release-test.sh` to a thin profile over
+  `run-profile.sh` / `test-pr.sh`.
+- **M4.** Delete the main-repo legacy fleet files once every mapping row
+  above has met its deletion gate; finish the `mint-health/` and
+  `upstream-wifi/` Makefile → pymake migration and delete the legacy
+  Makefiles.
