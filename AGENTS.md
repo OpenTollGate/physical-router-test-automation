@@ -2591,3 +2591,27 @@ Dangerous on commissioned routers (silent money-path swap; same class as the
 with full objects and verify via `logread | grep "Accepted Mints"`.
 
 
+## Local-lab fresh-cycle gotchas (2026-10-13, rc4 re-soak)
+
+Three ways a `--fresh` DUT overlay breaks tooling that worked against the
+persisted overlay — all found in one session, all fixed in-tree:
+
+1. **A fresh overlay changes the VM's host key.** `StrictHostKeyChecking=no`
+   does NOT save you: a CHANGED key in a real `known_hosts` is a hard ssh
+   error ("REMOTE HOST IDENTIFICATION HAS CHANGED"). Every lab ssh/scp must
+   pair the flag with `-o UserKnownHostsFile=/dev/null` (now uniform in
+   `install-package` and all 11 runner calls in `run-local-tests.sh`; the
+   rest of PRTA already did).
+2. **opkg refuses extensionless local files** ("Unknown package
+   /tmp/lane-pkg") exactly like apk3 — `install-package` stages as
+   `/tmp/tollgate-wrt-lane.$ext` on both lanes now.
+3. **A pristine base needs `opkg update` before `install-package`** — the
+   declared DEPENDS (nodogsplash/jq/ca-bundle) pull cleanly once feeds are
+   current; a fresh 24.10 base has none of them.
+
+Same session's deeper findings live in
+`docs/local-lab-soak-2026-10-13.md` (rc4 postinst reports SUCCESS over a
+husked portal — tmbg #715 evidence; entry_ui default-vs-convergence —
+tmbg #928) and the first-boot serial-timeout recovery is documented in the
+fast-start lesson above: re-run start-poc, the already-provisioned
+detection takes over.
