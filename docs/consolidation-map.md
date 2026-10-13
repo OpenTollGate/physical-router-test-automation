@@ -71,6 +71,7 @@ Updated 2026-10-13. Statuses are facts about trackers, not aspirations.
 | 14 | Behavioral gate before announce (happy-path on the built x86_64 .apk, ngit-native artifact fetch) | module [#924](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/924) | module | **open — sign-off**; step-level validation done, first live release run owed |
 | 15 | apk-era upgrade + reboot scenario (state preservation, #899 listener invariant on upgrade) | PRTA [#225](https://github.com/OpenTollGate/physical-router-test-automation/pull/225) | PRTA | **merged**; first bench execution owed |
 | 16 | Installer-contract lane wired per-rc into release-check + runbook | module [#925](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/925) | module | **open — sign-off** |
+| 17 | Fail-closed outcomes for required tests (skip ≠ PASS, venue rule) | PRTA [#227](https://github.com/OpenTollGate/physical-router-test-automation/pull/227) | PRTA | **merged**; required-set curation is incremental |
 
 ## Milestones ahead (smallest effective first)
 
@@ -93,9 +94,12 @@ Updated 2026-10-13. Statuses are facts about trackers, not aspirations.
    fail-closed until then), and the per-rc wiring is module
    [#925](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/925)
    (open, sign-off).
-4. **NOT_VERIFIED everywhere** — pytest collection in PRTA still reports
-   skips as green at the job level; adopt the lane's fail-closed outcome
-   semantics suite-wide.
+4. **NOT_VERIFIED everywhere — mechanism landed** (PRTA
+   [#227](https://github.com/OpenTollGate/physical-router-test-automation/pull/227)):
+   a `required`-marked test that skips fails as "NOT VERIFIED" (venue
+   rule keeps hardware tests skippable in the virtual lab by design).
+   Growing the required set is deliberate curation — seeded with the
+   health baseline, tracked here.
 5. **M4: delete legacy only through its gates** — fleet files go when
    their mapping rows have green hardware runs; `mint-health/` +
    `upstream-wifi/` Makefiles go when the pymake migration covers them.
