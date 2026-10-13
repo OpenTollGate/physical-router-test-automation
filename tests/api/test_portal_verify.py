@@ -10,6 +10,8 @@ import os
 
 import pytest
 
+from lib.helpers import portal_layout
+
 pytestmark = [
     pytest.mark.story("G1"),pytest.mark.api, pytest.mark.smoke, pytest.mark.virtual_lab]
 
@@ -158,6 +160,65 @@ class TestNet4satsPortal:
     def test_net4sats_manifest_exists(self, router):
         manifest = router.ssh("cat /etc/nodogsplash/htdocs/manifest.json 2>/dev/null")
         assert manifest.strip(), "net4sats portal manifest.json missing"
+
+
+class TestSpaPortal2051:
+    """The ipk-era SPA layout (PRTA #103): /etc/tollgate/tollgate-captive-portal-site
+    served by a uhttpd instance on :2051.
+
+    Gated on portal_layout() detection rather than TOLLGATE_PORTAL — the
+    pre-#103 tests below skip forever on current packaging, which left this
+    portal with zero passing coverage (incident 2026-10-01, fix F7).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_if_no_spa_2051(self, router):
+        layout = portal_layout(router)
+        if not layout["spa_2051"]:
+            pytest.skip(
+                "SPA portal not deployed/serving on :2051 "
+                f"(probe: {layout['probe']})"
+            )
+
+    @pytest.mark.smoke
+    def test_spa_dir_has_portal_files(self, router):
+        files = router.ssh(
+            "ls /etc/tollgate/tollgate-captive-portal-site 2>/dev/null", timeout=10
+        )
+        names = [f.strip() for f in files.splitlines() if f.strip()]
+        assert names, "SPA dir /etc/tollgate/tollgate-captive-portal-site/ is empty"
+        assert any(
+            n in ("splash.html", "index.html") for n in names
+        ), f"SPA dir has no portal entrypoint (files: {names})"
+
+    @pytest.mark.smoke
+    def test_spa_splash_served_on_2051(self, router):
+        code = router.ssh(
+            "curl -s -o /dev/null -w '%{http_code}' -m 5 "
+            "http://127.0.0.1:2051/splash.html",
+            timeout=10,
+        ).strip()
+        assert code == "200", f"SPA splash.html not served on :2051 (got {code!r})"
+
+    @pytest.mark.smoke
+    def test_spa_balance_served_on_2051(self, router):
+        code = router.ssh(
+            "curl -s -o /dev/null -w '%{http_code}' -m 5 "
+            "http://127.0.0.1:2051/balance.html",
+            timeout=10,
+        ).strip()
+        assert code == "200", f"SPA balance.html not served on :2051 (got {code!r})"
+
+    @pytest.mark.smoke
+    def test_uhttpd_instance_listens_on_2051(self, router):
+        uci = router.ssh("uci show uhttpd 2>/dev/null", timeout=10)
+        listeners = [
+            line for line in uci.splitlines() if "listen_http" in line and "2051" in line
+        ]
+        assert listeners, (
+            f"no uhttpd listen_http entry binds :2051 — the SPA has no server "
+            f"(uhttpd config: {uci[:300]!r})"
+        )
 
 
 class TestPortalAgnostic:
