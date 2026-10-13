@@ -22,11 +22,44 @@ import time
 import re
 import logging
 import shlex
+import functools
 
 from lib.constants import BACKEND_PORT, CGI_PORT, TEST_MINT_URL
 from lib.backend import BackendConfig
 
 log = logging.getLogger("tollgate.router")
+
+
+class RouterReadOnlyError(RuntimeError):
+    """A state-changing Router method was called in --read-only mode.
+
+    Raised by every @_mutating-guarded method when the router was armed
+    read-only (Router.enable_read_only, wired to the pytest --read-only
+    flag). Incident 2026-10-01: an autouse fixture mutated a commissioned
+    live router because --no-deploy was not passed; --read-only makes the
+    framework fail closed instead.
+    """
+
+
+def _mutating(method):
+    """Guard a state-changing Router method for --read-only mode.
+
+    Raises RouterReadOnlyError before any command runs when the instance
+    is armed read-only. Apply to every method that writes router config,
+    installs files, restarts services, rewrites firewall/NDS state, or
+    consumes payment value. Read-only mode cannot classify arbitrary
+    router.ssh() commands — those remain the caller's responsibility.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        if getattr(self, "_read_only", False):
+            raise RouterReadOnlyError(
+                f"{method.__name__}() mutates the router and is blocked in "
+                "--read-only mode (incident 2026-10-01). Run without "
+                "--read-only to allow state changes."
+            )
+        return method(self, *args, **kwargs)
+    return wrapper
 
 
 def remove_nds_auth_mark_rules(run_ssh, client_mac: str | None = None) -> int:
@@ -115,6 +148,7 @@ class Router:
         self.jump_host = jump_host
         self.port = port
         self.backend = backend or BackendConfig()
+        self._read_only = False
         self._ssh_pw = os.environ.get("TOLLGATE_SSH_PASSWORD") or os.environ.get("TOLLGATE_LUCI_PASSWORD")
         # Consecutive connect-level failures; reset on any successful call. See
         # RouterUnreachable — the install moves the wired LAN port, so this is how
@@ -144,6 +178,20 @@ class Router:
         if jump_host:
             self._ssh_base.extend(["-J", jump_host])
         self._ssh_base.append(f"root@{host}")
+
+    def enable_read_only(self):
+        """Arm fail-closed read-only mode (pytest --read-only).
+
+        Every @_mutating-guarded method raises RouterReadOnlyError from
+        this point on. Reads (ssh, api_status, getters, wait_for_auth)
+        keep working. Cannot be reversed on purpose within a session —
+        a commission run is read-only for its whole lifetime.
+        """
+        self._read_only = True
+        log.info(
+            "Router %s armed READ-ONLY — mutating methods will raise "
+            "(incident 2026-10-01 class)", self.host,
+        )
 
     def close(self):
         try:
@@ -249,6 +297,7 @@ class Router:
                 self._nds_gateway_domain = ""
         return self._nds_gateway_domain
 
+    @_mutating
     def ensure_nds_gateway_domain_supported(self):
         """Patch /etc/init.d/nodogsplash to include gatewaydomainname if missing."""
         if self.ssh("grep -q gatewaydomainname /etc/init.d/nodogsplash").strip():
@@ -385,6 +434,7 @@ class Router:
                 "run there. (TOLLGATE_ALLOW_ROUTER_MOVE=1 keeps the old behaviour.)"
             )
 
+    @_mutating
     def write_remote_text(self, remote_path: str, content: str, timeout: int = 15):
         result = self.ssh_stdin(f"cat > {shlex.quote(remote_path)}", content, timeout=timeout)
         if result.returncode == 0:
@@ -395,9 +445,11 @@ class Router:
             f"Failed to write {remote_path} ({result.returncode}): {cleaned[:300]}"
         )
 
+    @_mutating
     def write_remote_json(self, remote_path: str, payload, indent: int = 2, timeout: int = 15):
         self.write_remote_text(remote_path, json.dumps(payload, indent=indent), timeout=timeout)
 
+    @_mutating
     def ssh_stdin(self, cmd: str, data: str, timeout: int = 15):
         try:
             return subprocess.run(
@@ -413,6 +465,7 @@ class Router:
                 env=self._ssh_env(),
             )
 
+    @_mutating
     def scp_to(self, local_path: str, remote_path: str, timeout: int = 120):
         ssh_opts = [
             "-o", "StrictHostKeyChecking=no",
@@ -439,6 +492,7 @@ class Router:
             raise RuntimeError(f"SCP failed ({r.returncode}): {r.stderr.strip()[:300]}")
 
 
+    @_mutating
     def fix_nodogsplash_dhcp(self):
         """Ensure nodogsplash allows DHCP through its ndsRTR chain.
 
@@ -473,6 +527,7 @@ class Router:
         except Exception as e:
             log.warning(f"Could not fix nodogsplash DHCP: {e}")
 
+    @_mutating
     def fix_nodogsplash_auth_marks(self, ip: str | None = None, mac: str | None = None):
         """Repair NDS 5.0.2 auth-mark gating so authenticated clients can open
         NEW connections.
@@ -526,6 +581,7 @@ class Router:
         except Exception as e:
             log.warning(f"Could not fix nodogsplash auth marks: {e}")
 
+    @_mutating
     def remove_nds_auth_marks(self, mac: str | None = None) -> int:
         """Sweep leaked per-client ndsOUT auth-mark rules for a client.
 
@@ -535,6 +591,7 @@ class Router:
         """
         return remove_nds_auth_mark_rules(self.ssh, mac or self.phone_mac)
 
+    @_mutating
     def disable_ipv6_on_lan(self):
         """Disable IPv6 on the LAN interface to prevent captive portal bypass.
 
@@ -642,6 +699,7 @@ class Router:
             return self.ssh(f"wget -qO- {header_args} --post-data='{data}' '{path}' 2>/dev/null || true")
         return self.ssh(f"wget -qO- {header_args} '{path}' 2>/dev/null || true")
 
+    @_mutating
     def pay_direct(self, token: str, ip: str | None = None) -> dict:
         ip = ip or self.phone_ip
 
@@ -704,6 +762,7 @@ class Router:
         except json.JSONDecodeError:
             return {"raw": resp}
 
+    @_mutating
     def pay_direct_mac(self, token: str, mac: str | None = None, ip: str | None = None) -> dict:
         mac = mac or self.phone_mac
         ip = ip or self.phone_ip
@@ -722,6 +781,7 @@ class Router:
         except json.JSONDecodeError:
             return {"raw": resp}
 
+    @_mutating
     def pay_via_header(self, token: str, mac: str | None = None) -> str:
         mac = mac or self.phone_mac
         return self.ssh(
@@ -777,6 +837,7 @@ class Router:
             self.fix_nodogsplash_auth_marks()
         return authed
 
+    @_mutating
     def ensure_dhcp_lease(self, ip: str | None = None, mac: str | None = None) -> None:
         """Ensure the client IP/MAC pair exists in /tmp/dhcp.leases.
 
@@ -828,6 +889,7 @@ class Router:
             time.sleep(poll_interval)
         raise TimeoutError(f"Session did not expire within {max_wait}s")
 
+    @_mutating
     def reset_state(self, mac: str | None = None, adb=None):
         if not mac and not self.phone_mac and adb:
             detected = adb.wifi_mac()
@@ -848,6 +910,7 @@ class Router:
         self.ssh("echo '' > /tmp/tollgate-portal.log")
         self.ssh("echo '' > /www/pending-token.txt")
 
+    @_mutating
     def apply_pricing(self, step_size: int | None = None, metric: str = "milliseconds"):
         if step_size is None:
             from lib.constants import DEFAULT_STEP_SIZE_MS
@@ -863,6 +926,7 @@ class Router:
         self.restart_backend()
         self._wait_for_backend()
 
+    @_mutating
     def restore_pricing(self):
         self.ssh("cp /etc/tollgate/config.json.test-backup /etc/tollgate/config.json")
         self.restart_backend()
@@ -925,6 +989,7 @@ class Router:
     DEVICE_MINT_WORKDIR = "/tmp/mintd-work"
     DEVICE_MINT_MNEMONIC_ENV = "TOLLGATE_DEVICE_MINT_MNEMONIC"
 
+    @_mutating
     def start_device_mint(self, local_binary: str, local_settings: str) -> bool:
         """Sideload and start the on-device fakewallet mint.
 
@@ -971,9 +1036,11 @@ class Router:
         log.warning("device mint did not answer /v1/info; see /tmp/cdk-mintd.log")
         return False
 
+    @_mutating
     def stop_device_mint(self) -> None:
         self.ssh("killall cdk-mintd 2>/dev/null; true")
 
+    @_mutating
     def restart_backend(self, timeout: int = 30):
         """Restart the backend service and wait for readiness."""
         self.ssh("service tollgate-wrt restart 2>/dev/null; service tollgate restart 2>/dev/null; true", timeout=15)
@@ -1004,15 +1071,19 @@ class Router:
     def get_portal_log(self) -> str:
         return self.ssh("cat /tmp/tollgate-portal.log 2>/dev/null")
 
+    @_mutating
     def clear_portal_log(self):
         self.ssh("echo '' > /tmp/tollgate-portal.log")
 
+    @_mutating
     def enable_debug_portal(self):
         self.ssh("mkdir -p /etc/tollgate && touch /etc/tollgate/debug-portal")
 
+    @_mutating
     def disable_debug_portal(self):
         self.ssh("rm -f /etc/tollgate/debug-portal")
 
+    @_mutating
     def ensure_test_mint(self):
         cfg_raw = self.ssh("cat /etc/tollgate/config.json")
         if not cfg_raw or not cfg_raw.strip():
@@ -1043,6 +1114,7 @@ class Router:
         self.restart_backend()
         log.info(f"Added {TEST_MINT_URL} to accepted mints, restarted backend")
 
+    @_mutating
     def replace_mints(self, mint_urls: list[str] | None = None, force: bool = False):
         """Replace all accepted mints with only the specified URLs.
 
@@ -1201,15 +1273,18 @@ class Router:
     def uci_get(self, path: str) -> str:
         return self.ssh(f"uci -q get {path} 2>/dev/null || true").strip()
 
+    @_mutating
     def uci_set(self, path: str, value: str) -> None:
         self.ssh(f"uci set {path}={shlex.quote(value)}")
 
+    @_mutating
     def uci_commit(self, *configs: str) -> None:
         if configs:
             self.ssh("uci commit " + " ".join(configs))
         else:
             self.ssh("uci commit")
 
+    @_mutating
     def block_mint(self, mint_url: str | None = None) -> None:
         """Block mint hostname via /etc/hosts (same as Makefile block-mint)."""
         url = mint_url or os.environ.get("TOLLGATE_TEST_MINT_URL", TEST_MINT_URL)
@@ -1222,6 +1297,7 @@ class Router:
         )
         log.info("Blocked mint host %s via /etc/hosts", host)
 
+    @_mutating
     def unblock_mint(self, mint_url: str | None = None) -> None:
         url = mint_url or os.environ.get("TOLLGATE_TEST_MINT_URL", TEST_MINT_URL)
         from urllib.parse import urlparse
@@ -1235,12 +1311,14 @@ class Router:
     def get_hosts_entries(self) -> list[str]:
         return self.ssh("cat /etc/hosts").splitlines()
 
+    @_mutating
     def upstream_connect(self, ssid: str, password: str | None = None) -> dict[str, object]:
         args = ["connect", ssid]
         if password:
             args.append(password)
         return self.cli_command("upstream", args=args)
 
+    @_mutating
     def upstream_remove(self, ssid: str) -> dict[str, object]:
         return self.cli_command("upstream", args=["remove", ssid])
 

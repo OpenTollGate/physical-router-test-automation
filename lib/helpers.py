@@ -528,3 +528,43 @@ def nodogsplash_allows_port(cfg_text, port):
         if fields[:1] == ["allow"] and fields[-2:] == want:
             return True
     return False
+
+
+def portal_layout(router) -> dict:
+    """Detect which captive-portal layout the router actually serves.
+
+    One batched probe (PRTA #103 / fix F7): the ipk-era layout ships the
+    SPA to /etc/tollgate/tollgate-captive-portal-site/ served by a uhttpd
+    instance on :2051, while the net4sats (configwizzard) overlay brings
+    /www/net4sats/balance.html on :8090. Tests assert against the layout
+    that is present instead of skipping forever on the one that is not.
+
+    Returns {"spa_2051": bool, "net4sats": bool, "nds_splash": bool,
+    "probe": {raw probe values}} — spa_2051 requires both the directory
+    and a serving :2051, so a half-deployed portal reads False.
+    """
+    out = router.ssh(
+        "echo spa_files=$(ls /etc/tollgate/tollgate-captive-portal-site 2>/dev/null | wc -l); "
+        "echo spa_2051_code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1:2051/splash.html 2>/dev/null); "
+        "echo net4sats=$(test -f /www/net4sats/balance.html && echo yes || echo no); "
+        "echo nds_splash=$(test -f /etc/nodogsplash/htdocs/splash.html && echo yes || echo no)",
+        timeout=15,
+    )
+    probe = {}
+    for line in (out or "").splitlines():
+        if "=" in line:
+            key, _, val = line.partition("=")
+            probe[key.strip()] = val.strip()
+
+    def _int(key):
+        try:
+            return int(probe.get(key, "0"))
+        except ValueError:
+            return 0
+
+    return {
+        "spa_2051": _int("spa_files") > 0 and probe.get("spa_2051_code") == "200",
+        "net4sats": probe.get("net4sats") == "yes",
+        "nds_splash": probe.get("nds_splash") == "yes",
+        "probe": probe,
+    }
