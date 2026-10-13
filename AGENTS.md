@@ -2367,12 +2367,14 @@ Full postmortem + fix queue + labgrid plan:
   testnut.cashu.exchange and restarted the backend twice** during a
   "read-only" commissioned run against the MT3000 (tollgate-326D).
   `--no-deploy` is named after deployment but is the ONLY suppressor of state
-  prep. Live commissions must pass `--no-deploy` today; a `--read-only`
-  fail-closed flag is queued (F1).
+  prep. **F1 LANDED (PR #231)**: `--read-only` is fail-closed — 30 mutating
+  Router methods raise `RouterReadOnlyError`, deploy flags are refused, and
+  `config`/`destructive`-marked tests skip with a visible reason. Live
+  commissions pass `--no-deploy --read-only`.
 - **`replace_mints()` has a destructive default** (`mint_urls=None` →
   `[TEST_MINT_URL]`) — calling it bare nukes the operator's mint list
-  (`lib/router.py:834`). Queued fix F3: require explicit list, refuse
-  >1→1 shrinks without `force`.
+  (`lib/router.py:834`). **F3 LANDED**: explicit list required, >1→1 shrinks
+  refused without `force` (`tests/unit/test_replace_mints_guard.py`).
 - **Detection was luck** (pytest live-log printed "Replaced accepted mints…"),
   **recovery was luck** (`logread` boot lines enumerated the pre-run mints +
   the m5 lane's config backup existed + mutating methods are
@@ -2383,7 +2385,9 @@ Full postmortem + fix queue + labgrid plan:
   18 skipped — 15 of the skips assert the pre-PRTA-#103 net4sats portal
   layout and can never pass on current packaging, meaning **the :2051 SPA
   portal has zero passing pytest coverage** while the dashboard reads
-  "0 failed". Rewrite queued (F7) behind a `_portal_layout()` detection.
+  "0 failed". **F7 LANDED (PR #231)**: `portal_layout()` detection +
+  `TestSpaPortal2051` — soak-verified 4/4 on a live VM
+  (`docs/local-lab-soak-2026-10-13.md`).
 - **Unpinned contracts found**: `:2051` bare `/` answers 403 (intended?);
   `session-state?mac=X` returns `{"status":1,"mac":"","state":"none"}`;
   `/usage` sentinel `-1/-1`. Queue: pin all in `config/behavior-contract.json`
