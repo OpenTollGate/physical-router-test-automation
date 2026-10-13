@@ -38,7 +38,7 @@ reset_venue_state() {
   # 33F vs 54F on the same code). Fresh state per run.
   stop_mint
   rm -f /tmp/cdk-mintd-local/cdk-mintd.sqlite* /tmp/cdk-mintd-local.log
-  sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no "root@${OPENWRT_IP}" \
+  sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${OPENWRT_IP}" \
     "rm -f /etc/tollgate/http___10.99.99.2_8383.sqlite*; /etc/init.d/tollgate-wrt restart" \
     2>/dev/null || log "WARNING: gateway wallet-state reset failed"
 }
@@ -166,7 +166,7 @@ resync_backend_wallet() {
   # still work but discovery/degraded tests cascade-fail. Restarting the
   # backend makes the wallet re-register the mint (kind 10021 within ~10s).
   # Root-caused 2026-09-04: probes ok=true + curl 200 + discovery 21023.
-  sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+  sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
     "root@${OPENWRT_IP}" "/etc/init.d/tollgate-wrt restart" >/dev/null 2>&1 || true
   sleep 8
   log "Backend wallet resync: tollgate-wrt restarted"
@@ -195,7 +195,7 @@ stop_mint() {
 }
 
 check_vms() {
-  if ! sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "root@${OPENWRT_IP}" "echo ok" >/dev/null 2>&1; then
+  if ! sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 "root@${OPENWRT_IP}" "echo ok" >/dev/null 2>&1; then
     log "ERROR: OpenWrt VM not reachable at ${OPENWRT_IP}"
     log "Run: python3 scripts/virtual-lab.py start-poc --host localhost"
     exit 1
@@ -216,7 +216,7 @@ check_vms() {
   # curl (router-side probes in portal/NDS/degraded tests). Both have
   # been silently missing on lab VMs — every router-side probe returned
   # empty and portal tests failed constantly (2026-10-03 forensics).
-  sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no "root@${OPENWRT_IP}" \
+  sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${OPENWRT_IP}" \
     "command -v jq >/dev/null && command -v curl >/dev/null || { opkg update >/dev/null 2>&1; opkg install jq curl libcurl4 >/dev/null 2>&1; }; command -v jq && command -v curl" \
     2>/dev/null | grep -q curl || log "WARNING: could not provision jq+curl on the VM — portal/NDS tests will fail"
   log "VMs OK"
@@ -224,7 +224,7 @@ check_vms() {
 
 configure_mint() {
   log "Configuring OpenWrt to use local mint..."
-  sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no "root@${OPENWRT_IP}" "
+  sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${OPENWRT_IP}" "
     jq '.accepted_mints = [{\"url\": \"${MINT_URL}\", \"min_balance\": 0, \"balance_tolerance_percent\": 0, \"price_per_step\": 1, \"price_unit\": \"sats\", \"purchase_min_steps\": 1}]' /etc/tollgate/config.json > /tmp/cfg.json
     mv /tmp/cfg.json /etc/tollgate/config.json
     /etc/init.d/tollgate-wrt restart
@@ -238,7 +238,7 @@ configure_mint() {
   # 429/503 class, 2026-10-02). Single-mint venue restarts serve the
   # ad in ~2s (measured).
   for i in $(seq 1 90); do
-    if sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no "root@${OPENWRT_IP}" \
+    if sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${OPENWRT_IP}" \
       "wget -qO- --timeout=3 http://127.0.0.1:2121/ 2>/dev/null" 2>/dev/null | grep -q "${MINT_URL}"; then
       log "Backend healthy, ad serves the local mint (${i} polls)"
       return
@@ -254,15 +254,15 @@ assert_venue_config() {
   # from degraded fixtures that pytest-timeout killed BEFORE teardown —
   # either one poisons later files with 'No reachable mints' responses.
   local cur rejects
-  rejects=$(sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no "root@${OPENWRT_IP}" \
+  rejects=$(sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${OPENWRT_IP}" \
     "iptables -L OUTPUT -n 2>/dev/null | grep -c REJECT" 2>/dev/null || echo 0)
   if [ "${rejects:-0}" != "0" ]; then
     log "Sweeping ${rejects} leftover REJECT rule(s) before ${1:-file}"
-    sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no "root@${OPENWRT_IP}" \
+    sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${OPENWRT_IP}" \
       "while iptables -L OUTPUT -n 2>/dev/null | grep -q REJECT; do R=\$(iptables -L OUTPUT -n --line-numbers | awk '/REJECT/{print \$1; exit}'); iptables -D OUTPUT \$R; done" \
       2>/dev/null || true
   fi
-  cur=$(sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no "root@${OPENWRT_IP}" \
+  cur=$(sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${OPENWRT_IP}" \
     "jq -r '.accepted_mints[0].url' /etc/tollgate/config.json 2>/dev/null" 2>/dev/null || echo "")
   if [ "${cur}" != "${MINT_URL}" ]; then
     log "Venue config drifted (accepted_mints[0]=${cur:-none}) — re-asserting local mint"
@@ -466,7 +466,7 @@ nds_healthy() {
   # Host-side timeout: the router has no `timeout` binary, and a wedged NDS
   # hangs the ssh channel forever (ndsctl never returns).
   local out
-  out=$(timeout 15 sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no \
+  out=$(timeout 15 sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -o ConnectTimeout=8 "root@${OPENWRT_IP}" "ndsctl json 2>/dev/null | head -c 200" 2>/dev/null) || return 1
   case "${out}" in "{"*) return 0 ;; *) return 1 ;; esac
 }
@@ -480,7 +480,7 @@ ensure_nds_healthy() {
     return 0
   fi
   log "ndsctl unresponsive — restarting nodogsplash + tollgate-wrt"
-  timeout 30 sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no \
+  timeout 30 sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -o ConnectTimeout=8 "root@${OPENWRT_IP}" \
     "/etc/init.d/nodogsplash restart; /etc/init.d/tollgate-wrt restart" >/dev/null 2>&1 || true
   sleep 12
