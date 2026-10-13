@@ -226,6 +226,11 @@ def pytest_addoption(parser):
                      help="Restore previous binary after tests")
     parser.addoption("--no-deploy", action="store_true",
                      help="Skip portal deploy before phone tests")
+    parser.addoption("--read-only", action="store_true",
+                     help="Fail-closed commission mode (incident 2026-10-01, fix F1): "
+                          "no deploy, no state prep, router mutators raise, and "
+                          "config/destructive-marked tests skip. Use for runs against "
+                          "commissioned/live routers where only assertions may run.")
     parser.addoption("--results", default=None,
                      help="Custom results directory path")
     parser.addoption("--client", default=os.environ.get("TOLLGATE_CLIENT", "adb"),
@@ -394,7 +399,13 @@ def router(request, backend):
     # Rust backend's DhcpLeasesResolver needs the client IP in /tmp/dhcp.leases.
     # In cloud lab the container uses a static IP that never appears via DHCP.
     if client == "container" and phone_ip and phone_mac:
-        router.ensure_dhcp_lease()
+        if request.config.getoption("--read-only"):
+            log.info("--read-only: skipping ensure_dhcp_lease for container client")
+        else:
+            router.ensure_dhcp_lease()
+
+    if request.config.getoption("--read-only") and hasattr(router, "enable_read_only"):
+        router.enable_read_only()
 
     return router
 
@@ -498,12 +509,25 @@ def deploy_session(request, router, backend):
     tg_arch = request.config.getoption("--tollgate-arch")
     tg_reboot = request.config.getoption("--tollgate-reboot")
     no_deploy = request.config.getoption("--no-deploy")
+    read_only = request.config.getoption("--read-only")
 
     # Unit tests don't need router connectivity. Skip deployment when running
     # only tests under tests/unit/ and no explicit deploy source is specified.
     _no_deploy_source = not binary and not tg_branch and not tg_run_id
     _args = getattr(request.config, "args", []) or []
     _unit_only = bool(_args) and all("unit" in str(a).replace(os.sep, "/") for a in _args)
+    if read_only:
+        # Commission-mode guard (incident 2026-10-01, fix F1): the Router is
+        # armed read-only by the router fixture; a stray mutating call raises.
+        if binary or tg_branch or tg_run_id:
+            pytest.exit(
+                "--read-only forbids deployment — unset --binary/--tollgate-branch/"
+                "--tollgate-run-id for a read-only commission run",
+                returncode=4,
+            )
+        log.info("--read-only: skipping deployment AND state prep (commission mode)")
+        yield
+        return
     if no_deploy or (_no_deploy_source and _unit_only):
         log.info("Skipping deployment (unit tests only or --no-deploy)")
         yield
@@ -867,6 +891,16 @@ def pytest_runtest_setup(item):
 
 
 def pytest_collection_modifyitems(config, items):
+    # --read-only commissions: config/destructive tests cannot run without
+    # mutating the router — skip them up front with a visible reason.
+    if config.getoption("--read-only"):
+        ro_skip = pytest.mark.skip(
+            reason="--read-only commission run: test mutates router config/state"
+        )
+        for item in items:
+            if "config" in item.keywords or "destructive" in item.keywords:
+                item.add_marker(ro_skip)
+
     # Tier hierarchy: smoke ⊂ critical ⊂ extended
     for item in items:
         if "smoke" in item.keywords:
