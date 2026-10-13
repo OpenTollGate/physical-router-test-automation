@@ -2575,6 +2575,15 @@ had 17 GB free the same day and ran the whole campaign.
   code:"payment-received-grant-pending"`.
 - Both belong in `config/behavior-contract.json` + a regression test (issue
   filed).
+- Launch the VM via `sudo systemd-run --unit=<name> qemu-system …` (no
+  `-daemonize`): a plain `nohup … &` under an SSH session gets reaped when
+  logind tears the session scope down — the venue VM died twice at session
+  exit that way (the persisted ext4 image made relaunch cheap, but the
+  transient unit survives sessions).
+- Liveness from another host across the routed venue path is **TCP, not
+  ICMP**: ICMP can drop while SSH/HTTP flow — probe the service port
+  (`bash -c "echo > /dev/tcp/<ip>/22"`), never trust a venue-down verdict
+  from ping alone.
 - Paying-client attribution works with the pytest/lab host on the router's
   LAN (ARP path) — no Debian client VM needed for API-level payment rails.
 
