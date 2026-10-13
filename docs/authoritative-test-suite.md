@@ -162,6 +162,12 @@ regression; a cell that was always ✗ is a known gap.
 
 ## Runner consolidation (2026-10 decision)
 
+> The broader cross-repository rules — one owner per responsibility, the
+> four-level verification hierarchy, and the AI-agent operating principles
+> this decision feeds into — live in
+> [engineering-policy.md](engineering-policy.md). This section remains the
+> decision record for runner consolidation specifically.
+
 **Decision.** PRTA is the single source of truth for router-test runners.
 No runner in either repository may carry its own deploy/install logic or a
 soft-fail verdict; deployment goes through `lib/deploy.py`, flashing through

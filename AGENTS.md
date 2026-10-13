@@ -2,6 +2,51 @@
 
 This file contains hard-won operational knowledge for agents and humans working with physical OpenWrt routers (D-Link COVR-X1860, GL.iNet GL-MT3000). Read this before touching a router.
 
+## Cross-Repository Engineering Ownership and Verification
+
+**This repository (PRTA) is the canonical router integration and
+deployed-artifact acceptance-testing framework for all TollGate
+implementations.** It owns virtual OpenWrt testing, physical-router
+testing, bench/lab orchestration, end-to-end user journeys, shared router
+drivers and fixtures, release-acceptance evidence from installed artifacts,
+and cross-implementation integration contracts.
+
+Neighbors, so you never duplicate them:
+
+- Product runtime code and its unit tests live in the implementation repos
+  (`OpenTollGate/tollgate-module-basic-go`, `tollgate-rs`, …). PRTA consumes
+  and exercises real implementation behavior; it does not redefine product
+  semantics.
+- Shipping packages, version/source pins and feed publication are owned by
+  `FreedomTechFeed/packages`. PRTA *installs and verifies* feed artifacts
+  (e.g. `scripts/download-feed-release.sh`, `tests/scenarios/test_feed_package.py`);
+  it never builds or publishes shipping packages.
+- The captive portal is `OpenTollGate/tollgate-captive-portal-site`,
+  consumed at a pinned revision.
+- The wire protocol is `OpenTollGate/tollgate`.
+
+Rules for agents working here:
+
+- The cross-repository policy — ownership map, the four-level verification
+  hierarchy (source / virtual integration / physical / release acceptance),
+  and the agent operating principles — is
+  [docs/engineering-policy.md](docs/engineering-policy.md). Read it before
+  adding any runner, fixture or "temporary" test path.
+- Verification evidence for router-visible behavior belongs here, bound to
+  the exact artifact sha256 and source SHAs; a required check that was
+  skipped or never run is reported `NOT RUN`/`NOT_VERIFIED`, never PASS.
+- Do not add a second implementation of deployment, install or minting
+  logic: use the shared seams (`lib/deploy.py`, `scripts/bench/bench.py`,
+  the scenarios+markers scheme). The consolidation decision and the M1–M4
+  milestones live in
+  [docs/authoritative-test-suite.md](docs/authoritative-test-suite.md).
+- Untracked convenience checkouts vendored inside this repo (e.g. a local
+  `src/` copy of an implementation) are never authoritative and must never
+  be committed.
+
+All money-safety, router-safety, lock, identity and secrets rules in the
+rest of this file remain in force.
+
 ## What This Repository Does
 
 This is a **multi-tier test framework** for [tollgate-module-basic-go](https://github.com/OpenTollGate/tollgate-module-basic-go) (Go v1) and [tollgate-rs](https://github.com/OpenTollGate/tollgate-rs) (Rust v1) running on physical OpenWrt routers. It tests the TollGate WiFi payment system — Cashu ecash tokens for metered internet access through captive portals.
