@@ -102,6 +102,23 @@ export TOLLGATE_BACKEND_URL=http://192.168.94.2:2121
 pytest tests/phone/ --client cuttlefish --backend go --film
 ```
 
+#### Host firewall (ufw)
+
+ai-legion runs ufw with default INPUT DROP. TCP SYNs from the Cuttlefish
+guest (guest → OpenWrt AP VM → host tap `cvd-wifiap-01`) arrive at the host
+and die silently — no SYN-ACK, portal unreachable, captive probes timing
+out. ICMP passes (ufw allows it), which makes this look like a routing bug;
+tcpdump on the tap shows SYNs with zero replies (issue #121).
+
+Provision the interface-scoped allows and the guest return route with:
+
+```bash
+sudo tools/cvd-host-setup.sh   # idempotent; --dry-run prints without applying
+```
+
+Defaults match the lab topology (`cvd-wifiap-01`, guest `192.168.99.0/25`
+via AP VM `192.168.94.2`) and can be overridden with `--iface/--subnet/--gw`.
+
 ### QEMU Virtual Lab (local or ai-legion)
 
 ```bash
