@@ -351,6 +351,7 @@ def router(request, backend):
         venue_mutex,
     )
 
+    _xdist_worker = getattr(request.config, "workerinput", None) is not None
     _auto_skip = (
         resolve_venue_mode() == "auto"
         and (
@@ -358,30 +359,51 @@ def router(request, backend):
             or _session_args_only(request.config, "parity")
         )
     )
-    if _auto_skip:
+    if _xdist_worker:
+        log.warning("router venue: xdist worker — legacy env path (venue places are per-session; acquire them in the controller-owned run, not per worker)")
+    elif _auto_skip:
         log.info("router venue: auto skipped — unit-only/parity-only session, no DUT needed")
     else:
         try:
-            venue_plan = plan_venue()
+            venue_plan = plan_venue(
+                operator_host=getattr(request.session, "_tollgate_operator_ssh_host", None),
+            )
         except (InventoryError, LabgridBenchError) as e:
             pytest.exit(f"labgrid venue unavailable: {e}", returncode=4)
         if venue_plan.action == "venue":
             # Transition invariant (#232): hold the repo file lock AND the place,
-            # so venue sessions exclude legacy Make/pymake sessions on the DUT.
+            # so venue sessions exclude legacy Make/pymake sessions on the DUT —
+            # unless this session already holds the file lock via --lock-phase /
+            # TOLLGATE_USE_HARDWARE_LOCK (sessionstart owns acquire+release;
+            # a second acquire here would double-release, and the unconditional
+            # second unlink can delete a FOREIGN session's lock).
+            _already_locked = bool(request.config.getoption("--lock-phase")) or os.environ.get(
+                "TOLLGATE_USE_HARDWARE_LOCK", ""
+            ).lower() in ("1", "true", "yes")
             phase = request.config.getoption("--lock-phase") or f"labgrid-venue {venue_plan.binding.entry.place}"
             stack = contextlib.ExitStack()
             try:
-                stack.enter_context(venue_mutex(venue_plan.binding, phase))
+                stack.enter_context(venue_mutex(venue_plan.binding, phase, file_lock=not _already_locked))
             except RuntimeError as e:
-                pytest.exit(f"labgrid venue mutex unavailable: {e}", returncode=4)
+                holder = ""
+                with contextlib.suppress(Exception):
+                    holder = venue_plan.binding.who()
+                hint = (
+                    f" — place currently held by: {holder}; recovery: "
+                    f"labgrid-client -p {venue_plan.binding.place} release"
+                    if holder else ""
+                )
+                pytest.exit(f"labgrid venue mutex unavailable: {e}{hint}", returncode=4)
             request.addfinalizer(stack.close)
             apply_venue_env(
                 venue_plan.binding.entry,
                 respect_existing=venue_plan.origin == "address-match",
             )
             log.info(
-                "labgrid venue: acquired place %s + hardware lock (%s)",
-                venue_plan.binding.entry.place, venue_plan.origin,
+                "labgrid venue: acquired place %s + %s (%s)",
+                venue_plan.binding.entry.place,
+                "hardware lock" if not _already_locked else "existing hardware lock",
+                venue_plan.origin,
             )
         elif venue_plan.detail:
             log.info("router venue: %s — legacy env path", venue_plan.detail)
@@ -530,7 +552,7 @@ def _degrade_session_to_skips(request, reason: str) -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def deploy_session(request, router, backend):
+def deploy_session(request, router, backend, results_dir):
     if IS_MOCK_MODE:
         log.info("TOLLGATE_MOCK=1 — skipping deployment and health checks")
         yield
@@ -666,6 +688,17 @@ def deploy_session(request, router, backend):
         log.info("Pre-created ContainerClient for auto-screenshots")
 
     yield
+
+    # Collect session-end logs while the session still owns the DUT: this
+    # teardown runs BEFORE the router fixture's venue finalizer releases the
+    # place — post-release SSH contact (the old pytest_sessionfinish site)
+    # could race the next owner's deploy/flash. bundle="session-end" avoids
+    # overwriting per-failure bundles.
+    try:
+        router.collect_logs(results_dir, adb=None, bundle="session-end")
+        log.info("Collected session-end logs to %s", results_dir)
+    except Exception:
+        pass
 
     try:
         if restore:
@@ -1450,8 +1483,7 @@ def serial_console(router):
 
 
 def _preflight_unit_only(config) -> bool:
-    args = getattr(config, "args", []) or []
-    return bool(args) and all("unit" in str(a).replace(os.sep, "/") for a in args)
+    return _session_args_only(config, "unit")
 
 
 def _run_preflight_session(session) -> dict | None:
@@ -1486,6 +1518,11 @@ def _run_preflight_session(session) -> dict | None:
 
 def pytest_sessionstart(session):
     global _hardware_lock_acquired
+    # Captured BEFORE preflight: apply_env_defaults may reassign
+    # TOLLGATE_SSH_HOST to a reachable substitute when the operator's DUT is
+    # down — the venue must address-match the operator's choice, never the
+    # substitute (wrong-DUT class, venue review finding #1).
+    session._tollgate_operator_ssh_host = os.environ.get("TOLLGATE_SSH_HOST")
     try:
         session._tollgate_preflight_snapshot = _run_preflight_session(session)
     except Exception as exc:
@@ -1520,20 +1557,3 @@ def pytest_sessionfinish(session, exitstatus):
         from lib.hardware_lock import release_hardware_lock
         release_hardware_lock()
         _hardware_lock_acquired = False
-
-    # Always collect router logs at session end (not just on failure).
-    # Uses bundle="session-end" to avoid overwriting per-failure bundles.
-    if "unit" in str(getattr(session.config, "testpaths", "")):
-        return
-    for item in session.items[:1]:
-        if "router" in item.fixturenames:
-            try:
-                router = item.funcargs.get("router")
-                if router and hasattr(router, "collect_logs"):
-                    results_dir = getattr(item, "_results_dir", None)
-                    if results_dir:
-                        router.collect_logs(results_dir, adb=None, bundle="session-end")
-                        log.info("Collected session-end logs to %s", results_dir)
-            except Exception:
-                pass
-            break
