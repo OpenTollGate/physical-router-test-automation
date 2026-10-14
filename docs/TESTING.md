@@ -304,3 +304,25 @@ uci commit nodogsplash
 - Internet from VM ✅
 - External HTTP to :2121 ✅
 - No iptables-nft workaround needed ✅
+
+## ai-legion environment quirks (hit live, 2026-10-13)
+
+Lanes that build or boot things on ai-legion keep hitting the same four
+walls — recorded here so the next session does not re-derive them:
+
+- **`/tmp` is quota-exhausted** on the default login. Scratch dirs, worktree
+  bundles and `mktemp` targets must live under `$HOME` (a `mktemp -d
+  "${TMPDIR:-/tmp}/…"` that resolves to `/tmp` can truncate silently — a
+  staged copy died mid-`cp` and surfaced ten minutes later as an SDK
+  "No rule to make target").
+- **Docker bridge DNS flakes against the Alpine CDN** (`cdn.alpinelinux.org`,
+  `dl-cdn…`) while the registry and OpenWrt feeds resolve fine. The
+  repo-sanctioned workaround is `docker run --network host` — the same one
+  `tests/packaging/apk-install-resolution_test.sh` uses.
+- **earlyoom on this host is configured to prefer killing `qemu`** under
+  memory pressure — keep gate VMs small (512 MB is enough for the OpenWrt
+  images) and expect unexplained VM deaths when big builds run alongside.
+- **Lab services already hold `:2121` and `:8080`** on the host, and another
+  user's conwrt QEMU owns `:2222`. Probe with `ss -tln` before choosing
+  hostfwd ports, and never assume an unexplained `boot:port-free` failure is
+  the product's.
