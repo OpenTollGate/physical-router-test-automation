@@ -46,19 +46,17 @@ targets:
   # Same resources as the standalone targets above, but leased through the
   # coordinator so virtual and physical places compose uniformly (micronuts#79).
   # Lifecycle: scripts/virtual-lab.py start-poc on ai-legion boots the VM;
-  # these targets only resolve while the venue is up.
-  venue-openwrt-serial:
+  # this target only resolves while the venue is up.
+  # One place = whole lane (router+client), per #248: the old split
+  # venue-poc-openwrt-{serial,api} places never registered on the
+  # coordinator and are retired; vlab-default carries all four resources
+  # (owrt/client x ssh/console) via group matches on the ai-legion exporter.
+  venue-vlab:
     resources:
       RemotePlace:
-        name: "venue-poc-openwrt-serial"
+        name: "vlab-default"
     drivers:
       NetworkSerialDriver: {}
-
-  venue-openwrt-api:
-    resources:
-      RemotePlace:
-        name: "venue-poc-openwrt-api"
-    drivers:
       DummyDriver: {}
 
   # ─── Debian client VM ─────────────────────────────────
@@ -66,7 +64,7 @@ targets:
     resources:
       NetworkSSHDevice:
         address: "10.99.99.100"
-        username: "debian"
+        username: "root"
     drivers:
       SSHDriver:
         keyfile: "~/.ssh/id_ed25519"
