@@ -524,7 +524,13 @@ is deliberately shaped as the seam: `Bench` abstracts
 router-control/payment/mint-control behind one interface — a future
 `LabgridBench` can subclass it and swap SSH/QEMU control for labgrid places
 without touching scenario code. Keep scenarios written against `Bench`, never
-against raw ssh/curl.
+against raw ssh/curl. The org-wide labgrid canon — coordinator
+`192.168.13.208:20408` (`LG_COORDINATOR`; systemd unit, survives
+reboots), reservation queueing (`labgrid-client reserve --wait`,
+priority, owner-ETA convention), one-device-one-exclusion-domain, and
+the trusted-network security model — lives in **conwrt-bench
+`docs/labgrid-coordination.md`** (single source of truth; the
+`ai-legion-small-rig` android-phone exporter already follows it).
 
 ### GitHub org-Actions freeze: billing hold, not policy (2026-08-27 forensics)
 
