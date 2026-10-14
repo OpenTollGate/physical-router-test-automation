@@ -65,10 +65,15 @@ def _driver(android_place, target) -> AndroidADBDriver:
         drv = target.get_driver(AndroidADBDriver)
     except (lg_exc.NoDriverFoundError, lg_exc.InvalidConfigError) as exc:
         pytest.skip(f"android-phone resources unavailable: {exc}")
-    devices = _adb_devices()
-    if not devices:
-        pytest.skip("no adb device visible — plug the phone in, enable USB "
-                    "debugging, and accept the RSA authorization prompt "
+    # Presence via the driver's own transport (NetworkService/SSH to the
+    # USB host) — a local adb on the test host is NOT required.
+    try:
+        state = drv.get_status()
+    except Exception as exc:  # transport down = phone absent for our purposes
+        pytest.skip(f"adb transport unavailable: {exc}")
+    if state != "device":
+        pytest.skip(f"adb device not ready (state={state!r}) — plug the phone "
+                    "in, enable USB debugging, accept the RSA prompt "
                     "(see docs/android-phone-bringup.md)")
     return drv
 
