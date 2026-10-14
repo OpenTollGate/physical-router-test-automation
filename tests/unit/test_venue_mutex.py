@@ -65,7 +65,8 @@ def test_place_acquire_failure_releases_file_lock(lock_calls):
         with venue_mutex(_binding(calls, fail_on="acquire"), phase="p"):
             pass
     assert lock_calls == ["lock+ p", "lock-"]
-    assert calls == ["acquire"]  # release never issued on a failed acquire
+    # best-effort undo: a possibly-granted acquire is released before failing
+    assert calls == ["acquire", "release"]
 
 
 def test_place_release_failure_still_releases_file_lock(lock_calls):
@@ -95,3 +96,51 @@ def test_file_lock_failure_never_touches_coordinator(monkeypatch):
         with venue_mutex(_binding(calls), phase="p"):
             pass
     assert calls == []  # no coordinator round-trip when the local mutex refuses
+
+
+def test_file_lock_false_skips_repo_lock_entirely(lock_calls):
+    # Sessions already holding the lock via --lock-phase/TOLLGATE_USE_HARDWARE_LOCK:
+    # the venue takes only the place, so the existing holder keeps acquire/release.
+    calls: list[str] = []
+    with venue_mutex(_binding(calls), phase="p", file_lock=False):
+        assert lock_calls == []
+        assert calls == ["acquire"]
+    assert lock_calls == []
+    assert calls == ["acquire", "release"]
+
+
+class TestClientFailureContracts:
+    def _bench(self, calls, behavior):
+        def run(cmd, **kwargs):
+            args = cmd[5:]
+            calls.append(" ".join(args))
+            return behavior(args)
+        return LabgridBench(coordinator="fake:20408", place="x1860-1", runner=run)
+
+    def test_timeout_becomes_labgrid_error(self):
+        import subprocess as sp
+        def behavior(args):
+            if "acquire" in args:
+                raise sp.TimeoutExpired(cmd="labgrid-client", timeout=60)
+            return sp.CompletedProcess([], 0, stdout="", stderr="")
+        bench = self._bench([], behavior)
+        with pytest.raises(LabgridBenchError, match="timed out"):
+            bench.acquire()
+
+    def test_failed_acquire_attempts_best_effort_release(self):
+        import subprocess as sp
+        calls: list[str] = []
+        def behavior(args):
+            if "acquire" in args:
+                return sp.CompletedProcess([], 1, stdout="", stderr="held")
+            return sp.CompletedProcess([], 0, stdout="", stderr="")
+        bench = self._bench(calls, behavior)
+        with pytest.raises(LabgridBenchError):
+            bench.acquire()
+        assert calls == ["acquire", "release"]  # the possibly-granted place is undone
+
+    def test_who_returns_holder(self):
+        import subprocess as sp
+        def behavior(args):
+            return sp.CompletedProcess([], 0, stdout="other@host\n", stderr="")
+        assert self._bench([], behavior).who() == "other@host"

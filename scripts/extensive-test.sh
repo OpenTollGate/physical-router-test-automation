@@ -139,6 +139,9 @@ elif [ "$VENUE" = "physical" ]; then
   [ -n "${TOLLGATE_SSH_HOST:-}" ] || fail "physical venue needs TOLLGATE_SSH_HOST"
   if [ -n "${TOLLGATE_IPK:-}" ]; then
     echo "== deploying $TOLLGATE_IPK"
+    # This deploy block runs outside the venue mutex (only the pytest tiers
+    # below acquire the DUT) — do not add router mutation here without
+    # taking the place first.
     scp -O "$TOLLGATE_IPK" "root@${TOLLGATE_SSH_HOST}:/tmp/tollgate.ipk" \
       && ssh "root@${TOLLGATE_SSH_HOST}" \
         'opkg install --force-overwrite /tmp/tollgate.ipk; rm -f /etc/tollgate/wallet.db; /etc/init.d/tollgate-wrt restart' \
@@ -178,7 +181,10 @@ run_tier_local() {
 run_tier_physical() {
   local tier="$1"
   echo "== tier: $tier ${STORIES:+stories=$STORIES }${PATHS:+paths=$PATHS}"
-  "$PY" -m pytest tests/ -m "${tier}${PATH_EXPR}" \
+  # TOLLGATE_VENUE=physical would pin pytest to the legacy env path — 'auto'
+  # lets the venue take the DUT place + hardware lock on configured hosts
+  # (lane choice lives in $VENUE above, not in the child env).
+  TOLLGATE_VENUE=auto "$PY" -m pytest tests/ -m "${tier}${PATH_EXPR}" \
     "${select_args[@]}" \
     -q --tb=short \
     --junitxml="$OUT/raw/junit-${tier}.xml" \
