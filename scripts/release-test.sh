@@ -145,9 +145,11 @@ fi
 log "Phase 3: Running story suite"
 export TOLLGATE_SSH_HOST="$ROUTER"
 export TOLLGATE_SSID="${TOLLGATE_SSID:-TollGate}"
-# The lab moto g (ZY326DPC7R) now lives on the numo-phone labgrid place
-# (Numo POS lane) — coordinate before borrowing it; set PHONE_SERIAL
-# explicitly when using it.
+# The lab moto g (ZY326DPC7R) is a SHARED bench resource — its current
+# labgrid export point is the numo-phone place (Numo lane wired it last).
+# Acquire that place for exclusivity when driving phone stories, and set
+# PHONE_SERIAL explicitly; unset means phone-dependent stories degrade to
+# other clients instead of silently using the device.
 export PHONE_SERIAL="${PHONE_SERIAL:-}"
 export TOLLGATE_TEST_MINT_URL="${TOLLGATE_TEST_MINT_URL:-http://192.168.13.221:8383}"
 
