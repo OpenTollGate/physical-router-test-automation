@@ -97,7 +97,7 @@ def test_phone_wifi_state_dump(android_place, target):
     """Wifi must be toggleable for portal tests; dump the current state."""
     driver = _driver(android_place, target)
     wifi = driver.run_check(
-        "settings query global wifi_on 2>/dev/null || "
+        "settings get global wifi_on 2>/dev/null || "
         "dumpsys wifi | grep -m1 'Wi-Fi is'")
     assert wifi, "no wifi state output — is this an Android with wifi?"
 
