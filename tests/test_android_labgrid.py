@@ -33,12 +33,12 @@ def android_place():
     """Acquire the coordinator place for this session (bench convention:
     explicit acquire/release, like the bolty/fips-lab HIL conftests)."""
     client = os.path.join(os.path.dirname(sys.executable), "labgrid-client")
-    r = subprocess.run([client, "-x", COORDINATOR, "-p", "android-phone",
+    r = subprocess.run([client, "-x", COORDINATOR, "-p", "numo-phone",
                         "acquire"], capture_output=True, text=True, timeout=30)
     if r.returncode != 0:
-        pytest.skip(f"cannot acquire android-phone place: {r.stderr.strip()}")
+        pytest.skip(f"cannot acquire numo-phone place: {r.stderr.strip()}")
     yield
-    subprocess.run([client, "-x", COORDINATOR, "-p", "android-phone",
+    subprocess.run([client, "-x", COORDINATOR, "-p", "numo-phone",
                     "release"], capture_output=True, timeout=30)
 
 
