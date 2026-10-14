@@ -5,14 +5,14 @@
       "lane": "24/ipk",
       "router": "10.16.107.1",
       "image": "/home/c03rad0r/bench-images/openwrt-24.10.8-mediatek-filogic-glinet_gl-mt3000-squashfs-sysupgrade.bin",
-      "pkg": "/home/c03rad0r/bench-images/tollgate-wrt_0.6.0_rc1_aarch64_cortex-a53.ipk",
+      "pkg": "/home/c03rad0r/bench-images/tollgate-wrt_0.6.0_rc5_aarch64_cortex-a53.ipk",
       "static_ip": "10.16.107.1"
     },
     {
       "lane": "25/apk",
       "router": "10.17.171.1",
       "image": "/home/c03rad0r/bench-images/bench-mt3000-25-sysupgrade.bin",
-      "pkg": "/home/c03rad0r/bench-images/tollgate-wrt_0.6.0_rc1_aarch64_cortex-a53.apk",
+      "pkg": "/home/c03rad0r/bench-images/tollgate-wrt_0.6.0_rc5_aarch64_cortex-a53.apk",
       "static_ip": "10.17.172.1"
     }
   ]
