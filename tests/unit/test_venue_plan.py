@@ -119,19 +119,34 @@ class TestPlanVenue:
 
     def test_auto_address_match_placeless_entry_falls_back(self, host_ready):
         plan = plan_venue({"TOLLGATE_SSH_HOST": "192.0.2.12"})
-        assert plan.action == "legacy" and "no place maps" in plan.detail
+        assert plan.action == "legacy" and "no place" in plan.detail
 
     def test_auto_unknown_explicit_place_is_fatal(self, host_ready):
         with pytest.raises(InventoryError):
             plan_venue({"TOLLGATE_LABGRID_PLACE": "no-such-place"})
 
+    def test_auto_place_name_lookup_fallback(self, host_ready):
+        # TOLLGATE_LABGRID_PLACE carrying the labgrid place name (not the
+        # dossier key) still resolves — operators get both from labgrid-client.
+        plan = plan_venue({"TOLLGATE_LABGRID_PLACE": "x1860-1"})
+        assert plan.action == "venue" and plan.binding.entry.name == "x1860-1"
+
     def test_auto_protected_match_is_fatal(self, host_ready):
         with pytest.raises(LabgridBenchError, match="protected"):
             plan_venue({"TOLLGATE_SSH_HOST": "192.0.2.13"})
 
-    def test_forced_default_place(self, host_ready):
+    def test_forced_smoke_default_when_nothing_named(self, host_ready):
         plan = plan_venue({"TOLLGATE_VENUE": "labgrid"})
         assert plan.action == "venue" and plan.origin == "forced" and plan.detail == "ap-lan2"
+
+    def test_forced_address_match_beats_smoke_default(self, host_ready):
+        plan = plan_venue({"TOLLGATE_VENUE": "labgrid", "TOLLGATE_SSH_HOST": "192.0.2.11"})
+        assert plan.action == "venue" and plan.origin == "address-match"
+        assert plan.binding.entry.place == "x1860-2"
+
+    def test_forced_unknown_host_is_fatal_not_retargeted(self, host_ready):
+        with pytest.raises(LabgridBenchError, match="no inventory dossier maps"):
+            plan_venue({"TOLLGATE_VENUE": "labgrid", "TOLLGATE_SSH_HOST": "203.0.113.99"})
 
     def test_forced_unknown_place_is_fatal(self, host_ready):
         with pytest.raises(InventoryError):
@@ -143,6 +158,33 @@ class TestPlanVenue:
         monkeypatch.setattr("lib.labgrid_venue.load_inventory", boom)
         with pytest.raises(InventoryError):
             plan_venue({"TOLLGATE_VENUE": "labgrid"})
+
+
+class TestOperatorHostPrecedence:
+    """Preflight may swap TOLLGATE_SSH_HOST to a reachable substitute when
+    the operator's DUT is down — the venue must bind the OPERATOR's DUT (or
+    refuse loudly), never the substitute."""
+
+    def test_operator_host_wins_over_preflight_substitute(self, host_ready):
+        plan = plan_venue(
+            {"TOLLGATE_SSH_HOST": "192.0.2.11"},  # post-preflight substitute
+            operator_host="192.0.2.10",           # operator's actual choice
+        )
+        assert plan.action == "venue" and plan.detail == "x1860-1"
+
+    def test_operator_host_unknown_refuses_substitute(self, host_ready):
+        plan = plan_venue(
+            {"TOLLGATE_SSH_HOST": "192.0.2.11"},
+            operator_host="203.0.113.99",
+        )
+        assert plan.action == "legacy" and "no place maps" in plan.detail
+
+    def test_operator_host_placeless_dossier_refuses_substitute(self, host_ready):
+        plan = plan_venue(
+            {"TOLLGATE_SSH_HOST": "192.0.2.11"},
+            operator_host="192.0.2.12",  # in inventory, but has no place
+        )
+        assert plan.action == "legacy" and "no place" in plan.detail
 
 
 class TestApplyVenueEnvPrecedence:
@@ -168,6 +210,18 @@ class TestApplyVenueEnvPrecedence:
         apply_venue_env(self.ENTRY, env, respect_existing=True)
         assert env["TOLLGATE_SSH_KEY"] == "operator-key"
         assert env["TOLLGATE_SSH_JUMP_HOST"] == "operator-jump"
+
+    def test_authoritative_mode_drops_leftover_port(self):
+        # A port set for a previous target poisons the switched DUT's connection.
+        env: dict[str, str] = {"TOLLGATE_SSH_HOST": "old", "TOLLGATE_SSH_PORT": "2223"}
+        apply_venue_env(self.ENTRY, env)
+        assert "TOLLGATE_SSH_PORT" not in env
+        assert env["TOLLGATE_SSH_HOST"] == "192.0.2.10"
+
+    def test_address_match_keeps_operator_port(self):
+        env: dict[str, str] = {"TOLLGATE_SSH_HOST": "192.0.2.10", "TOLLGATE_SSH_PORT": "2223"}
+        apply_venue_env(self.ENTRY, env, respect_existing=True)
+        assert env["TOLLGATE_SSH_PORT"] == "2223"
 
     def test_address_match_still_fills_gaps(self):
         env: dict[str, str] = {"TOLLGATE_SSH_HOST": "192.0.2.10"}

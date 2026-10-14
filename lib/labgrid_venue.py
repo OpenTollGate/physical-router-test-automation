@@ -77,6 +77,15 @@ class LabgridBench:
             proc = self._run(cmd)
         except OSError as e:
             raise LabgridBenchError(f"labgrid-client failed to start: {e}") from None
+        except subprocess.TimeoutExpired:
+            # A timed-out acquire may still have been GRANTED server-side —
+            # callers must see a LabgridBenchError, not a raw TimeoutExpired
+            # that skips every RuntimeError handler upstream.
+            raise LabgridBenchError(
+                f"labgrid-client {' '.join(args)} on place {self.place!r} "
+                f"timed out after {_RUN_TIMEOUT}s — the operation may have "
+                "succeeded on the coordinator; check 'labgrid-client who'"
+            ) from None
         if proc.returncode != 0:
             raise LabgridBenchError(
                 f"labgrid-client {' '.join(args)} on place {self.place!r} failed "
@@ -88,7 +97,15 @@ class LabgridBench:
         return self._runner(cmd, capture_output=True, text=True, timeout=_RUN_TIMEOUT)
 
     def acquire(self) -> None:
-        self._client("acquire")
+        try:
+            self._client("acquire")
+        except LabgridBenchError:
+            # An acquire that failed after the request was sent may have been
+            # granted anyway; release() would no-op while _acquired is False,
+            # leaking the place. Best-effort undo, then surface the failure.
+            with contextlib.suppress(LabgridBenchError):
+                self._client("release")
+            raise
         self._acquired = True
 
     def release(self) -> None:
@@ -102,6 +119,10 @@ class LabgridBench:
     def power(self, on: bool) -> None:
         self._client("power", "on" if on else "off")
 
+    def who(self) -> str:
+        """Current holder of the place — contention diagnostics in fatal paths."""
+        return self._client("who").strip()
+
 
 @dataclass(frozen=True)
 class VenueBinding:
@@ -111,8 +132,10 @@ class VenueBinding:
 
 def bench_for_router(inv: LabInventory, name: str) -> VenueBinding:
     """Guarded place binding: refuses protected/unmapped routers BEFORE any
-    coordinator interaction (the labgrid path itself has no PRTA-side guard)."""
-    entry = inv.router(name)
+    coordinator interaction (the labgrid path itself has no PRTA-side guard).
+    `name` accepts either the inventory dossier key or the dossier's labgrid
+    place name (TOLLGATE_LABGRID_PLACE is ambiguous in operators' hands)."""
+    entry = _resolve_entry(inv, name)
     if entry.protected:
         raise LabgridBenchError(
             f"router {name!r} is protected — labgrid venue refuses to acquire it"
@@ -153,13 +176,16 @@ def apply_venue_env(
 ) -> None:
     """Feed the venue's connection env into the Router construction.
 
-    respect_existing=True fills only UNSET vars (setdefault): used when auto
-    mode picked the venue by ADDRESS MATCH — the operator already named this
-    DUT with their own env, so their explicit keyfile/jump-host wins. Forced
-    and explicit-place modes keep venue authority (overwrite): a divergent
-    operator TOLLGATE_SSH_HOST under an explicitly named place would point
-    the session at the wrong DUT while holding another's lock.
+    respect_existing=True fills only UNSET vars (setdefault): used when the
+    venue was chosen by ADDRESS MATCH — the operator already named this DUT
+    with their own env, so their explicit keyfile/jump-host/port wins.
+    Authoritative modes (forced/explicit-place) keep venue authority AND drop
+    TOLLGATE_SSH_PORT: a leftover port from a previous target poisons the
+    switched DUT's connection.
     """
+    if not respect_existing:
+        if isinstance(environ, dict):
+            environ.pop("TOLLGATE_SSH_PORT", None)
     for key, value in venue_env(entry).items():
         if respect_existing and environ.get(key):
             continue
@@ -196,20 +222,6 @@ def venue_preconditions_met(environ: Mapping[str, str] = os.environ) -> tuple[bo
     return True, ""
 
 
-def auto_place_name(inv: LabInventory, environ: Mapping[str, str] = os.environ) -> str | None:
-    """Which place an auto session means: an explicit TOLLGATE_LABGRID_PLACE,
-    else the dossier whose address equals TOLLGATE_SSH_HOST, else None."""
-    explicit = (environ.get("TOLLGATE_LABGRID_PLACE") or "").strip()
-    if explicit:
-        return explicit
-    host = (environ.get("TOLLGATE_SSH_HOST") or "").strip()
-    if host:
-        for entry in inv.routers.values():
-            if entry.address and entry.address == host and entry.place:
-                return entry.name
-    return None
-
-
 @dataclass(frozen=True)
 class VenuePlan:
     """action: "venue" — acquire through venue_mutex; "legacy" — env path.
@@ -226,15 +238,50 @@ class VenuePlan:
     origin: str = ""
 
 
-def plan_venue(environ: Mapping[str, str] = os.environ) -> VenuePlan:
+def _resolve_entry(inv: LabInventory, name: str) -> RouterEntry:
+    try:
+        return inv.router(name)
+    except InventoryError:
+        by_place = [e for e in inv.routers.values() if e.place and e.place == name]
+        if len(by_place) == 1:
+            return by_place[0]
+        raise
+
+
+def _resolve_target(
+    inv: LabInventory, environ: Mapping[str, str], operator_host: str | None
+) -> tuple[str | None, str]:
+    """Which dossier this session means, by address.
+
+    The operator's host (captured BEFORE preflight could reassign it) wins
+    absolutely when it maps to ANY dossier — even one without a place, so a
+    preflight substitute (picked because the operator's DUT is unreachable,
+    i.e. most likely busy in another session) can never silently redirect
+    the session to a different DUT. The post-preflight env host is only
+    honored when the operator set nothing (auto-discovery).
+    """
+    if operator_host:
+        for name, entry in inv.routers.items():
+            if entry.address and entry.address == operator_host:
+                return name, "address-match"
+        return None, ""
+    host = (environ.get("TOLLGATE_SSH_HOST") or "").strip()
+    if host:
+        for name, entry in inv.routers.items():
+            if entry.address and entry.address == host and entry.place:
+                return name, "address-match"
+    return None, ""
+
+
+def plan_venue(environ: Mapping[str, str] = os.environ, operator_host: str | None = None) -> VenuePlan:
     """Decide the router-access venue for this session.
 
     Auto falls back to legacy ONLY on unmet preconditions (missing inventory
     or client, non-physical lab, no place mapping). A venue that resolves but
-    then fails — unknown/protected/undressed place, coordinator or acquire
-    error — raises InventoryError/LabgridBenchError and is the CALLER's
-    fatal case: falling back to direct while a place is held would put two
-    sessions on one DUT.
+    then fails — unknown/protected place, coordinator or acquire error —
+    raises InventoryError/LabgridBenchError and is the CALLER's fatal case:
+    falling back to direct while a place is held would put two sessions on
+    one DUT.
     """
     mode = resolve_venue_mode(environ)
     if mode == "direct":
@@ -243,9 +290,24 @@ def plan_venue(environ: Mapping[str, str] = os.environ) -> VenuePlan:
         raw = (environ.get("TOLLGATE_VENUE") or "").strip()
         return VenuePlan("legacy", detail=f"TOLLGATE_VENUE={raw!r} keeps the legacy path")
     if mode == "labgrid":
-        inv = load_inventory()
-        place = (environ.get("TOLLGATE_LABGRID_PLACE") or "").strip() or "ap-lan2"
-        origin = "forced"
+        try:
+            inv = load_inventory()
+        except InventoryError:
+            raise
+        explicit = (environ.get("TOLLGATE_LABGRID_PLACE") or "").strip()
+        if explicit:
+            place, origin = explicit, "explicit-place"
+        else:
+            place, origin = _resolve_target(inv, environ, operator_host)
+            if place is None:
+                if operator_host or (environ.get("TOLLGATE_SSH_HOST") or "").strip():
+                    # The operator named a DUT that maps to no dossier —
+                    # refuse rather than silently retarget to the smoke default.
+                    raise LabgridBenchError(
+                        "forced venue: no inventory dossier maps to the configured "
+                        "TOLLGATE_SSH_HOST — set TOLLGATE_LABGRID_PLACE or fix the inventory"
+                    )
+                place, origin = "ap-lan2", "forced"
     else:
         ok, why = venue_preconditions_met(environ)
         if not ok:
@@ -258,27 +320,35 @@ def plan_venue(environ: Mapping[str, str] = os.environ) -> VenuePlan:
         if explicit:
             place, origin = explicit, "explicit-place"
         else:
-            place = auto_place_name(inv, environ)
-            if not place:
+            place, origin = _resolve_target(inv, environ, operator_host)
+            if place is None:
                 return VenuePlan("legacy", detail="venue auto: no place maps to this target")
-            origin = "address-match"
+            if not inv.router(place).place:
+                return VenuePlan("legacy", detail=f"venue auto: {place!r} has no place mapping")
     return VenuePlan("venue", binding=bench_for_router(inv, place), detail=place, origin=origin)
 
 
 @contextlib.contextmanager
-def venue_mutex(binding: "VenueBinding", phase: str) -> Iterator[LabgridBench]:
+def venue_mutex(binding: "VenueBinding", phase: str, *, file_lock: bool = True) -> Iterator[LabgridBench]:
     """Transition invariant (#232): a venue session holds BOTH mutexes.
 
     Legacy participants (Make targets, pymake, release-matrix) take only the
     repo file lock; foreign labgrid sessions may take only the place. Taking
     both — file lock first, then place, released in reverse — makes venue
-    and legacy sessions exclude each other, and the fixed order means two
-    PRTA sessions can never wait on each other circularly (they serialize on
-    the cheap local lock before any coordinator round-trip). Shed the
-    file-lock half when #232's exit criteria hold; until then removing it
-    reopens the venue-vs-legacy race on shared DUTs.
+    and legacy sessions exclude each other. The fixed order means two PRTA
+    sessions cannot wait on each other circularly; note the file lock only
+    serializes CROSS-USER (same-user re-acquire is allowed by design), so
+    same-user concurrent sessions race the place and the loser fails loudly.
+    Shed the file-lock half when #232's exit criteria hold; until then
+    removing it reopens the venue-vs-legacy race on shared DUTs.
+
+    file_lock=False for sessions that ALREADY hold the repo lock through
+    --lock-phase or TOLLGATE_USE_HARDWARE_LOCK (sessionstart/pymake owns
+    acquire and release there) — acquiring again here would double-release,
+    and the second unconditional unlink can delete a FOREIGN session's lock.
     """
-    hardware_lock.acquire_hardware_lock(phase)
+    if file_lock:
+        hardware_lock.acquire_hardware_lock(phase)
     try:
         binding.bench.acquire()
         try:
@@ -286,4 +356,5 @@ def venue_mutex(binding: "VenueBinding", phase: str) -> Iterator[LabgridBench]:
         finally:
             binding.bench.release()
     finally:
-        hardware_lock.release_hardware_lock()
+        if file_lock:
+            hardware_lock.release_hardware_lock()
