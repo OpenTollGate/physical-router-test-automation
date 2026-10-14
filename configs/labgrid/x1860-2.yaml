@@ -1,0 +1,24 @@
+# PRTA venue — D-Link COVR-X1860 A1 "BRAVO" (tollgate-wrt router).
+#
+# Place x1860-2 on the labgrid coordinator (ai-legion 192.168.13.208:20408):
+# seat bench-owrt lan4 / VLAN 1004, mgmt 192.168.104.52 (baked static).
+# Exported by ai-legion-small (labgrid-exporter-x1860.service,
+# conwrt-bench deploy/exporter-x1860.yaml).
+#
+# NO PowerPort, NO serial (owner directive 2026-09-28 labgrid-only contract):
+# the unit is DC-powered — power is a MANUAL bench action. Tests must not
+# assume power-cycling; provisioning = labgrid ssh/scp + sysupgrade -n.
+#
+# Run (SSH-only venue; first test after powering the unit):
+#   TOLLGATE_SSH_HOST= ROUTER_IP= TOLLGATE_VIRTUAL_LAB= \
+#   ~/venvs/rig-labgrid/bin/python -m pytest \
+#     --lg-env=configs/labgrid/x1860-2.yaml --no-deploy \
+#     tests/test_lab_health.py -v
+targets:
+  main:
+    resources:
+      RemotePlace:
+        name: x1860-2
+    drivers:
+      SSHDriver:
+        connection_timeout: 240.0
