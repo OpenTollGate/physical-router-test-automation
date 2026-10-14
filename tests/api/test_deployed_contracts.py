@@ -115,6 +115,56 @@ def test_entry_ui_port_mapping_contract(router):
     )
 
 
+def _uhttpd_home(router, section: str) -> str:
+    return router.ssh(f"uci get uhttpd.{section}.home 2>/dev/null || echo ''").strip()
+
+
+@pytest.mark.go_only
+def test_board_is_the_default_face_when_entry_ui_is_board(router):
+    """entry_ui=board (the DEFAULT): the board owns the entry pair and LuCI
+    keeps the secondary pair — asserted against the live uhttpd ``home`` of
+    whichever section owns each listen pair, not a table shipped in this test.
+
+    This is the correction the runbook films carried the wrong way: the board
+    (Vite base ``/``, home ``/www/tollgate``) is the default face on the entry
+    pair (8080/443); LuCI (home ``/www``) is the secondary face on 8090/8443,
+    reached by the board's "OpenWrt LuCI" cross-link button. A regression that
+    swaps the homes (the historical 8090-serves-LuCI-on-the-entry-pair bug)
+    fails here.
+    """
+    entry_ui = _read_entry_ui(router)
+    if entry_ui is None:
+        pytest.skip("deployed config predates entry_ui (schema < v0.0.10) — contract absent")
+    if entry_ui != "board":
+        pytest.skip(f"entry_ui={entry_ui!r} — the board-default-face contract applies only to 'board'")
+
+    sections = router.ssh("uci show uhttpd 2>/dev/null | cut -d. -f2 | sort -u").split()
+    entry_section = secondary_section = None
+    for section in sections:
+        if not section:
+            continue
+        http, https = _uhttpd_listens(router, section)
+        if ENTRY_PAIR[0] in http or ENTRY_PAIR[1] in https:
+            entry_section = section
+        if SECONDARY_PAIR[0] in http or SECONDARY_PAIR[1] in https:
+            secondary_section = section
+
+    if entry_section is None or secondary_section is None:
+        pytest.skip("entry/secondary uhttpd sections not both present — contract absent")
+
+    entry_home = _uhttpd_home(router, entry_section).rstrip("/")
+    secondary_home = _uhttpd_home(router, secondary_section).rstrip("/")
+
+    assert entry_home == "/www/tollgate", (
+        f"entry_ui=board but the entry section '{entry_section}' (8080/443) home is "
+        f"{entry_home!r}, not the board (/www/tollgate) — the board is not the default face"
+    )
+    assert secondary_home == "/www", (
+        f"entry_ui=board: the secondary section '{secondary_section}' (8090/8443) home is "
+        f"{secondary_home!r}, not LuCI (/www)"
+    )
+
+
 @pytest.mark.smoke
 def test_discovery_advertisement_content_type_is_json(router):
     """:2121's advertisement must answer application/json (#730/#628) —
