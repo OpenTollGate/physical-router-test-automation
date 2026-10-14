@@ -2,7 +2,8 @@
 # Release test pipeline — one command to validate a TollGate release.
 #
 # Usage: scripts/release-test.sh --version v0.6.0-rc1 [--router IP]
-#                                  [--ipk PATH] [--no-flash] [--report-dir DIR]
+#                                  [--place NAME] [--ipk PATH] [--no-flash]
+#                                  [--report-dir DIR]
 #
 # Phases:
 #   1. Preflight — verify DUT reachable, labgrid place available
@@ -25,9 +26,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && dirname "$0")"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VENV="${TOLLGATE_PYTHON_VENV:-$HOME/venvs/rig-labgrid}"
 LABGRID_COORD="${LG_COORDINATOR:-192.168.13.208:20408}"
+LABGRID_PLACE="${LG_PLACE:-nr7101-router}"
 
 VERSION=""
-ROUTER="${TOLLGATE_SSH_HOST:-192.168.13.124}"
+ROUTER="${TOLLGATE_SSH_HOST:-192.168.12.124}"
 IPK_PATH=""
 NO_FLASH=false
 REPORT_DIR=""
@@ -36,6 +38,7 @@ SKIP_LABGRID=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --version) VERSION="$2"; shift 2 ;;
+        --place) LABGRID_PLACE="$2"; shift 2 ;;
         --router) ROUTER="$2"; shift 2 ;;
         --ipk) IPK_PATH="$2"; shift 2 ;;
         --no-flash) NO_FLASH=true; shift ;;
@@ -44,6 +47,9 @@ while [[ $# -gt 0 ]]; do
         *) echo "unknown: $1"; exit 1 ;;
     esac
 done
+
+LG="$VENV/bin/labgrid-client"; [ -x "$LG" ] || LG="$(command -v labgrid-client || true)"
+PY="$VENV/bin/python"; [ -x "$PY" ] || PY="python3"
 
 if [[ -z "$VERSION" ]]; then
     echo "ERROR: --version required (e.g. v0.6.0-rc1)"
@@ -69,12 +75,11 @@ LOCKED_PLACE=""
 
 if [[ "$SKIP_LABGRID" == "false" ]]; then
     log "Phase 1: Preflight + labgrid reservation"
-    # Try to lock the nr7101-router place
-    if "$VENV/bin/labgrid-client" -x "$LABGRID_COORD" -p nr7101-router lock 2>/dev/null; then
-        LOCKED_PLACE="nr7101-router"
-        log "✓ Labgrid place 'nr7101-router' locked"
+    if "$LG" -x "$LABGRID_COORD" -p "$LABGRID_PLACE" lock 2>/dev/null; then
+        LOCKED_PLACE="$LABGRID_PLACE"
+        log "✓ Labgrid place '$LABGRID_PLACE' locked"
     else
-        log "❌ Could not lock labgrid place 'nr7101-router' (in use, or coordinator unreachable at $LABGRID_COORD)"
+        log "❌ Could not lock labgrid place '$LABGRID_PLACE' (in use, or coordinator unreachable at $LABGRID_COORD)"
         log "   A release run without the mutex is not attributable — refusing."
         log "   Retry when the place is free, or pass --skip-labgrid explicitly."
         exit 1
@@ -86,7 +91,7 @@ fi
 # Verify DUT reachable
 if ! ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "root@$ROUTER" "echo ok" >/dev/null 2>&1; then
     log "❌ DUT not reachable at $ROUTER"
-    [[ -n "$LOCKED_PLACE" ]] && "$VENV/bin/labgrid-client" -x "$LABGRID_COORD" -p "$LOCKED_PLACE" release 2>/dev/null || true
+    [[ -n "$LOCKED_PLACE" ]] && "$LG" -x "$LABGRID_COORD" -p "$LOCKED_PLACE" release 2>/dev/null || true
     exit 1
 fi
 log "✓ DUT reachable at $ROUTER"
@@ -105,7 +110,7 @@ if [[ "$NO_FLASH" == "false" && -n "$IPK_PATH" ]]; then
     # The standard harness path (transfer, era-aware apk/opkg install, service
     # restart, :2121 health check) — replaces the hand-copied scp+opkg that
     # lived here (docs/authoritative-test-suite.md → "Runner consolidation").
-    if (cd "$REPO_ROOT" && "$VENV/bin/python" - "$ROUTER" "$IPK_PATH" <<'PY'
+    if (cd "$REPO_ROOT" && "$PY" - "$ROUTER" "$IPK_PATH" <<'PY'
 import sys
 from pathlib import Path
 
@@ -126,7 +131,7 @@ PY
     else
         tail -n 20 "$DEPLOY_LOG" >&2 || true
         log "❌ Package install failed (see $DEPLOY_LOG)"
-        [[ -n "$LOCKED_PLACE" ]] && "$VENV/bin/labgrid-client" -x "$LABGRID_COORD" -p "$LOCKED_PLACE" release 2>/dev/null || true
+        [[ -n "$LOCKED_PLACE" ]] && "$LG" -x "$LABGRID_COORD" -p "$LOCKED_PLACE" release 2>/dev/null || true
         exit 1
     fi
     sleep 10
@@ -140,13 +145,16 @@ fi
 log "Phase 3: Running story suite"
 export TOLLGATE_SSH_HOST="$ROUTER"
 export TOLLGATE_SSID="${TOLLGATE_SSID:-TollGate}"
-export PHONE_SERIAL="${PHONE_SERIAL:-ZY326DPC7R}"
+# The lab moto g (ZY326DPC7R) now lives on the numo-phone labgrid place
+# (Numo POS lane) — coordinate before borrowing it; set PHONE_SERIAL
+# explicitly when using it.
+export PHONE_SERIAL="${PHONE_SERIAL:-}"
 export TOLLGATE_TEST_MINT_URL="${TOLLGATE_TEST_MINT_URL:-http://192.168.13.221:8383}"
 
 cd "$REPO_ROOT"
 STORY_RESULT=0
 PORTAL_RESULT=0
-if "$VENV/bin/python" -m pytest tests/scenarios/stories/ \
+if "$PY" -m pytest tests/scenarios/stories/ \
     --no-deploy --timeout-method=signal -v --tb=short \
     2>&1 | tee "$REPORT_DIR/stories.log"; then
     log "✓ All stories passed"
@@ -222,7 +230,7 @@ log ""
 # Cleanup
 # ═══════════════════════════════════════════════════════════════
 if [[ -n "$LOCKED_PLACE" ]]; then
-    "$VENV/bin/labgrid-client" -x "$LABGRID_COORD" -p "$LOCKED_PLACE" release 2>/dev/null || true
+    "$LG" -x "$LABGRID_COORD" -p "$LOCKED_PLACE" release 2>/dev/null || true
     log "✓ Labgrid place released"
 fi
 
