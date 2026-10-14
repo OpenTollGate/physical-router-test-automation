@@ -91,6 +91,15 @@ index events the test dashboard reads.
 - Per-scene clips, never one long take, so a re-cut stays local
   (`tools/film/narrate-film.sh` already synthesizes line by line).
 
+## Concrete lanes
+
+- **`films/installer/`** — the TollGate **install run book** films: the wizard
+  (GUI + headless), the merged manual install, and the post-install board +
+  payment. The kit carries a `README.md` with the dependency pins, the
+  environment knobs, and the per-film determinism — the scripted films are
+  byte-reproducible and offline; the portal/board films need the bench routers.
+  This is the reference concrete lane the mechanics above were built for.
+
 ## References
 
 - `lib/film_voice.py`, `scripts/film-narrate.py`, `scripts/publish-film.py`
