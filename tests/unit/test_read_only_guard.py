@@ -57,7 +57,11 @@ def test_mutators_raise_in_read_only_mode(method, kwargs):
     assert not ssh_calls, f"{method} ran SSH commands before failing"
 
 
-def test_reads_still_work_in_read_only_mode():
+def test_reads_still_work_in_read_only_mode(monkeypatch):
+    # api_status only routes through the (mocked) SSH read path when the
+    # virtual-lab flag is set — without this, the test would really curl the
+    # router address and stall on the network.
+    monkeypatch.setenv("TOLLGATE_VIRTUAL_LAB", "1")
     router, ssh_calls = make_router()
     router.enable_read_only()
     router.ssh("uci -q get dhcp.lan.ra")
