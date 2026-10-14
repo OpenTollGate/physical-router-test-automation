@@ -8,6 +8,11 @@ import pytest
 
 import lib.cloud_lab.shc_submit as shc_submit
 
+try:
+    import shc_toolkit.selfdestruct  # noqa: F401
+    _HAS_SHC_TOOLKIT = True
+except ImportError:
+    _HAS_SHC_TOOLKIT = False
 
 pytestmark = [pytest.mark.story("P11")]
 
@@ -36,8 +41,14 @@ class TestBootstrapScriptKillswitchGating:
 
 
 class TestArmSelfdestructContract:
-    """Pins the contract between our hardcoded env guards and the toolkit."""
+    """Pins the contract between our hardcoded env guards and the toolkit.
 
+    Requires the sibling shc_toolkit checkout — skipped where it is not
+    installed (the env-name drift it guards against is also caught on the
+    lab host, where the toolkit IS present).
+    """
+
+    @pytest.mark.skipif(not _HAS_SHC_TOOLKIT, reason="shc_toolkit not installed on this host")
     def test_env_names_match_toolkit_constants(self):
         import inspect
 
@@ -55,6 +66,7 @@ class TestArmSelfdestructContract:
                 f"{name} missing from shc-run-baked.py — guard drifted from toolkit contract"
             )
 
+    @pytest.mark.skipif(not _HAS_SHC_TOOLKIT, reason="shc_toolkit not installed on this host")
     def test_no_source_raises_runtime_error(self, monkeypatch):
         from shc_toolkit.selfdestruct import arm_self_destruct
 
