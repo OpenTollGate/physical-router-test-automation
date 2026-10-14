@@ -22,7 +22,13 @@ from dataclasses import dataclass
 from typing import Callable, Iterator, Mapping
 
 from lib import hardware_lock
-from lib.lab_inventory import LabInventory, RouterEntry
+from lib.lab_inventory import (
+    InventoryError,
+    LabInventory,
+    RouterEntry,
+    inventory_exists,
+    load_inventory,
+)
 
 _RUN_TIMEOUT = 60
 
@@ -143,6 +149,86 @@ def venue_env(entry: RouterEntry) -> dict[str, str]:
 def apply_venue_env(entry: RouterEntry, environ: Mapping[str, str] = os.environ) -> None:
     for key, value in venue_env(entry).items():
         environ[key] = value
+
+
+def resolve_venue_mode(environ: Mapping[str, str] = os.environ) -> str:
+    """TOLLGATE_VENUE values: 'labgrid' forces the venue, 'direct' forces the
+    legacy env path, unset/'auto' prefers the venue on physical runs when it
+    is configured on this host. Any other value keeps the legacy path —
+    extensive-test.sh reuses this variable for its own lane selection
+    ('virtual'/'physical'/'skip') and must not change meaning here.
+    """
+    mode = (environ.get("TOLLGATE_VENUE") or "").strip().lower()
+    if mode == "labgrid":
+        return "labgrid"
+    if mode == "direct":
+        return "direct"
+    if mode in ("", "auto"):
+        return "auto"
+    return "legacy"
+
+
+def venue_preconditions_met(environ: Mapping[str, str] = os.environ) -> tuple[bool, str]:
+    """Coarse venue availability on THIS host, before any coordinator contact."""
+    if (environ.get("TOLLGATE_LAB_TYPE") or "physical") != "physical":
+        return False, "non-physical lab type"
+    if not inventory_exists():
+        return False, "no lab inventory on this host"
+    try:
+        _default_client_bin()
+    except LabgridBenchError:
+        return False, "labgrid-client not installed"
+    return True, ""
+
+
+def auto_place_name(inv: LabInventory, environ: Mapping[str, str] = os.environ) -> str | None:
+    """Which place an auto session means: an explicit TOLLGATE_LABGRID_PLACE,
+    else the dossier whose address equals TOLLGATE_SSH_HOST, else None."""
+    explicit = (environ.get("TOLLGATE_LABGRID_PLACE") or "").strip()
+    if explicit:
+        return explicit
+    host = (environ.get("TOLLGATE_SSH_HOST") or "").strip()
+    if host:
+        for entry in inv.routers.values():
+            if entry.address and entry.address == host and entry.place:
+                return entry.name
+    return None
+
+
+def plan_venue(environ: Mapping[str, str] = os.environ) -> tuple[str, "VenueBinding | None", str]:
+    """Decide the router-access venue for this session.
+
+    Returns ("venue", binding, place-name) — acquire through venue_mutex —
+    or ("legacy", None, reason) — env path, no place acquisition.
+
+    Auto falls back to legacy ONLY on unmet preconditions (missing inventory
+    or client, non-physical lab, no place mapping). A venue that resolves but
+    then fails — unknown/protected/undressed place, coordinator or acquire
+    error — raises InventoryError/LabgridBenchError and is the CALLER's
+    fatal case: falling back to direct while a place is held would put two
+    sessions on one DUT.
+    """
+    mode = resolve_venue_mode(environ)
+    if mode == "direct":
+        return "legacy", None, "TOLLGATE_VENUE=direct"
+    if mode == "legacy":
+        raw = (environ.get("TOLLGATE_VENUE") or "").strip()
+        return "legacy", None, f"TOLLGATE_VENUE={raw!r} keeps the legacy path"
+    if mode == "labgrid":
+        inv = load_inventory()
+        place = (environ.get("TOLLGATE_LABGRID_PLACE") or "").strip() or "ap-lan2"
+    else:
+        ok, why = venue_preconditions_met(environ)
+        if not ok:
+            return "legacy", None, f"venue auto: {why}"
+        try:
+            inv = load_inventory()
+        except InventoryError as e:
+            return "legacy", None, f"venue auto: inventory unusable ({e})"
+        place = auto_place_name(inv, environ)
+        if not place:
+            return "legacy", None, "venue auto: no place maps to this target"
+    return "venue", bench_for_router(inv, place), place
 
 
 @contextlib.contextmanager

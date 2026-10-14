@@ -328,28 +328,35 @@ def router(request, backend):
         )
         return mock
 
-    if os.environ.get("TOLLGATE_VENUE") == "labgrid":
-        from lib.lab_inventory import InventoryError, load_inventory
-        from lib.labgrid_venue import LabgridBenchError, apply_venue_env, bench_for_router, venue_mutex
+    # Venue decision (#232 convergence): forced/direct/auto — see plan_venue.
+    # A resolved venue that then fails is FATAL (rc=4): falling back to direct
+    # while a place may be held would put two sessions on one DUT.
+    from lib.lab_inventory import InventoryError
+    from lib.labgrid_venue import (
+        LabgridBenchError,
+        apply_venue_env,
+        plan_venue,
+        venue_mutex,
+    )
 
-        try:
-            labgrid_inv = load_inventory()
-            binding = bench_for_router(
-                labgrid_inv, os.environ.get("TOLLGATE_LABGRID_PLACE", "ap-lan2")
-            )
-        except (InventoryError, LabgridBenchError) as e:
-            pytest.exit(f"labgrid venue unavailable: {e}", returncode=4)
+    try:
+        venue_action, venue_binding, venue_detail = plan_venue()
+    except (InventoryError, LabgridBenchError) as e:
+        pytest.exit(f"labgrid venue unavailable: {e}", returncode=4)
+    if venue_action == "venue":
         # Transition invariant (#232): hold the repo file lock AND the place,
         # so venue sessions exclude legacy Make/pymake sessions on the DUT.
-        phase = request.config.getoption("--lock-phase") or f"labgrid-venue {binding.entry.place}"
+        phase = request.config.getoption("--lock-phase") or f"labgrid-venue {venue_binding.entry.place}"
         stack = contextlib.ExitStack()
         try:
-            stack.enter_context(venue_mutex(binding, phase))
+            stack.enter_context(venue_mutex(venue_binding, phase))
         except RuntimeError as e:
             pytest.exit(f"labgrid venue mutex unavailable: {e}", returncode=4)
         request.addfinalizer(stack.close)
-        apply_venue_env(binding.entry)
-        log.info("labgrid venue: acquired place %s + hardware lock", binding.entry.place)
+        apply_venue_env(venue_binding.entry)
+        log.info("labgrid venue: acquired place %s + hardware lock", venue_binding.entry.place)
+    elif venue_detail:
+        log.info("router venue: %s — legacy env path", venue_detail)
 
     host = os.environ.get("TOLLGATE_SSH_HOST") or os.environ.get("ROUTER_IP")
     identity_file = os.environ.get("TOLLGATE_SSH_KEY", "")
