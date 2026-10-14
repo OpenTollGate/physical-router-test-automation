@@ -16,7 +16,13 @@ from lib.lab_inventory import (
     RouterEntry,
     SwitchEntry,
 )
-from lib.labgrid_venue import LabgridBenchError, plan_venue, resolve_venue_mode, venue_preconditions_met
+from lib.labgrid_venue import (
+    LabgridBenchError,
+    apply_venue_env,
+    plan_venue,
+    resolve_venue_mode,
+    venue_preconditions_met,
+)
 
 
 def _inv(**overrides) -> LabInventory:
@@ -86,34 +92,34 @@ class TestPreconditions:
 
 class TestPlanVenue:
     def test_direct_forces_legacy(self):
-        action, binding, detail = plan_venue({"TOLLGATE_VENUE": "direct"})
-        assert action == "legacy" and binding is None
+        plan = plan_venue({"TOLLGATE_VENUE": "direct"})
+        assert plan.action == "legacy" and plan.binding is None
 
     def test_lane_value_keeps_legacy(self):
-        action, _, _ = plan_venue({"TOLLGATE_VENUE": "physical"})
-        assert action == "legacy"
+        assert plan_venue({"TOLLGATE_VENUE": "physical"}).action == "legacy"
 
     def test_auto_unmet_falls_back(self, monkeypatch):
         monkeypatch.setattr("lib.labgrid_venue.inventory_exists", lambda: False)
-        action, binding, detail = plan_venue({})
-        assert action == "legacy" and "no lab inventory" in detail
+        plan = plan_venue({})
+        assert plan.action == "legacy" and "no lab inventory" in plan.detail
 
     def test_auto_no_mapping_falls_back(self, host_ready):
-        action, binding, detail = plan_venue({})
-        assert action == "legacy" and "no place maps" in detail
+        plan = plan_venue({})
+        assert plan.action == "legacy" and "no place maps" in plan.detail
 
     def test_auto_explicit_place(self, host_ready):
-        action, binding, place = plan_venue({"TOLLGATE_LABGRID_PLACE": "x1860-2"})
-        assert action == "venue" and place == "x1860-2"
-        assert binding.entry.place == "x1860-2"
+        plan = plan_venue({"TOLLGATE_LABGRID_PLACE": "x1860-2"})
+        assert plan.action == "venue" and plan.origin == "explicit-place"
+        assert plan.binding.entry.place == "x1860-2"
 
     def test_auto_address_match(self, host_ready):
-        action, binding, place = plan_venue({"TOLLGATE_SSH_HOST": "192.0.2.11"})
-        assert action == "venue" and place == "x1860-2"
+        plan = plan_venue({"TOLLGATE_SSH_HOST": "192.0.2.11"})
+        assert plan.action == "venue" and plan.origin == "address-match"
+        assert plan.detail == "x1860-2"
 
     def test_auto_address_match_placeless_entry_falls_back(self, host_ready):
-        action, _, detail = plan_venue({"TOLLGATE_SSH_HOST": "192.0.2.12"})
-        assert action == "legacy" and "no place maps" in detail
+        plan = plan_venue({"TOLLGATE_SSH_HOST": "192.0.2.12"})
+        assert plan.action == "legacy" and "no place maps" in plan.detail
 
     def test_auto_unknown_explicit_place_is_fatal(self, host_ready):
         with pytest.raises(InventoryError):
@@ -124,8 +130,8 @@ class TestPlanVenue:
             plan_venue({"TOLLGATE_SSH_HOST": "192.0.2.13"})
 
     def test_forced_default_place(self, host_ready):
-        action, binding, place = plan_venue({"TOLLGATE_VENUE": "labgrid"})
-        assert action == "venue" and place == "ap-lan2"
+        plan = plan_venue({"TOLLGATE_VENUE": "labgrid"})
+        assert plan.action == "venue" and plan.origin == "forced" and plan.detail == "ap-lan2"
 
     def test_forced_unknown_place_is_fatal(self, host_ready):
         with pytest.raises(InventoryError):
@@ -137,3 +143,33 @@ class TestPlanVenue:
         monkeypatch.setattr("lib.labgrid_venue.load_inventory", boom)
         with pytest.raises(InventoryError):
             plan_venue({"TOLLGATE_VENUE": "labgrid"})
+
+
+class TestApplyVenueEnvPrecedence:
+    ENTRY = RouterEntry(
+        name="x1860-1", poe_port="3", address="192.0.2.10",
+        place="x1860-1", keyfile="~/.ssh/dossier-key", jump_host="jump.example",
+    )
+
+    def test_default_venue_is_authoritative(self):
+        env: dict[str, str] = {
+            "TOLLGATE_SSH_HOST": "elsewhere", "TOLLGATE_SSH_KEY": "operator-key",
+        }
+        apply_venue_env(self.ENTRY, env)
+        assert env["TOLLGATE_SSH_HOST"] == "192.0.2.10"
+        assert env["TOLLGATE_SSH_KEY"].endswith("dossier-key")
+        assert env["TOLLGATE_SSH_JUMP_HOST"] == "jump.example"
+
+    def test_address_match_respects_operator_env(self):
+        env: dict[str, str] = {
+            "TOLLGATE_SSH_HOST": "192.0.2.10", "TOLLGATE_SSH_KEY": "operator-key",
+            "TOLLGATE_SSH_JUMP_HOST": "operator-jump",
+        }
+        apply_venue_env(self.ENTRY, env, respect_existing=True)
+        assert env["TOLLGATE_SSH_KEY"] == "operator-key"
+        assert env["TOLLGATE_SSH_JUMP_HOST"] == "operator-jump"
+
+    def test_address_match_still_fills_gaps(self):
+        env: dict[str, str] = {"TOLLGATE_SSH_HOST": "192.0.2.10"}
+        apply_venue_env(self.ENTRY, env, respect_existing=True)
+        assert env["TOLLGATE_SSH_KEY"].endswith("dossier-key")

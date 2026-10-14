@@ -146,8 +146,23 @@ def venue_env(entry: RouterEntry) -> dict[str, str]:
     return env
 
 
-def apply_venue_env(entry: RouterEntry, environ: Mapping[str, str] = os.environ) -> None:
+def apply_venue_env(
+    entry: RouterEntry,
+    environ: Mapping[str, str] = os.environ,
+    respect_existing: bool = False,
+) -> None:
+    """Feed the venue's connection env into the Router construction.
+
+    respect_existing=True fills only UNSET vars (setdefault): used when auto
+    mode picked the venue by ADDRESS MATCH — the operator already named this
+    DUT with their own env, so their explicit keyfile/jump-host wins. Forced
+    and explicit-place modes keep venue authority (overwrite): a divergent
+    operator TOLLGATE_SSH_HOST under an explicitly named place would point
+    the session at the wrong DUT while holding another's lock.
+    """
     for key, value in venue_env(entry).items():
+        if respect_existing and environ.get(key):
+            continue
         environ[key] = value
 
 
@@ -195,11 +210,24 @@ def auto_place_name(inv: LabInventory, environ: Mapping[str, str] = os.environ) 
     return None
 
 
-def plan_venue(environ: Mapping[str, str] = os.environ) -> tuple[str, "VenueBinding | None", str]:
-    """Decide the router-access venue for this session.
+@dataclass(frozen=True)
+class VenuePlan:
+    """action: "venue" — acquire through venue_mutex; "legacy" — env path.
 
-    Returns ("venue", binding, place-name) — acquire through venue_mutex —
-    or ("legacy", None, reason) — env path, no place acquisition.
+    origin: how the venue was chosen — "forced" (TOLLGATE_VENUE=labgrid),
+    "explicit-place" (TOLLGATE_LABGRID_PLACE named it), "address-match"
+    (the dossier whose address equals TOLLGATE_SSH_HOST), "" for legacy.
+    Address-match respects pre-set operator env (see apply_venue_env).
+    """
+
+    action: str
+    binding: "VenueBinding | None" = None
+    detail: str = ""
+    origin: str = ""
+
+
+def plan_venue(environ: Mapping[str, str] = os.environ) -> VenuePlan:
+    """Decide the router-access venue for this session.
 
     Auto falls back to legacy ONLY on unmet preconditions (missing inventory
     or client, non-physical lab, no place mapping). A venue that resolves but
@@ -210,25 +238,31 @@ def plan_venue(environ: Mapping[str, str] = os.environ) -> tuple[str, "VenueBind
     """
     mode = resolve_venue_mode(environ)
     if mode == "direct":
-        return "legacy", None, "TOLLGATE_VENUE=direct"
+        return VenuePlan("legacy", detail="TOLLGATE_VENUE=direct")
     if mode == "legacy":
         raw = (environ.get("TOLLGATE_VENUE") or "").strip()
-        return "legacy", None, f"TOLLGATE_VENUE={raw!r} keeps the legacy path"
+        return VenuePlan("legacy", detail=f"TOLLGATE_VENUE={raw!r} keeps the legacy path")
     if mode == "labgrid":
         inv = load_inventory()
         place = (environ.get("TOLLGATE_LABGRID_PLACE") or "").strip() or "ap-lan2"
+        origin = "forced"
     else:
         ok, why = venue_preconditions_met(environ)
         if not ok:
-            return "legacy", None, f"venue auto: {why}"
+            return VenuePlan("legacy", detail=f"venue auto: {why}")
         try:
             inv = load_inventory()
         except InventoryError as e:
-            return "legacy", None, f"venue auto: inventory unusable ({e})"
-        place = auto_place_name(inv, environ)
-        if not place:
-            return "legacy", None, "venue auto: no place maps to this target"
-    return "venue", bench_for_router(inv, place), place
+            return VenuePlan("legacy", detail=f"venue auto: inventory unusable ({e})")
+        explicit = (environ.get("TOLLGATE_LABGRID_PLACE") or "").strip()
+        if explicit:
+            place, origin = explicit, "explicit-place"
+        else:
+            place = auto_place_name(inv, environ)
+            if not place:
+                return VenuePlan("legacy", detail="venue auto: no place maps to this target")
+            origin = "address-match"
+    return VenuePlan("venue", binding=bench_for_router(inv, place), detail=place, origin=origin)
 
 
 @contextlib.contextmanager
