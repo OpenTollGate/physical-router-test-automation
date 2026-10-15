@@ -20,15 +20,16 @@ TOLLGATE_VENUE=physical TOLLGATE_SSH_HOST=192.168.1.1 \
 Artifacts land in `results/extensive-<UTC stamp>/`: per-tier junit +
 logs, plus copies of both maps. Exit code = worst tier.
 
-## Venue readiness (checked 2026-10-07 — verify before relying)
+## Venue readiness (refreshed 2026-10-15 — live-probed; see docs/testing-cycles.md for rail cycle times)
 
 | Venue | State | Bring-up |
 |---|---|---|
-| Virtual lab (ai-legion QEMU) | **Down** (0 QEMU) | script auto-starts via `start-poc` and **refuses politely if another lane is driving the lab** (omarchy/socat markers). Known instability = issue #21. |
-| TollGate-326D (live MT3000) | **Dark** — no beacons; uplink key needs the `<hidden>`-mask fix before its STA can ever associate (see lane status docs); commissioned battery = issue #12 | owner power-cycle + key fix, then `TOLLGATE_VENUE=physical` |
-| ALPHA/BRAVO (x1860 labgrid) | Free places, but DUT-bay VLANs 104/105.x are **unrouted** from the house LAN | conwrt-bench `bench_net.py` routing or bench-side access |
-| NR7101 | Reachable at 192.168.12.124; labgrid place match broken; SSH creds unknown | fix place match + creds (owner) |
-| Phone (android-test) | adb shows no devices on ai-legion-small | check rig cabling/phone power |
+| Virtual rail (br-laneA venue, ai-legion-small) | **UP** — one-command via `scripts/release-validate.sh` (tag→build→deploy→suite, ~15 min) | none; image persists |
+| Virtual lab (ai-legion poc QEMUs) | host-memory dependent — #241's preflight fails fast when starved | clear host memory or use the br-laneA venue |
+| TollGate-326D (live MT3000) | **MIA** per owner | locate, cable to bench-owrt lan3 (VLAN 1003) |
+| ALPHA/BRAVO (x1860 labgrid) | dark — awaiting bench cabling (seats lan5/lan4 exist; lan6/7 free for more) | owner cabling + PSUs |
+| NR7101 (.12.124) | **reachable from ai-legion-small (root key-auth), running tollgate-wrt rc5 mipsel**, WiFi AP `TollGate-0805` broadcasting — but client-initiated TCP to the gateway never arrives (portal unusable; tmbg#946) | discriminator test or fix per #946 |
+| Phone | attached on ai-legion (`numo-phone` place — **shared resource**), adb authorized; **browser suspended by a supervision profile** — UX lane blocked, adb-shell lane works | owner lifts supervision |
 
 ## Scoping knobs
 
