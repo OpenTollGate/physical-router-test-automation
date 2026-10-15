@@ -18,6 +18,7 @@ See: PRTA #238; AGENTS.md "2026-10-13 official-install-path" section.
 """
 
 import os
+import time
 import subprocess
 
 import pytest
@@ -53,8 +54,19 @@ def _portal_prime(router) -> None:
     assert result.returncode == 0, f"portal prime failed: {result.stderr}"
 
 
+def _reset_nds_clients(router) -> None:
+    # Test-rail hygiene (2026-09-19 lesson): a persisted venue keeps NDS
+    # client state across runs, and a merely-DEAUTHED client stays tracked
+    # (preauth) — the backend then treats it as registered and the rejection
+    # phase can never trigger. The client-not-registered path needs a client
+    # NDS has never seen, so clear the table.
+    router.ssh("/etc/init.d/nodogsplash restart")
+    time.sleep(6)
+
+
 def test_client_not_registered_rejects_without_consuming(router, cashu):
     _require_client_routing()
+    _reset_nds_clients(router)
     token = cashu.mint(4)
 
     resp = router.pay_direct(token)
