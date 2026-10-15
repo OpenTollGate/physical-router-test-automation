@@ -92,7 +92,8 @@ else
     log "building x86_64 from $COMMIT (Node pin + $GO_PIN)"
     git -C "$TMBG" fetch origin main -q || fail "tmbg fetch failed"
     git -C "$TMBG" checkout -q "$COMMIT" || fail "checkout $COMMIT failed"
-    (cd "$TMBG" && make portal-build \
+    (cd "$TMBG" && export PATH="$NODE_BIN:$PATH" \
+        && make portal-build \
         && ARCH=x86_64 GOTOOLCHAIN="$GO_PIN" PKG_VERSION="$TAG" \
            bash packaging/local-build-ipk.sh) >> "$OUT/build.log" 2>&1 \
         || fail "build failed (see $OUT/build.log)"
