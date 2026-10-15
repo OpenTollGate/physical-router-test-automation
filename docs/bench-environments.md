@@ -59,6 +59,27 @@ in older WiFi/upstream reports (`upstream-wifi-test-report.md`,
 "MT3000 + arm64 + NetBird" in a doc, THAT is this environment, never
 Environment 2's router.
 
+## Environment 4 — the serial fleet bench (TollGate-installed)
+
+**Where:** the serial fleet hosts. MT3000 on **T440** (`/dev/ttyUSB0`), MT6000 on
+**x280** (`/dev/ttyUSB1`; `ttyUSB0` is the other adapter on that host) — FTDI
+USB-TTL, 115200 8N1, 3.3 V. The gateway (`cobrador`) reaches both over USB-eth.
+
+**Devices:** the **TollGate-installed** pair — MT3000 hostname `tollgate-52BE`
+(OpenWrt 25.12.5, apk, `aarch64_cortex-a53`), MT6000 hostname `tollgate-A04E`
+(OpenWrt 24.10.2, opkg). These are the boxes a package under test is flashed onto.
+
+**What runs here:** serial-console capture (flash, boot log, recovery) and
+anything that must reach the box's **post-install** services — the captive
+portal and the board.
+
+**Access:** the gateway on the box's **management net** (`10.x`); serial console
+from T440/x280. **The flashed LAN IP is gone after install** — the wired LAN
+moves to br-private, so `192.168.1.1` routes out the WAN and is firewalled. See
+[RUNBOOK-bench-lab.md](RUNBOOK-bench-lab.md#reaching-a-tollgate-installed-box-post-install-address)
+for the `ip route get` discovery recipe. From `cobrador` the MT3000 answers on
+`10.57.113.1` (portal `:2051`, board `https://…/`).
+
 ## The confusion this doc exists to kill
 
 | If a session sees... | It is... | Verdict |
@@ -66,4 +87,6 @@ Environment 2's router.
 | `TollGate-326D` / `192.168.1.1` | Env 2 (laptop bench) | Ours; test via laptop bridge |
 | `TollGate-1690` / `TollGate-D1C6` / `100.90.x` | Env 3 (external NetBird) | Out of scope |
 | WS3915i / x1860 / PoE control | Env 1 (labgrid farm) | Ours; use the coordinator |
+| `tollgate-52BE` / `tollgate-A04E`, `10.57.113.1` / `10.63.101.1`, serial on T440/x280 | Env 4 (serial fleet bench) | Ours; reach on the **management net**, not `192.168.1.1` |
+| `192.168.1.1` **from the gateway** | post-install box (Env 4) at a dead address | routes out the WAN — use `ip route get` |
 | "MT3000 (arm64)" with no other identity | AMBIGUOUS — must be pinned before use | Identity check mandatory |

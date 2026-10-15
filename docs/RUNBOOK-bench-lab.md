@@ -101,3 +101,61 @@ fully-serial image-ingest path for the unbootable case.
 | `Operation not permitted` on a fetch from the box | Linux firewall/policy; use the console, or the U-Boot path |
 | Box answers on a different `10.17.x` than configured | LAN/WAN/enx cabling ambiguity — re-pin with `--static-ip`; read the console boot log |
 | `iw dev` shows interfaces after a run | radios-on leaked; run `radios-off.sh <IP>` (watchdog should catch it) |
+
+## Reaching a TollGate-installed box (post-install address)
+
+A box that has had the TollGate package installed is **not** reachable at the
+address you flashed it with. The module moves the wired LAN onto **br-private**
+(a `10.x` subnet) during install, so from the gateway:
+
+- **Do not** target `192.168.1.1`. From `cobrador` that address routes out the
+  WAN (`ip route get 192.168.1.1` → `via 192.168.2.1`) and the box's firewall
+  drops it — a bare TCP connect can even look "open" for the same reason and
+  still be a dead end.
+- Reach the box on its **directly-connected management net** — the USB-eth link
+  the gateway holds. `ip route get <ip>` must show `dev enx…`, never
+  `via 192.168.2.1`.
+
+Discovery, in order:
+
+```sh
+# 1. which interface (and therefore which net) actually reaches the box?
+ip route get 10.57.113.1       # dev enx00e04c683d2d  -> MT3000 br-private
+ip route get 192.168.1.1       # via 192.168.2.1      -> OUT THE WAN, blocked
+
+# 2. the two services a film or probe needs, on the management-net IP
+curl -s  -o /dev/null -w '%{http_code}\n' http://<mgmt-ip>:2051/splash.html   # portal -> 200
+curl -sk -o /dev/null -w '%{http_code}\n' https://<mgmt-ip>/                  # board  -> 200
+```
+
+Verified on the fleet (2026-10-15): from `cobrador`, the MT3000 br-private
+`10.57.113.1` serves the portal at `:2051` (**200**; `:2050` → **307**) and the
+board at `https://10.57.113.1/` (**200**; `:8080` → **307** → `:443`). The
+gateway's USB-eth links are `enx00e04c683d2d` → MT3000 `10.57.113.1` and
+`enx6c6e0750c33b` → MT6000 `10.63.101.1` (interface names are examples — treat
+`ip route get` as authoritative).
+
+**Rules:**
+- Run anything that must reach the router **on a host on the router's
+  LAN/management side** (the gateway, or whatever the USB-eth cable terminates
+  at). Do **not** SSH-tunnel the router's ports to a WAN-side laptop.
+- Do **not** add temporary firewall accepts (`nft insert … accept`) to "open a
+  path". The path you want already exists on the management net; a hole is
+  invasive, is wiped by the next `fw4 reload` / `network restart`, and hides the
+  real topology.
+- The portal, the board, and any router menu are reached at the
+  **management-net IP** — never the flashed LAN IP.
+
+## Mistakes these docs exist to prevent
+
+Written 2026-10-15 after a session wired up tunnels and firewall holes it did
+not need, and aimed at the wrong address. Each row is a real error; the section
+above is the answer.
+
+| Mistake | Why it's wrong | Do this instead |
+|---|---|---|
+| Treated a **synthetic** film as needing the router | the recorders render a fake terminal in HTML; many never touch a router | read the recorder first — no `page.goto(router)` means no router needed |
+| **SSH-tunnelled** router ports to a WAN-side host | the browser must run where the router is reachable; a tunnel is a fragile detour | run the recorder **on the LAN-side gateway** |
+| Punched a **temporary `nft … accept`** on the router | invasive, ephemeral (wiped by the next reload), and it masks the topology | use the management-net path that already exists |
+| Aimed at **`192.168.1.1` from the gateway** | post-install the LAN is on **br-private**; `192.168.1.1` routes out the WAN and is dropped | resolve with `ip route get`; use the `dev enx…` address |
+| Assumed a "recording host" without pinning **which** host/interface | the same service listens on several addresses; only one is reachable | pin the host **and** run `ip route get` before recording |

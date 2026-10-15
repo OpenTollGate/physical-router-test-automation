@@ -78,6 +78,28 @@ python3 scripts/publish-film.py --run results/films/<id> \
 The installer lane's `installer/publish_film.py` additionally emits the Nostr
 index events the test dashboard reads.
 
+## Router-driven films: where to record
+
+Not every film needs the hardware. Classify the recorder **before** wiring
+anything up — the answer decides which host runs it:
+
+| Class | How to tell | Needs | Run it on |
+|---|---|---|---|
+| **Scripted** | renders HTML/text (a fake terminal, a static page); no `page.goto(router)` | nothing | any host with `node`+Playwright+`ffmpeg`+Kokoro |
+| **Local-UI** | `page.goto(WIZ_URL)` at a `127.0.0.1` URL | a locally served UI | the authoring host, UI served locally |
+| **Router-driven** | `page.goto` / `PORTAL_URL` / `BOARD_HOST` at a real address | the live router | a host **on the router's LAN/management side** |
+
+A quick check: read the recorder. If it never navigates to a router address, it
+is scripted and hermetic — no router, no tunnel, no firewall hole.
+
+For **router-driven** films, the browser must run where the target is actually
+reachable — for the fleet that is the gateway, `cobrador`, on the box's
+**management net** (see
+[RUNBOOK-bench-lab.md](RUNBOOK-bench-lab.md#reaching-a-tollgate-installed-box-post-install-address)).
+Do **not** SSH-tunnel the router's ports to a WAN-side laptop, and do **not**
+add temporary firewall accepts; the working path already exists. The portal and
+the board are addressed at the **management-net IP**, never the flashed LAN IP.
+
 ## Pitfalls
 
 - Footage from a local or physical lane can carry real SSIDs, MACs, IPs, and
