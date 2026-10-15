@@ -2465,6 +2465,19 @@ the place, or convert exports to NetworkSerialPort), and a root ser2net
 (telnet :7171) squats the FT232R outside labgrid's exclusivity — one
 access pattern per device, consolidate before it bites.
 
+## Lab host WiFi is management — NEVER a test surface (hard rule)
+
+`ai-legion` and `ai-legion-small` WiFi interfaces (`wlp4s0` on small) carry
+their **management uplink** — small's only route to the house LAN is its WiFi
+(default route via wlp4s0). Joining a test SSID, scanning for test networks,
+or otherwise reconfiguring these radios **orphaned-hosts risk**: it cuts the
+path every lane uses to reach the coordinators, exporters, mint, and the
+hosts themselves. A 2026-10-14 near-miss (planned SSID swap on small for a
+client-discrimination test) was stopped by the owner before any damage —
+do not retry it. WiFi client testing needs a dedicated client: the phone,
+a USB dongle on the driver host, or a VM. If a test seems to need a lab
+host's radio, it needs a different design.
+
 ### The virtual-lab VMs are shared — check for live lanes before driving them
 
 Both poc QEMUs died mid-deploy while another lane's automation was
