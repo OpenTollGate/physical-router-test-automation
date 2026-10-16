@@ -72,6 +72,7 @@ Updated 2026-10-13. Statuses are facts about trackers, not aspirations.
 | 15 | apk-era upgrade + reboot scenario (state preservation, #899 listener invariant on upgrade) | PRTA [#225](https://github.com/OpenTollGate/physical-router-test-automation/pull/225) | PRTA | **merged**; first bench execution owed |
 | 16 | Installer-contract lane wired per-rc into release-check + runbook | module [#925](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/925) | module | **open — sign-off** |
 | 17 | Fail-closed outcomes for required tests (skip ≠ PASS, venue rule) | PRTA [#227](https://github.com/OpenTollGate/physical-router-test-automation/pull/227) | PRTA | **merged**; required-set curation is incremental |
+| 18 | Alpha-rig quick-test entry point (one-command cycle: feed artifact → setup → e2e suite, timed) | PRTA [#274](https://github.com/OpenTollGate/physical-router-test-automation/pull/274) | PRTA | **open**; 3 timed cycles PASS (≈130 s full / 64 s steady), payment E2E over flat L2 proven |
 
 ## Milestones ahead (smallest effective first)
 
