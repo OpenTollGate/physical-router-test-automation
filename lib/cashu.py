@@ -825,6 +825,22 @@ class TokenPool:
                     return token
         return self._minter.mint(amount, legacy=legacy, timeout=timeout, retries=retries)
 
+    def mint_fresh(self, amount: int = 4, legacy: bool = True, timeout: int = 120, retries: int = 2) -> str:
+        # #247: bypass the pool for payment-critical tokens. A venue reset
+        # re-inits the fakewallet mint and rotates its keyset generation —
+        # pooled tokens minted before the rotation then verify as CU109
+        # (outdated mint key) and the payment silently never lands.
+        return self._minter.mint(amount, legacy=legacy, timeout=timeout, retries=retries)
+
+    def drain(self) -> int:
+        """Drop queued tokens (e.g. after a venue reset rotated the mint)."""
+        with self._lock:
+            n = len(self._queue)
+            self._queue.clear()
+        if n:
+            log.info("TokenPool: drained %d pooled tokens", n)
+        return n
+
     @property
     def mint_url(self) -> str:
         return self._minter_url

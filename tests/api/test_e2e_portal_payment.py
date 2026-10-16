@@ -29,8 +29,9 @@ def _wait_for_auth_state(router, timeout: int = 45) -> bool:
     while time.time() - start < timeout:
         if router.get_nds_state() == "Authenticated":
             return True
-        if time.time() - start > 10:
-            router.ssh(f"ndsctl auth {router.phone_mac} 2>&1", timeout=5)
+        # No forced `ndsctl auth` here: the backend's client-list
+        # reconciliation closes any auth it holds no session for (~1s), so
+        # forcing it can never stick and only masked payment failures (#247).
         time.sleep(1)
     return router.get_nds_state() == "Authenticated"
 
@@ -73,7 +74,11 @@ def test_e2e_portal_payment(adb, cashu, router, results_dir, request):
 
     assert adb.wait_for_portal_ready(timeout=60), "Playwright did not load portal in time"
 
-    token = cashu.mint(TOKEN_DEFAULT)
+    token = (
+        cashu.mint_fresh(TOKEN_DEFAULT)
+        if hasattr(cashu, "mint_fresh")
+        else cashu.mint(TOKEN_DEFAULT)
+    )
     assert token, "cashu mint failed"
 
     adb.signal_token(token)
