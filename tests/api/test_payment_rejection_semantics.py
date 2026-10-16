@@ -64,6 +64,7 @@ def _reset_nds_clients(router) -> None:
     time.sleep(6)
 
 
+@pytest.mark.timeout(180)
 def test_client_not_registered_rejects_without_consuming(router, cashu):
     _require_client_routing()
     _reset_nds_clients(router)

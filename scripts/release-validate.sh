@@ -75,9 +75,18 @@ else
     log "resolving source commit from the feed's aarch64 ipk stamp"
     PROBE=$(mktemp -d)
     VER=$(printf '%s' "$TAG" | sed -e 's/^v//' -e 's/-/_/g')
-    curl -fsSL --max-time 60 -o "$PROBE/p.ipk" \
-        "https://github.com/FreedomTechFeed/packages/releases/download/${TAG}/tollgate-wrt_${VER}_aarch64_cortex-a53.ipk" \
-        || fail "feed ipk download failed (arch parked for this tag?)"
+    AASSET=$(curl -fsS --max-time 20 "$FEED_API" | python3 -c "
+import json,sys
+rs=[r for r in json.load(sys.stdin) if r.get('tag_name')=='$TAG']
+for r in rs:
+    for a in r.get('assets',[]):
+        n=a['name']
+        if 'aarch64_cortex-a53' in n and n.endswith('.ipk'):
+            print(a['browser_download_url']); raise SystemExit
+" 2>/dev/null) || true
+    [ -n "$AASSET" ] || fail "no aarch64_cortex-a53 ipk asset found for $TAG"
+    curl -fsSL --max-time 60 -o "$PROBE/p.ipk" "$AASSET" \
+        || fail "feed ipk download failed"
     (cd "$PROBE" && tar xzf p.ipk ./data.tar.gz 2>/dev/null \
         && tar xzf data.tar.gz ./usr/bin/tollgate-wrt 2>/dev/null) \
         || fail "ipk extraction failed"
