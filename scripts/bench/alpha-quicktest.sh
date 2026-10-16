@@ -8,18 +8,24 @@
 #                 switch-SVI collision, verify board identity, ensure the
 #                 DUT's dedicated management IP .61 exists
 #     -> INSTALL  fetch + verify the feed release artifact (provenance via
-#                 scripts/download-feed-release.sh), transfer via small
-#                 (scp -O), full reinstall on the DUT (apk del + apk add —
-#                 the "flash" step for this package-flow rig), with
-#                 wait-for-SSH loops around both network bounces
+#                 scripts/download-feed-release.sh), transfer ai-legion ->
+#                 small -> DUT (scp -O, hash re-verified on the DUT), full
+#                 reinstall (apk del + apk add — the "flash" step for this
+#                 package-flow rig), with wait-for-SSH loops around both
+#                 network bounces
 #     -> SETUP    re-assert default route + DNS (works around
 #                 OpenTollGate/tollgate-rs#29), reset wallet.db, pin
 #                 accepted_mints to the fakewallet mint, restart, settle
 #     -> TEST     standard e2e suite: kind:10021 health gate, mint 11 sat +
 #                 send 4 sat via cdk-cli, independent netns client (fresh
-#                 MAC/IP), portal prime, token POST -> kind:1022, ndsctl
-#                 Authenticated, /usage allotment, internet through DUT
-#     -> TEARDOWN remove the netns client rig, re-apply the ARP pin
+#                 MAC/IP every cycle), portal prime, token POST ->
+#                 kind:1022, ndsctl Authenticated, /usage allotment,
+#                 internet through DUT
+#     -> TEARDOWN remove the netns client rig, restore addressing, re-apply
+#                 the ARP pin, verify the bench NIC is whole
+#
+# The teardown also runs from an EXIT/INT/TERM trap, so a failed, killed
+# or Ctrl-C'd cycle still restores ai-legion-small's bench NIC.
 #
 # "Flash" on this rig means a full package reinstall (apk del removes the
 # package, its deps, and bounces the network; apk add reinstalls from the
@@ -39,6 +45,7 @@
 #
 # Env:  ALPHA_SMALL          jump host             (default ubuntu@192.168.13.221)
 #       ALPHA_SMALL_KEY      ssh key for the jump  (default ~/.ssh/id_ed25519)
+#       ALPHA_DUT_KEY        key on small for DUT  (default /home/ubuntu/.ssh/id_ed25519)
 #       ALPHA_ROUTER         DUT primary address   (default 192.168.105.1)
 #       ALPHA_MGMT           DUT mgmt secondary    (default 192.168.105.61)
 #       ALPHA_DUT_MAC        DUT br-private MAC    (default a8:63:7d:8f:61:a8)
@@ -62,6 +69,11 @@
 # DEPENDENCIES (bench-owner): remove the OpenWrt switch's VLAN 1005 SVI
 # that collides with the DUT's primary address (192.168.105.1). Until then
 # this script's ARP pin + dedicated mgmt IP are load-bearing.
+#
+# BENCH-NIC EXCLUSIVITY: the TEST phase flushes enp5s0 (the "bench-trunk"
+# NIC) and re-bridges it for the netns client. If that NIC ever grows
+# addresses outside 192.168.105.0/24 (another lane), the cycle ABORTS
+# before touching it — multi-lane fabric rule (AGENTS.md).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -71,6 +83,7 @@ RESULT="results/alpha-quicktest"
 LOCK="$HOME/.hermes/state/alpha-quicktest.lock"
 SMALL="${ALPHA_SMALL:-ubuntu@192.168.13.221}"
 SMALL_KEY="${ALPHA_SMALL_KEY:-$HOME/.ssh/id_ed25519}"
+DUT_KEY="${ALPHA_DUT_KEY:-/home/ubuntu/.ssh/id_ed25519}"
 ROUTER="${ALPHA_ROUTER:-192.168.105.1}"
 MGMT="${ALPHA_MGMT:-192.168.105.61}"
 DUT_MAC="${ALPHA_DUT_MAC:-a8:63:7d:8f:61:a8}"
@@ -81,20 +94,23 @@ GW_IP="${ALPHA_GW_IP:-192.168.105.2}"
 CLIENT_NS="alpha-qt"
 CLIENT_BR="alpha-qt-br"
 ARCH="mipsel_24kc-ramips-mt7621"
+STAGE="alpha-qt.$$"                 # per-run staging names on small/DUT
+APK_NAME="tollgate-quicktest.apk"
 
-usage() { sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { awk 'NR>1 && /^#/{sub(/^# ?/,""); print; next} NR>1 && /^set -/ {exit}' "$0"; exit 2; }
+need()  { [ -n "${!1:-}" ] || usage; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --release) RELEASE="$2"; shift 2 ;;
+    --release) RELEASE="${2:-}"; need RELEASE; shift 2 ;;
+    --result)  RESULT="${2:-}";  need RESULT;  shift 2 ;;
+    --lock)    LOCK="${2:-}";    need LOCK;    shift 2 ;;
     --no-reinstall) NO_REINSTALL=1; shift ;;
     --keep-client) KEEP_CLIENT=1; shift ;;
-    --result) RESULT="$2"; shift 2 ;;
-    --lock) LOCK="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "unknown arg: $1" >&2; usage ;;
   esac
 done
-[ -n "$RELEASE" ] || usage
+need RELEASE
 
 SSH_SMALL=(ssh -i "$SMALL_KEY" -o IdentitiesOnly=yes -o ProxyJump=none
            -o ConnectTimeout=20 -o ServerAliveInterval=15 "$SMALL")
@@ -104,23 +120,24 @@ SCP_SMALL=(scp -q -i "$SMALL_KEY" -o IdentitiesOnly=yes -o ProxyJump=none)
 SSH_DUT_OPTS=(-o ConnectTimeout=12 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
               -o ServerAliveInterval=10 -o ServerAliveCountMax=3)
 
-mkdir -p "$(dirname "$LOCK")" "$RESULT" 2>/dev/null
+exec 9>"$LOCK" 2>/dev/null || { echo "cannot open lock: $LOCK" >&2; exit 3; }
+mkdir -p "$(dirname "$LOCK")" 2>/dev/null
 RUN_DIR="$RESULT/run-$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$RUN_DIR"
+mkdir -p "$RUN_DIR" 2>/dev/null || { echo "cannot create $RUN_DIR" >&2; exit 3; }
 TIMES="$RUN_DIR/phases.tsv"
-: > "$TIMES"
+: > "$TIMES" 2>/dev/null || { echo "cannot write $TIMES" >&2; exit 3; }
 
 log()  { echo "[alpha-quicktest $(date +%H:%M:%S)] $*" | tee -a "$RUN_DIR/cycle.log"; }
 fail() { log "FAIL($1): $2"; exit "$1"; }
 phase() { printf '%s\t%s\t%s\n' "$1" "$2" "$(date +%s.%N)" >> "$TIMES"; }
 
 # ---- DUT helpers (all through the jump host) ---------------------------------
-dut_pin() { "${SSH_SMALL[@]}" "sudo ip neigh replace $ROUTER lladdr $DUT_MAC dev enp5s0 nud permanent" 2>/dev/null; }
+dut_pin() { "${SSH_SMALL[@]}" "sudo -n ip neigh replace $ROUTER lladdr $DUT_MAC dev enp5s0 nud permanent" 2>/dev/null; }
 
 dut_run() { # dut_run <addr> <local-script> [args]
   local addr="$1" script="$2" args="${3:-}"
-  "${SCP_SMALL[@]}" "$script" "$SMALL:/tmp/alpha-qt.sh" >/dev/null 2>&1 \
-    && "${SSH_SMALL[@]}" "scp -q -O -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null /tmp/alpha-qt.sh root@$addr:/tmp/alpha-qt.sh && ssh ${SSH_DUT_OPTS[*]} root@$addr 'sh /tmp/alpha-qt.sh $args'"
+  "${SCP_SMALL[@]}" "$script" "$SMALL:/tmp/$STAGE.sh" >/dev/null 2>&1 \
+    && "${SSH_SMALL[@]}" "scp -q -O -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null /tmp/$STAGE.sh root@$addr:/tmp/$STAGE.sh && ssh ${SSH_DUT_OPTS[*]} root@$addr 'sh /tmp/$STAGE.sh $args'"
 }
 
 dut_alive() { # dut_alive <addr> -> 0 iff SSH answers AND it is the COVR
@@ -143,9 +160,29 @@ ensure_mgmt_ip() { # add the dedicated secondary if missing (idempotent)
   "${SSH_SMALL[@]}" "ssh ${SSH_DUT_OPTS[*]} root@$ROUTER 'ip -4 addr show br-private | grep -q $MGMT || ip addr add $MGMT/24 dev br-private; ip -4 addr show br-private | grep inet'" 2>/dev/null
 }
 
-# ---- lock -------------------------------------------------------------------
-exec 9>"$LOCK" || fail 3 "cannot open lock"
-flock -n 9 || fail 3 "bench lock busy: $LOCK"
+restore_bench_nic() { # idempotent teardown of the netns rig + NIC restore
+  "${SSH_SMALL[@]}" "sudo -n ip netns del $CLIENT_NS 2>/dev/null; sudo -n ip link del v0 2>/dev/null; \
+    sudo -n ip link set enp5s0 nomaster 2>/dev/null; sudo -n ip link del $CLIENT_BR 2>/dev/null; \
+    sudo -n nmcli con up bench-trunk >/dev/null 2>&1; \
+    sudo -n ip neigh del $ROUTER dev enp5s0 2>/dev/null; \
+    sudo -n ip neigh replace $ROUTER lladdr $DUT_MAC dev enp5s0 nud permanent; \
+    sudo -n rm -rf /etc/netns/$CLIENT_NS /tmp/$STAGE.sh /tmp/$STAGE-token.txt 2>/dev/null; \
+    ip -4 addr show enp5s0 | grep -c inet"
+}
+
+TEARDOWN_OK=0
+on_exit() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ "$TEARDOWN_OK" != 1 ] && [ "$KEEP_CLIENT" != 1 ] && [ -n "${RUN_DIR:-}" ]; then
+    log "exit trap: restoring bench NIC (cycle failed with rc=$rc)"
+    restore_bench_nic >/dev/null 2>&1 || true
+  fi
+  exit "$rc"
+}
+trap on_exit EXIT INT TERM
+
+# ---- lock (after trap setup so failures release cleanly) --------------------
+flock -n 9 || { echo "bench lock busy: $LOCK" >&2; exit 3; }
 log "lock acquired: $LOCK (run dir $RUN_DIR, release $RELEASE)"
 
 # ==== 1. ACQUIRE =============================================================
@@ -166,17 +203,20 @@ phase install start
 log "INSTALL: fetching feed artifact $RELEASE ($ARCH apk)"
 APK="$("$HERE/../download-feed-release.sh" "$RELEASE" "$ARCH" apk "$RUN_DIR")" \
   || fail 20 "feed artifact download/verify failed"
-log "INSTALL: artifact $(basename "$APK") ($(sha256sum "$APK" | cut -c1-16)...)"
-"${SCP_SMALL[@]}" "$APK" "$SMALL:/tmp/rc6.apk" || fail 20 "transfer to small failed"
-log "INSTALL: artifact staged on small; pushing to DUT"
-echo 'sha256sum /tmp/rc6.apk' > "$RUN_DIR/push.sh"
+APK_SHA="$(sha256sum "$APK" | cut -d' ' -f1)"
+log "INSTALL: artifact $(basename "$APK") ($APK_SHA | cut -c1-16...)"
+"${SCP_SMALL[@]}" "$APK" "$SMALL:/tmp/$APK_NAME" || fail 20 "transfer to small failed"
+
+log "INSTALL: staging artifact on DUT (transfer if hash mismatch)"
+echo "sha256sum /tmp/$APK_NAME" > "$RUN_DIR/push.sh"
 PUSHED=""
 for i in 1 2 3 4 5; do
-  if dut_run "$MGMT" "$RUN_DIR/push.sh" | grep -q "$(sha256sum "$APK" | cut -d' ' -f1)"; then PUSHED=1; break; fi
-  log "INSTALL: push attempt $i failed (DUT settling?) — retrying in 10s"
-  sleep 10; ensure_mgmt_ip >/dev/null 2>&1; dut_pin
+  if dut_run "$MGMT" "$RUN_DIR/push.sh" | grep -q "$APK_SHA"; then PUSHED=1; break; fi
+  log "INSTALL: stage attempt $i (hash mismatch/absent — transferring)"
+  "${SSH_SMALL[@]}" "scp -q -O -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null /tmp/$APK_NAME root@$MGMT:/tmp/$APK_NAME" \
+    || { sleep 10; ensure_mgmt_ip >/dev/null 2>&1; dut_pin; }
 done
-[ -n "$PUSHED" ] || fail 20 "push to DUT failed after retries"
+[ -n "$PUSHED" ] || fail 20 "artifact staging on DUT failed after retries"
 
 cat > "$RUN_DIR/install.sh" <<'EOF'
 set -e
@@ -195,10 +235,10 @@ set -e
 echo "=== route first (del dropped it) ==="
 ip route replace default via $GW_IP dev br-private
 printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > /tmp/resolv.conf
-echo "=== sha256 on DUT ==="; sha256sum /tmp/rc6.apk
+echo "=== sha256 on DUT ==="; sha256sum /tmp/$APK_NAME
 n=0; until apk update >/tmp/apkupd.log 2>&1; do n=\$((n+1)); [ \$n -ge 4 ] && { cat /tmp/apkupd.log; exit 1; }; sleep 5; done
 echo "apk update ok"
-n=0; until apk add --allow-untrusted /tmp/rc6.apk 2>&1 | grep -vE "uci: Entry not found|init\.d/(rpcd|uhttpd)" | tail -4; do
+n=0; until apk add --allow-untrusted /tmp/$APK_NAME 2>&1 | grep -vE "uci: Entry not found|init\.d/(rpcd|uhttpd)" | tail -4; do
   n=\$((n+1)); [ \$n -ge 4 ] && exit 1; ip route replace default via $GW_IP dev br-private; sleep 5
 done
 echo "=== verify deps ==="
@@ -225,13 +265,13 @@ phase install end
 # ==== 3. SETUP ===============================================================
 phase setup start
 log "SETUP: route+DNS (#29 workaround), wallet reset, mint config, restart"
-MINT_HOSTPORT="$(echo "$MINT" | sed 's|http://||; s|/$||')"
 cat > "$RUN_DIR/setup.sh" <<EOF
 set -e
 ip route replace default via $GW_IP dev br-private
 printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > /tmp/resolv.conf
 echo "=== egress ==="; ping -c 2 -W 3 8.8.8.8 2>&1 | tail -1
-echo "=== mint reachable ==="; wget -q -O- -T 8 $MINT/v1/info 2>/dev/null | head -c 60; echo
+echo "=== mint reachable (from the mint itself, not our echo) ==="
+if wget -q -O- -T 8 $MINT/v1/info 2>/dev/null | grep -q '"pubkey"'; then echo MINT-REACHABLE; else echo MINT-UNREACHABLE; fi
 cp /etc/tollgate/config.json /etc/tollgate/config.json.quicktest-bak 2>/dev/null || true
 rm -f /etc/tollgate/wallet.db
 jq '.accepted_mints = [{
@@ -244,15 +284,15 @@ jq '.accepted_mints = [{
   "price_unit": "sat",
   "purchase_min_steps": 1
 }]' /etc/tollgate/config.json > /tmp/cfg.new && mv /tmp/cfg.new /etc/tollgate/config.json
-jq -c '.accepted_mints[0].url' /etc/tollgate/config.json
+echo "=== configured mint ==="; jq -c '.accepted_mints[0].url' /etc/tollgate/config.json
 /etc/init.d/tollgate-wrt restart
 sleep 15
 pgrep -l tollgate
 EOF
 OUT=$(dut_run "$MGMT" "$RUN_DIR/setup.sh") || { echo "$OUT" >&2; fail 30 "setup failed"; }
 echo "$OUT" | tee "$RUN_DIR/setup.out"
+echo "$OUT" | grep -q 'MINT-REACHABLE'   || fail 30 "mint not reachable from DUT (wget /v1/info failed)"
 echo "$OUT" | grep -q 'tollgate-wrt' || fail 30 "daemon not running after restart"
-echo "$OUT" | grep -q "$MINT_HOSTPORT" || fail 30 "mint not reachable from DUT"
 log "SETUP: ok"
 phase setup end
 
@@ -276,42 +316,52 @@ log "TEST: minting 11 sat + sending 4 sat via fakewallet"
 log "TEST: token ready ($(wc -c < "$RUN_DIR/token4.txt")B)"
 
 log "TEST: netns client + portal prime + payment + internet"
-"${SCP_SMALL[@]}" "$RUN_DIR/token4.txt" "$SMALL:/tmp/alpha-qt-token.txt" || fail 40 "token transfer failed"
+"${SCP_SMALL[@]}" "$RUN_DIR/token4.txt" "$SMALL:/tmp/$STAGE-token.txt" || fail 40 "token transfer failed"
 cat > "$RUN_DIR/client.sh" <<EOF
 set -e
-if ! ip netns list | grep -q "^$CLIENT_NS "; then
-  ip link add $CLIENT_BR type bridge; ip link set $CLIENT_BR up
-  ip addr flush dev enp5s0
-  ip link set enp5s0 master $CLIENT_BR
-  ip addr add 192.168.105.10/24 dev $CLIENT_BR
-  ip addr add $GW_IP/24 dev $CLIENT_BR
-  ip netns add $CLIENT_NS
-  ip link add v0 type veth peer name v1
-  ip link set v0 master $CLIENT_BR; ip link set v0 up
-  ip link set v1 netns $CLIENT_NS
-  ip netns exec $CLIENT_NS ip link set lo up
-  ip netns exec $CLIENT_NS ip link set v1 up
-  ip netns exec $CLIENT_NS ip addr add $CLIENT_IP/24 dev v1
-  ip netns exec $CLIENT_NS ip route add default via $ROUTER
-  mkdir -p /etc/netns/$CLIENT_NS
-  echo "nameserver 1.1.1.1" > /etc/netns/$CLIENT_NS/resolv.conf
-fi
+# --- exclusivity guard: this NIC must belong to the 105 lane only ---
+FOREIGN=\$(ip -4 addr show enp5s0 | grep -o 'inet [0-9.]*' | awk '{print \$2}' | grep -v '^192\.168\.105\.' || true)
+[ -z "\$FOREIGN" ] || { echo "REFUSING: enp5s0 carries non-105 addresses: \$FOREIGN"; exit 1; }
+# --- fresh client rig every cycle: a reused (already-Authenticated) MAC
+#     would consume the token and fail the gate-open race ---
+ip netns del $CLIENT_NS 2>/dev/null || true
+ip link del v0 2>/dev/null || true
+ip link del $CLIENT_BR 2>/dev/null || true
+ip link set enp5s0 nomaster 2>/dev/null || true
+ip link add $CLIENT_BR type bridge; ip link set $CLIENT_BR up
+ip addr flush dev enp5s0
+ip link set enp5s0 master $CLIENT_BR
+ip addr add 192.168.105.10/24 dev $CLIENT_BR
+ip addr add $GW_IP/24 dev $CLIENT_BR
+ip netns add $CLIENT_NS
+ip link add v0 type veth peer name v1
+ip link set v0 master $CLIENT_BR; ip link set v0 up
+ip link set v1 netns $CLIENT_NS
+ip netns exec $CLIENT_NS ip link set lo up
+ip netns exec $CLIENT_NS ip link set v1 up
+ip netns exec $CLIENT_NS ip addr add $CLIENT_IP/24 dev v1
+ip netns exec $CLIENT_NS ip route add default via $ROUTER
+mkdir -p /etc/netns/$CLIENT_NS
+echo "nameserver 1.1.1.1" > /etc/netns/$CLIENT_NS/resolv.conf
 CMAC=\$(ip netns exec $CLIENT_NS ip link show v1 | grep ether | awk '{print \$2}')
+[ -n "\$CMAC" ] || { echo "cannot determine client MAC"; exit 1; }
 echo "CLIENT_MAC=\$CMAC"
 ip netns exec $CLIENT_NS ping -c 2 -W 2 $ROUTER 2>&1 | tail -1
+echo "=== deauth any stale session for this MAC (must be unauthenticated) ==="
+ssh -i $DUT_KEY ${SSH_DUT_OPTS[*]} root@$MGMT "ndsctl deauth \$CMAC" 2>/dev/null || true
 echo "=== portal prime ==="
 ip netns exec $CLIENT_NS curl -sS -m 10 -o /dev/null -w "portal %{http_code}\n" http://$ROUTER:2050/
 echo "=== token POST ==="
 ip netns exec $CLIENT_NS curl -sS -m 30 -X POST -H "Content-Type: text/plain" \
-  -d @/tmp/alpha-qt-token.txt -w "\nPOST %{http_code}\n" http://$ROUTER:2121/
+  -d @/tmp/$STAGE-token.txt -w "\nPOST %{http_code}\n" http://$ROUTER:2121/
 echo "=== internet through DUT ==="
 ip netns exec $CLIENT_NS curl -sS -m 10 -o /dev/null -w "net %{http_code} %{time_total}s\n" http://1.1.1.1/
 echo "=== usage ==="
 ip netns exec $CLIENT_NS curl -sS -m 10 http://$ROUTER:2121/usage; echo
 echo "=== ndsctl auth ==="
-ssh -i /home/ubuntu/.ssh/id_ed25519 ${SSH_DUT_OPTS[*]} root@$MGMT "ndsctl status" 2>/dev/null | grep -A8 "\$CMAC" | head -9
+ssh -i $DUT_KEY ${SSH_DUT_OPTS[*]} root@$MGMT "ndsctl status" 2>/dev/null | grep -A8 "\$CMAC" | head -9
 EOF
-OUT=$("${SCP_SMALL[@]}" "$RUN_DIR/client.sh" "$SMALL:/tmp/alpha-qt.sh" && "${SSH_SMALL[@]}" "sudo sh /tmp/alpha-qt.sh") \
+OUT=$("${SCP_SMALL[@]}" "$RUN_DIR/client.sh" "$SMALL:/tmp/$STAGE.sh" && "${SSH_SMALL[@]}" "sudo -n sh /tmp/$STAGE.sh") \
   || { echo "$OUT" >&2; fail 40 "client/payment phase failed"; }
 echo "$OUT" | tee "$RUN_DIR/payment.out"
 echo "$OUT" | grep -q '"kind":1022'          || fail 40 "payment did not return kind:1022"
@@ -328,14 +378,16 @@ if [ "$KEEP_CLIENT" = 1 ]; then
   log "TEARDOWN: --keep-client, leaving netns rig on small"
 else
   log "TEARDOWN: removing netns rig, restoring addressing + ARP pin"
-  "${SSH_SMALL[@]}" "sudo ip netns del $CLIENT_NS 2>/dev/null; sudo ip link del v0 2>/dev/null; \
-    sudo ip link set enp5s0 nomaster 2>/dev/null; sudo ip link del $CLIENT_BR 2>/dev/null; \
-    sudo nmcli con up bench-trunk >/dev/null 2>&1; \
-    sudo ip neigh del $ROUTER dev enp5s0 2>/dev/null; \
-    sudo ip neigh replace $ROUTER lladdr $DUT_MAC dev enp5s0 nud permanent; \
-    sudo rm -rf /etc/netns/$CLIENT_NS; \
-    ip -4 addr show enp5s0 | grep -c inet" | tee "$RUN_DIR/teardown.out"
+  ADDR_COUNT="$(restore_bench_nic | tail -1)"
+  if [ "$ADDR_COUNT" != "2" ]; then
+    log "TEARDOWN: bench NIC has $ADDR_COUNT/2 addresses — re-running NM activation"
+    "${SSH_SMALL[@]}" "sudo -n nmcli con up bench-trunk" >/dev/null 2>&1 || true
+    ADDR_COUNT="$("${SSH_SMALL[@]}" "ip -4 addr show enp5s0 | grep -c inet" 2>/dev/null | tail -1)"
+    [ "$ADDR_COUNT" = "2" ] || fail 50 "bench NIC not restored (expected 2 addresses, got $ADDR_COUNT)"
+  fi
+  log "TEARDOWN: bench NIC whole (2 addresses)"
 fi
+TEARDOWN_OK=1
 phase teardown end
 
 # ---- summary ----------------------------------------------------------------
