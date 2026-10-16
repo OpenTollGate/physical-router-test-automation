@@ -128,3 +128,19 @@ the board are addressed at the **management-net IP**, never the flashed LAN IP.
 - `tools/film/` — the vendored narrator and Kokoro CLI (`PROVENANCE.md`)
 - `ansible/film-voice.yml`, `ansible/roles/film_voice/`
 - `Amperstrand/test-films` — the methodology this lane follows.
+
+## Reproducible recording environment (IaC)
+
+A router-driven take needs a real guest session and a real token. Do not assemble
+that by hand — use the scripts:
+
+- `scripts/film-record-env.sh up --host <recorder> --ssid <guest-ssid> --router-ip <mgmt-ip>`
+  joins the recorder host's WiFi to the router's **guest** SSID (never-default, so
+  the management path is untouched), disables WiFi power-save, and **primes
+  NoDogSplash** by loading the gateway port (without it the purchase is refused
+  with `#CU107`). `… down --host <recorder>` restores the WiFi.
+- `scripts/mint-testnet-token.sh <out-file> [amount] [mint-url]` (with `CASHU_TS`)
+  mints a fresh **testnet** e-cash token for the portal film.
+
+Then record the kit's films (`installer/docs/runbook/film/`) and gate them with
+`film-verify.py` before publishing.
