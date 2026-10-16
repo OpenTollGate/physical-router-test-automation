@@ -3,8 +3,8 @@ import logging
 
 log = logging.getLogger("tollgate.backend")
 
-BACKEND_TYPES = ("go", "go-cdk", "rust", "rust-basic", "rust-embedded")
-BACKEND_CHOICES_CLI = ("go", "rust", "rust-basic", "rust-embedded")
+BACKEND_TYPES = ("go", "go-cdk", "rust", "rust-basic", "rust-embedded", "rust-v2")
+BACKEND_CHOICES_CLI = ("go", "rust", "rust-basic", "rust-embedded", "rust-v2")
 
 
 class BackendConfig:
@@ -40,6 +40,13 @@ class BackendConfig:
         return self.type == "rust-embedded"
 
     @property
+    def is_rust_v2(self) -> bool:
+        """The current OpenTollGate/tollgate-rs node: native TollGate protocol
+        (tollgated + mintd + merchantd), no HTTP captive API. Asserted through
+        the control-socket snapshot instead of :2121."""
+        return self.type == "rust-v2"
+
+    @property
     def build_tags(self) -> str:
         return "cdk_wallet" if self.is_go_cdk else ""
 
@@ -49,6 +56,8 @@ class BackendConfig:
 
     @property
     def repo(self) -> str:
+        if self.is_rust_v2:
+            return "OpenTollGate/tollgate-rs"
         if self.is_rust:
             return "Amperstrand/tollgate-rs-ai-research-and-experiments"
         if self.is_rust_basic or self.is_rust_embedded:
@@ -57,12 +66,14 @@ class BackendConfig:
 
     @property
     def workflow(self) -> str:
-        if self.is_rust or self.is_rust_basic or self.is_rust_embedded:
+        if self.is_rust or self.is_rust_basic or self.is_rust_embedded or self.is_rust_v2:
             return "Build and Package"
         return "Build and Publish"
 
     @property
     def config_path(self) -> str:
+        if self.is_rust_v2:
+            return "/etc/tollgate/tollgate.yaml"
         return "/etc/tollgate/config.json"
 
     @property
