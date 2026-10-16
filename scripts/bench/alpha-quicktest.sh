@@ -120,8 +120,9 @@ SCP_SMALL=(scp -q -i "$SMALL_KEY" -o IdentitiesOnly=yes -o ProxyJump=none)
 SSH_DUT_OPTS=(-o ConnectTimeout=12 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
               -o ServerAliveInterval=10 -o ServerAliveCountMax=3)
 
+LOCK_DIR="$(dirname "$LOCK")"
+mkdir -p "$LOCK_DIR" 2>/dev/null
 exec 9>"$LOCK" 2>/dev/null || { echo "cannot open lock: $LOCK" >&2; exit 3; }
-mkdir -p "$(dirname "$LOCK")" 2>/dev/null
 RUN_DIR="$RESULT/run-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$RUN_DIR" 2>/dev/null || { echo "cannot create $RUN_DIR" >&2; exit 3; }
 TIMES="$RUN_DIR/phases.tsv"
@@ -171,18 +172,25 @@ restore_bench_nic() { # idempotent teardown of the netns rig + NIC restore
 }
 
 TEARDOWN_OK=0
+LOCK_OK=0
 on_exit() {
   local rc=$?
-  if [ "$rc" -ne 0 ] && [ "$TEARDOWN_OK" != 1 ] && [ "$KEEP_CLIENT" != 1 ] && [ -n "${RUN_DIR:-}" ]; then
+  # Only a run that ACQUIRED the lock may restore the bench NIC: a
+  # lock-busy loser (LOCK_OK=0) must never tear down the holder's rig
+  # (the netns/bridge names are fixed).
+  if [ "$LOCK_OK" = 1 ] && [ "$rc" -ne 0 ] && [ "$TEARDOWN_OK" != 1 ] && [ "$KEEP_CLIENT" != 1 ]; then
     log "exit trap: restoring bench NIC (cycle failed with rc=$rc)"
     restore_bench_nic >/dev/null 2>&1 || true
   fi
   exit "$rc"
 }
-trap on_exit EXIT INT TERM
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # ---- lock (after trap setup so failures release cleanly) --------------------
 flock -n 9 || { echo "bench lock busy: $LOCK" >&2; exit 3; }
+LOCK_OK=1
 log "lock acquired: $LOCK (run dir $RUN_DIR, release $RELEASE)"
 
 # ==== 1. ACQUIRE =============================================================
@@ -204,7 +212,7 @@ log "INSTALL: fetching feed artifact $RELEASE ($ARCH apk)"
 APK="$("$HERE/../download-feed-release.sh" "$RELEASE" "$ARCH" apk "$RUN_DIR")" \
   || fail 20 "feed artifact download/verify failed"
 APK_SHA="$(sha256sum "$APK" | cut -d' ' -f1)"
-log "INSTALL: artifact $(basename "$APK") ($APK_SHA | cut -c1-16...)"
+log "INSTALL: artifact $(basename "$APK") (${APK_SHA:0:16}...)"
 "${SCP_SMALL[@]}" "$APK" "$SMALL:/tmp/$APK_NAME" || fail 20 "transfer to small failed"
 
 log "INSTALL: staging artifact on DUT (transfer if hash mismatch)"
