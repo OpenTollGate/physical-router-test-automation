@@ -352,3 +352,73 @@ def test_subflow_over_tunnel_establishes(serial_console):
         f"a subflow established but not on a tunnel address {tunnel_addrs}; "
         f"the advertised address is not the reachable one.\n{mon}"
     )
+
+
+# ---------------------------------------------------------------------------
+# THE TRANSFERABLE PRECONDITION (hardened)
+# ---------------------------------------------------------------------------
+# This is the lesson that cost the most time in this work, and it is now a
+# first-class check rather than a comment.
+#
+# `mptcpize run iperf3 -c ...` converts the CLIENT socket only. A listener
+# started plain as `iperf3 -s` stays plain TCP, so the connection FALLS BACK to
+# regular TCP -- and a fallback connection has NO path manager, so no ADD_ADDR is
+# ever generated, `ip mptcp monitor` shows only CLOSED, and it presents exactly
+# like a router-side fault. Days of router-side debugging could not find it
+# because the defect was on the far end.
+#
+# The rule: BEFORE diagnosing any MPTCP symptom, prove the far end negotiated
+# multipath. Two independent signals, because either alone can mislead:
+#   1. the peer's socket must be MPTCP  -> `ss -Mltn` shows `mptcp LISTEN`
+#   2. the responder counter must move  -> MP_CAPABLE SYN-ACK actually sent
+#
+# Signal 2 is checked from the router (it is the responder's counter we cannot
+# read), signal 1 must be checked ON the peer. This test fails loudly rather than
+# skipping when a peer IS configured but has not negotiated, because a silent
+# pass here is what produces a wrong result downstream.
+
+def test_no_mptcp_fallback_before_any_measurement(serial_console):
+    """Hard precondition: refuse to trust a measurement if MPTCP fell back.
+
+    Fails (does not skip) when a peer is configured but capability was never
+    negotiated, because everything measured afterwards would be measurement of
+    ordinary TCP wearing an MPTCP label.
+    """
+    peer = os.environ.get("TOLLGATE_MPTCP_PEER", "").strip()
+    if not peer:
+        pytest.skip("TOLLGATE_MPTCP_PEER not set (no peer configured)")
+
+    c = mptcp_counters(serial_console)
+    if not c:
+        pytest.skip("MPTcpExt counters unreadable on this build")
+
+    fallback = c.get("MPCapableFallbackACK", 0) + c.get("MPCapableFallbackSYNACK", 0)
+    capable_rx = c.get("MPCapableSYNRX", 0)
+
+    assert not (fallback > 0 and capable_rx == 0), (
+        "MPTCP capability negotiation FELL BACK with no successful SYN seen. "
+        "Everything measured next would be plain TCP. Check the peer listener: "
+        "`ss -Mltn` must show `mptcp LISTEN` (start it as "
+        "`mptcpize run <server>`, not plain)."
+    )
+
+
+def test_peer_listener_is_mptcp_if_probe_available(serial_console):
+    """If a peer probe command is provided, assert the peer socket is MPTCP.
+
+    TOLLGATE_MPTCP_PEER_SS_CMD lets the operator supply the exact command that
+    reads the peer's listeners (e.g. `ssh vps 'ss -Mltn'`), so this lane asserts
+    the real precondition instead of trusting the router's view of it.
+    """
+    cmd = os.environ.get("TOLLGATE_MPTCP_PEER_SS_CMD", "").strip()
+    if not cmd:
+        pytest.skip("TOLLGATE_MPTCP_PEER_SS_CMD not set (cannot read peer sockets)")
+    import subprocess
+
+    out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
+    text = (out.stdout or "") + (out.stderr or "")
+    assert "mptcp" in text.lower(), (
+        "the peer reports no MPTCP listener. A plain-TCP listener causes a "
+        "fallback connection, which has no path manager and therefore never "
+        f"generates ADD_ADDR. Output:\n{text}"
+    )
