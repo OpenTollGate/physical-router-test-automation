@@ -725,10 +725,15 @@ class HttpMinter:
         for p in proofs:
             entry = {"amount": p["amount"], "secret": p["secret"], "C": p["C"]}
             if p.get("id"):
-                # Portal decoders (cashu-ts family) accept SHORT keyset ids
-                # only: v1 (00…) or v2-short (first 16 hex of the full 64-hex
-                # id, 01…). A full-length id fails token parsing outright.
-                entry["id"] = p["id"][:16]
+                # Full keyset id, verbatim. An earlier truncation to 16 hex
+                # chars (v1-style) made every V2-keyset token (66-hex id,
+                # e.g. the cdk-0.18 local fakewallet) verify as CU109
+                # "outdated mint key" on the router — the browser-payment
+                # tests failed while the error card was screenshotted as
+                # "paid" (#247). Full-length ids verified live against the
+                # rc5 router AND the portal on 2026-10-16; the old
+                # portal-parser claim no longer holds at current pins.
+                entry["id"] = p["id"]
             clean_proofs.append(entry)
         token_obj = {
             "token": [{"mint": self.mint_url, "proofs": clean_proofs}],
