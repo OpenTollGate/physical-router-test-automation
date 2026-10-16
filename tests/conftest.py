@@ -323,6 +323,10 @@ def backend(request):
 
 @pytest.fixture(scope="session")
 def router(request, backend):
+    if backend.is_rust_v2:
+        # The rust-v2 lane brings up tollgated/mintd/merchantd itself
+        # (lib/tollgate_rs.py); there is no router to drive.
+        return None
     if IS_MOCK_MODE:
         log.info("TOLLGATE_MOCK=1 — using MockRouter (no physical router needed)")
         phone_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.0.0.100")
@@ -553,6 +557,11 @@ def _degrade_session_to_skips(request, reason: str) -> None:
 
 @pytest.fixture(scope="session", autouse=True)
 def deploy_session(request, router, backend, results_dir):
+    if backend.is_rust_v2:
+        # No deployment and no HTTP health check: the rust-v2 tests start
+        # and stop their own nodes.
+        yield
+        return
     if IS_MOCK_MODE:
         log.info("TOLLGATE_MOCK=1 — skipping deployment and health checks")
         yield
