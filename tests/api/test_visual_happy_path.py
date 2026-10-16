@@ -140,9 +140,16 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     assert adb.wait_for_portal_ready(timeout=90), "Playwright did not load portal in time"
     print("[visual] portal loaded, unpaid screenshot taken by recording thread")
 
-    # Step 3: mint a token and let the recorded browser paste + submit it
+    # Step 3: mint a token and let the recorded browser paste + submit it.
+    # Fresh, not pooled: a venue reset rotates the fakewallet keyset and
+    # pooled tokens reject as CU109 — the browser payment then never lands
+    # while the portal only shows the error card (#247).
     print("[visual] minting Cashu token for browser payment...")
-    token = cashu.mint(TOKEN_DEFAULT)
+    token = (
+        cashu.mint_fresh(TOKEN_DEFAULT)
+        if hasattr(cashu, "mint_fresh")
+        else cashu.mint(TOKEN_DEFAULT)
+    )
     assert token, "cashu mint failed"
     adb.signal_token(token)
 
@@ -177,7 +184,11 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     except Exception as exc:
         print(f"[visual] standalone screenshot skipped: {exc}")
 
-    assert authenticated, "client should be authenticated after ndsctl auth"
+    assert authenticated, (
+        "client should be authenticated after the browser payment — if the "
+        "portal showed an 'E-cash note expired' (CU109) card, the token was "
+        "minted against a rotated keyset (stale pool vs venue reset, #247)"
+    )
 
 
 @pytest.mark.complete

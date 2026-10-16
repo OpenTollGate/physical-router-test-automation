@@ -725,10 +725,15 @@ class HttpMinter:
         for p in proofs:
             entry = {"amount": p["amount"], "secret": p["secret"], "C": p["C"]}
             if p.get("id"):
-                # Portal decoders (cashu-ts family) accept SHORT keyset ids
-                # only: v1 (00…) or v2-short (first 16 hex of the full 64-hex
-                # id, 01…). A full-length id fails token parsing outright.
-                entry["id"] = p["id"][:16]
+                # Full keyset id, verbatim. An earlier truncation to 16 hex
+                # chars (v1-style) made every V2-keyset token (66-hex id,
+                # e.g. the cdk-0.18 local fakewallet) verify as CU109
+                # "outdated mint key" on the router — the browser-payment
+                # tests failed while the error card was screenshotted as
+                # "paid" (#247). Full-length ids verified live against the
+                # rc5 router AND the portal on 2026-10-16; the old
+                # portal-parser claim no longer holds at current pins.
+                entry["id"] = p["id"]
             clean_proofs.append(entry)
         token_obj = {
             "token": [{"mint": self.mint_url, "proofs": clean_proofs}],
@@ -824,6 +829,22 @@ class TokenPool:
                         threading.Thread(target=self._replenish, daemon=True).start()
                     return token
         return self._minter.mint(amount, legacy=legacy, timeout=timeout, retries=retries)
+
+    def mint_fresh(self, amount: int = 4, legacy: bool = True, timeout: int = 120, retries: int = 2) -> str:
+        # #247: bypass the pool for payment-critical tokens. A venue reset
+        # re-inits the fakewallet mint and rotates its keyset generation —
+        # pooled tokens minted before the rotation then verify as CU109
+        # (outdated mint key) and the payment silently never lands.
+        return self._minter.mint(amount, legacy=legacy, timeout=timeout, retries=retries)
+
+    def drain(self) -> int:
+        """Drop queued tokens (e.g. after a venue reset rotated the mint)."""
+        with self._lock:
+            n = len(self._queue)
+            self._queue.clear()
+        if n:
+            log.info("TokenPool: drained %d pooled tokens", n)
+        return n
 
     @property
     def mint_url(self) -> str:
