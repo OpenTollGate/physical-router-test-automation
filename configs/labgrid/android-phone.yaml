@@ -14,6 +14,6 @@ targets:
   main:
     resources:
       RemotePlace:
-        name: android-phone
+        name: numo-phone
     drivers:
       AndroidADBDriver: {}

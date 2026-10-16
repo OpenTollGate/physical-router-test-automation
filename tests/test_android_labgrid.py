@@ -33,12 +33,12 @@ def android_place():
     """Acquire the coordinator place for this session (bench convention:
     explicit acquire/release, like the bolty/fips-lab HIL conftests)."""
     client = os.path.join(os.path.dirname(sys.executable), "labgrid-client")
-    r = subprocess.run([client, "-x", COORDINATOR, "-p", "android-phone",
+    r = subprocess.run([client, "-x", COORDINATOR, "-p", "numo-phone",
                         "acquire"], capture_output=True, text=True, timeout=30)
     if r.returncode != 0:
-        pytest.skip(f"cannot acquire android-phone place: {r.stderr.strip()}")
+        pytest.skip(f"cannot acquire numo-phone place: {r.stderr.strip()}")
     yield
-    subprocess.run([client, "-x", COORDINATOR, "-p", "android-phone",
+    subprocess.run([client, "-x", COORDINATOR, "-p", "numo-phone",
                     "release"], capture_output=True, timeout=30)
 
 
@@ -65,10 +65,15 @@ def _driver(android_place, target) -> AndroidADBDriver:
         drv = target.get_driver(AndroidADBDriver)
     except (lg_exc.NoDriverFoundError, lg_exc.InvalidConfigError) as exc:
         pytest.skip(f"android-phone resources unavailable: {exc}")
-    devices = _adb_devices()
-    if not devices:
-        pytest.skip("no adb device visible — plug the phone in, enable USB "
-                    "debugging, and accept the RSA authorization prompt "
+    # Presence via the driver's own transport (NetworkService/SSH to the
+    # USB host) — a local adb on the test host is NOT required.
+    try:
+        state = drv.get_status()
+    except Exception as exc:  # transport down = phone absent for our purposes
+        pytest.skip(f"adb transport unavailable: {exc}")
+    if state != "device":
+        pytest.skip(f"adb device not ready (state={state!r}) — plug the phone "
+                    "in, enable USB debugging, accept the RSA prompt "
                     "(see docs/android-phone-bringup.md)")
     return drv
 
@@ -92,7 +97,7 @@ def test_phone_wifi_state_dump(android_place, target):
     """Wifi must be toggleable for portal tests; dump the current state."""
     driver = _driver(android_place, target)
     wifi = driver.run_check(
-        "settings query global wifi_on 2>/dev/null || "
+        "settings get global wifi_on 2>/dev/null || "
         "dumpsys wifi | grep -m1 'Wi-Fi is'")
     assert wifi, "no wifi state output — is this an Android with wifi?"
 
