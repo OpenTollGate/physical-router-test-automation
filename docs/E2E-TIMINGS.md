@@ -74,9 +74,21 @@ which does exactly this for the MT3000 lanes).
 
 ### Steady-state smoke (no reinstall)
 
-`--no-reinstall` skips the purge and re-adds over the running install
-(measures: acquire + verify + setup + test only, ≈ 45 s/cycle expected;
-not separately timed yet).
+`--no-reinstall` skips the purge and re-installs over the running
+install. Measured 2026-10-16 (run-20261016-202800, PASS):
+
+| Phase | Time |
+|---|---:|
+| acquire | 7.5 s |
+| install (verify + no-op add) | 25.6 s |
+| setup | 19.5 s |
+| test | 10.4 s |
+| teardown | 1.2 s |
+| **TOTAL** | **64.2 s** |
+
+So the A/B for the flash step: full flash-equivalent cycle ≈ 130 s,
+steady-state re-test ≈ 64 s — the purge+dep-refetch+bounces cost ≈ 65 s
+per cycle.
 
 ## Reproduce
 
