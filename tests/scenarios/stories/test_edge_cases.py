@@ -48,7 +48,7 @@ def test_spent_token_rejected():
     is not on the TollGate WiFi, it skips. Loopback POSTs are blocked
     by the backend's client-class firewall on some implementations.
     """
-    from lib.cashu import HttpMinter
+    from lib.cashu import create_minter
     from tests.scenarios.stories.conftest import get_client_device
 
     device = get_client_device("android-phone")
@@ -60,7 +60,7 @@ def test_spent_token_rejected():
         pytest.skip("phone not on TollGate WiFi (needed for br-lan client class)")
 
     # Mint and spend a token
-    token = HttpMinter(mint_url).mint(4)
+    token = create_minter(mint_url).mint(4)
     first = _backend_post_via_client(device, token)
     assert first.get("kind") == 1022, f"first payment should succeed: {first}"
 

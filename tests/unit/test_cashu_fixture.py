@@ -19,7 +19,6 @@ from lib.cashu_fixture import (
     _resolve_mint_url,
     cleanup_token,
 )
-from lib.cashu import _encode_c
 
 
 # --------------------------------------------------------------------------- #
@@ -77,7 +76,7 @@ class FakeTokenPool(TokenPool):
 
 
 class FakeMinterNoWorkDir:
-    """Stands in for HttpMinter — no _work_dir, not a CashuMint/CdkCliWallet."""
+    """Stands in for any minter without _work_dir (not CashuMint/CdkCliWallet)."""
 
     def __init__(self, mint_url="https://testnut.cashu.exchange"):
         self.mint_url = mint_url
@@ -248,7 +247,7 @@ class TestCleanupToken:
         assert not work_dir.exists()
 
     def test_no_work_dir_no_crash(self):
-        """Minters without _work_dir (HttpMinter) don't crash cleanup."""
+        """Minters without _work_dir don't crash cleanup."""
         minter = FakeMinterNoWorkDir()
         mt = MintedToken(token="cashuA123", amount=4, mint_url="https://mint", minter=minter)
         mt.mark_consumed()
@@ -291,20 +290,3 @@ class TestCleanupToken:
         cleanup_token(mt)
 
 
-class TestEncodeC:
-    """_encode_c dialect knob: hex (backend) default, base64 (portal) opt-in."""
-
-    POINT = bytes([2]) + bytes(range(1, 33))  # 33-byte compressed point
-
-    def test_default_is_hex(self, monkeypatch):
-        monkeypatch.delenv("TOLLGATE_TOKEN_C_BASE64", raising=False)
-        assert _encode_c(self.POINT) == self.POINT.hex()
-
-    def test_base64_opt_in(self, monkeypatch):
-        monkeypatch.setenv("TOLLGATE_TOKEN_C_BASE64", "1")
-        import base64 as _b64
-        assert _encode_c(self.POINT) == _b64.b64encode(self.POINT).decode()
-
-    def test_hex_form_round_trips_to_33_bytes(self, monkeypatch):
-        monkeypatch.delenv("TOLLGATE_TOKEN_C_BASE64", raising=False)
-        assert len(bytes.fromhex(_encode_c(self.POINT))) == 33

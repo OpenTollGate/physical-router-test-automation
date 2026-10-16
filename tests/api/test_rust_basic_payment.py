@@ -84,7 +84,7 @@ def _mint_test_token():
 
     Returns the token string, or None when the mint is unreachable.
     Uses the existing lib.cashu minter infrastructure rather than the
-    raw cashu CLI so we inherit retry/skip logic and HttpMinter/CdkCliWallet
+    raw cashu CLI so we inherit retry/skip logic and CdkCliWallet/CashuMint
     fallback selection.
     """
     try:
