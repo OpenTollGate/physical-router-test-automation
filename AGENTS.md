@@ -316,19 +316,16 @@ The `Router` class is the primary interface to the router. Key methods:
 
 ### `lib/cashu.py` — Token Minting
 
-Three token minters with fallback chain: `HttpMinter` → `CdkCliWallet` → `CashuMint`. `create_minter()` auto-selects the best available.
+Two token minters, reference-first (#268): `CdkCliWallet` (CDK reference) → `CashuMint` (Python/nutshell reference). `create_minter()` auto-selects. The hand-rolled `HttpMinter` was REMOVED (2026-10-16): its v1-truncated keyset ids co-masked the portal defect for months (see the #247 saga) — hand-rolled Cashu serialization has no place in the suite; speed comes from TokenPool parallelism, not custom crypto.
 
 | Minter | How | Speed (nested KVM) | Dependencies |
 |---|---|---|---|
-| `HttpMinter` | Direct HTTP NUT-04 + `coincurve` BDHKE crypto | ~1-2s per token | `coincurve>=18.0` (in requirements.txt) |
 | `CdkCliWallet` | `cdk-cli` subprocess | ~10-15s per token | `/opt/cdk-mintd/cdk-cli` binary |
 | `CashuMint` | `cashu` Python CLI subprocess | ~15-30s per token | `/opt/cashu-venv` Python venv |
 
-`HttpMinter` implements the full Cashu NUT-04 minting flow without subprocess overhead: fetch active keyset → create mint quote (POST `/v1/mint/quote/bolt11`) → wait for FakeWallet auto-payment → mint tokens (POST `/v1/mint/bolt11`) with blinded messages → unblind signatures via secp256k1 point math → serialize V3 token. Works with any Cashu mint (FakeWallet auto-pay, local CDK/Nutshell, or public testnut).
-
 `TokenPool` pre-fills a queue of tokens in parallel (ThreadPoolExecutor, max 5 workers) and replenishes in background threads. Tests call `pool.mint(4)` and get an instant token from the queue.
 
-The `setup-cashu.sh` script patches cashu's `models.py` for a version mismatch (missing `active` field on keysets). Only needed for `CashuMint` — `HttpMinter` and `CdkCliWallet` don't use the Python cashu CLI.
+The `setup-cashu.sh` script patches cashu's `models.py` for a version mismatch (missing `active` field on keysets). Only needed for `CashuMint` — `CdkCliWallet` doesn't use the Python cashu CLI.
 
 ### `lib/deploy.py` — CI Artifact Deployment
 
@@ -355,7 +352,7 @@ Session-scoped (created once per test run):
 | `router` | SSH connection to TollGate router (`Router` instance) |
 | `secondary_router` | Optional second router for two-router tests |
 | `adb` | Phone control — ADB, MacWiFiClient, LinuxWiFiClient, or ContainerClient |
-| `cashu` | Token minter (`HttpMinter` > `CdkCliWallet` > `CashuMint`) for testnet tokens |
+| `cashu` | Token minter (`CdkCliWallet` > `CashuMint`) for testnet tokens |
 | `deploy_session` | Auto-deploy (autouse) — deploys branch/binary before tests |
 | `results_dir` | Canonical results directory under `results/` |
 | `backend` | `BackendConfig` from `--backend` flag or env |
@@ -693,7 +690,7 @@ The Go backend's wallet dependency is declared as `Origami74/gonuts-tollgate v0.
 
 > **Note (updated 2026-09-18)**: both testnut domains are currently operational —
 > live-probed: `testnut.cashu.space` answers `/v1/info` (0.17s) AND settles
-> NUT-04 quotes (verified end-to-end with HttpMinter), as does
+> NUT-04 quotes (verified end-to-end with the CdkCliWallet), as does
 > `testnut.cashu.exchange`. An earlier July 2026 note declared `.space` dead
 > (HTTP 000); that was transient or has been fixed. `.space` is the canonical
 > testnut domain (returns proper bolt11); `.exchange` remains the fallback and
@@ -1498,7 +1495,7 @@ The cloud lab uses a Debian QEMU VM (`10.99.99.100`) as the test client. Visual 
 2. Falls back to Nutshell V1 (`http://v1.testnut.nutshell.lan:8385`) for Go backend
 3. Writes chosen URL to `.env` as `TOLLGATE_TEST_MINT_URL`
 4. `conftest.py` `cashu()` fixture reads `TOLLGATE_TEST_MINT_URL` from env
-5. `create_minter()` selects the best available minter (`HttpMinter` > `CdkCliWallet` > `CashuMint`) and uses this URL for all minting operations
+5. `create_minter()` selects the best available minter (`CdkCliWallet` > `CashuMint`) and uses this URL for all minting operations
 
 **Recording lifecycle (`lib/clients/container.py`):**
 
@@ -1542,7 +1539,7 @@ PRTA integration (verified live 2026-09-30 on router 326D, rust v0.6.0-alpha4):
 
 - `lib/m5.py` — `M5Mint`: USB-serial discovery (`Hades2001`/`M5STACK` by-id,
   override with `TOLLGATE_M5_PORT`), status parsing, health probe, and
-  `M5Minter(HttpMinter)` which trusts a born-PAID quote-create and only polls
+  `M5Minter(HttpMinter)` (historical — the class is gone; the M5 lane now wraps the reference minters) which trusts a born-PAID quote-create and only polls
   the quote GET when the create response is not PAID (works on all fw versions).
 - `m5_mint` fixture (session) — skips tests when no Atom is attached.
 - `tests/api/test_m5_hardware_mint.py` — pins the M5 into `accepted_mints`
@@ -1990,7 +1987,7 @@ and emit the matching config.
   `CDK_MINTD_LN_*` → `CDK_MINTD_PAYMENT_BACKEND_*`.
 - `[fake_wallet]` still exists; keep `min_delay_time = 0` /
   `max_delay_time = 0` — 0.18 defaults are 1–3s, which slows every mint.
-- NUT-04/07 HTTP behavior is unchanged for our flows (HttpMinter,
+- NUT-04/07 HTTP behavior is unchanged for our flows (CdkCliWallet,
   checkstate verified live on 0.18.0: full payment E2E + unknown-Y probe
   both pass; unknown Y still reads `UNSPENT`, consistent with
   `unwrap_or(State::Unspent)` in `check_spendable.rs`).

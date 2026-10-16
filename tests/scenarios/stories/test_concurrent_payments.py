@@ -12,7 +12,7 @@ import time
 import pytest
 
 from lib.contract import min_token_sats, probe_host
-from lib.cashu import HttpMinter
+from lib.cashu import create_minter
 
 log = logging.getLogger("tollgate.story.concurrent")
 
@@ -58,7 +58,7 @@ def test_phone_and_vm_pay_simultaneously(tollgate_ssid, rate_limiter):
     # Mint two tokens
     mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL",
                               "http://192.168.13.221:8383")
-    minter = HttpMinter(mint_url)
+    minter = create_minter(mint_url)
     phone_token = minter.mint(min_token_sats())
     vm_token = minter.mint(min_token_sats())
 

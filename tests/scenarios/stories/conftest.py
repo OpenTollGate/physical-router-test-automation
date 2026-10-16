@@ -773,10 +773,10 @@ def _deauth_device(device=None):
 
 
 def _mint_and_pay(device) -> bool:
-    from lib.cashu import HttpMinter
+    from lib.cashu import create_minter
     mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL",
                               "http://192.168.13.221:8383")
-    minter = HttpMinter(mint_url)
+    minter = create_minter(mint_url)
     token = minter.mint(4)
     return device.submit_token(token)
 

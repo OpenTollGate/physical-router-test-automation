@@ -11,7 +11,7 @@ import time
 import pytest
 
 from lib.contract import min_token_sats
-from lib.cashu import HttpMinter
+from lib.cashu import create_minter
 from tests.scenarios.stories.conftest import _deauth_device
 
 log = logging.getLogger("tollgate.story.session_expiry")
@@ -39,7 +39,7 @@ def test_session_expiry_and_repayment(fresh_session, rate_limiter):
     # Act: re-pay
     mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL",
                               "http://192.168.13.221:8383")
-    token = HttpMinter(mint_url).mint(min_token_sats())
+    token = create_minter(mint_url).mint(min_token_sats())
 
     rate_limiter()
     assert device.submit_token(token), "re-payment failed"

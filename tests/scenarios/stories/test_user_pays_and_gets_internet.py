@@ -11,7 +11,7 @@ import time
 import pytest
 
 from lib.contract import min_token_sats, probe_host, revalidation_policy
-from lib.cashu import HttpMinter
+from lib.cashu import create_minter
 
 log = logging.getLogger("tollgate.story.pay_internet")
 
@@ -32,7 +32,7 @@ def test_user_pays_and_gets_internet(story_video, no_session, tollgate_ssid,
 
     mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL",
                               "http://192.168.13.221:8383")
-    minter = HttpMinter(mint_url)
+    minter = create_minter(mint_url)
     token = minter.mint(min_token_sats())
     log.info("[%s] minted %d-char token", device.name, len(token))
 

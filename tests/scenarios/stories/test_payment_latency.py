@@ -12,7 +12,7 @@ import time
 import pytest
 
 from lib.contract import min_token_sats, probe_host
-from lib.cashu import HttpMinter
+from lib.cashu import create_minter
 
 log = logging.getLogger("tollgate.story.bench")
 
@@ -34,7 +34,7 @@ class TestPaymentLatency:
         # Mint
         mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL",
                                   "http://192.168.13.221:8383")
-        token = HttpMinter(mint_url).mint(min_token_sats())
+        token = create_minter(mint_url).mint(min_token_sats())
         t_minted = time.time()
 
         # Submit
