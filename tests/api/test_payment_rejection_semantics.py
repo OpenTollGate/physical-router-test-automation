@@ -59,8 +59,12 @@ def _reset_nds_clients(router) -> None:
     # client state across runs, and a merely-DEAUTHED client stays tracked
     # (preauth) — the backend then treats it as registered and the rejection
     # phase can never trigger. The client-not-registered path needs a client
-    # NDS has never seen, so clear the table.
-    router.ssh("/etc/init.d/nodogsplash restart")
+    # NDS has never seen, so clear the table. The restart drops in-flight SSH
+    # sessions — tolerate that (the command completes server-side).
+    try:
+        router.ssh("( /etc/init.d/nodogsplash restart ) >/dev/null 2>&1 &")
+    except Exception:
+        pass
     time.sleep(6)
 
 
