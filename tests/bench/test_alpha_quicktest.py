@@ -116,6 +116,11 @@ def test_script_contains_no_hardcoded_passwords():
 
 _QUICKTEST_ENABLED = os.environ.get("PRTA_ALPHA_QUICKTEST", "") == "1"
 
+# NOTE the double gate: this module is marked ``rust_only`` and the repo's
+# conftest skips rust_only tests unless TOLLGATE_BACKEND=rust (the default
+# is "go"). Running the A/B pair therefore needs BOTH env vars:
+#   PRTA_ALPHA_QUICKTEST=1 TOLLGATE_BACKEND=rust pytest tests/bench/...
+
 
 @pytest.mark.skipif(
     not _QUICKTEST_ENABLED,
