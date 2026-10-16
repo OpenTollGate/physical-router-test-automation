@@ -73,23 +73,27 @@ if [ -n "$TAG" ] && [ -z "$COMMIT" ]; then
         fail "no source to build from"
     fi
     log "resolving source commit from feed tag $TAG"
-    AURL=$(curl -fsS --max-time 20 "$FEED_API" | "$PY" -c "
-import json,sys
-rs=[r for r in json.load(sys.stdin) if r.get('tag_name')=='$TAG']
-for r in rs:
-    for a in r.get('assets',[]):
-        n=a['name']
-        if 'aarch64_cortex-a53' in n and n.endswith('.ipk'):
-            print(a['browser_download_url']); raise SystemExit
-" 2>/dev/null) || true
+    AURL=$(gh api "repos/FreedomTechFeed/packages/releases/tags/$TAG" \
+        --jq '.assets[] | select(.name | test("aarch64_cortex-a53.*\\.ipk$")) | .browser_download_url' 2>/dev/null | head -1)
     [ -n "$AURL" ] || fail "no aarch64 asset for $TAG"
     PROBE=$(mktemp -d)
     curl -fsSL --max-time 60 -o "$PROBE/p.ipk" "$AURL" || fail "feed ipk download failed"
     (cd "$PROBE" && tar xzf p.ipk ./data.tar.gz 2>/dev/null && tar xzf data.tar.gz ./usr/bin/tollgate-wrt 2>/dev/null) || true
+    # Try the -g<sha> stamp first; fall back to the release's target commitish
     STAMPED=$(strings "$PROBE/usr/bin/tollgate-wrt" 2>/dev/null | grep -m1 -oE 'g[0-9a-f]{7,10}' | tr -d g || true)
-    COMMIT=$(printf '%s' "$STAMPED" | grep -oE '[0-9a-f]{7,10}' || true)
+    if [ -z "$STAMPED" ] || [ "$STAMPED" = "0123456" ]; then
+        # Stamp missing or dummy — use the release metadata
+        STAMPED=$(gh api "repos/FreedomTechFeed/packages/releases/tags/$TAG" \
+            --jq '.target_commitish' 2>/dev/null || true)
+        # target_commitish may be a branch name, not a SHA — resolve it
+        if [ -n "$STAMPED" ] && [ ${#STAMPED} -lt 8 ]; then
+            STAMPED=$(gh api "repos/OpenTollGate/tollgate-module-basic-go/commits/$STAMPED" \
+                --jq '.sha[:7]' 2>/dev/null || true)
+        fi
+    fi
     rm -rf "$PROBE"
-    [ -n "$COMMIT" ] || fail "could not resolve source commit from feed ipk"
+    [ -n "$STAMPED" ] || fail "could not resolve source commit"
+    COMMIT="$STAMPED"
     log "feed stamp → commit $COMMIT"
 fi
 
@@ -102,31 +106,50 @@ elif [ "$SKIP_BUILD" = true ]; then
     [ -n "$ARTIFACT" ] || fail "no pre-built x86_64 ipk found"
     log "using latest build: $ARTIFACT"
 else
-    [ -n "$COMMIT" ] || fail "no source commit to build from"
+    # If the feed publishes the arch we need, use the actual artifact —
+    # feed-faithful, no build step, no stamp-lag risk
     case "$VENUE_TYPE" in
-        bay|island) BUILD_ARCH=mipsel_24kc ;;
-        *) BUILD_ARCH=x86_64 ;;
+        bay|island) FEED_ARCH="mipsel_24kc-ramips-mt7621" ; FEED_FMT="apk" ;;
+        *)          FEED_ARCH="x86_64-x86-64"            ; FEED_FMT="ipk" ;;
     esac
-    log "building $BUILD_ARCH from $COMMIT"
-    git -C "$TMBG" fetch origin main -q || fail "tmbg fetch failed"
-    git -C "$TMBG" checkout -q "$COMMIT" || fail "checkout $COMMIT failed"
-    (cd "$TMBG" && export PATH="$NODE_BIN:$PATH" \
-        && make portal-build \
-        && ARCH=$BUILD_ARCH GOTOOLCHAIN="$GO_PIN" PKG_VERSION="${TAG:-dev}" \
-           bash packaging/local-build-ipk.sh) >> "$OUT/build.log" 2>&1 \
-        || fail "build failed (see $OUT/build.log)"
-    if [ "$BUILD_ARCH" = "x86_64" ]; then
-        ARTIFACT=$(ls -t "$TMBG"/packaging/tollgate-wrt_*_x86_64.ipk | head -1)
-    else
-        # mipsel builds via the SDK lane
-        EPOCH=$(git -C "$TMBG" log -1 --format=%ct "$COMMIT")
-        sudo -n systemd-run --collect --wait --pipe --unit="tg-build-$$" \
-            /bin/bash -c "export PATH=/home/user/.local/share/mise/installs/go/1.27.1/bin:/home/user/laneA/tools/node-v22.17.0-linux-x64/bin:\$PATH; export HOME=/root SOURCE_DATE_EPOCH=$EPOCH TG_GIT_COMMIT=${COMMIT:0:7}; cd $TMBG && SDK_TAG=ramips-mt7621-25.12.0 PACKAGE_FORMAT=apk PACKAGE_VERSION=${TAG:-dev} GOTOOLCHAIN=$GO_PIN bash scripts/build-sdk-package.sh" >> "$OUT/build.log" 2>&1 \
-            || fail "mipsel build failed (see $OUT/build.log)"
-        ARTIFACT=$(sudo -n ls -t /tmp/tollgate-build-artifacts/apk-ramips-mt7621-25.12.0/*.apk 2>/dev/null | head -1)
-        [ -n "$ARTIFACT" ] || fail "mipsel artifact not found after build"
+    if [ -n "$TAG" ]; then
+        log "checking feed for $FEED_ARCH artifact at $TAG"
+        FEED_URL=$(gh api "repos/FreedomTechFeed/packages/releases/tags/$TAG" \
+            --jq '.assets[].browser_download_url' 2>/dev/null | grep "${FEED_ARCH}.*${FEED_FMT}$" | head -1)
+        if [ -n "$FEED_URL" ]; then
+            log "downloading official feed artifact: $FEED_URL"
+            ARTIFACT="/tmp/validate-feed-artifact.${FEED_FMT}"
+            curl -fsSL --max-time 120 -o "$ARTIFACT" "$FEED_URL" \
+                || fail "feed artifact download failed"
+            log "using feed artifact: $ARTIFACT"
+        fi
     fi
-    log "built: $ARTIFACT"
+    if [ -z "$ARTIFACT" ]; then
+        [ -n "$COMMIT" ] || fail "no source commit to build from"
+        case "$VENUE_TYPE" in
+            bay|island) BUILD_ARCH=mipsel_24kc ;;
+            *) BUILD_ARCH=x86_64 ;;
+        esac
+        log "building $BUILD_ARCH from $COMMIT"
+        git -C "$TMBG" fetch origin main -q || fail "tmbg fetch failed"
+        git -C "$TMBG" checkout -q "$COMMIT" || fail "checkout $COMMIT failed"
+        (cd "$TMBG" && export PATH="$NODE_BIN:$PATH" \
+            && make portal-build \
+            && ARCH=$BUILD_ARCH GOTOOLCHAIN="$GO_PIN" PKG_VERSION="${TAG:-dev}" \
+               bash packaging/local-build-ipk.sh) >> "$OUT/build.log" 2>&1 \
+            || fail "build failed (see $OUT/build.log)"
+        if [ "$BUILD_ARCH" = "x86_64" ]; then
+            ARTIFACT=$(ls -t "$TMBG"/packaging/tollgate-wrt_*_x86_64.ipk | head -1)
+        else
+            EPOCH=$(git -C "$TMBG" log -1 --format=%ct "$COMMIT")
+            sudo -n systemd-run --collect --wait --pipe --unit="tg-build-$$" \
+                /bin/bash -c "export PATH=/home/user/.local/share/mise/installs/go/1.27.1/bin:/home/user/laneA/tools/node-v22.17.0-linux-x64/bin:\$PATH; export HOME=/root SOURCE_DATE_EPOCH=$EPOCH TG_GIT_COMMIT=${COMMIT:0:7}; cd $TMBG && SDK_TAG=ramips-mt7621-25.12.0 PACKAGE_FORMAT=apk PACKAGE_VERSION=${TAG:-dev} GOTOOLCHAIN=$GO_PIN bash scripts/build-sdk-package.sh" >> "$OUT/build.log" 2>&1 \
+                || fail "mipsel build failed (see $OUT/build.log)"
+            ARTIFACT=$(sudo -n ls -t /tmp/tollgate-build-artifacts/apk-ramips-mt7621-25.12.0/*.apk 2>/dev/null | head -1)
+            [ -n "$ARTIFACT" ] || fail "mipsel artifact not found after build"
+        fi
+        log "built: $ARTIFACT"
+    fi
 fi
 
 # ── Venue + deploy + suite (via lib/venue.py) ──────────────────────────────
