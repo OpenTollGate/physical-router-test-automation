@@ -260,17 +260,35 @@ class TestRouterLockCoordination:
             lock.release()
 
     def test_force_release_allows_new_session(self):
+        """A STALE holder line is cleared by force_release; a new session then wins.
+
+        PRTA-REVIVE: a *live* lease can no longer be force-released — the flock
+        drops only when its holder exits, which is the property that makes a
+        crashed worker unable to wedge the bench. What force_release still does
+        is clear a dead window's leftover holder line (see
+        test_live_lock_cannot_be_stolen_by_force_release for the other half).
+        """
         lock = RouterLock()
         try:
             lock.acquire(router_id="alpha", phase="stale-session")
-            lock.force_release()
+        finally:
+            # simulate the owner dying: drop the flock but keep the holder line
+            lock_path = lock.lock_path
+            lock.release()
+        with open(lock_path, "w") as f:
+            f.write(
+                "ghost pid=4128000 purpose=alpha:stale-session since=2026-01-01T00:00:00"
+                " task=- host=bench\n"
+            )
 
-            lock2 = RouterLock(lock_path=lock.lock_path)
+        dead = RouterLock()
+        with pytest.raises(RuntimeError, match="BENCH STALE"):
+            dead.acquire(router_id="alpha", phase="new-session")
+        dead.force_release()
+
+        lock2 = RouterLock()
+        try:
             lock2.acquire(router_id="alpha", phase="new-session")
             assert lock2.is_locked()
-            lock2.release()
         finally:
-            try:
-                lock.release()
-            except Exception:
-                pass
+            lock2.release()
