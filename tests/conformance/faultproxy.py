@@ -46,10 +46,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import random
 import sys
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.error
 import urllib.request
@@ -118,9 +120,13 @@ class ProxyState:
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.rules: list[Rule] = []
-        # sha256(blinded message) -> list of "METHOD path" sightings
-        self.blinded_sightings: dict[str, list[str]] = {}
+        # sha256(blinded message) -> list of sighting records
+        self.blinded_sightings: dict[str, list[dict]] = {}
         self.request_count = 0
+        # Correlation-id → request log entry (request-level audit trail)
+        self.request_log: list[dict] = []
+        # Env-gated: FAULTPROXY_REQUEST_LOG=1 enables stderr request dumps
+        self.verbose_requests = os.environ.get("FAULTPROXY_REQUEST_LOG", "").lower() in ("1", "true", "yes")
 
     def set_rules(self, specs: list[dict]) -> list[str]:
         with self.lock:
@@ -144,7 +150,32 @@ class ProxyState:
                     continue
             return None
 
-    def observe_blinded(self, method: str, path: str, body: bytes) -> None:
+    def _log_request(self, corr_id: str, method: str, path: str,
+                     body: bytes, headers: dict) -> dict:
+        """Build a request-level log entry; stderr-dump if verbose."""
+        body_hash = hashlib.sha256(body).hexdigest() if body else ""
+        entry = {
+            "corr_id": corr_id,
+            "ts": time.time(),
+            "method": method,
+            "path": path,
+            "body_sha256": body_hash,
+            "body_len": len(body),
+            "x_request_id": headers.get("X-Request-Id", ""),
+            "client_port": headers.get("_client_port", ""),
+        }
+        with self.lock:
+            self.request_log.append(entry)
+        if self.verbose_requests:
+            sys.stderr.write(
+                f"[faultproxy:req] {corr_id} {method} {path} "
+                f"body={body_hash[:16]}… len={len(body)} "
+                f"x-req-id={entry['x_request_id'] or '-'}\n"
+            )
+        return entry
+
+    def observe_blinded(self, method: str, path: str, body: bytes,
+                        corr_id: str = "") -> None:
         """Hash every blinded message (B_) in a JSON request body."""
         if not body:
             return
@@ -154,6 +185,7 @@ class ProxyState:
             return
         if not isinstance(payload, dict):
             return
+        body_hash = hashlib.sha256(body).hexdigest()
         for key in ("outputs", "inputs"):
             items = payload.get(key)
             if not isinstance(items, list):
@@ -165,8 +197,14 @@ class ProxyState:
                 if not isinstance(b, str) or not b:
                     continue
                 digest = hashlib.sha256(b.encode()).hexdigest()
+                record = {
+                    "method": method,
+                    "path": path,
+                    "corr_id": corr_id,
+                    "body_sha256": body_hash,
+                }
                 with self.lock:
-                    self.blinded_sightings.setdefault(digest, []).append(f"{method} {path}")
+                    self.blinded_sightings.setdefault(digest, []).append(record)
 
     def count_request(self) -> int:
         with self.lock:
@@ -178,7 +216,13 @@ class ProxyState:
             return {
                 "requests": self.request_count,
                 "rules": [r.to_dict() for r in self.rules],
+                "request_log_entries": len(self.request_log),
             }
+
+    def request_log_snapshot(self, limit: int = 0) -> dict:
+        with self.lock:
+            entries = self.request_log if not limit else self.request_log[-limit:]
+            return {"entries": list(entries), "total": len(self.request_log)}
 
     def observations(self) -> dict:
         with self.lock:
@@ -219,7 +263,7 @@ def make_handler(upstream: str):
         def _control(self) -> bool:
             if not self.path.startswith(CONTROL_PREFIX):
                 return False
-            cmd = self.path[len(CONTROL_PREFIX) :]
+            cmd = self.path[len(CONTROL_PREFIX):].split("?")[0]
             if cmd == "control" and self.command == "POST":
                 try:
                     payload = json.loads(self._read_body() or b"{}")
@@ -244,6 +288,13 @@ def make_handler(upstream: str):
                 self._send_json(200, STATE.snapshot())
             elif cmd == "observations" and self.command == "GET":
                 self._send_json(200, STATE.observations())
+            elif cmd == "request-log" and self.command == "GET":
+                limit = 0
+                if "?" in self.path:
+                    from urllib.parse import parse_qs, urlparse
+                    qs = parse_qs(urlparse(self.path).query)
+                    limit = int(qs.get("limit", ["0"])[0])
+                self._send_json(200, STATE.request_log_snapshot(limit))
             else:
                 self._send_json(404, {"error": f"unknown control op {self.command} {cmd}"})
             return True
@@ -280,8 +331,14 @@ def make_handler(upstream: str):
                 sys.stderr.write(f"[faultproxy] notify {rule.notify_url} failed\n")
 
         def _forward(self, body: bytes) -> None:
+            corr_id = uuid.uuid4().hex[:12]
             STATE.count_request()
-            STATE.observe_blinded(self.command, self.path, body)
+            headers = {
+                "X-Request-Id": self.headers.get("X-Request-Id", ""),
+                "_client_port": str(self.client_address[1]) if self.client_address else "",
+            }
+            STATE._log_request(corr_id, self.command, self.path, body, headers)
+            STATE.observe_blinded(self.command, self.path, body, corr_id)
             rule = STATE.next_action(self.command, self.path)
 
             if rule is not None:
