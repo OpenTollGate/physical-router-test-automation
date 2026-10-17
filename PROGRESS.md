@@ -1,19 +1,26 @@
 # PROGRESS — t_a4aa351d (Consolidate bench locking into ONE machine-global lease)
 
 Worktree: /home/c03rad0r/worktrees/prta-revive  branch pr/prta-revive-hw-dispatch
+Head: 6ceb9fe (PUSHED to fork, ls-remote verified)
 
-## State inherited from attempt 1 (run 21, timed out at 160 iterations)
-- 94f3315 — landed: scripts/hw-bench-lease + Makefile + hardware_lock.py + router_lock.py
-  delegation + tests/unit/test_bench_lease.py. PUSHED? verify.
-- 435d72e — landed: hw-smoke dispatch lane + queue fallback. PUSHED (ls-remote == HEAD seen).
-- ~730 lines uncommitted (esp32/Makefile, mint-health/Makefile, docs/router-mutex.md,
-  lib/bench_lock.py, scripts/hw-bench-lease prune-legacy, extra tests). NOT committed.
-- Evidence logs exist under evidence/prta-lease/ (concurrent-run.log, stale-reclaim.log)
-  produced from real runs at 17:35 today.
+## Attempt 1 (run 21, timed out) — recovered
+- 94f3315 lease + 435d72e dispatch lane already pushed.
+- ~730 lines uncommitted work recovered, reviewed, verified, committed as 28cbbe3.
 
-## Plan for attempt 2 (run 26)
-1. Verify the tree: run tests/unit/test_bench_lease.py + test_router_lock.py + test_hardware_lock.py.
-2. Confirm pushed state of 94f3315 on fork.
-3. Commit the uncommitted cluster once green.
-4. Produce final grep evidence (single mechanism).
-5. Write REPORT.md, attach diff + grep + concurrent log, complete.
+## Attempt 2 (run 26) — done
+- 28cbbe3 finish consolidation: esp32 board leases, mint-health, bench.py,
+  poll-queue CHECKOUT bug, legacy sweep + prune-legacy, idle-gate fail-closed
+  fix (RED-first test), evidence logs. PUSHED.
+- 6ceb9fe regression fix: pytest could take the PRODUCTION lease (3 scenario
+  modules bypass conftest's gate) + force_release semantics test pinned.
+  PUSHED.
+- Verified: 82 lease unit tests, scenario lock tests, make check-workflows 24/24,
+  make lock-status end to end, production lease still free after test runs.
+- Evidence: evidence/prta-lease/{ACCEPTANCE.md,concurrent-run.log,
+  stale-reclaim.log,board-concurrent-run.log}
+- REPORT.md written.
+
+## Remaining (for the sibling card t_30255dee, not this one)
+1. Trigger the dispatch workflow and capture a run URL (needs runner/token; bench
+   not reachable from this host — 192.168.1.1 not pingable).
+2. Nothing else outstanding for this card's acceptance criteria.
