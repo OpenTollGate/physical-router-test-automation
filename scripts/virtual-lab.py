@@ -533,18 +533,75 @@ printf '\n== DUT (OpenWrt VM) integrity ==\n'
 _sshopts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR"
 if sshpass -p {POC_PASSWORD} ssh $_sshopts root@{POC_GATEWAY} true 2>/dev/null; then
   printf 'SSH: reachable\n'
-  _zeros=$(sshpass -p {POC_PASSWORD} ssh $_sshopts root@{POC_GATEWAY} 'find /usr/bin -maxdepth 1 -type f -size 0' 2>/dev/null)
+  _zeros=$(sshpass -p {POC_PASSWORD} ssh $_sshopts root@{POC_GATEWAY} 'find /usr/bin /usr/sbin /usr/lib /lib -type f -size 0 2>/dev/null | grep -v "/opkg/info/" | head -10' 2>/dev/null)
   if [ -n "$_zeros" ]; then
-    printf 'CORRUPTION: zero-byte binaries in /usr/bin (opkg orphan-removal class, #26):\n%s\n' "$_zeros"
+    printf 'CORRUPTION: zero-byte system files (dirty-overlay class, #246 / prta#21):\n%s\n' "$_zeros"
     printf 'remediation: virtual-lab.py stop-poc && virtual-lab.py start-poc --fresh\n'
     printf 'DUT_ZERO_BYTE_BINARIES=1\n'
   else
-    printf '/usr/bin: no zero-byte binaries\n'
+    printf 'system trees: no zero-byte binaries/libs (opkg metadata excluded)\n'
   fi
 else
   printf 'SSH: unreachable (run start-poc to bring the DUT up; integrity check skipped)\n'
 fi
 '''
+
+
+def net_restart(args: argparse.Namespace) -> int:
+    """Ordered, wedge-safe network restart on the DUT (prta#21).
+
+    A bare `/etc/init.d/network restart` on a DUT carrying leftover wireless
+    state wedges netifd silently (stale monotonic hwsim radio paths; jailed
+    hostapd/wpa_supplicant globals losing ubus registration — reproduced
+    live: one double-restart left every wifi-iface ``up:false, pending:false``
+    with no retry). The suite's answer to a hang is a hard reset, and a hard
+    reset on a dirty qcow2 is the #246 overlay-rot class. This helper runs
+    the restart in the order that avoids the wedge, waits bounded for the
+    DUT to answer SSH again, then asserts scripts/lab_vm_canary.sh.
+    """
+    host = cast(str, args.host)
+    workdir = cast(str, args.workdir)
+    _, _, _disk = _poc_paths(workdir)
+    canary = Path(__file__).parent / "lab_vm_canary.sh"
+    script = f'''
+set +e
+_password="{POC_PASSWORD}"
+_sshopts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -o LogLevel=ERROR"
+_gateway="{POC_GATEWAY}"
+_has_wireless() {{ sshpass -p "$_password" ssh $_sshopts "root@$_gateway" 'test -f /etc/config/wireless' 2>/dev/null; }}
+
+printf '== net-restart (ordered, prta#21) ==\\n'
+if _has_wireless; then
+  printf 'wireless config present: wifi down first (wedge-safe ordering)\\n'
+  sshpass -p "$_password" ssh $_sshopts "root@$_gateway" 'wifi down' 2>/dev/null
+  sleep 2
+fi
+sshpass -p "$_password" ssh $_sshopts "root@$_gateway" '/etc/init.d/network restart' 2>/dev/null
+printf 'waiting for SSH to return (bounded 90s)...\\n'
+_w=0
+while [ $_w -lt 90 ]; do
+  sshpass -p "$_password" ssh $_sshopts "root@$_gateway" true 2>/dev/null && break
+  sleep 3; _w=$((_w+3))
+done
+if [ $_w -ge 90 ]; then
+  printf 'NET-RESTART FAIL: DUT did not answer SSH within 90s.\\n'
+  printf 'DO NOT hard-reset (kill -9 QEMU) — that is the #246 overlay-rot path.\\n'
+  printf 'Use: virtual-lab.py stop-poc && virtual-lab.py start-poc  (monitor powerdown)\\n'
+  exit 2
+fi
+printf 'SSH back after ~%ss\\n' "$_w"
+if _has_wireless; then
+  sshpass -p "$_password" ssh $_sshopts "root@$_gateway" 'wifi up' 2>/dev/null
+  sleep 5
+fi
+'''
+    rc = _print_result(run_remote(host, quote_script(script), timeout=180))
+    if rc != 0:
+        return rc
+    canary_rc = subprocess.run(["bash", str(canary)], env={**os.environ}).returncode
+    if canary_rc != 0:
+        return canary_rc
+    return 0
 
 
 def doctor(args: argparse.Namespace) -> int:
@@ -1398,6 +1455,20 @@ done
 ps aux | grep 'qemu-system.*drive file=' | grep -v grep | awk '{{print $2}}' | xargs kill 2>/dev/null || true
 sleep 1
 
+# Overlay-damage tripwire (prta#21): after any stop — and especially after the
+# kill paths above — check the qcow2. A corrupted overlay reused by the next
+# start-poc is the #246 rot class (zero-byte binaries that masked breakage for
+# months). Loud, non-fatal: the operator decides, but cannot NOT know.
+for d in "$workdir/overlays/tollgate-poc.qcow2" "$workdir/overlays/debian-client.qcow2"; do
+  [ -f "$d" ] || continue
+  if ! qemu-img check "$d" >/tmp/qemu-check.out 2>&1; then
+    printf 'OVERLAY DAMAGE: qemu-img check failed on %s:\n%s\n' "$d" "$(head -5 /tmp/qemu-check.out)"
+    printf 'Do NOT reuse this overlay — remediate with: virtual-lab.py start-poc --fresh\n'
+  else
+    printf 'overlay clean: %s\n' "$d"
+  fi
+done
+
 sudo ip link del {DEBIAN_TAP} 2>/dev/null || true
 sudo ip link del {POC_TAP} 2>/dev/null || true
 sudo ip link del {POC_BRIDGE} 2>/dev/null || true
@@ -1699,6 +1770,14 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser = subparsers.add_parser("doctor", help="Check host readiness")
     _ = doctor_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
     doctor_parser.set_defaults(func=doctor)
+
+    netrestart_parser = subparsers.add_parser(
+        "net-restart",
+        help="Ordered network restart on the DUT (prta#21 wedge-safe path) + canary",
+    )
+    _ = netrestart_parser.add_argument("--host", default="localhost")
+    _ = netrestart_parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
+    netrestart_parser.set_defaults(func=net_restart)
 
     deps_parser = subparsers.add_parser("install-deps", help="Install host dependencies via apt")
     _ = deps_parser.add_argument("--host", default="218", help="SSH host for the Ubuntu lab machine")
