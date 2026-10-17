@@ -2641,3 +2641,43 @@ husked portal — tmbg #715 evidence; entry_ui default-vs-convergence —
 tmbg #928) and the first-boot serial-timeout recovery is documented in the
 fast-start lesson above: re-run start-poc, the already-provisioned
 detection takes over.
+
+## Lessons Learned — 2026-10-17 vlab-ops marathons
+
+### Never `kill -HUP ubusd` on OpenWrt (venue-killer)
+ubusd dies silently, its socket orphans, and every ubus caller (procd, uci,
+the tollgate CLI) fails with "Failed to connect to ubus" — the box needs
+`--fresh`. Hit live on the poc VM (tmbg#998 session): service "still
+starting" + CLI socket refused + `ubus list` failing = dead ubusd, not a
+product bug. There is no safe userland restart of ubusd on a running box.
+
+### Never raw-tar a package payload over a live rootfs (boot wedge)
+tar-extracting `data.tar.gz` over the running system + reboot wedges boot at
+`procd: - ubus -` (pre-init), 100% reproducible, and is NOT cured by removing
+the payload's uci-defaults/hotplug files offline (tmbg#1001, evidence
+#998 §3). Deploy local ipks with `opkg install` only; if opkg refuses
+(arch-name mismatch), fix the opkg side — do not bypass with tar.
+
+### vlab VM recovery toolkit (proven 2026-10-17)
+- **GRUB failsafe entry**: QEMU `system_reset` via the monitor socket + spam
+  `f` over the serial bridge (`:7301`) reliably catches the GRUB menu; DOWN
+  + ENTER boots "OpenWrt (failsafe)". The 2-second OpenWrt failsafe prompt
+  itself is too fast for manual typing.
+- **Offline overlay surgery**: `qemu-nbd --connect` + mount partition 2
+  (rootfs, ext4 rw) → edit → umount → disconnect. Preserve excised files as
+  evidence. If the wedge persists after surgery: stop-poc + start-poc
+  `--fresh` (canary discipline, prta#21).
+- **dtolnay/rust-toolchain does NOT read rust-toolchain.toml** — it requires
+  an explicit `toolchain:` input and dies at "Parse toolchain version" with
+  `'toolchain' is a required input` (the micronuts #107/#108 8/8-red root
+  cause; main had been silently red for a day). rust-toolchain.toml still
+  governs local rustup — express the pin in BOTH places.
+
+### cdk-cli 0.18 mint-relay quirks (recurring trap)
+- Mint against the URL the ROUTER will see (e.g. `http://10.99.99.2:8383`),
+  never loopback — the token carries the minting URL and the backend refuses
+  foreign-URL tokens (the #247 class, re-hit in #998).
+- The cdk-cli wallet is per-mint-URL: relaying one physical mint under a
+  second URL creates a second wallet; `send --include-fee` then fails
+  "Unknown Keyset" while plain `send` works. `-v` emits V3 (`cashuA`)
+  tokens.
