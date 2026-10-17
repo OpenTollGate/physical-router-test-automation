@@ -16,11 +16,11 @@ ssh/curl.
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import os
 import shlex
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -32,7 +32,6 @@ ROUTER = os.environ.get("BENCH_ROUTER", "10.99.99.1")
 HOST_IP = os.environ.get("BENCH_HOST_IP", "10.99.99.2")
 VMPW = os.environ.get("VMPW", "Upgr4deTest-2026")
 PRTA_LIB = os.environ.get("BENCH_PRTA_LIB", str(Path.home() / "upgrade-test/prta"))
-LOCK_PATH = Path(os.environ.get("BENCH_LOCK", str(Path.home() / "upgrade-test/bench.lock")))
 
 
 class BenchError(RuntimeError):
@@ -274,16 +273,28 @@ class Bench:
 
     @contextlib.contextmanager
     def lock(self, note: str = "") -> Iterator[None]:
-        """Advisory host lock so two sessions never drive the same bench."""
-        LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with LOCK_PATH.open("w") as f:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            f.write(f"{os.environ.get('USER', '?')} {note} {time.strftime('%FT%TZ', time.gmtime())}\n")
-            f.flush()
-            try:
-                yield
-            finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
+        """Take the ONE machine-global bench lease for the duration of a scenario.
+
+        PRTA-REVIVE: this used to flock a private ``~/upgrade-test/bench.lock``,
+        which meant a scenario here and a ``make`` target / pytest session /
+        hw-smoke lane could drive the router at the same time. It now delegates
+        to :class:`lib.bench_lock.BenchLock` — the same flock on
+        ``~/.hermes/state/bench-mt3000.lock`` that every other surface takes —
+        so a busy bench refuses loudly (naming the holder) instead of silently
+        running in parallel.
+        """
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+        from lib.bench_lock import BenchBusy, BenchLock
+
+        lock = BenchLock(purpose=f"bench-scenario:{note or 'unnamed'}")
+        try:
+            lock.acquire()
+        except BenchBusy as exc:
+            raise BenchError(f"bench lease refused: {exc}") from exc
+        try:
+            yield
+        finally:
+            lock.release()
 
 
 def verdicts_dir(base: str = "partial-degr") -> Path:

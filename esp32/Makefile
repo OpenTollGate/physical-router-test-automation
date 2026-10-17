@@ -28,55 +28,35 @@ include boards.env
         pytest-all-a pytest-all-c pytest-smoke pytest-help
 
 define require_lock_a
-	@if [ ! -f "$(LOCK_DIR)/board-a.lock" ]; then \
-		echo "$(RED)$(BOLD)Board A not locked — run 'make lock-a PHASE=\"description\"' first$(RESET)"; \
-		echo "$(YELLOW)Another LLM session may be using Board A.$(RESET)"; \
+	@python3 "$(BOARD_LEASE)" require --lock "$(BOARD_LOCK_A)" --resource "Board A" || { \
+		echo "$(RED)$(BOLD)Board A not leased — run 'make lock-a PHASE=\"description\"' first$(RESET)"; \
+		echo "$(YELLOW)Another agent session may be using Board A.$(RESET)"; \
 		exit 1; \
-	fi
+	}
 endef
 
 define require_lock_b
-	@if [ ! -f "$(LOCK_DIR)/board-b.lock" ]; then \
-		echo "$(RED)$(BOLD)Board B not locked — run 'make lock-b PHASE=\"description\"' first$(RESET)"; \
-		echo "$(YELLOW)Another LLM session may be using Board B.$(RESET)"; \
+	@python3 "$(BOARD_LEASE)" require --lock "$(BOARD_LOCK_B)" --resource "Board B" || { \
+		echo "$(RED)$(BOLD)Board B not leased — run 'make lock-b PHASE=\"description\"' first$(RESET)"; \
+		echo "$(YELLOW)Another agent session may be using Board B.$(RESET)"; \
 		exit 1; \
-	fi
+	}
 endef
 
 define require_lock_c
-	@if [ ! -f "$(LOCK_DIR)/board-c.lock" ]; then \
-		echo "$(RED)$(BOLD)Board C not locked — run 'make lock-c PHASE=\"description\"' first$(RESET)"; \
-		echo "$(YELLOW)Another LLM session may be using Board C.$(RESET)"; \
+	@python3 "$(BOARD_LEASE)" require --lock "$(BOARD_LOCK_C)" --resource "Board C" || { \
+		echo "$(RED)$(BOLD)Board C not leased — run 'make lock-c PHASE=\"description\"' first$(RESET)"; \
+		echo "$(YELLOW)Another agent session may be using Board C.$(RESET)"; \
 		exit 1; \
-	fi
+	}
 endef
 
+# Acquire a per-board lease. Same mechanism (flock + holder line) as the bench
+# lease, just a board-scoped file under the machine-global lock root — esp32/
+# used to keep its own presence-only `$(LOCK_DIR)/board-X.lock`, which was
+# per-worktree and had no liveness check (a dead session wedged the board).
 define acquire_lock
-	@if [ -f "$(LOCK_DIR)/$(1).lock" ]; then \
-		owner=$$(grep '^session:' $(LOCK_DIR)/$(1).lock | head -1 | sed 's/session: *//' | cut -d@ -f1); \
-		if [ "$$owner" = "$$USER" ]; then \
-			echo "$(YELLOW)$(1) already locked by this session — refreshing lock$(RESET)"; \
-		else \
-			echo "$(RED)$(BOLD)Cannot acquire lock — $(1) locked by another session:$(RESET)"; \
-			echo ""; \
-			cat $(LOCK_DIR)/$(1).lock | sed 's/^/  /'; \
-			echo ""; \
-			echo "$(YELLOW)Use 'make force-unlock-$(1)' to override.$(RESET)"; \
-			exit 1; \
-		fi; \
-	fi; \
-	branch=$$(git branch --show-current 2>/dev/null || echo "unknown"); \
-	worktree=$$(pwd); \
-	echo "locked: true" > $(LOCK_DIR)/$(1).lock; \
-	echo "board: $(1)" >> $(LOCK_DIR)/$(1).lock; \
-	echo "port: $(2)" >> $(LOCK_DIR)/$(1).lock; \
-	echo "branch: $$branch" >> $(LOCK_DIR)/$(1).lock; \
-	echo "worktree: $$worktree" >> $(LOCK_DIR)/$(1).lock; \
-	echo "session: $$USER@$$(hostname)" >> $(LOCK_DIR)/$(1).lock; \
-	echo "timestamp: $$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $(LOCK_DIR)/$(1).lock; \
-	echo "phase: $(PHASE)" >> $(LOCK_DIR)/$(1).lock; \
-	echo "$(GREEN)$(BOLD)Board $(1) lock acquired$(RESET)"; \
-	cat $(LOCK_DIR)/$(1).lock
+	@python3 "$(BOARD_LEASE)" hold --lock "$(BOARD_LOCK_DIR)/esp32-$(1).lock" --resource "Board $(1)" --purpose "$(if $(PHASE),$(PHASE),$(1))"
 endef
 
 # ===========================================================================
@@ -174,69 +154,32 @@ lock-b: ## Acquire Board B lock
 lock-c: ## Acquire Board C lock
 	$(call acquire_lock,board-c,$(BOARD_C_PORT))
 
-unlock-a: ## Release Board A lock
-	@if [ ! -f "$(LOCK_DIR)/board-a.lock" ]; then \
-		echo "$(YELLOW)Board A not locked — already available.$(RESET)"; \
-		exit 0; \
-	fi; \
-	rm -f $(LOCK_DIR)/board-a.lock; \
-	echo "$(GREEN)Board A lock released.$(RESET)"
+unlock-a: ## Release Board A lease
+	@python3 "$(BOARD_LEASE)" release --lock "$(BOARD_LOCK_A)"
 
-unlock-b: ## Release Board B lock
-	@if [ ! -f "$(LOCK_DIR)/board-b.lock" ]; then \
-		echo "$(YELLOW)Board B not locked — already available.$(RESET)"; \
-		exit 0; \
-	fi; \
-	rm -f $(LOCK_DIR)/board-b.lock; \
-	echo "$(GREEN)Board B lock released.$(RESET)"
+unlock-b: ## Release Board B lease
+	@python3 "$(BOARD_LEASE)" release --lock "$(BOARD_LOCK_B)"
 
-unlock-c: ## Release Board C lock
-	@if [ ! -f "$(LOCK_DIR)/board-c.lock" ]; then \
-		echo "$(YELLOW)Board C not locked — already available.$(RESET)"; \
-		exit 0; \
-	fi; \
-	rm -f $(LOCK_DIR)/board-c.lock; \
-	echo "$(GREEN)Board C lock released.$(RESET)"
+unlock-c: ## Release Board C lease
+	@python3 "$(BOARD_LEASE)" release --lock "$(BOARD_LOCK_C)"
 
-force-unlock-a: ## Force-release Board A lock
-	@if [ ! -f "$(LOCK_DIR)/board-a.lock" ]; then \
-		echo "$(YELLOW)Board A not locked.$(RESET)"; exit 0; \
-	fi; \
-	echo "$(RED)$(BOLD)WARNING: Force-releasing Board A lock!$(RESET)"; \
-	cat $(LOCK_DIR)/board-a.lock | sed 's/^/  /'; \
-	rm -f $(LOCK_DIR)/board-a.lock; \
-	echo "$(GREEN)Board A lock force-released.$(RESET)"
+force-unlock-a: ## Clear a stale Board A lease holder line
+	@python3 "$(BOARD_LEASE)" release --lock "$(BOARD_LOCK_A)"
 
-force-unlock-b: ## Force-release Board B lock
-	@if [ ! -f "$(LOCK_DIR)/board-b.lock" ]; then \
-		echo "$(YELLOW)Board B not locked.$(RESET)"; exit 0; \
-	fi; \
-	echo "$(RED)$(BOLD)WARNING: Force-releasing Board B lock!$(RESET)"; \
-	cat $(LOCK_DIR)/board-b.lock | sed 's/^/  /'; \
-	rm -f $(LOCK_DIR)/board-b.lock; \
-	echo "$(GREEN)Board B lock force-released.$(RESET)"
+force-unlock-b: ## Clear a stale Board B lease holder line
+	@python3 "$(BOARD_LEASE)" release --lock "$(BOARD_LOCK_B)"
 
-force-unlock-c: ## Force-release Board C lock
-	@if [ ! -f "$(LOCK_DIR)/board-c.lock" ]; then \
-		echo "$(YELLOW)Board C not locked.$(RESET)"; exit 0; \
-	fi; \
-	echo "$(RED)$(BOLD)WARNING: Force-releasing Board C lock!$(RESET)"; \
-	cat $(LOCK_DIR)/board-c.lock | sed 's/^/  /'; \
-	rm -f $(LOCK_DIR)/board-c.lock; \
-	echo "$(GREEN)Board C lock force-released.$(RESET)"
+force-unlock-c: ## Clear a stale Board C lease holder line
+	@python3 "$(BOARD_LEASE)" release --lock "$(BOARD_LOCK_C)"
 
-lock-status: ## Show all board lock statuses
-	@echo "$(BOLD)Board Lock Status$(RESET)"
-	@echo "$(BOLD)==================$(RESET)"
-	@for board in a b c; do \
-		if [ -f "$(LOCK_DIR)/board-$$board.lock" ]; then \
-			echo ""; \
-			echo "$(YELLOW)Board $$board: LOCKED$(RESET)"; \
-			cat $(LOCK_DIR)/board-$$board.lock | sed 's/^/  /'; \
-		else \
-			echo "Board $$board: $(GREEN)available$(RESET)"; \
-		fi; \
-	done
+lock-status: ## Show all board lease statuses
+	@echo "$(BOLD)Board Lease Status (machine-global, flock-backed)$(RESET)"
+	@echo "$(BOLD)=================================================$(RESET)"
+	@python3 "$(BOARD_LEASE)" status --lock "$(BOARD_LOCK_A)" --no-legacy-scan
+	@echo ""
+	@python3 "$(BOARD_LEASE)" status --lock "$(BOARD_LOCK_B)" --no-legacy-scan
+	@echo ""
+	@python3 "$(BOARD_LEASE)" status --lock "$(BOARD_LOCK_C)" --no-legacy-scan
 
 # ===========================================================================
 #  BUILD (no lock needed)
@@ -929,11 +872,11 @@ ARCH_WIFI_PASSWORD ?= $(SUDO_PW)
 ARCH_REQ_DELAY     := 2
 
 define require_arch_lock
-	@if [ ! -f "$(LOCK_DIR)/board-$(ARCH_BOARD).lock" ]; then \
-		echo "$(RED)$(BOLD)Board $(ARCH_BOARD) not locked — run 'make lock-$(ARCH_BOARD) PHASE=\"description\"' first$(RESET)"; \
-		echo "$(YELLOW)Another LLM session may be using this board.$(RESET)"; \
+	@python3 "$(BOARD_LEASE)" require --lock "$(BOARD_LOCK_DIR)/esp32-board-$(ARCH_BOARD).lock" --resource "Board $(ARCH_BOARD)" || { \
+		echo "$(RED)$(BOLD)Board $(ARCH_BOARD) not leased — run 'make lock-$(ARCH_BOARD) PHASE=\"description\"' first$(RESET)"; \
+		echo "$(YELLOW)Another agent session may be using this board.$(RESET)"; \
 		exit 1; \
-	fi
+	}
 endef
 
 .PHONY: arch-build arch-flash arch-generate-spiffs arch-flash-spiffs \

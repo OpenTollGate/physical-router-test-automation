@@ -168,7 +168,7 @@ def run_target(target: str, args: argparse.Namespace) -> int:
     lock_held = False
     if entry.lock == "hardware":
         # Surface the lock requirement to the pytest subprocess so its
-        # pytest_sessionstart enforces hardware.lock as well.
+        # pytest_sessionstart asserts the machine-global bench lease too.
         os.environ["TOLLGATE_USE_HARDWARE_LOCK"] = "1"
         if args.lock_phase:
             acquire_hardware_lock(args.lock_phase)
@@ -215,7 +215,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ssid", default=None)
     parser.add_argument("--password", default=None)
     parser.add_argument("--mint", default=None)
-    parser.add_argument("--lock-phase", default=None, help="Acquire hardware.lock for this run")
+    parser.add_argument(
+        "--lock-phase", default=None, help="Take the bench lease for this run (PHASE text)"
+    )
     parser.add_argument("--cmd", default=None, help="Command for serial-recovery")
     args, extra_pytest = parser.parse_known_args(argv)
     if extra_pytest and extra_pytest[0] == "--":

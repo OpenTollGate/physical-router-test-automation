@@ -1,0 +1,50 @@
+== scenario: a sibling worktree left routers.lock behind 93 days ago ==
+-rw-rw-r-- 1 c03rad0r c03rad0r  71 2026-07-16 17:35 /home/c03rad0r/.cache/hermes/tmp/prta-stale-GwAHBO/sibling-worktree/hardware.lock
+-rw-rw-r-- 1 c03rad0r c03rad0r 110 2026-07-16 17:35 /home/c03rad0r/.cache/hermes/tmp/prta-stale-GwAHBO/sibling-worktree/mint-health/routers.lock
+
+== 1) the lease is FREE — the stale file is not authority ==
+bench lease : free
+lock file   : /home/c03rad0r/.cache/hermes/tmp/prta-stale-GwAHBO/bench-mt3000.lock
+holder      : <none>
+bench free — take it with `make lock` or hw-bench-lease exec/hold
+
+retired lock files still on disk (NOT authoritative, nothing reads them):
+  [STALE] /home/c03rad0r/.cache/hermes/tmp/prta-stale-GwAHBO/sibling-worktree/mint-health/routers.lock (age=93.0d, size=110B) first_line='locked: true'
+  [STALE] /home/c03rad0r/.cache/hermes/tmp/prta-stale-GwAHBO/sibling-worktree/hardware.lock (age=93.0d, size=71B) first_line='locked: true'
+2 of them are older than 24h — a session that trusted them would refuse the bench forever.
+  remove with: scripts/hw-bench-lease prune-legacy
+status rc=0 (want 0)
+
+== 2) a run is NOT blocked by the stale file ==
+note: retired lock file (STALE, ignored): /home/c03rad0r/.cache/hermes/tmp/prta-stale-GwAHBO/sibling-worktree/mint-health/routers.lock (age=93.0d, size=110B) first_line='locked: true'
+      nothing reads it; prune with `hw-bench-lease prune-legacy`
+note: retired lock file (STALE, ignored): /home/c03rad0r/.cache/hermes/tmp/prta-stale-GwAHBO/sibling-worktree/hardware.lock (age=93.0d, size=71B) first_line='locked: true'
+      nothing reads it; prune with `hw-bench-lease prune-legacy`
+RAN DESPITE 93-DAY routers.lock
+exec rc=0 (want 0)
+
+== 3) prune-legacy reclaims it (dry-run first) ==
+would remove /home/c03rad0r/.cache/hermes/tmp/prta-stale-GwAHBO/sibling-worktree/mint-health/routers.lock (age=93.0d, size=110B) first_line='locked: true'
+would remove /home/c03rad0r/.cache/hermes/tmp/prta-stale-GwAHBO/sibling-worktree/hardware.lock (age=93.0d, size=71B) first_line='locked: true'
+removed /home/c03rad0r/.cache/hermes/tmp/prta-stale-GwAHBO/sibling-worktree/mint-health/routers.lock
+removed /home/c03rad0r/.cache/hermes/tmp/prta-stale-GwAHBO/sibling-worktree/hardware.lock
+2 retired lock file(s) removed — they were not authoritative; the lease (/home/c03rad0r/.cache/hermes/tmp/prta-stale-GwAHBO/bench-mt3000.lock) is untouched
+prune rc=0
+
+== 4) nothing left, lease untouched ==
+bench lease : free
+lock file   : /home/c03rad0r/.cache/hermes/tmp/prta-stale-GwAHBO/bench-mt3000.lock
+holder      : <none>
+bench free — take it with `make lock` or hw-bench-lease exec/hold
+
+== 5) a STALE lease holder line (owner died mid-run) refuses, then reclaims ==
+bench lease : stale
+lock file   : /home/c03rad0r/.cache/hermes/tmp/prta-stale-GwAHBO/bench-mt3000.lock
+holder      : profile=ghost-worker pid=4128000 purpose=crashed-run since=2026-07-16T00:00:00+00:00 task=t_dead host=bench
+stale holder line (owner gone): inspect, then release it with `scripts/hw-bench-lease release` or pass --reclaim-stale
+BENCH STALE: a holder line is present with no flock behind it — its owner is gone: profile=ghost-worker pid=4128000 purpose=crashed-run since=2026-07-16T00:00:00+00:00 task=t_dead host=bench [ghost-worker pid=4128000 purpose=crashed-run since=2026-07-16T00:00:00+00:00 task=t_dead host=bench] (/home/c03rad0r/.cache/hermes/tmp/prta-stale-GwAHBO/bench-mt3000.lock). the MT3000 bench IS free, but recovery is explicit only. Re-check that no other window is live, then re-run with --reclaim-stale (or TOLLGATE_BENCH_RECLAIM_STALE=1).
+exec rc=3 (want 3 = STALE, explicit recovery)
+exec --reclaim-stale rc=0 (want 0)
+
+VERDICT: stale retired locks are reported, non-blocking and prunable;
+         stale lease holder lines refuse by default and reclaim explicitly.
