@@ -49,50 +49,39 @@ def board_config(config, board_id):
 
 @pytest.fixture(scope="session")
 def board_lock(request, config, board_config):
-    lock_path = Path(config.lock_dir) / f"{board_config.lock_name}.lock"
+    """Hold this board's lease for the whole session (ONE mechanism, flock-backed).
+
+    esp32/ used to write its own presence-only ``$(LOCK_DIR)/board-X.lock`` —
+    per-worktree, no liveness check, so a killed session wedged the board. The
+    board lease is now ``lib.bench_lock.BenchLock`` on
+    ``~/.hermes/state/esp32-board-<id>.lock``: the same primitive as the bench
+    router lease, just a board-scoped file.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from lib.bench_lock import BenchBusy, BenchLock, BenchStale
+
     phase = request.config.getoption("--phase") or "pytest"
-
-    if lock_path.exists():
-        existing = lock_path.read_text()
-        for line in existing.splitlines():
-            if line.startswith("session:"):
-                owner = line.split(":", 1)[1].strip().split("@")[0]
-                current_user = os.environ.get("USER", "unknown")
-                if owner != current_user:
-                    pytest.skip(
-                        f"\n  Board {board_config.id} locked by another session:\n"
-                        f"  {existing}\n"
-                        f"  Use --force-unlock to override."
-                    )
-                break
-
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    branch = "unknown"
-    try:
-        branch = subprocess.run(
-            ["git", "branch", "--show-current"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout.strip()
-    except Exception:
-        pass
-
-    lock_path.write_text(
-        f"locked: true\n"
-        f"board: {board_config.lock_name}\n"
-        f"port: {board_config.port}\n"
-        f"branch: {branch}\n"
-        f"session: {os.environ.get('USER', 'unknown')}@{os.uname().nodename}\n"
-        f"timestamp: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
-        f"phase: {phase}\n"
+    lock_root = os.environ.get("ESP32_LOCK_DIR") or os.path.join(
+        os.path.expanduser("~"), ".hermes", "state"
     )
-    print(f"\n  Lock acquired: {board_config.lock_name} ({phase})")
+    lock_path = Path(lock_root) / f"esp32-{board_config.lock_name}.lock"
+
+    lock = BenchLock(purpose=f"{board_config.lock_name}:{phase}", path=str(lock_path))
+    try:
+        lock.acquire()
+    except BenchStale as exc:  # BenchStale subclasses BenchBusy — catch it first
+        pytest.skip(
+            f"\n  {exc}\n  A previous owner died; clear it with "
+            f"`scripts/hw-bench-lease release --lock {lock_path}`."
+        )
+    except BenchBusy as exc:
+        pytest.skip(f"\n  {exc}\n  Another session owns this board right now.")
+    print(f"\n  Board lease acquired: {board_config.lock_name} ({phase})")
 
     yield board_config
 
-    lock_path.unlink(missing_ok=True)
-    print(f"\n  Lock released: {board_config.lock_name}")
+    lock.release()
+    print(f"\n  Board lease released: {board_config.lock_name}")
 
 
 @pytest.fixture(scope="session")

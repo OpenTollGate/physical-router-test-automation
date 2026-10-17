@@ -1,0 +1,29 @@
+== lock under test ==
+TOLLGATE_BENCH_LOCK=/home/c03rad0r/.hermes/state/bench-mt3000.lock
+
+== state before ==
+bench lease : free
+lock file   : /home/c03rad0r/.hermes/state/bench-mt3000.lock
+holder      : <none>
+bench free — take it with `make lock` or hw-bench-lease exec/hold
+
+== agent A: takes the lease and sleeps 5s ==
+holder line: worker-heavy pid=3419593 purpose=PRTA-REVIVE-evidence-agent-A since=2026-10-17T17:35:18+02:00 task=- host=c03rad0r-DQ05proplus
+
+== agent B: attempts the same router while A holds it ==
+BENCH BUSY: the MT3000 bench is locked by profile=worker-heavy pid=3419593 purpose=PRTA-REVIVE-evidence-agent-A since=2026-10-17T17:35:18+02:00 task=- host=c03rad0r-DQ05proplus [worker-heavy pid=3419593 purpose=PRTA-REVIVE-evidence-agent-A since=2026-10-17T17:35:18+02:00 task=- host=c03rad0r-DQ05proplus] (/home/c03rad0r/.hermes/state/bench-mt3000.lock). Wait for that run to finish, or kill its tree (pgrep -af 3419593) and retry. [`bench-lock status` shows the current owner.] [[Errno 11] Resource temporarily unavailable]
+agent B rc=2 (want 2 = BENCH BUSY)
+
+== the Makefile guard (make lock-status / require) while A holds it ==
+bench lease held: profile=worker-heavy pid=3419593 purpose=PRTA-REVIVE-evidence-agent-A since=2026-10-17T17:35:18+02:00 task=- host=c03rad0r-DQ05proplus
+require rc=0 (want 0 while held)
+
+== agent A finished; state after ==
+bench lease : free
+lock file   : /home/c03rad0r/.hermes/state/bench-mt3000.lock
+holder      : <none>
+bench free — take it with `make lock` or hw-bench-lease exec/hold
+
+require rc=1 after release (want 1 = free)
+
+VERDICT: second agent blocked with a named holder; lease released cleanly.

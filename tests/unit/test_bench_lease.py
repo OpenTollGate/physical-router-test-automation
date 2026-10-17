@@ -88,6 +88,20 @@ def run_lease(args, env, timeout=30):
     )
 
 
+def _load_lease_module():
+    """Import scripts/hw-bench-lease as a module (it has no .py suffix)."""
+    import importlib.machinery
+    import importlib.util
+
+    loader = importlib.machinery.SourceFileLoader("hw_bench_lease", str(LEASE))
+    spec = importlib.util.spec_from_loader("hw_bench_lease", loader)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["hw_bench_lease"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def lock_path(env):
     return Path(env["TOLLGATE_BENCH_LOCK"])
 
@@ -373,3 +387,190 @@ class TestIdleGate:
     def test_fails_closed_when_balance_not_parseable(self, lease_env, fake_balance_api):
         result = self._exec_against(lease_env, fake_balance_api, status=502)
         assert result.returncode == UNREACHABLE_RC
+
+    def test_fails_closed_when_the_probe_raises(self, monkeypatch):
+        """A raising probe must REFUSE, not abort with a traceback.
+
+        check_balance_api is documented to degrade to a sentinel rather than
+        raise; this pins the lease's own belt-and-braces path so a future
+        change there cannot turn the gate into a fault-OPEN one. Exercised
+        in-process: probe_idle imports check_balance_api at call time, so the
+        monkeypatch reaches it (a subprocess would not see it and the test
+        would pass for the wrong reason).
+        """
+        mod = _load_lease_module()
+        import lib.session_verify as sv
+
+        def boom(*_a, **_k):
+            raise RuntimeError("probe exploded")
+
+        monkeypatch.setattr(sv, "check_balance_api", boom)
+        refused, reason, evidence = mod.probe_idle("127.0.0.1", 1, 1.0)
+        assert refused is True
+        assert "not probeable" in reason
+        assert "probe exploded" in evidence
+
+
+# --------------------------------------------------------------------------- #
+# retired lock files — the 93-day-stale class
+# --------------------------------------------------------------------------- #
+
+
+def _seed_legacy(
+    root: Path, name: str = "routers.lock", *, age_days: float = 93.0, subdir: str = ""
+) -> Path:
+    """Write a leftover lock file with a controlled mtime."""
+    path = (root / subdir / name) if subdir else (root / name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "locked: true\nsession: dead-agent@bench\ntimestamp: 2026-01-01T00:00:00Z\n"
+    )
+    stamp = time.time() - age_days * 86400
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+class TestLegacyLocks:
+    def test_status_reports_a_stale_retired_lock_file(self, lease_env, tmp_path):
+        leftover = _seed_legacy(tmp_path, age_days=93)
+        result = run_lease(["status", "--legacy-root", str(tmp_path)], lease_env)
+        assert result.returncode == 0
+        assert str(leftover) in result.stdout
+        assert "[STALE]" in result.stdout
+        assert "NOT authoritative" in result.stdout
+        # the retired file must not change the lease verdict
+        assert "bench lease : free" in result.stdout
+
+    def test_status_json_lists_legacy_locks_with_age(self, lease_env, tmp_path):
+        _seed_legacy(tmp_path, age_days=93)
+        result = run_lease(
+            ["status", "--json", "--legacy-root", str(tmp_path)], lease_env
+        )
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+        assert len(payload["legacy_locks"]) == 1
+        entry = payload["legacy_locks"][0]
+        assert entry["stale"] is True
+        assert entry["age_days"] >= 92
+
+    def test_fresh_legacy_lock_is_not_flagged_stale(self, lease_env, tmp_path):
+        _seed_legacy(tmp_path, age_days=0.1)
+        result = run_lease(["status", "--legacy-root", str(tmp_path)], lease_env)
+        assert "[fresh]" in result.stdout
+        assert "[STALE]" not in result.stdout
+
+    def test_legacy_scan_finds_all_three_retired_names(self, lease_env, tmp_path):
+        for name in ("routers.lock", "hardware.lock", "tollgate_hardware.lock"):
+            _seed_legacy(tmp_path, name=name)
+        result = run_lease(
+            ["status", "--json", "--legacy-root", str(tmp_path)], lease_env
+        )
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+        names = {Path(item["path"]).name for item in payload["legacy_locks"]}
+        assert names == {"routers.lock", "hardware.lock", "tollgate_hardware.lock"}
+
+    def test_legacy_scan_walks_subdirectories(self, lease_env, tmp_path):
+        leftover = _seed_legacy(tmp_path, subdir="mint-health")
+        result = run_lease(
+            ["status", "--json", "--legacy-root", str(tmp_path)], lease_env
+        )
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+        assert [item["path"] for item in payload["legacy_locks"]] == [str(leftover)]
+
+    def test_prune_legacy_removes_stale_files_and_leaves_fresh_ones(
+        self, lease_env, tmp_path
+    ):
+        stale = _seed_legacy(tmp_path, age_days=93)
+        fresh = _seed_legacy(tmp_path, name="hardware.lock", age_days=0.1)
+        result = run_lease(["prune-legacy", "--legacy-root", str(tmp_path)], lease_env)
+        assert result.returncode == 0, result.stderr
+        assert not stale.exists()
+        assert fresh.exists()  # below the stale threshold; --all is required
+        assert "removed" in result.stdout
+
+    def test_prune_legacy_all_removes_everything(self, lease_env, tmp_path):
+        stale = _seed_legacy(tmp_path, age_days=93)
+        fresh = _seed_legacy(tmp_path, name="hardware.lock", age_days=0.1)
+        result = run_lease(
+            ["prune-legacy", "--all", "--legacy-root", str(tmp_path)], lease_env
+        )
+        assert result.returncode == 0, result.stderr
+        assert not stale.exists() and not fresh.exists()
+
+    def test_prune_legacy_dry_run_touches_nothing(self, lease_env, tmp_path):
+        stale = _seed_legacy(tmp_path, age_days=93)
+        result = run_lease(
+            ["prune-legacy", "--dry-run", "--legacy-root", str(tmp_path)], lease_env
+        )
+        assert stale.exists()
+        assert "would remove" in result.stdout
+
+    def test_prune_legacy_never_removes_the_lease(self, lease_env, tmp_path):
+        """The authoritative lease must survive a prune, held or not."""
+        holder = subprocess.Popen(
+            [sys.executable, str(LEASE), "hold", "--purpose", "prune-safety"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=lease_env,
+            cwd=str(REPO_ROOT),
+        )
+        try:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if lock_path(lease_env).exists() and "prune-safety" in lock_path(
+                    lease_env
+                ).read_text():
+                    break
+                time.sleep(0.05)
+            _seed_legacy(tmp_path, age_days=93)
+            result = run_lease(
+                ["prune-legacy", "--all", "--legacy-root", str(tmp_path)], lease_env
+            )
+            assert result.returncode == 0, result.stderr
+            # the lease is still held and still names its holder
+            held = run_lease(["require"], lease_env)
+            assert held.returncode == 0
+            assert "prune-safety" in held.stdout
+        finally:
+            holder.send_signal(signal.SIGINT)
+            holder.wait(timeout=10)
+
+    def test_exec_warns_about_a_retired_lock_but_still_runs(self, lease_env, tmp_path):
+        """A 93-day routers.lock must not block a lease-holding run."""
+        leftover = _seed_legacy(tmp_path, age_days=93)
+        result = run_lease(
+            [
+                "exec",
+                "--purpose",
+                "not-blocked-by-legacy",
+                "--legacy-root",
+                str(tmp_path),
+                "--",
+                "echo",
+                "ran-anyway",
+            ],
+            lease_env,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "ran-anyway" in result.stdout
+        assert "retired lock file" in result.stderr
+        assert str(leftover) in result.stderr
+
+    def test_exec_no_legacy_scan_is_quiet(self, lease_env, tmp_path):
+        _seed_legacy(tmp_path, age_days=93)
+        result = run_lease(
+            [
+                "exec",
+                "--purpose",
+                "quiet",
+                "--no-legacy-scan",
+                "--legacy-root",
+                str(tmp_path),
+                "--",
+                "echo",
+                "ran",
+            ],
+            lease_env,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "retired lock file" not in result.stderr

@@ -259,6 +259,177 @@ def bench_state(path: str | None = None) -> str:
 
 
 # ---------------------------------------------------------------------------
+# legacy lock-file discovery (the 93-day-stale class of bug)
+# ---------------------------------------------------------------------------
+
+#: Names of lock files retired by PRTA-REVIVE.  Any of these on disk is a
+#: leftover from a mechanism that no longer exists: it is NOT authoritative
+#: (nothing reads it), but it is a lie a human will believe ("the bench is
+#: locked"), so ``hw-bench-lease status`` names them and ``prune-legacy``
+#: removes them.
+LEGACY_LOCK_NAMES = ("routers.lock", "hardware.lock", "tollgate_hardware.lock")
+
+#: Where the retired mechanisms used to write, relative to a repo/worktree root.
+LEGACY_LOCK_SUBPATHS = ("", "mint-health", "upstream-wifi", "esp32")
+
+#: Directories never worth walking when hunting for leftovers.
+_SKIP_DIR_NAMES = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache"}
+
+
+@dataclass(frozen=True)
+class LegacyLock:
+    """A leftover lock file from one of the retired mechanisms."""
+
+    path: str
+    age_seconds: float
+    stale_hours: float
+    size: int
+    first_line: str = ""
+
+    @property
+    def age_days(self) -> float:
+        return self.age_seconds / 86400.0
+
+    @property
+    def is_stale(self) -> bool:
+        """Older than the stale threshold — the 93-day file's class."""
+        return self.age_seconds > self.stale_hours * 3600.0
+
+    def describe(self) -> str:
+        return (
+            f"{self.path} (age={self.age_days:.1f}d, size={self.size}B)"
+            + (f" first_line={self.first_line[:80]!r}" if self.first_line else "")
+        )
+
+
+def _iter_candidate_roots(root: Path, depth: int) -> list[Path]:
+    """Repo root plus sibling worktrees, bounded by *depth* directories.
+
+    The original incident was a lock in a SIBLING worktree — invisible to the
+    session working in the main checkout — so walking only the current repo
+    root would reproduce the bug.  We walk up to the common parent, then
+    inspect its direct children for repo-like directories.
+    """
+    roots: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(candidate: Path) -> None:
+        try:
+            resolved = str(candidate.resolve())
+        except OSError:
+            return
+        if resolved in seen or not candidate.is_dir():
+            return
+        seen.add(resolved)
+        roots.append(candidate)
+
+    _add(root)
+    if depth <= 0:
+        return roots
+
+    parent = root.resolve().parent
+    if parent == root.resolve():
+        return roots
+    # the shared parent (e.g. ~/worktrees) is where sibling checkouts live
+    _add(parent)
+    try:
+        for child in sorted(parent.iterdir()):
+            if child.is_dir() and child.name not in _SKIP_DIR_NAMES:
+                # a repo-like sibling: has .git or one of the retired lock dirs
+                if (child / ".git").exists() or any(
+                    (child / sub / name).exists()
+                    for sub in LEGACY_LOCK_SUBPATHS
+                    if sub
+                    for name in LEGACY_LOCK_NAMES
+                ):
+                    _add(child)
+    except OSError:
+        pass
+    return roots
+
+
+def find_legacy_locks(
+    roots: list[str] | None = None,
+    *,
+    stale_hours: float = 24.0,
+    depth: int = 2,
+    now: float | None = None,
+) -> list[LegacyLock]:
+    """Find leftover lock files from the retired mechanisms.
+
+    Returns one :class:`LegacyLock` per file found, sorted oldest first.  A file
+    is reported whatever its age; ``stale_hours`` only decides which ones
+    ``hw-bench-lease status`` calls out as STALE (the 93-day file was the
+    incident: harmless-looking, permanently blocking, and invisible from the
+    checkout you were working in).
+    """
+    import time as _time
+
+    now = _time.time() if now is None else now
+    search_roots: list[Path] = []
+    if roots:
+        search_roots = [Path(r).expanduser() for r in roots]
+    else:
+        repo_root = Path(__file__).resolve().parents[1]
+        search_roots = _iter_candidate_roots(repo_root, depth)
+
+    found: list[LegacyLock] = []
+    seen: set[str] = set()
+    for base in search_roots:
+        for sub in LEGACY_LOCK_SUBPATHS:
+            for name in LEGACY_LOCK_NAMES:
+                candidate = (base / sub / name) if sub else (base / name)
+                try:
+                    resolved = str(candidate.resolve())
+                except OSError:
+                    continue
+                if resolved in seen:
+                    continue
+                try:
+                    stat = candidate.stat()
+                except OSError:
+                    continue
+                if not candidate.is_file():
+                    continue
+                seen.add(resolved)
+                first_line = ""
+                try:
+                    with open(candidate, encoding="utf-8", errors="replace") as handle:
+                        first_line = handle.readline().strip()
+                except OSError:
+                    pass
+                found.append(
+                    LegacyLock(
+                        path=str(candidate),
+                        age_seconds=max(0.0, now - stat.st_mtime),
+                        stale_hours=stale_hours,
+                        size=stat.st_size,
+                        first_line=first_line,
+                    )
+                )
+    found.sort(key=lambda item: item.age_seconds, reverse=True)
+    return found
+
+
+def prune_legacy_locks(locks: list[LegacyLock]) -> list[str]:
+    """Delete the given leftover lock files; return the paths actually removed.
+
+    Only files reported by :func:`find_legacy_locks` should be passed here —
+    these names are no longer read by anything, so removing them cannot
+    release a live window (the authoritative lease is the flock on
+    ``~/.hermes/state/bench-mt3000.lock``).
+    """
+    removed: list[str] = []
+    for lock in locks:
+        try:
+            os.remove(lock.path)
+            removed.append(lock.path)
+        except OSError:
+            continue
+    return removed
+
+
+# ---------------------------------------------------------------------------
 # canonical tooling discovery (the sanctioned shell helpers)
 # ---------------------------------------------------------------------------
 
@@ -338,11 +509,16 @@ class BenchLock:
         profile: str | None = None,
         path: str | None = None,
         reclaim_stale: bool | None = None,
+        resource: str = "the MT3000 bench",
     ) -> None:
         self.path = lock_path(path)
         self.purpose = purpose
         self.task_id = task_id
         self.profile = profile
+        #: Human label for WHAT is being leased. The bench router is the default
+        #: (every legacy surface meant that); board-scoped leases pass "Board A"
+        #: etc. so a refusal names the right resource.
+        self.resource = resource
         self.reclaim_stale = (
             os.environ.get(ENV_RECLAIM_STALE, "").lower() in ("1", "true", "yes")
             if reclaim_stale is None
@@ -372,7 +548,7 @@ class BenchLock:
             current = parse_holder(handle.read())
             handle.close()
             raise BenchBusy(
-                "BENCH BUSY: the MT3000 bench is locked by "
+                f"BENCH BUSY: {self.resource} is locked by "
                 f"{current.describe() if current.is_live_metadata else '<unknown holder>'} "
                 f"[{current.raw or 'no holder line'}] ({self.path}). "
                 "Wait for that run to finish, or "
@@ -402,7 +578,7 @@ class BenchLock:
             handle.close()
             raise BenchStale(
                 "BENCH STALE: a holder line is present with no flock behind it — its owner is "
-                f"gone: {previous.describe()} [{previous.raw}] ({self.path}). The bench IS free, "
+                f"gone: {previous.describe()} [{previous.raw}] ({self.path}). {self.resource} IS free, "
                 "but recovery is explicit only. Re-check that no other window is live, then "
                 "re-run with --reclaim-stale (or TOLLGATE_BENCH_RECLAIM_STALE=1)."
             )

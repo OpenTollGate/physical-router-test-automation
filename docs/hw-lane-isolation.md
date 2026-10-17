@@ -58,7 +58,14 @@ flock on `~/.hermes/state/bench-mt3000.lock` that
   thin wrappers over it, and the Makefile's `require_hardware_lock` guard now
   asserts the lease instead of a repo-local `hardware.lock` file.
 - `lib/hardware_lock.py` and `lib/router_lock.py` delegate to the same lease
-  (the /tmp JSON lock and `routers.lock` are retired).
+  (the /tmp JSON lock and `routers.lock` are retired), and so do
+  `mint-health/Makefile`'s r-* targets, `scripts/pymake.py`,
+  `scripts/bench/bench.py` scenarios, and the ESP32 board leases (same
+  mechanism, board-scoped file under `~/.hermes/state/`).
+- Retired lock files are still reported by `hw-bench-lease status` (with age,
+  including ones in sibling worktrees) and removable with `prune-legacy` — the
+  93-day-stale `routers.lock` incident class. `exec --check-idle` additionally
+  fails closed when `/balance` cannot be probed.
 - The `--check-idle` flag wires in the read-only primitive
   `lib.session_verify.check_balance_api`: a run REFUSES to start while a
   paying session is live on the bench, and fails closed when the balance API

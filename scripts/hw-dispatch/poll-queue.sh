@@ -34,7 +34,7 @@ set -uo pipefail
 
 SPOOL="${HW_QUEUE_SPOOL:-$HOME/.hermes/state/hw-queue}"
 REPO="${HW_QUEUE_REPO:-felixfelix-bot/physical-router-test-automation}"
-CHECKOUT="${HW_QUEUE_CHECKOUT:-$(cd "$(dirname "$0")/.." && pwd)}"
+CHECKOUT="${HW_QUEUE_CHECKOUT:-$(cd "$(dirname "$0")/../.." && pwd)}"
 LEASE="$CHECKOUT/scripts/hw-bench-lease"
 
 DRY_RUN=0
@@ -95,6 +95,22 @@ run_one_job() { # run_one_job <job-file>
 
     log "running job $(basename "$job") sha=${sha:0:12} purpose=$purpose host=$host"
 
+    # 1) Fast preflight under the lease: refuse early when the bench is busy,
+    #    mid-paying-session, or unreachable — before any npm prep.
+    local rc=0
+    (cd "$CHECKOUT" && TOLLGATE_ROUTER_HOST="$host" \
+        python3 "$LEASE" exec \
+            --purpose "hw-queue:$purpose:preflight" \
+            --check-idle \
+            --host "$host" \
+            -- true) || rc=$?
+    case "$rc" in
+        2) log "bench lease BUSY — job $(basename "$job") stays queued"; return 0 ;;
+        4) post_status "$sha" failure "hw-smoke: idle gate refused — a paying session was live"; mv "$job" "$SPOOL/done/"; log "job $(basename "$job") IDLE-REFUSED"; return 0 ;;
+        5) post_status "$sha" failure "hw-smoke: bench unreachable / balance not probeable (fail closed)"; mv "$job" "$SPOOL/done/"; log "job $(basename "$job") UNREACHABLE"; return 0 ;;
+    esac
+
+    # 2) Prepare the checkout (no router contact).
     if [ ! -d "$CHECKOUT/node_modules" ]; then
         log "no node_modules in $CHECKOUT — running npm ci --prefer-offline"
         (cd "$CHECKOUT" && npm ci --prefer-offline --no-audit --no-fund) \
@@ -102,7 +118,8 @@ run_one_job() { # run_one_job <job-file>
                  mv "$job" "$SPOOL/done/"; return 0; }
     fi
 
-    local rc=0
+    # 3) The guarded run.
+    rc=0
     (cd "$CHECKOUT" && TOLLGATE_ROUTER_HOST="$host" \
         python3 "$LEASE" exec \
             --purpose "hw-queue:$purpose" \

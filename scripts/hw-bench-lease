@@ -51,6 +51,8 @@ from lib.bench_lock import (  # noqa: E402 - path setup above
     BenchLock,
     BenchStale,
     bench_state,
+    find_legacy_locks,
+    prune_legacy_locks,
     read_holder,
 )
 
@@ -99,7 +101,17 @@ def probe_idle(host: str, port: int, timeout: float) -> tuple[bool, str, str]:
     from lib.session_verify import check_balance_api
 
     router = HttpBalanceRouter(host, port, timeout=timeout)
-    active, evidence = check_balance_api(router)
+    try:
+        active, evidence = check_balance_api(router)
+    except Exception as exc:  # noqa: BLE001 - the gate must never fault OPEN
+        # check_balance_api is documented to degrade to a sentinel rather than
+        # raise, but the failure mode if that ever changes is the wrong way
+        # round: an exception escaping here would abort `exec` *before* the
+        # lease is taken with a traceback, which reads like a crash rather than
+        # a refusal — and a caller that treats "crashed" as "retry" could then
+        # start a run mid-paying-session. Refuse explicitly instead.
+        evidence = f"<balance raised: {exc}>"
+        return True, f"balance API not probeable (fail closed): {evidence}", evidence
     if active:
         return True, "active session on the bench", evidence
     if evidence.startswith("<"):
@@ -127,15 +139,20 @@ class _Parser(argparse.ArgumentParser):
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    state = bench_state()
-    holder = read_holder()
+    target = getattr(args, "lock", None)
+    state = bench_state(target)
+    holder = read_holder(target)
+    legacy = find_legacy_locks(
+        args.legacy_root, stale_hours=args.legacy_stale_hours
+    ) if not args.no_legacy_scan else []
+    stale_legacy = [item for item in legacy if item.is_stale]
     if args.json:
         print(
             json.dumps(
                 {
                     "check": "hw-bench-lease",
                     "state": state,
-                    "path": str(_lock_path()),
+                    "path": str(_lock_path(target)),
                     "holder": {
                         "profile": holder.profile,
                         "pid": holder.pid,
@@ -144,12 +161,21 @@ def cmd_status(args: argparse.Namespace) -> int:
                         "task": holder.task,
                         "host": holder.host,
                     },
+                    "legacy_locks": [
+                        {
+                            "path": item.path,
+                            "age_days": round(item.age_days, 2),
+                            "size": item.size,
+                            "stale": item.is_stale,
+                        }
+                        for item in legacy
+                    ],
                 }
             )
         )
         return 0
     print(f"bench lease : {state}")
-    print(f"lock file   : {_lock_path()}")
+    print(f"lock file   : {_lock_path(target)}")
     print(f"holder      : {holder.describe()}")
     if state == "held":
         print("the bench is owned by the holder above; wait or coordinate")
@@ -160,12 +186,54 @@ def cmd_status(args: argparse.Namespace) -> int:
         )
     else:
         print("bench free — take it with `make lock` or hw-bench-lease exec/hold")
+    if legacy:
+        print("")
+        print("retired lock files still on disk (NOT authoritative, nothing reads them):")
+        for item in legacy:
+            flag = "STALE" if item.is_stale else "fresh"
+            print(f"  [{flag}] {item.describe()}")
+        if stale_legacy:
+            print(
+                f"{len(stale_legacy)} of them are older than "
+                f"{args.legacy_stale_hours:g}h — a session that trusted them would "
+                "refuse the bench forever."
+            )
+        print("  remove with: scripts/hw-bench-lease prune-legacy")
+    return 0
+
+
+def cmd_prune_legacy(args: argparse.Namespace) -> int:
+    target = getattr(args, "lock", None)
+    legacy = find_legacy_locks(args.legacy_root, stale_hours=args.legacy_stale_hours)
+    if not legacy:
+        print("no retired lock files on disk — nothing to prune")
+        return 0
+    stale = [item for item in legacy if item.is_stale]
+    targets = stale if not args.all else legacy
+    if not targets:
+        print(
+            f"{len(legacy)} retired lock file(s) present but none older than "
+            f"{args.legacy_stale_hours:g}h — re-run with --all to remove them anyway"
+        )
+        return 0
+    if args.dry_run:
+        for item in targets:
+            print(f"would remove {item.describe()}")
+        return 0
+    removed = prune_legacy_locks(targets)
+    for path in removed:
+        print(f"removed {path}")
+    print(
+        f"{len(removed)} retired lock file(s) removed — they were not authoritative; "
+        f"the lease ({_lock_path(target)}) is untouched"
+    )
     return 0
 
 
 def cmd_require(_args: argparse.Namespace) -> int:
-    state = bench_state()
-    holder = read_holder()
+    target = getattr(_args, "lock", None)
+    state = bench_state(target)
+    holder = read_holder(target)
     if state == "held":
         print(f"bench lease held: {holder.describe()}")
         return 0
@@ -182,6 +250,8 @@ def _acquire(args: argparse.Namespace) -> BenchLock:
     lock = BenchLock(
         purpose=args.purpose if getattr(args, "purpose", None) else "ad-hoc",
         task_id=getattr(args, "task", None),
+        path=getattr(args, "lock", None),
+        resource=getattr(args, "resource", "the MT3000 bench"),
         reclaim_stale=bool(getattr(args, "reclaim_stale", False)),
     )
     lock.acquire()
@@ -190,7 +260,7 @@ def _acquire(args: argparse.Namespace) -> BenchLock:
 
 def cmd_hold(args: argparse.Namespace) -> int:
     lock = _acquire(args)
-    print(f"bench lease acquired (Ctrl-C to release): {read_holder().describe()}")
+    print(f"bench lease acquired (Ctrl-C to release): {lock.holder.describe()}")
 
     def _release_and_exit(signum: int, _frame: object) -> None:
         lock.release()
@@ -204,11 +274,13 @@ def cmd_hold(args: argparse.Namespace) -> int:
 
 
 def cmd_release(args: argparse.Namespace) -> int:
+    target = getattr(args, "lock", None)
     # A live flock cannot be stolen — release() only clears a stale/own line by
     # taking the lock non-blockingly for an instant.
     try:
         lock = BenchLock(
             purpose="release",
+            path=target,
             reclaim_stale=True,
         )
         lock.acquire(reclaim_stale=True)
@@ -225,6 +297,20 @@ def cmd_exec(args: argparse.Namespace) -> int:
     if not args.cmd:
         print("hw-bench-lease exec: -- requires a command", file=sys.stderr)
         return RC_USAGE
+    if not getattr(args, "no_legacy_scan", False):
+        for leftover in find_legacy_locks(
+            getattr(args, "legacy_root", None),
+            stale_hours=getattr(args, "legacy_stale_hours", 24.0),
+        ):
+            flag = "STALE" if leftover.is_stale else "present"
+            print(
+                f"note: retired lock file ({flag}, ignored): {leftover.describe()}",
+                file=sys.stderr,
+            )
+            print(
+                "      nothing reads it; prune with `hw-bench-lease prune-legacy`",
+                file=sys.stderr,
+            )
     try:
         lock = _acquire(args)
     except BenchStale as exc:
@@ -261,10 +347,10 @@ def cmd_exec(args: argparse.Namespace) -> int:
         lock.release()
 
 
-def _lock_path() -> str:
+def _lock_path(override: str | None = None) -> str:
     from lib.bench_lock import lock_path
 
-    return lock_path()
+    return lock_path(override)
 
 
 def build_parser() -> _Parser:
@@ -279,18 +365,71 @@ def build_parser() -> _Parser:
             p.add_argument("--purpose", required=True, help="what this window is for")
         p.add_argument("--task", default=None, help="task/card id for the holder line")
         p.add_argument(
+            "--lock",
+            default=None,
+            metavar="PATH",
+            help="lock file (default: the machine-global bench lease; use only to "
+            "scope a DIFFERENT single-owner resource, e.g. an ESP32 board — the "
+            "mechanism stays the same)",
+        )
+        p.add_argument(
+            "--resource",
+            default="the MT3000 bench",
+            help="human label for what is leased, used in refusal messages "
+            "(default: 'the MT3000 bench')",
+        )
+        p.add_argument(
             "--reclaim-stale",
             action="store_true",
             help="take over a stale holder line (owner gone) explicitly",
         )
 
+    def legacy(p: argparse.ArgumentParser) -> None:
+        """Flags for the retired-lock sweep (see lib.bench_lock.find_legacy_locks)."""
+        p.add_argument(
+            "--legacy-root",
+            action="append",
+            default=None,
+            metavar="DIR",
+            help="root to sweep for retired lock files (repeatable; default: this "
+            "checkout plus sibling worktrees)",
+        )
+        p.add_argument(
+            "--legacy-stale-hours",
+            type=float,
+            default=24.0,
+            help="age at which a retired lock file is called STALE (default 24h)",
+        )
+
     p_status = sub.add_parser("status", help="show bench lease state + holder")
     p_status.add_argument("--json", action="store_true")
+    legacy(p_status)
+    p_status.add_argument(
+        "--no-legacy-scan",
+        action="store_true",
+        help="skip the retired-lock-file sweep (faster status)",
+    )
+    p_status.add_argument("--lock", default=None, metavar="PATH", help=argparse.SUPPRESS)
     p_status.set_defaults(func=cmd_status)
+
+    p_prune = sub.add_parser(
+        "prune-legacy",
+        help="remove leftover routers.lock / hardware.lock files (never the lease)",
+    )
+    legacy(p_prune)
+    p_prune.add_argument(
+        "--all",
+        action="store_true",
+        help="remove every retired lock file, not just ones older than "
+        "--legacy-stale-hours",
+    )
+    p_prune.add_argument("--dry-run", action="store_true", help="print, do not remove")
+    p_prune.set_defaults(func=cmd_prune_legacy)
 
     p_require = sub.add_parser(
         "require", help="exit 0 iff the bench lease is currently held"
     )
+    p_require.add_argument("--lock", default=None, metavar="PATH", help=argparse.SUPPRESS)
     p_require.set_defaults(func=cmd_require)
 
     p_hold = sub.add_parser("hold", help="acquire and block (interactive windows)")
@@ -300,6 +439,7 @@ def build_parser() -> _Parser:
     p_release = sub.add_parser(
         "release", help="clear a stale holder line (cannot steal a live flock)"
     )
+    p_release.add_argument("--lock", default=None, metavar="PATH", help=argparse.SUPPRESS)
     p_release.set_defaults(func=cmd_release)
 
     p_exec = sub.add_parser(
@@ -328,6 +468,12 @@ def build_parser() -> _Parser:
         default=8.0,
         help="per-probe connect timeout for --check-idle (default 8s)",
     )
+    p_exec.add_argument(
+        "--no-legacy-scan",
+        action="store_true",
+        help="skip the retired-lock-file advisory sweep (see status --no-legacy-scan)",
+    )
+    legacy(p_exec)
     p_exec.add_argument("cmd", nargs=argparse.REMAINDER, help="command after --")
     p_exec.set_defaults(func=cmd_exec)
 

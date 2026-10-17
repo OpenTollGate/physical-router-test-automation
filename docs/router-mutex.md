@@ -1,136 +1,111 @@
-# Router Mutex: Avoiding Collisions Between LLM Sessions
+# Router Mutex: the ONE machine-global bench lease
+
+Status: reworked 2026-10-17 (PRTA-REVIVE). The old `routers.lock` protocol
+described below is **retired** — see "What was wrong" at the end.
 
 ## Problem
 
-Multiple LLM sessions (or humans) may need to run tests on the same physical
-routers simultaneously. Without coordination, two sessions could deploy
-different binaries, modify configs, or restart services on the same router at
-the same time, causing test failures and confusion.
+Multiple agent sessions (or humans, or CI lanes) may need to drive the same
+physical router. Without coordination, two sessions can deploy different
+binaries, modify configs, or restart services at the same time, producing test
+failures that look like product bugs and corrupt the bench for the next run.
 
-## Solution: File-Based Lock
+## Solution: one flock-backed lease, machine-global
 
-A `routers.lock` file in the repo root acts as an advisory mutex. Any session
-that needs to modify router state **must** acquire the lock first.
+`lib/bench_lock.py` — `BenchLock` — is the only mechanism. It has two parts:
 
-### The Lock File
+1. **`flock` on a single lock file.** The kernel owns the mutual exclusion. When
+   the holder process dies, the flock disappears: a crashed agent can never
+   wedge the bench.
+2. **A holder line** (human metadata, not authority):
+   `<profile> pid=<pid> purpose=<purpose> since=<iso8601> task=<id|-> host=<host>`
 
-**Location**: `routers.lock` (gitignored, never committed)
+**Location** — machine-global, never per-worktree, never `/tmp`:
 
-**Format**:
-```
-locked: true
-branch: 94-temporarily-remove-unreachable-mints-from-list-of-supported-mints
-session: LLM session — degraded merchant testing
-timestamp: 2026-04-29T16:45:00Z
-phase: Part B — cold boot testing
-```
+| resource | lock file |
+|---|---|
+| bench router (GL-MT3000) | `~/.hermes/state/bench-mt3000.lock` |
+| ESP32 board A / B / C | `~/.hermes/state/esp32-board-{a,b,c}.lock` |
 
-### How to Use
+Overrides: `TOLLGATE_BENCH_LOCK` / `BENCH_LOCK_PATH` for the bench,
+`LOCK_DIR` for the boards. The boards use **the same** mechanism with a
+board-scoped filename — there is no second implementation.
 
-#### Before starting router tests
-
-```sh
-make -f Makefile.test r-lock PHASE="Part B: cold boot testing"
-```
-
-This checks if the lock already exists. If it does, it shows who holds it and
-exits with an error. If not, it creates the lock with your branch name,
-timestamp, and phase description.
-
-#### While running tests
-
-Update the phase as you progress:
+## Using it
 
 ```sh
-make -f Makefile.test r-lock PHASE="Part D: multi-mint scenarios"
+make lock PHASE="part B: cold boot testing"   # take the lease (blocks; Ctrl-C releases)
+make lock-status                              # who owns it right now
+make unlock                                   # release (clears the holder line)
+make force-unlock                             # clear a STALE holder line
 ```
 
-This updates the phase description without changing the branch/session info.
-
-#### Check if routers are available
+The same CLI, for scripts and CI:
 
 ```sh
-make -f Makefile.test r-status-lock
+scripts/hw-bench-lease status                 # state + holder + retired-lock report
+scripts/hw-bench-lease require                # exit 0 iff held (Makefile guard)
+scripts/hw-bench-lease exec --purpose "smoke" -- <cmd>     # lease for the cmd's lifetime
+scripts/hw-bench-lease exec --purpose "smoke" --check-idle -- <cmd>   # + idle gate
 ```
 
-Shows either "unlocked" or the current lock holder's details.
+Exit codes: `2` busy, `3` stale, `4` idle-refused, `5` idle-unprobeable,
+`0` ok, otherwise the child's own exit code.
 
-#### After finishing tests
+From Python:
 
-```sh
-make -f Makefile.test r-unlock
+```python
+from lib.bench_lock import BenchLock, BenchBusy
+
+with BenchLock(purpose="prta install-path e2e", task_id="t_a05094ad") as lock:
+    subprocess.run(cmd, env=lock.child_env())   # children pass `bench-lock require`
 ```
 
-Removes the lock file so other sessions can proceed.
+`lib/router_lock.RouterLock` and `lib/hardware_lock` delegate to the same
+`BenchLock`; their public APIs are unchanged.
 
-#### If a session crashes without unlocking
+## Busy, stale, and the 93-day file
 
-```sh
-make -f Makefile.test force-unlock
+| state | meaning | what to do |
+|---|---|---|
+| `held` | a live process holds the flock | wait, or coordinate with the named holder |
+| `stale` | a holder line exists but **no flock backs it** — the owner died | `hw-bench-lease release` (or re-run with `--reclaim-stale`) |
+| `free` | no flock, no holder line | take it |
+
+Recovery from `stale` is deliberately **explicit**: the line names who died, so
+an operator can confirm nothing is live before clearing it.
+
+`hw-bench-lease status` additionally sweeps for **retired** lock files
+(`routers.lock`, `hardware.lock`, `tollgate_hardware.lock`) in this checkout and
+in sibling worktrees, and reports their age:
+
+```
+retired lock files still on disk (NOT authoritative, nothing reads them):
+  [STALE] /home/u/worktrees/old/prta/routers.lock (age=93.3d, size=137B)
+  remove with: scripts/hw-bench-lease prune-legacy
 ```
 
-Force-removes the lock with a warning. Use with caution — always check if
-someone is actually still running tests first.
+`prune-legacy` removes stale ones (`--all` for all, `--dry-run` to preview).
+It never touches the lease itself.
 
-### Convention for LLM Sessions
+## What was wrong before (the incident this closes)
 
-1. **Always check the lock before deploying or modifying router state.**
-   All `r-*` Makefile targets enforce this automatically.
+Three inconsistent mechanisms, none machine-global, none flock-authoritative:
 
-2. **Set a meaningful phase description.** This helps other sessions
-   understand what you're doing and estimate when you'll be done.
+- `Makefile`'s repo-local `hardware.lock` **presence check** — per-worktree, so a
+  lock in one checkout was invisible from another, and a stale file blocked
+  forever.
+- `lib/hardware_lock.py`'s `/tmp/tollgate_hardware.lock` JSON — a 2-hour age
+  heuristic, no mutual exclusion, and `/tmp` is not shared reliably.
+- `lib/router_lock.py`'s `routers.lock` (and `mint-health/Makefile`'s own copy) —
+  a file with a timestamp, no flock; staleness guessed from mtime.
 
-3. **Include your branch name.** The lock automatically captures the current
-   git branch so others know which PR is using the routers.
+Result: the only live lock file in the fleet was **93 days stale in a sibling
+worktree**, while the main worktree had none — so a session that trusted its
+own checkout saw "unlocked" and a session that found the stale file saw
+"locked". Both were wrong at the same time.
 
-4. **Unlock promptly when done.** Don't hold the lock longer than necessary.
-
-5. **Stale locks**: If a lock is older than 2 hours and you can't reach the
-   session that created it, it's reasonable to `force-unlock`.
-
-### For New Branches / PRs
-
-If you're setting up router testing for a new PR:
-
-1. Copy this pattern into your `Makefile.test` (or reference this file)
-2. Use the same `routers.lock` file — it's shared across branches
-3. The lock is advisory — it prevents accidental collisions, not malicious use
-
-### The `r-lock` and `r-unlock` Targets
-
-These targets are defined in `Makefile.test`:
-
-- `r-lock` — Acquire or update the lock. Fails if someone else holds it.
-- `r-unlock` — Release the lock.
-- `force-unlock` — Force-release the lock (use with caution).
-- `r-status-lock` — Show current lock status.
-
-All `r-*` targets that modify router state check the lock before proceeding.
-Local targets (run on the router itself) do not check the lock — they assume
-you're already on the router and know what you're doing.
-
-## Known Pitfall: Dual-WWAN Routing Conflict
-
-**Never create a second `wwan` interface (e.g. `wwan2`) on any router.**
-
-When two WWAN interfaces exist simultaneously (e.g. `wwan` and `wwan2`), the
-kernel gets two default gateway routes and routing breaks — the router loses
-internet connectivity even though individual interfaces may have valid DHCP leases.
-
-**Symptoms:** `ping 9.9.9.9` returns "Network unreachable" despite `ifconfig`
-showing an IP on `phy0-sta0`.
-
-**Correct approach:** Use a single `wwan` interface. When you need to connect
-to a different network, switch the existing STA (disable old, enable new) rather
-than adding a second interface. The `r-rescue-router` target follows this pattern.
-
-**Guard:** The `r-guard-no-dual-wwan` target checks for multiple wwan interfaces
-and fails fast. It runs automatically as a prerequisite in two-router tests
-(`r-smoke-degraded-upstream`, `r-smoke-degraded-connect`).
-
-**Recovery if you accidentally create a second wwan:**
-```sh
-uci delete network.wwan2
-uci commit network
-wifi reload
-```
+`lib/session_verify.check_balance_api` (the read-only idle-gate primitive) is
+now wired into the lease as `exec --check-idle`: a mutating run refuses to
+start while a paying session is live, and fails closed when `/balance` is not
+probeable. It was previously implemented but connected to nothing.
