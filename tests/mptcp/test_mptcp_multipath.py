@@ -422,3 +422,80 @@ def test_peer_listener_is_mptcp_if_probe_available(serial_console):
         "fallback connection, which has no path manager and therefore never "
         f"generates ADD_ADDR. Output:\n{text}"
     )
+
+
+# ---------------------------------------------------------------------------
+# TRANSPORT SHAPE (D10): proxy-terminated must not signal its own addresses
+# ---------------------------------------------------------------------------
+# Decided in docs/architecture/multi-wan-bonding-decision.md A1.2 (D10).
+#
+# The bond may not rely on the peer dialling back into the client. Measured on
+# this bench: both uplinks were private (house NAT + Starlink CGNAT), so the
+# peer's MPTcpExtAddAddr stayed 0, MPJoinNoTokenFound climbed, and the second
+# subflow never formed while the transport itself was healthy.
+#
+# A `signal` endpoint makes the kernel send ADD_ADDR, which asks the peer to
+# connect to that address. Behind NAT that JOIN can never succeed. In the
+# proxy-terminated shape the client initiates every path, so NO endpoint may be
+# signalled -- while every endpoint must still be `subflow` so the client can
+# open subflows itself.
+#
+# These checks read the state back FROM THE DEVICE, per the IaC gate.
+
+def test_proxy_terminated_signals_no_endpoint(serial_console):
+    """No registered endpoint may carry `signal` in the proxy-terminated shape.
+
+    `signal` instructs the peer to connect back to this address. When that
+    address is private -- which is the whole reason this shape exists -- the
+    resulting JOIN cannot succeed, and the bond silently stays single-path.
+    """
+    if os.environ.get("TOLLGATE_MPTCP_TRANSPORT", "").strip() != "proxy-terminated":
+        pytest.skip("TOLLGATE_MPTCP_TRANSPORT is not proxy-terminated")
+
+    out = sh(serial_console, "ip mptcp endpoint show")
+    if not out.strip():
+        pytest.skip("no MPTCP endpoints registered")
+
+    signalled = [ln for ln in out.splitlines() if " signal" in ln]
+    assert not signalled, (
+        "proxy-terminated bond signalled an endpoint, which asks the peer to "
+        "dial an address it cannot reach behind NAT. Endpoints must be "
+        f"`subflow` only.\nOffending lines:\n" + "\n".join(signalled)
+    )
+
+
+def test_proxy_terminated_endpoints_still_permit_subflows(serial_console):
+    """Dropping `signal` must not drop `subflow` -- we still need to open paths."""
+    if os.environ.get("TOLLGATE_MPTCP_TRANSPORT", "").strip() != "proxy-terminated":
+        pytest.skip("TOLLGATE_MPTCP_TRANSPORT is not proxy-terminated")
+
+    out = sh(serial_console, "ip mptcp endpoint show")
+    if not out.strip():
+        pytest.skip("no MPTCP endpoints registered")
+
+    for line in out.splitlines():
+        assert "subflow" in line, (
+            "every registered endpoint must permit subflows; without it the "
+            f"client cannot open a path over that uplink: {line!r}"
+        )
+
+
+def test_advertised_address_shape_signals_every_endpoint(serial_console):
+    """The default shape must still signal, or public-address deployments regress.
+
+    On a network with genuinely routable uplinks, `signal` is the only way the
+    peer learns an address to dial. The proxy-terminated default must not have
+    removed it from the historic shape.
+    """
+    if os.environ.get("TOLLGATE_MPTCP_TRANSPORT", "advertised-address").strip() != "advertised-address":
+        pytest.skip("transport is not advertised-address")
+
+    out = sh(serial_console, "ip mptcp endpoint show")
+    if not out.strip():
+        pytest.skip("no MPTCP endpoints registered")
+
+    for line in out.splitlines():
+        assert "signal" in line, (
+            "advertised-address shape must signal every endpoint so the peer "
+            f"can learn it: {line!r}"
+        )
