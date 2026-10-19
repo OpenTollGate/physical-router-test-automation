@@ -498,15 +498,68 @@ def run_python_on_host(host: str, python_code: str, timeout: int = 120) -> Comma
         except subprocess.TimeoutExpired:
             return CommandResult(1, "", "TIMEOUT")
     else:
-        proc = subprocess.run(
-            ["ssh", host, "python3"],
-            input=python_code,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                ["ssh", host, "python3"],
+                input=python_code,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            # Parity with the local branch: a host-side cap hit is a
+            # TIMEOUT sentinel CommandResult, never a raw crash out of
+            # start_poc (the #1005 traceback class).
+            return CommandResult(1, "", "TIMEOUT")
     return CommandResult(proc.returncode, proc.stdout.strip(), proc.stderr.strip())
+
+
+# Serial-console provisioning runs as a subprocess on the lab host.  The old
+# fixed 120s cap killed healthy boots under host load (N=39 vlab soak,
+# tollgate-module-basic-go#1005: load avg ~36, swap 94% — the DUT was booted
+# and fine, pure tooling timeout; the next iteration was green).  Hardening:
+# a generous per-attempt cap plus ONE retry on the host-side TIMEOUT sentinel
+# only.  Script-internal failures (dead serial socket, boot prompt never
+# seen) return a real rc/stderr immediately, so genuinely-dead DUTs still
+# fail fast instead of paying the raised cap twice.
+SERIAL_PROVISION_TIMEOUT_S = int(os.environ.get("TOLLGATE_VLAB_PROVISION_TIMEOUT", "300"))
+SERIAL_PROVISION_ATTEMPTS = 2
+SERIAL_PROVISION_RETRY_BACKOFF_S = 10
+
+
+def run_python_on_host_with_retry(
+    host: str,
+    python_code: str,
+    *,
+    timeout: int,
+    attempts: int = SERIAL_PROVISION_ATTEMPTS,
+    backoff_s: int = SERIAL_PROVISION_RETRY_BACKOFF_S,
+) -> CommandResult:
+    """Run a serial-provisioning script on the lab host with a bounded
+    timeout-only retry (tollgate-module-basic-go#1005 hardening).
+
+    Retrying is safe because the provisioning scripts are idempotent: an
+    already-provisioned boot detects the shell prompt and exits 0 early, so
+    the retry against a live-but-slow DUT is cheap.  Only the host-side
+    TIMEOUT sentinel retries; a genuine script failure fails fast.
+    """
+    result = CommandResult(1, "", "TIMEOUT")
+    for attempt in range(1, attempts + 1):
+        result = run_python_on_host(host, python_code, timeout=timeout)
+        if result.returncode == 0 or result.stderr.strip() != "TIMEOUT":
+            return result
+        if attempt < attempts:
+            print(
+                f"Serial provisioning hit the host-side {timeout}s cap "
+                f"(attempt {attempt}/{attempts}) — host load stretches the "
+                f"serial console (tollgate-module-basic-go#1005); "
+                f"retrying in {backoff_s}s...",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(backoff_s)
+    return result
 
 
 def quote_script(script: str) -> str:
@@ -1157,7 +1210,7 @@ printf 'Started POC OpenWrt VM pid=%s\\n' "$(cat "$pidfile")"
     # Step 2: provision VM via serial console
     print("Provisioning OpenWrt VM via serial console...")
     provision_script = _generate_provision_script(workdir)
-    result = run_python_on_host(host, provision_script, timeout=120)
+    result = run_python_on_host_with_retry(host, provision_script, timeout=SERIAL_PROVISION_TIMEOUT_S)
     if result.stdout:
         print(result.stdout)
     if result.stderr:
@@ -1266,7 +1319,7 @@ printf 'Started Debian client VM pid=%s\\n' "$(cat "$client_pidfile")"
     if not client_provisioned:
         print("Step 5: provision Debian VM via serial console...", flush=True)
         debian_provision_script = _generate_debian_provision_script(workdir)
-        result = run_python_on_host(host, debian_provision_script, timeout=600)
+        result = run_python_on_host_with_retry(host, debian_provision_script, timeout=600)
         if result.stdout:
             print(result.stdout)
         if result.stderr:
