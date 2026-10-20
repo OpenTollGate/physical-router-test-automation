@@ -7,9 +7,14 @@ from typing import Any
 import pytest
 
 from lib.constants import TOKEN_DEFAULT
-from lib.helpers import assert_deauthenticated, metering_test_setup, wait_expiry_and_verify_cutoff
+from lib.helpers import (
+    assert_deauthenticated,
+    metering_test_setup,
+    skip_if_no_client_playwright,
+    wait_expiry_and_verify_cutoff,
+)
 
-pytestmark = [pytest.mark.api, pytest.mark.virtual_lab, pytest.mark.publish_screenshot]
+pytestmark = [pytest.mark.story("P5"),pytest.mark.api, pytest.mark.virtual_lab, pytest.mark.publish_screenshot]
 
 DATA_DOWNLOAD_URL = os.environ.get(
     "TOLLGATE_VISUAL_DATA_TEST_URL",
@@ -82,11 +87,18 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     if client != "container":
         pytest.skip("visual test requires --client=container")
 
-    # IPv6 on br-lan bypasses Nodogsplash's IPv4-only captive portal.
-    # Without this, the container reaches the internet via IPv6 and the
-    # Playwright recording never sees auth markers (ok=False).
+    skip_if_no_client_playwright(adb)
+
+    # IPv6 on br-lan bypasses Nodogsplash's IPv4-only captive portal, so this
+    # test needs v6 off — but the ROUTER must ship that itself (#148/#160,
+    # asserted below); the framework force-disabling it here masked package
+    # regressions (#783). PRTA_FORCE_IPV6_OFF=1 restores the legacy force for
+    # deliberate old-firmware experiments.
     # See: https://github.com/OpenTollGate/physical-router-test-automation/issues/30
-    router.disable_ipv6_on_lan()
+    if os.environ.get("PRTA_FORCE_IPV6_OFF") == "1":
+        router.disable_ipv6_on_lan()
+    else:
+        router.assert_ipv6_disabled_on_lan()
 
     gateway = os.environ.get("TOLLGATE_VIRTUAL_GATEWAY", "10.99.99.1")
     client_mac = os.environ.get("TOLLGATE_CLIENT_MAC", "")
@@ -94,14 +106,6 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"[visual] gateway={gateway} client_mac={client_mac}")
-
-    # Pre-check: verify Playwright is functional in the container
-    try:
-        pw_check = adb._exec("python3 -c 'from playwright.sync_api import sync_playwright; print(\"PW_OK\")' 2>&1", timeout=15)
-        if "PW_OK" not in pw_check:
-            pytest.fail(f"Playwright not functional in container: {pw_check[:200]}")
-    except Exception as exc:
-        pytest.fail(f"Cannot check Playwright in container: {exc}")
 
     portal_url = f"http://{gateway}/"
     code = ""
@@ -136,9 +140,16 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     assert adb.wait_for_portal_ready(timeout=90), "Playwright did not load portal in time"
     print("[visual] portal loaded, unpaid screenshot taken by recording thread")
 
-    # Step 3: mint a token and let the recorded browser paste + submit it
+    # Step 3: mint a token and let the recorded browser paste + submit it.
+    # Fresh, not pooled: a venue reset rotates the fakewallet keyset and
+    # pooled tokens reject as CU109 — the browser payment then never lands
+    # while the portal only shows the error card (#247).
     print("[visual] minting Cashu token for browser payment...")
-    token = cashu.mint(TOKEN_DEFAULT)
+    token = (
+        cashu.mint_fresh(TOKEN_DEFAULT)
+        if hasattr(cashu, "mint_fresh")
+        else cashu.mint(TOKEN_DEFAULT)
+    )
     assert token, "cashu mint failed"
     adb.signal_token(token)
 
@@ -173,7 +184,11 @@ def test_visual_happy_path(adb, cashu, router, results_dir, request):
     except Exception as exc:
         print(f"[visual] standalone screenshot skipped: {exc}")
 
-    assert authenticated, "client should be authenticated after ndsctl auth"
+    assert authenticated, (
+        "client should be authenticated after the browser payment — if the "
+        "portal showed an 'E-cash note expired' (CU109) card, the token was "
+        "minted against a rotated keyset (stale pool vs venue reset, #247)"
+    )
 
 
 @pytest.mark.complete

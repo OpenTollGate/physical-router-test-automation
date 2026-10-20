@@ -137,11 +137,6 @@ jobs:
       TOLLGATE_SSH_HOST: ${{ secrets.TOLLGATE_SSH_HOST }}
       TOLLGATE_SSH_PASSWORD: ${{ secrets.TOLLGATE_SSH_PASSWORD }}
       TOLLGATE_WIFI_INTERFACE: ${{ secrets.TOLLGATE_WIFI_INTERFACE }}
-      # Paid-traffic / state-mutating specs: opt-in per dispatch, OFF by
-      # default. The lane cannot corrupt the bench for the next agent by
-      # accident any more.
-      TOLLGATE_ENABLE_WIFI_CLIENT_TESTS: ${{ github.event.inputs.enable_wifi_client_tests || 'false' }}
-      TOLLGATE_ENABLE_DATA_ALLOTMENT_TESTS: ${{ github.event.inputs.enable_data_allotment_tests || 'false' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -163,7 +158,16 @@ jobs:
       # Non-destructive projects only. The destructive project (firmware flash,
       # reboot) has its own job below — the old `test-physical` job ran the
       # whole config, destructive project included.
+      #
+      # The paid-traffic opt-in lives HERE, on the spec step, and not in the
+      # job-level env: `scripts/hw-readonly-check.sh` G0 refuses to run at all
+      # when it sees a mutating flag, so a job-level flag would abort the
+      # pre-flight of the very lane that opted in (the opt-in path would be
+      # dead on arrival).
       - name: Bench E2E (non-destructive projects)
+        env:
+          TOLLGATE_ENABLE_WIFI_CLIENT_TESTS: ${{ github.event.inputs.enable_wifi_client_tests || 'false' }}
+          TOLLGATE_ENABLE_DATA_ALLOTMENT_TESTS: ${{ github.event.inputs.enable_data_allotment_tests || 'false' }}
         run: |
           npx playwright test --config=tests/playwright.config.mjs \
             --project=desktop-luci \
@@ -200,6 +204,9 @@ jobs:
       TOLLGATE_LUCI_PASSWORD: ${{ secrets.TOLLGATE_LUCI_PASSWORD }}
       TOLLGATE_SSH_HOST: ${{ secrets.TOLLGATE_SSH_HOST }}
       TOLLGATE_SSH_PASSWORD: ${{ secrets.TOLLGATE_SSH_PASSWORD }}
+      # Parity with the mutating lane: the flash/reboot specs read the WiFi
+      # interface name like every other bench project.
+      TOLLGATE_WIFI_INTERFACE: ${{ secrets.TOLLGATE_WIFI_INTERFACE }}
     steps:
       - uses: actions/checkout@v4
         with:

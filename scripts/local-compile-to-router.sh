@@ -29,6 +29,10 @@ set -e
 #                           Supported values:
 #                           - gl-mt3000 (ARM64 architecture) [default]
 #                           - gl-ar300 (MIPS with soft float)
+#   --arch=OPENWRT_ARCH    - Target OpenWrt package arch (e.g. mipsel_24kc,
+#                           aarch64_cortex-a53, x86_64). Takes precedence over
+#                           --device; also read from the router inventory or
+#                           TOLLGATE_ROUTER_ARCH. See lib/openwrt-arch.sh.
 #
 # EXAMPLES:
 #   ./local-compile-to-router.sh                                    # Deploy to 192.168.1.1 for gl-mt3000
@@ -47,7 +51,17 @@ echo "Compiling to router"
 ROUTER_USERNAME=root
 ROUTER_IP=192.168.1.1
 DEVICE="gl-mt3000"
+ARCH=""
 WALLET="gonuts"
+
+# OpenWrt package arch per known device (lib/openwrt-arch.sh does the rest).
+device_to_openwrt_arch() {
+  case "$1" in
+    gl-mt3000) echo "aarch64_cortex-a53" ;;
+    gl-ar300)  echo "mips_24kc" ;;
+    *) echo "" ;;
+  esac
+}
 
 # Check for router IP as first argument
 if [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -58,6 +72,8 @@ fi
 # Parse remaining command line arguments
 for i in "$@"; do
   case $i in
+    --arch=*) ARCH="${i#*=}" ;;
+    --arch)   shift; ARCH="$1" ;;
     --device=*)
       DEVICE="${i#*=}"
       shift
@@ -92,16 +108,21 @@ EXECUTABLE_PATH="/usr/bin/$EXECUTABLE_NAME"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT/src"
 
+# Resolve the target arch: explicit --arch wins, then the device table,
+# then the router inventory. Never a silent default (lib/openwrt-arch.sh).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/openwrt-arch.sh"
+if [ -z "$ARCH" ]; then
+  ARCH="$(device_to_openwrt_arch "$DEVICE")"
+fi
+if [ -z "$ARCH" ]; then
+  ARCH="$(resolve_openwrt_arch "")" || exit 1
+fi
+GO_ENV="$(go_env_for_openwrt_arch "$ARCH")"
+echo "Building for OpenWrt arch $ARCH (${GO_ENV})"
+
 # Build main service
 echo "Building TollGate service..."
-if [[ $DEVICE == "gl-mt3000" ]]; then
-  env $CGO_FLAG GOOS=linux GOARCH=arm64 go build $BUILD_TAGS -o $EXECUTABLE_NAME -trimpath -ldflags="-s -w"
-elif [[ $DEVICE == "gl-ar300" ]]; then
-  env $CGO_FLAG GOOS=linux GOARCH=mips GOMIPS=softfloat go build $BUILD_TAGS -o $EXECUTABLE_NAME -trimpath -ldflags="-s -w"
-else
-  echo "Unknown device: $DEVICE"
-  exit 1
-fi
+env $CGO_FLAG GOOS=linux $GO_ENV go build $BUILD_TAGS -o $EXECUTABLE_NAME -trimpath -ldflags="-s -w"
 
 # Build CLI client
 CLI_NAME=tollgate
@@ -114,14 +135,7 @@ rm -f $CLI_NAME
 go clean -cache
 go mod tidy
 
-if [[ $DEVICE == "gl-mt3000" ]]; then
-  env $CGO_FLAG GOOS=linux GOARCH=arm64 go build $BUILD_TAGS -o $CLI_NAME -trimpath -ldflags="-s -w"
-elif [[ $DEVICE == "gl-ar300" ]]; then
-  env $CGO_FLAG GOOS=linux GOARCH=mips GOMIPS=softfloat go build $BUILD_TAGS -o $CLI_NAME -trimpath -ldflags="-s -w"
-else
-  echo "Unknown device: $DEVICE"
-  exit 1
-fi
+env $CGO_FLAG GOOS=linux $GO_ENV go build $BUILD_TAGS -o $CLI_NAME -trimpath -ldflags="-s -w"
 
 # Verify CLI binary was created
 if [[ ! -f $CLI_NAME ]]; then
@@ -146,7 +160,10 @@ scp -O $SSH_OPTS "cmd/tollgate-cli/$CLI_NAME" "$ROUTER_USERNAME@$ROUTER_IP:$CLI_
 echo "CLI binary copied to router at $CLI_PATH"
 
 if [[ "$WALLET" == "cdk" ]]; then
-  CDK_SO_SRC="$(go env GOMODCACHE)/github.com/cashubtc/cdk-go@v0.17.3/bindings/cdkffi/native/linux_arm64/libcdk_ffi.so"
+  # The cdkffi prebuilt follows the Go arch name (linux_arm64, ...). The
+  # old hardcode silently shipped an arm64 .so to MIPS routers.
+  CDK_GOARCH="$(echo "$GO_ENV" | awk '{print $1}' | cut -d= -f2)"
+  CDK_SO_SRC="$(go env GOMODCACHE)/github.com/cashubtc/cdk-go@v0.17.3/bindings/cdkffi/native/linux_${CDK_GOARCH}/libcdk_ffi.so"
   if [[ -f "$CDK_SO_SRC" ]]; then
     echo "Deploying libcdk_ffi.so (cdk_wallet)..."
     scp -O $SSH_OPTS "$CDK_SO_SRC" "$ROUTER_USERNAME@$ROUTER_IP:/usr/lib/libcdk_ffi.so"

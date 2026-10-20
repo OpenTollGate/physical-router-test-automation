@@ -1,0 +1,11 @@
+#!/bin/sh
+# kokoro-tts — venv-aware wrapper installed by ansible/roles/film_voice.
+#
+# Runs the Kokoro synthesis script against the backend virtualenv and the
+# pinned model files, so callers (tools/film/narrate-film.sh) only need the
+# command on PATH. Override KOKORO_MODEL / KOKORO_VOICES to use other files.
+set -eu
+: "${KOKORO_MODEL:={{ film_voice_models }}/kokoro-v1.0.onnx}"
+: "${KOKORO_VOICES:={{ film_voice_models }}/voices-v1.0.bin}"
+export KOKORO_MODEL KOKORO_VOICES
+exec "{{ film_voice_venv }}/bin/python" "{{ film_voice_root }}/kokoro-tts.py" "$@"

@@ -257,6 +257,40 @@ hw-readonly: ## Read-only bench surface check: no creds, no mutation, no paid tr
 	@# runnable while another agent holds the bench and while a session is live.
 	@# Host via TOLLGATE_ROUTER_HOST (default 192.168.1.1).
 	@bash scripts/hw-readonly-check.sh
+#  DEMO RECORDING (docs/demo-recording.md)
+# ===========================================================================
+
+.PHONY: record-demo-clientd
+
+TOLLGATE_LAB_COMPOSE ?= ../tollgate-module-basic-go/tests/cloud-lab/docker-compose.yml
+
+record-demo-clientd: ## Record clientd auto-top-up demo vs cloud lab → evidence/ [demo]
+	@test -f "$(TOLLGATE_LAB_COMPOSE)" || { echo "cloud-lab compose not found: $(TOLLGATE_LAB_COMPOSE) — set TOLLGATE_LAB_COMPOSE"; exit 1; }
+	@mkdir -p /tmp/tollgate-demo-wallet
+	docker compose -f $(TOLLGATE_LAB_COMPOSE) run --rm --entrypoint cdk-cli \
+		-v /tmp/tollgate-demo-wallet:/w client -w /w mint http://mint:8085 100
+	docker compose -f $(TOLLGATE_LAB_COMPOSE) restart upstream
+	python3 scripts/record-demo.py \
+		--clientd-cmd "docker compose -f $(TOLLGATE_LAB_COMPOSE) run --rm --entrypoint python3 \
+			-v /tmp/tollgate-demo-wallet:/w -v $(CURDIR)/scripts:/prta:ro client \
+			/prta/tollgate-clientd.py --gateway upstream --mac 02:00:00:00:00:20 \
+			--wallet cdk-cli --wallet-dir /w --steps 1 --renew-below 45s --interval 1" \
+		--log-source docker:tg-upstream \
+		--duration 45 \
+		--out evidence/$(shell date +%F)-clientd-demo \
+		--title "PRTA laptop lane — clientd auto-top-up (cloud lab)" \
+		--export-video --export-speed 2
+
+.PHONY: test-laptop-clientd
+
+# tests/laptop/ — clientd from this host against a real TollGate router
+# (real ARP + NoDogSplash MAC registration). Requires provisioning, see
+# docs/tollgate-clientd.md "The laptop lane": LAPTOP_GATEWAY (router IP),
+# a funded cdk-cli wallet reachable in PATH, and SSH to the router.
+test-laptop-clientd: ## [hardware] clientd vs real router: ARP + NDS MAC lane (tests/laptop/)
+	$(call require_hardware_lock)
+	@test -n "$${LAPTOP_GATEWAY:-}" || { echo "$(RED)Set LAPTOP_GATEWAY (e.g. 10.99.99.1)$(RESET)"; exit 1; }
+	LAPTOP_GATEWAY="$${LAPTOP_GATEWAY}" $(PYTHON) -m pytest tests/laptop/ -v $(PYTEST_ARGS)
 
 # ===========================================================================
 #  FULL TEST SUITES
@@ -1036,15 +1070,7 @@ arch-test-full: ## Run all arch E2E tests (~4min)
 #  PYTEST / CI / REPORT TARGETS (from main branch)
 # ===========================================================================
 
-.PHONY: pytest-smoke pytest-critical pytest-extended pytest-api pytest-phone \
-        pytest-test pytest-scenarios pytest-hardware-smoke pymake-help \
-        pytest-smoke-mac pytest-critical-mac pytest-api-mac pytest-test-mac \
-        pytest-smoke-linux pytest-api-linux pytest-test-linux \
-        pytest-smoke-rust pytest-api-rust pytest-test-rust pytest-critical-rust \
-        pytest-smoke-rust-basic pytest-api-rust-basic \
-        luci deploy-ci deploy-ci-rust setup-python \
-        run-api run-api-quick run-phone run-captive-portal run-luci run-all run-profile \
-        collect render-report sanitize publish pr-smoke clean
+.PHONY: pytest-smoke pytest-critical pytest-extended pytest-api pytest-phone pytest-test pytest-scenarios pytest-hardware-smoke pymake-help install-path-preflight install-path-dry-run install-path-e2e fresh-flash-check bench-lock-status cudy-flash-check cudy-flash-capacity cudy-flash-dump-page cudy-flash-oem-upload cudy-flash-sysupgrade cudy-flash-install-tollgate cudy-flash-verify cudy-flash-tests pytest-smoke-mac pytest-critical-mac pytest-api-mac pytest-test-mac pytest-smoke-linux pytest-api-linux pytest-test-linux pytest-smoke-rust pytest-api-rust pytest-test-rust pytest-critical-rust pytest-smoke-rust-basic pytest-api-rust-basic luci deploy-ci deploy-ci-rust setup-python run-api run-api-quick run-phone run-captive-portal run-luci run-all run-profile collect render-report sanitize publish pr-smoke clean
 
 # --- Pytest test tiers (raw pytest, no canonical run dir) ---
 
@@ -1069,6 +1095,144 @@ pytest-test:
 pytest-scenarios: ## Hardware scenario tests (requires lock + routers.env)
 	$(call require_hardware_lock)
 	@TOLLGATE_USE_HARDWARE_LOCK=1 pytest tests/scenarios/ -m hardware -v --tb=short
+
+# --- Dual-install-path e2e (fresh flash -> direct package / installer -> happy path) ---
+#
+# The bench MT3000 is a SINGLE-OWNER resource: every router-touching step runs
+# under the sanctioned bench lock (`bench-with-lock` / `bench-deploy-apk`, see
+# the tollgate-development skill reference `bench-router-single-owner`).  When
+# that helper is not installed the lock is taken in-process by lib/bench_lock.py
+# on the same flock + the same holder-line format.
+
+install-path-preflight: ## Flash-free, network-free: does this release support the POLICY/guard assertion? [exit 3 = unsupported]
+	@PYTHONPATH=. python3 -c "import os; from lib import install_paths as ip; r = ip.policy_preflight(os.environ.get('TOLLGATE_FEED_TAG') or ip.FEED_RELEASE_DEFAULT); print(r.message()); raise SystemExit(0 if r.supported else 3)"
+
+install-path-dry-run: ## Flash-free dual-install-path checks: pre-flight, artifact fetch+hash, same-format payload identity, installer shape, image verify, lock state
+	@if command -v bench-with-lock >/dev/null 2>&1; then \
+		bench-with-lock --purpose "install-path dry run" --task $${TOLLGATE_BENCH_TASK_ID:-t_a05094ad} -- \
+			env PYTHONPATH=. TOLLGATE_APK_TOOL=$${TOLLGATE_APK_TOOL:-$$HOME/.cache/apk-v3/apk.static} \
+			python3 scripts/install-path-e2e.py --dry-run --host $(TOLLGATE_SSH_HOST) \
+			--md-out docs/install-paths-dry-run-report.md; \
+	else \
+		echo "note: bench-with-lock not installed — using the in-process lock (lib/bench_lock.py)"; \
+		env PYTHONPATH=. TOLLGATE_APK_TOOL=$${TOLLGATE_APK_TOOL:-$$HOME/.cache/apk-v3/apk.static} \
+			python3 scripts/install-path-e2e.py --dry-run --host $(TOLLGATE_SSH_HOST) \
+			--md-out docs/install-paths-dry-run-report.md; \
+	fi
+
+install-path-e2e: ## LOCKED bench phase: wallet gate + bench lock + fresh flash + both install paths + happy path (needs TOLLGATE_LN_ADDRESS + TOLLGATE_ENABLE_SYSUPGRADE_FLASHING=true)
+	$(call require_hardware_lock)
+	@PYTHONPATH=. python3 scripts/install-path-e2e.py --flash-and-run --host $(TOLLGATE_SSH_HOST)
+
+fresh-flash-check: ## Read-only fresh-flash preconditions (image hash, wallet drain gate, lock state)
+	@PYTHONPATH=. python3 scripts/fresh-flash.py --check
+
+bench-lock-status: ## Show who holds the shared bench lock (~/.hermes/state/bench-mt3000.lock)
+	@python3 -m lib.bench_lock status
+
+# --- Cudy WR3000 v1 flash lane (procedure: docs/cudy-wr3000-flashing.md) ---
+#
+# Two stages, no case opening: Cudy's signed transitional image through the vendor
+# web UI, then a mainline sysupgrade, then the handover into the EXISTING install
+# path (install-path-e2e below).  Every mutating target needs BOTH
+# TOLLGATE_ENABLE_SYSUPGRADE_FLASHING=true AND --yes-i-mean-it (pass it in CUDY_ARGS).
+#
+# EVIDENCE (2026-09-27): stages 1 and 2 were verified on a real Cudy WR3000 v1; the
+# vendor upload endpoint/file-field are PINNED from that run.  The capacity preflight
+# and the volatile install are implemented + unit-tested but NOT hardware-verified.
+#
+# Lock policy (explicit): the Cudy is a SEPARATE physical box from the MT3000 bench,
+# so these targets do NOT take the shared bench flock.  Set
+# TOLLGATE_CUDY_TAKE_BENCH_LOCK=true to serialise on the Cudy's own lock.
+
+CUDY_ARGS ?=
+
+cudy-flash-check: ## Read-only Cudy preconditions: image hashes, model guard, page class, staged commands
+	@PYTHONPATH=. python3 scripts/cudy-flash.py check $(CUDY_ARGS)
+
+cudy-flash-capacity: ## Read-only flash-capacity preflight (the 16 MB device vs the 21 MB payload)
+	@PYTHONPATH=. python3 scripts/cudy-flash.py capacity $(CUDY_ARGS)
+
+cudy-flash-dump-page: ## STAGE 1 evidence-first: log the real vendor firmware page + selectors (uploads NOTHING)
+	@PYTHONPATH=. python3 scripts/cudy-flash.py oem-upload --dump-page $(CUDY_ARGS)
+
+cudy-flash-oem-upload: ## STAGE 1 (destructive): vendor-UI upload of the Cudy-signed transitional image (switch + --yes-i-mean-it)
+	@PYTHONPATH=. python3 scripts/cudy-flash.py oem-upload $(CUDY_ARGS)
+
+cudy-flash-sysupgrade: ## STAGE 2 (destructive): mainline sysupgrade -n over ssh stdin (switch + --yes-i-mean-it)
+	@PYTHONPATH=. python3 scripts/cudy-flash.py sysupgrade $(CUDY_ARGS)
+
+cudy-flash-install-tollgate: ## STAGE 3: set the root password, enable Wi-Fi, then hand over to the existing install path
+	@PYTHONPATH=. python3 scripts/cudy-flash.py install-tollgate $(CUDY_ARGS)
+#  add --volatile (and --package <local .apk>) for the tmpfs install: the 16 MB flash
+#  cannot hold the 21 MB payload, so the big binaries live in /tmp and IS LOST ON REBOOT
+
+cudy-flash-verify: ## Read-only post-install ladder (board, Wi-Fi ifaces, module kind:10021)
+	@PYTHONPATH=. python3 scripts/cudy-flash.py verify $(CUDY_ARGS)
+
+cudy-flash-tests: ## Offline unit tests for the Cudy lane (no router, no network)
+	@python3 -m pytest tests/unit/test_cudy_flash.py -q
+
+# --- Second-purchase bench lanes (procedure + measured result: docs/second-purchase-bench.md)
+#
+# Every router-touching step rides the sanctioned single-owner bench lock; the e2e takes it
+# itself (re-exec under `bench-lock.sh exec`) unless it is already inside a window.
+# NOTHING HERE SPENDS ANYTHING unless you pass ARGS=--purchase (the e2e) or ARGS=--yes (mint).
+
+SECOND_PURCHASE_ARGS ?=
+BENCH_TOKEN_AMOUNT   ?= 64
+BENCH_TOKEN_ARGS     ?=
+TOKEN_FILE           ?=
+
+.PHONY: second-purchase-e2e second-purchase-detached bench-snapshot bench-snapshot-payload \
+        bench-token-mint bench-token-verify bench-tests device-identity-tests \
+        device-identity-claim device-identity-verify
+
+second-purchase-e2e: ## Second purchase on the bench: DRY RUN default (ARGS=--purchase TOKEN_1=.. TOKEN_2=.. spends)
+	@bash scripts/mt3000-bench/second-purchase-e2e.sh $(SECOND_PURCHASE_ARGS)
+
+second-purchase-detached: ## Launch the long second-purchase run detached (systemd-run --user), then poll the journal
+	@systemd-run --user --collect --unit=tg-second-purchase-$$(date +%s) \
+		bash scripts/mt3000-bench/second-purchase-e2e.sh $(SECOND_PURCHASE_ARGS)
+
+bench-snapshot: ## Router-side snapshot: ndsctl, nft guard counters, /balance, module log (needs the bench window)
+	@bash scripts/mt3000-bench/router-snapshot.sh snapshot --label "make bench-snapshot"
+
+bench-snapshot-payload: ## Print the on-router snapshot payload locally (no ssh, no lock) — review what runs on the box
+	@bash scripts/mt3000-bench/router-snapshot.sh render
+
+bench-token-mint: ## Mint one token for the bench (DRY RUN; ARGS=--yes to actually mint)
+	@scripts/mt3000-bench/bench-token.py mint --amount $(BENCH_TOKEN_AMOUNT) $(BENCH_TOKEN_ARGS)
+
+bench-token-verify: ## NUT-07: TOKEN_FILE must read back fully UNSPENT before it is spent (exit 1 if not)
+	@test -n "$(TOKEN_FILE)" || { echo "set TOKEN_FILE=<path to a cashu token file>"; exit 1; }
+	@scripts/mt3000-bench/bench-token.py verify --token-file $(TOKEN_FILE) $(BENCH_TOKEN_ARGS)
+
+bench-tests: ## Offline negative-control suite: the bench lock (hermetic: never the production lock), the e2e lanes, the snapshot payload, and the live-run guard controls (no router)
+	@bash tests/mt3000-bench/run-tests.sh
+
+# --- The bench DEVICE PIN (docs/bench-device-identity.md)
+#
+# Two routers can answer on ONE address (2026-09-28: GL-MT3000 on enp0s31f6 + Cudy WR3000 on a
+# USB dongle, both at 192.168.1.1) and a flash/install then lands on the wrong box. Pin the box
+# once, then call the preflight before ANY destructive step:
+#
+#   scripts/bench/device-identity.sh verify --name bench-mt3000 || exit $?
+#
+# bench-deploy-apk.sh runs it itself when BENCH_BOX (or BENCH_DEVICE_IDENTITY) is set.
+DEVICE_BOX ?= bench-mt3000
+DEVICE_IFACE ?=
+DEVICE_SRC ?=
+
+device-identity-claim: ## Pin a box, e.g. make device-identity-claim DEVICE_BOX=bench-mt3000 DEVICE_IFACE=enp0s31f6 DEVICE_SRC=192.168.1.200
+	@test -n "$(DEVICE_IFACE)" || { echo "set DEVICE_IFACE=<host interface> (and DEVICE_SRC=<host address on it>)"; exit 2; }
+	@scripts/bench/device-identity.sh claim --name $(DEVICE_BOX) --iface $(DEVICE_IFACE) $(if $(DEVICE_SRC),--src $(DEVICE_SRC),)
+
+device-identity-verify: ## Fail-closed preflight: is the box on this address the box we claimed?
+	@scripts/bench/device-identity.sh verify --name $(DEVICE_BOX)
+
+device-identity-tests: ## Offline suite for the device pin: 28 tests, no router, PATH doubles + non-vacuity and mutation controls
+	@bash tests/bench-device-identity/run-tests.sh
 
 pytest-hardware-smoke: ## Migrated smoke-* scenario subset
 	$(call require_hardware_lock)
@@ -1266,9 +1430,51 @@ record-portal: ## Record portal demo videos WITH cursor highlight (desktop+mobil
 	@if [ ! -d node_modules ]; then echo "$(YELLOW)Run npm install first$(RESET)"; exit 1; fi
 	@node scripts/record-portal-highlight.mjs
 
+# --- Pre-auth probes ---
+
+.PHONY: probe-ports
+probe-ports: ## Pre-auth port/UI sweep from a captive-LAN client (no SSH, no creds)
+	@bash scripts/tollgate-port-sweep.sh $(if $(HOST),--host $(HOST),)
+
 # --- Clean ---
 
 clean:
 	rm -rf $(RESULTS_DIR)/*
 	rm -f report.html
 	rm -rf .pytest_cache __pycache__
+
+# ─── User-story tests (device-agnostic, labgrid-integrated) ─────────────
+
+.PHONY: pytest-stories pytest-story-pay pytest-story-expiry pytest-story-degraded
+
+pytest-stories:
+	pytest tests/stories/ --no-deploy --timeout-method=signal -v
+
+pytest-story-pay:
+	pytest tests/stories/test_user_pays_and_gets_internet.py --no-deploy --timeout-method=signal -v
+
+pytest-story-expiry:
+	pytest tests/stories/test_session_expiry_and_repayment.py --no-deploy --timeout-method=signal -v
+
+pytest-story-degraded:
+	pytest tests/stories/test_degraded_mode.py --no-deploy --timeout-method=signal -v
+
+# Story/TIP coverage: regenerate the machine-generated mapping
+# (docs/user-stories.generated.md) from the pytest.mark.story/tip marks.
+# Selection: pytest --story <ID> | pytest --tip <TIP-xx> (both combine).
+story-report:
+	python3 scripts/story-coverage.py
+	@echo "--- summary ---"
+	@head -n 12 docs/user-stories.generated.md
+
+extensive-test: ## One-command extensive-test sweep (see docs/extensive-test.md)
+	@bash scripts/extensive-test.sh
+
+# --- Film narration (attach a narrated video to any test lane) ---
+
+.PHONY: film-narrate film-publish
+film-narrate: ## Narrate a recording: make film-narrate VIDEO=clip.mp4 TIMELINE=narration.json OUT=film.mp4 [ENGINE=kokoro VOICE=af_heart]
+	@python3 scripts/film-narrate.py --video $(VIDEO) --timeline $(TIMELINE) --out $(OUT) $(if $(ENGINE),--engine $(ENGINE),) $(if $(VOICE),--voice $(VOICE),)
+
+film-publish: ## Publish film artifacts to Blossom: make film-publish RUN=results/films/<id>
+	@python3 scripts/publish-film.py --run $(RUN) $(if $(SERVER),--server $(SERVER),)

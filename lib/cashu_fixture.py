@@ -58,7 +58,6 @@ import pytest
 from lib.cashu import (
     CashuMint,
     CdkCliWallet,
-    HttpMinter,
     MintUnavailableError,
     TokenPool,
     create_minter,
@@ -183,7 +182,7 @@ def cleanup_token(minted: MintedToken) -> None:
     1. Records whether the token was consumed by the test (audit trail).
     2. For CLI-based minters (``CashuMint`` / ``CdkCliWallet``) removes the
        per-mint ephemeral work directory so no wallet DB or key material leaks
-       on disk. ``HttpMinter`` and ``TokenPool`` hold no local state to clean.
+       on disk. ``TokenPool`` holds no local state to clean.
 
     Testnut FakeWallet tokens have no real value, so an unconsumed token is
     logged as a warning rather than treated as a hard failure.

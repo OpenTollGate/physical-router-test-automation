@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# validate.sh — one entry point for validating any TollGate build.
+#
+#   scripts/validate.sh --tag v0.6.0-rc6           # official release tag
+#   scripts/validate.sh --pr 123                   # any PR (resolves head SHA)
+#   scripts/validate.sh --ref abc1234              # any commit
+#   scripts/validate.sh --artifact path/to/ipk     # pre-built artifact
+#
+# All paths share the same pipeline via lib/venue.py:
+#   resolve source → build (if needed) → venue ensure → deploy → gate → suite
+#
+# Venue selection:
+#   --venue virtual (default) | bay --address 192.168.105.1 | island
+#
+# Session-safe: self-launches under a transient systemd --user unit.
+set -uo pipefail
+
+REPO_ROOT=$(git -C "$(dirname -- "$0")" rev-parse --show-toplevel)
+cd "$REPO_ROOT"
+
+if [ "${TOLLGATE_VALIDATE_IN_SYSTEMD:-}" != "1" ] && [ -n "${XDG_RUNTIME_DIR:-}" ] \
+    && command -v systemd-run >/dev/null 2>&1; then
+    exec systemd-run --user --collect --same-dir --pipe --wait \
+        --setenv=TOLLGATE_VALIDATE_IN_SYSTEMD=1 \
+        --unit="validate-$(date +%s)" "$0" "$@"
+fi
+
+# ── Args ───────────────────────────────────────────────────────────────────
+TAG="" ; PR="" ; REF="" ; ARTIFACT=""
+VENUE_TYPE="virtual" ; VENUE_ADDRESS="" ; VENUE_PASSWORD=""
+SKIP_BUILD=false ; SKIP_SUITE=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --tag)          TAG="$2"; shift 2 ;;
+        --pr)           PR="$2"; shift 2 ;;
+        --ref)          REF="$2"; shift 2 ;;
+        --artifact)     ARTIFACT="$2"; shift 2 ;;
+        --venue)        VENUE_TYPE="$2"; shift 2 ;;
+        --address)      VENUE_ADDRESS="$2"; shift 2 ;;
+        --password)     VENUE_PASSWORD="$2"; shift 2 ;;
+        --skip-build)   SKIP_BUILD=true; shift ;;
+        --skip-suite)   SKIP_SUITE=true; shift ;;
+        *) echo "unknown: $1" >&2; exit 1 ;;
+    esac
+done
+
+# ── Resolve source ─────────────────────────────────────────────────────────
+TMBG="${TOLLGATE_TMBG_CHECKOUT:-$HOME/src/tollgate-module-basic-go}"
+NODE_BIN="${TOLLGATE_NODE_BIN:-$HOME/laneA/tools/node-v22.17.0-linux-x64/bin}"
+GO_PIN="${TOLLGATE_GO_PIN:-go1.26.8}"
+FEED_API="https://api.github.com/repos/FreedomTechFeed/packages/releases?per_page=30"
+PY="${TOLLGATE_PYTHON:-$(command -v python3)}"
+
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+OUT="results/validate-$STAMP"
+mkdir -p "$OUT"
+log() { echo "[validate $(date +%H:%M:%S)] $*" | tee -a "$OUT/validate.log"; }
+fail() { echo "[validate] FAIL: $*" | tee -a "$OUT/validate.log" >&2; exit 1; }
+
+if [ -n "$PR" ]; then
+    log "resolving PR #$PR → head SHA"
+    REF=$(gh pr view "$PR" -R OpenTollGate/tollgate-module-basic-go \
+        --json headRefOid --jq .headRefOid 2>/dev/null) \
+        || fail "could not resolve PR #$PR"
+    TAG="${TAG:-PR-${PR}}"
+    log "PR #$PR → commit $REF, label $TAG"
+fi
+
+COMMIT="$REF"
+if [ -n "$TAG" ] && [ -z "$COMMIT" ]; then
+    if [ "$TAG" = "PR-"* ] || [ -z "$TAG" ]; then
+        fail "no source to build from"
+    fi
+    log "resolving source commit from feed tag $TAG"
+    AURL=$(gh api "repos/FreedomTechFeed/packages/releases/tags/$TAG" \
+        --jq '.assets[] | select(.name | test("aarch64_cortex-a53.*\\.ipk$")) | .browser_download_url' 2>/dev/null | head -1)
+    [ -n "$AURL" ] || fail "no aarch64 asset for $TAG"
+    PROBE=$(mktemp -d)
+    curl -fsSL --max-time 60 -o "$PROBE/p.ipk" "$AURL" || fail "feed ipk download failed"
+    (cd "$PROBE" && tar xzf p.ipk ./data.tar.gz 2>/dev/null && tar xzf data.tar.gz ./usr/bin/tollgate-wrt 2>/dev/null) || true
+    # Try the -g<sha> stamp first; fall back to the release's target commitish
+    STAMPED=$(strings "$PROBE/usr/bin/tollgate-wrt" 2>/dev/null | grep -m1 -oE 'g[0-9a-f]{7,10}' | tr -d g || true)
+    if [ -z "$STAMPED" ] || [ "$STAMPED" = "0123456" ]; then
+        # Stamp missing or dummy — use the release metadata
+        STAMPED=$(gh api "repos/FreedomTechFeed/packages/releases/tags/$TAG" \
+            --jq '.target_commitish' 2>/dev/null || true)
+        # target_commitish may be a branch name, not a SHA — resolve it
+        if [ -n "$STAMPED" ] && [ ${#STAMPED} -lt 8 ]; then
+            STAMPED=$(gh api "repos/OpenTollGate/tollgate-module-basic-go/commits/$STAMPED" \
+                --jq '.sha[:7]' 2>/dev/null || true)
+        fi
+    fi
+    rm -rf "$PROBE"
+    [ -n "$STAMPED" ] || fail "could not resolve source commit"
+    COMMIT="$STAMPED"
+    log "feed stamp → commit $COMMIT"
+fi
+
+# ── Build (or use provided artifact) ───────────────────────────────────────
+if [ -n "$ARTIFACT" ]; then
+    [ -f "$ARTIFACT" ] || fail "no artifact at $ARTIFACT"
+    log "using provided artifact: $ARTIFACT"
+elif [ "$SKIP_BUILD" = true ]; then
+    ARTIFACT=$(ls -t "$TMBG"/packaging/tollgate-wrt_*_x86_64.ipk 2>/dev/null | head -1)
+    [ -n "$ARTIFACT" ] || fail "no pre-built x86_64 ipk found"
+    log "using latest build: $ARTIFACT"
+else
+    # If the feed publishes the arch we need, use the actual artifact —
+    # feed-faithful, no build step, no stamp-lag risk
+    case "$VENUE_TYPE" in
+        bay|island) FEED_ARCH="mipsel_24kc-ramips-mt7621" ; FEED_FMT="apk" ;;
+        *)          FEED_ARCH="x86_64-x86-64"            ; FEED_FMT="ipk" ;;
+    esac
+    if [ -n "$TAG" ]; then
+        log "checking feed for $FEED_ARCH artifact at $TAG"
+        FEED_URL=$(gh api "repos/FreedomTechFeed/packages/releases/tags/$TAG" \
+            --jq '.assets[].browser_download_url' 2>/dev/null | grep "${FEED_ARCH}.*${FEED_FMT}$" | head -1)
+        if [ -n "$FEED_URL" ]; then
+            log "downloading official feed artifact: $FEED_URL"
+            ARTIFACT="/tmp/validate-feed-artifact.${FEED_FMT}"
+            curl -fsSL --max-time 120 -o "$ARTIFACT" "$FEED_URL" \
+                || fail "feed artifact download failed"
+            log "using feed artifact: $ARTIFACT"
+        fi
+    fi
+    if [ -z "$ARTIFACT" ]; then
+        [ -n "$COMMIT" ] || fail "no source commit to build from"
+        case "$VENUE_TYPE" in
+            bay|island) BUILD_ARCH=mipsel_24kc ;;
+            *) BUILD_ARCH=x86_64 ;;
+        esac
+        log "building $BUILD_ARCH from $COMMIT"
+        git -C "$TMBG" fetch origin main -q || fail "tmbg fetch failed"
+        git -C "$TMBG" checkout -q "$COMMIT" || fail "checkout $COMMIT failed"
+        (cd "$TMBG" && export PATH="$NODE_BIN:$PATH" \
+            && make portal-build \
+            && ARCH=$BUILD_ARCH GOTOOLCHAIN="$GO_PIN" PKG_VERSION="${TAG:-dev}" \
+               bash packaging/local-build-ipk.sh) >> "$OUT/build.log" 2>&1 \
+            || fail "build failed (see $OUT/build.log)"
+        if [ "$BUILD_ARCH" = "x86_64" ]; then
+            ARTIFACT=$(ls -t "$TMBG"/packaging/tollgate-wrt_*_x86_64.ipk | head -1)
+        else
+            EPOCH=$(git -C "$TMBG" log -1 --format=%ct "$COMMIT")
+            sudo -n systemd-run --collect --wait --pipe --unit="tg-build-$$" \
+                /bin/bash -c "export PATH=/home/user/.local/share/mise/installs/go/1.27.1/bin:/home/user/laneA/tools/node-v22.17.0-linux-x64/bin:\$PATH; export HOME=/root SOURCE_DATE_EPOCH=$EPOCH TG_GIT_COMMIT=${COMMIT:0:7}; cd $TMBG && SDK_TAG=ramips-mt7621-25.12.0 PACKAGE_FORMAT=apk PACKAGE_VERSION=${TAG:-dev} GOTOOLCHAIN=$GO_PIN bash scripts/build-sdk-package.sh" >> "$OUT/build.log" 2>&1 \
+                || fail "mipsel build failed (see $OUT/build.log)"
+            ARTIFACT=$(sudo -n ls -t /tmp/tollgate-build-artifacts/apk-ramips-mt7621-25.12.0/*.apk 2>/dev/null | head -1)
+            [ -n "$ARTIFACT" ] || fail "mipsel artifact not found after build"
+        fi
+        log "built: $ARTIFACT"
+    fi
+fi
+
+# ── Venue + deploy + suite (via lib/venue.py) ──────────────────────────────
+log "venue: $VENUE_TYPE${VENUE_ADDRESS:+ @ $VENUE_ADDRESS}"
+VARGS="--type $VENUE_TYPE"
+[ -n "$VENUE_ADDRESS" ] && VARGS="$VARGS --address $VENUE_ADDRESS"
+[ -n "$VENUE_PASSWORD" ] && VARGS="$VARGS --password $VENUE_PASSWORD"
+
+"$PY" -m lib.venue ensure $VARGS >> "$OUT/venue.log" 2>&1 \
+    || fail "venue ensure failed (see $OUT/venue.log)"
+
+"$PY" -m lib.venue deploy $VARGS --artifact "$ARTIFACT" >> "$OUT/deploy.log" 2>&1 \
+    || fail "deploy failed (see $OUT/deploy.log)"
+log "health gate green"
+
+if [ "$SKIP_SUITE" = true ]; then
+    log "VERDICT: deploy-green (suite skipped)"
+    exit 0
+fi
+
+"$PY" -m lib.venue suite $VARGS --test tests/api/test_payment_rejection_semantics.py \
+    >> "$OUT/suite.log" 2>&1
+RC=$?
+if [ $RC -eq 0 ]; then
+    log "VERDICT: GREEN"
+else
+    log "VERDICT: RED (rc=$RC — see $OUT/suite.log)"
+fi
+exit $RC

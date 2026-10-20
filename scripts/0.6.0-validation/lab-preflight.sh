@@ -43,8 +43,8 @@ echo "$NFT" | grep -qE 'ip saddr 10\.99\.99\.0/24.*masquerade'; ck "nft masquera
 # 6. NDS running with preauth rules for :2121/:2051
 $SSH "ndsctl status 2>/dev/null | head -3" > /tmp/pf-nds.txt 2>/dev/null || true; grep -q NoDogSplash /tmp/pf-nds.txt; ck "NDS running" $? "/etc/init.d/nodogsplash start"
 $SSH "iptables-save 2>/dev/null | grep -E '^-A ndsRTR'" > /tmp/pf-ndsfw.txt 2>/dev/null || true
-grep -q 2121 /tmp/pf-ndsfw.txt; ck "NDS preauth allows :2121" $? "see TESTING.md NDS preauth rules"
-grep -q 2051 /tmp/pf-ndsfw.txt; ck "NDS preauth allows :2051" $? "see TESTING.md NDS preauth rules"
+grep -q 2121 /tmp/pf-ndsfw.txt; ck "NDS preauth allows :2121" $? "see docs/TESTING.md NDS preauth rules"
+grep -q 2051 /tmp/pf-ndsfw.txt; ck "NDS preauth allows :2051" $? "see docs/TESTING.md NDS preauth rules"
 
 # 7. mint reachable + latency (signut latency blips cascade into degraded mode)
 MT0=$(date +%s%N); MRESP=$(curl -s -m 10 "$MINT/v1/info" | head -c 40); MT1=$(date +%s%N)
@@ -68,6 +68,23 @@ else ck "token inventory" 1 "scp tokens.json to ai-legion:/tmp/phase-a/"; fi
 ip rule show | grep -q "iif tg-poc-br lookup 2000"; ck "policy rule: router-bounced -> wlo1 table" $? "sudo ip rule add pref 100 iif tg-poc-br lookup 2000; sudo ip route replace default via 192.168.13.1 dev wlo1 table 2000"
 $SSH "iptables -C FORWARD -i br-lan -o br-lan ! -s 10.99.99.0/24 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT" >/dev/null 2>&1; ck "router lab_shim (wan-zone parity)" $? "source /tmp/tg-lib.sh && lab_shim"
 [ "$(sysctl -n net.ipv4.conf.tg-poc-br.rp_filter)" = "0" ]; ck "rp_filter=0 on tg-poc-br" $? "sudo sysctl -w net.ipv4.conf.tg-poc-br.rp_filter=0"
+
+# 10. image doctor — the stock minimal image ships WITHOUT the wifi/firewall
+#     tooling every bench session has had to rediscover (2026-10-09 lane:
+# ~1h lost). Each check names its opkg remedy. Section 11 of the campaign
+# depends on these for the topology scenarios (veth/ip-full) and the hwsim
+# suites (wpad).
+IMG_REMEDY="on the DUT: opkg update && opkg install wpad-basic-mbedtls kmod-veth ip-full kmod-nf-ipt kmod-nft-compat; then (missing depmod only): for p in 1 2 3; do cd /lib/modules/\$(uname -r) && for f in *.ko; do insmod \$f 2>/dev/null; done; done"
+DEP=$($SSH "wc -l < /lib/modules/\$(uname -r)/modules.dep 2>/dev/null || echo 0" 2>/dev/null)
+RC=0; [ "${DEP:-0}" -gt 5 ] || RC=1
+ck "modules.dep populated (${DEP:-0} lines — modprobe works)" $RC "$IMG_REMEDY"
+ZERO=$($SSH "for m in ip_tables nf_tables; do f=/lib/modules/\$(uname -r)/\$m.ko; [ -f \$f ] && [ ! -s \$f ] && echo \$m; done" 2>/dev/null)
+RC=0; [ -z "$ZERO" ] || RC=1
+ck "no zero-byte kmods (${ZERO:-none} — 0-byte .ko = mmap fail = 'Protocol not supported')" $RC "opkg install --force-reinstall kmod-nf-ipt kmod-nft-compat"
+$SSH "test -d /sys/module/nf_tables || echo missing" 2>/dev/null | grep -q missing; ck "nf_tables loaded (fw4 ruleset can exist)" $? "$IMG_REMEDY"
+$SSH "command -v hostapd >/dev/null" >/dev/null 2>&1; ck "hostapd/wpad present (hwsim suites)" $? "opkg install wpad-basic-mbedtls"
+$SSH "test -d /sys/module/veth" >/dev/null 2>&1; ck "veth module (scenario netns clients)" $? "opkg install kmod-veth"
+$SSH "test -x /usr/libexec/ip-full" >/dev/null 2>&1; ck "ip-full (netns orchestration)" $? "opkg install ip-full"
 
 echo; [ $ERR -eq 0 ] && echo "LAB READY" || echo "LAB NOT READY — fix the above before running phases"
 exit $ERR

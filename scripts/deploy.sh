@@ -44,7 +44,11 @@ done
 GIT_HASH="${POSITIONAL[0]:?Usage: $0 <git-hash|local.ipk> [--restart] [--build-only] [router-ip] [router-user] [arch]}"
 ROUTER_IP="${POSITIONAL[1]:-${TOLLGATE_ROUTER_IP:-192.168.13.112}}"
 ROUTER_USER="${POSITIONAL[2]:-root}"
-ARCH="${POSITIONAL[3]:-${TOLLGATE_ROUTER_ARCH:-aarch64_cortex-a53}}"
+
+# The package arch comes from the device, never a default: explicit arg,
+# then the router inventory. See lib/openwrt-arch.sh.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/openwrt-arch.sh"
+ARCH="$(resolve_openwrt_arch "${POSITIONAL[3]:-}")"
 
 # --- Resolve artifact source ----------------------------------------------
 # A prebuilt .ipk (explicit env, or first arg pointing at an .ipk file) short-
@@ -83,7 +87,8 @@ else
 
   cd "$TMPDIR/repo"
 
-  echo "==> Building Go binaries for linux/arm64..."
+  GO_ENV="$(go_env_for_openwrt_arch "$ARCH")"
+  echo "==> Building Go binaries for linux (${GO_ENV})..."
   LDFLAGS="-s -w -X 'github.com/OpenTollGate/tollgate-module-basic-go/src/cli.Version=${VERSION}' -X 'github.com/OpenTollGate/tollgate-module-basic-go/src/cli.GitCommit=${GIT_HASH}' -X 'github.com/OpenTollGate/tollgate-module-basic-go/src/cli.BuildTime=${BUILD_TIME}'"
 
   # Absolute BIN_DIR: `go build -C <dir> -o <rel>` resolves -o relative to the
@@ -92,8 +97,11 @@ else
   # straight into an absolute repo-root bin/ directory.
   BIN_DIR="$TMPDIR/repo/bin"
   mkdir -p "$BIN_DIR"
-  env GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -C src -o "$BIN_DIR/tollgate-wrt" -trimpath -ldflags="$LDFLAGS" main.go
-  env GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -C src/cmd/tollgate-cli -o "$BIN_DIR/tollgate" -trimpath -ldflags="$LDFLAGS"
+  # Package build (`.`), not `main.go`: single-file builds miss every other
+  # file of package main (undefined symbols on any arch — pre-existing bug
+  # this line fixes alongside the arch mapping).
+  env GOOS=linux $GO_ENV CGO_ENABLED=0 go build -C src -o "$BIN_DIR/tollgate-wrt" -trimpath -ldflags="$LDFLAGS" .
+  env GOOS=linux $GO_ENV CGO_ENABLED=0 go build -C src/cmd/tollgate-cli -o "$BIN_DIR/tollgate" -trimpath -ldflags="$LDFLAGS"
 
   echo "==> Building payload tree..."
   PAYLOAD="$TMPDIR/payload"

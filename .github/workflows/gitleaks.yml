@@ -5,8 +5,11 @@ on:
     branches: [main]
   pull_request:
   schedule:
-    - cron: "1 5 * * *"
+    - cron: "23 6 * * *"
 
 jobs:
   gitleaks:
-    uses: Amperstrand/.github/.github/workflows/gitleaks.yml@main
+    # Org-wide reusable scanner (single definition, OpenTollGate/.github —
+    # ported from Amperstrand/.github#1 in the tollgate consolidation #758;
+    # this repo's rules/allowlists live in the .gitleaks.toml beside this).
+    uses: OpenTollGate/.github/.github/workflows/gitleaks.yml@main

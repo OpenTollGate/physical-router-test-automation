@@ -1,3 +1,4 @@
+import os
 import re
 import time
 import json
@@ -219,6 +220,86 @@ def skip_if_no_luci(router):
         pytest.skip("Cannot check LuCI availability")
 
 
+# Client-side Playwright capability detection (issue #104)
+
+_PW_PROBE_OK_MARKER = "PW_OK"
+_client_pw_probe_cache: dict[str, tuple[bool, str]] = {}
+
+
+def _client_pw_probe_cmd() -> str:
+    """Build the remote probe: import playwright, start it, launch headless Chromium.
+
+    Verifies BOTH the python package and a runnable browser — the old inline
+    check only imported the package and missed missing browsers.
+
+    TOLLGATE_PLAYWRIGHT_CHROMIUM_PATH overrides the launched executable
+    (custom browser, or a nonexistent path to force the probe absent in
+    tests). Values containing quotes/backslashes are ignored (shell-safety).
+    """
+    exe = os.environ.get("TOLLGATE_PLAYWRIGHT_CHROMIUM_PATH", "").strip()
+    if exe and not re.search(r"[\"'\\]", exe):
+        launch = (
+            "p.chromium.launch(headless=True, args=[\"--no-sandbox\"], "
+            f"executable_path=\"{exe}\")"
+        )
+    else:
+        launch = "p.chromium.launch(headless=True, args=[\"--no-sandbox\"])"
+    return (
+        "python3 -c 'from playwright.sync_api import sync_playwright; "
+        "p = sync_playwright().start(); "
+        f"b = {launch}; "
+        "b.close(); p.stop(); print(\"PW_OK\")' 2>&1"
+    )
+
+
+def client_playwright_functional(client) -> tuple[bool, str]:
+    """Probe once per session whether the client can run Playwright + Chromium.
+
+    Returns ``(functional, diag)``; ``diag`` carries the probe output on
+    failure (import errors, missing browser, launch failures).
+    """
+    ident = getattr(client, "_client_ip", None) or "client"
+    cached = _client_pw_probe_cache.get(ident)
+    if cached is not None:
+        return cached
+
+    cmd = _client_pw_probe_cmd()
+    try:
+        if hasattr(client, "exec"):
+            out = client.exec(cmd, timeout=60)
+        elif hasattr(client, "_exec"):
+            out = client._exec(cmd, timeout=60)
+        else:
+            result = (False, "client adapter has no remote exec")
+            _client_pw_probe_cache[ident] = result
+            return result
+    except Exception as exc:
+        result = (False, f"probe failed: {exc}")
+        _client_pw_probe_cache[ident] = result
+        return result
+
+    out = (out or "").strip()
+    # A line EQUAL to the marker only — never a substring match: a failing
+    # probe's traceback echoes the source line, which contains print("PW_OK").
+    ok = any(line.strip() == _PW_PROBE_OK_MARKER for line in out.splitlines())
+    result = (ok, "ok" if ok else out.replace("\n", " ")[:160])
+    _client_pw_probe_cache[ident] = result
+    return result
+
+
+def skip_if_no_client_playwright(client) -> None:
+    """Skip browser-driven visual tests when client Playwright is not usable.
+
+    Feature-detection gate (AGENTS.md "Test Gating Strategies"): visual portal
+    tests SKIP with a named reason instead of FAILING when the client VM lacks
+    a functional Playwright/Chromium (issue #104). Probe result is cached per
+    session — installing Playwright mid-session requires a rerun.
+    """
+    functional, diag = client_playwright_functional(client)
+    if not functional:
+        pytest.skip(f"Playwright not functional in this environment ({diag})")
+
+
 INCIDENTS_URL = "https://github.com/OpenTollGate/tollgate-knowledgebase/tree/main/incidents"
 
 
@@ -299,7 +380,10 @@ def is_full_merchant(router) -> bool:
     body = router.api_body("/")
     try:
         data = json.loads(body)
-        if data.get("kind") != 10021:
+        # 10021 is the canonical nostr ad kind; the deployed build line
+        # self-reports 21023 with identical price tags — accept both
+        # (the run-local health probe already greps "10021|21023").
+        if data.get("kind") not in (10021, 21023):
             return False
         tags = data.get("tags", [])
         return any(
@@ -311,12 +395,23 @@ def is_full_merchant(router) -> bool:
 
 
 def is_degraded(router) -> bool:
+    # kind 21023 is the NORMAL advertisement kind — every healthy ad has
+    # it, so keying on kind made wait_for_degraded return instantly and
+    # every dependent assert raced the degraded transition (transient
+    # empty ad bodies surfaced as JSONDecodeError). Degraded is signaled
+    # by the level/code TAGS (level=warning, code=no-reachable-mints).
     body = router.api_body("/")
     try:
         data = json.loads(body)
-        return data.get("kind") == 21023
     except json.JSONDecodeError:
         return False
+    if data.get("kind") != 21023:
+        return False
+    return any(
+        "no-reachable" in str(t).lower() or "degraded" in str(t).lower()
+        for tag in data.get("tags", [])
+        for t in tag
+    )
 
 
 def wait_for_full_merchant(router, timeout=120, interval=5):
@@ -329,13 +424,14 @@ def wait_for_full_merchant(router, timeout=120, interval=5):
 
 
 def wait_for_degraded(router, timeout=120, interval=5):
-    import re
+    # The old log-regex fallback matched STALE degraded lines (boot-time
+    # "Merchant started in degraded mode" persists in the last-500-lines
+    # window across the state-reset restart) and returned instantly,
+    # racing every dependent assert. The tag-based ad check is the
+    # authoritative live signal now that is_degraded keys on markers.
     deadline = time.time() + timeout
     while time.time() < deadline:
         if is_degraded(router):
-            return True
-        logs = router.get_tollgate_logs(lines=500)
-        if re.search(r"(degraded|no reachable mints|all mints unreachable)", logs, re.IGNORECASE):
             return True
         time.sleep(interval)
     return False
@@ -384,22 +480,49 @@ def _mint_url_port(url: str) -> int:
     return 443 if parsed.scheme == "https" else 80
 
 
+# Set when block_mints installs rules; the api-conftest autouse sweep
+# reads it so a teardown killed by pytest-timeout cannot leak rules into
+# the NEXT test (the per-file runner sweep only guards file boundaries).
+_mint_blocks_installed = False
+
+
+def sweep_mint_blocks(router):
+    """Loop-delete every OUTPUT REJECT (iptables -I can leave duplicates;
+    a single -D removes one instance)."""
+    router.ssh(
+        "while iptables -L OUTPUT -n 2>/dev/null | grep -q REJECT; do"
+        " R=$(iptables -L OUTPUT -n --line-numbers | awk '/REJECT/{print $1; exit}');"
+        " iptables -D OUTPUT $R; done 2>/dev/null || true"
+    )
+
+
 def block_mints(router, mint_ip_map):
     """Block all mint IPs via iptables OUTPUT REJECT on the mint's real port.
     Returns list of (url, ip, port) rules."""
+    global _mint_blocks_installed
     rules = []
     for url, ip in mint_ip_map.items():
         port = _mint_url_port(url)
         router.ssh(f"iptables -I OUTPUT -d {ip} -p tcp --dport {port} -j REJECT")
         rules.append((url, ip, port))
+    _mint_blocks_installed = True
     return rules
 
 
 def unblock_mints(router, rules):
-    """Remove the OUTPUT REJECT rules created by block_mints()."""
+    """Remove the OUTPUT REJECT rules created by block_mints().
+
+    Loop-deletes the exact spec (duplicates on retry) and clears the
+    leak flag; the conftest sweep still guards against timeouts that
+    kill this teardown entirely."""
+    global _mint_blocks_installed
     for url, ip, port in rules:
-        router.ssh(f"iptables -D OUTPUT -d {ip} -p tcp --dport {port} -j REJECT"
-                   f" 2>/dev/null || true")
+        spec = f"-d {ip} -p tcp --dport {port} -j REJECT"
+        router.ssh(
+            f"while iptables -C OUTPUT {spec} 2>/dev/null; do"
+            f" iptables -D OUTPUT {spec}; done 2>/dev/null || true"
+        )
+    _mint_blocks_installed = False
 
 
 def skip_if_no_ssl_cli(router):
@@ -442,3 +565,87 @@ def skip_if_no_degraded_support(router):
     files import this name directly.
     """
     skip_if_no_mint_health_tracker(router)
+
+
+def nodogsplash_allow_entries(cfg_text):
+    """Entries of nodogsplash's ``users_to_router`` allow-list, in file order.
+
+    UCI serialises a list as one ``list users_to_router '<entry>'`` line per
+    element, which is what ``cat /etc/config/nodogsplash`` (or ``uci export``)
+    returns. Entries come back without their quotes, e.g.::
+
+        ['allow tcp port 22', 'allow tcp port 8443', 'allow tcp port 2051']
+
+    Only ``list users_to_router`` lines are permissions for an unauthenticated
+    client; every other line in the file (including
+    ``authenticated_users_to_router``) is ignored.
+    """
+    entries = []
+    prefix = "list users_to_router"
+    for raw in cfg_text.splitlines():
+        line = raw.strip()
+        if not line.startswith(prefix):
+            continue
+        rest = line[len(prefix):].strip()
+        if len(rest) >= 2 and rest[0] == rest[-1] and rest[0] in ("'", '"'):
+            rest = rest[1:-1]
+        entries.append(rest)
+    return entries
+
+
+def nodogsplash_allows_port(cfg_text, port):
+    """True when the ``users_to_router`` allow-list names exactly ``port``.
+
+    Parsed, never substring-searched: ``"443" in cfg_text`` is satisfied by the
+    ``list users_to_router 'allow tcp port 8443'`` entry that every router with
+    the admin board carries. That is how the 0.6.0-alpha3 pre14 regression
+    (LuCI's :443 refused for an unauthenticated captive-LAN client, so the
+    ``:8080 -> https://<router>/`` redirect dead-ended) stayed hidden behind a
+    test named "Verify nodogsplash allows port 443".
+    """
+    want = ["port", str(port)]
+    for entry in nodogsplash_allow_entries(cfg_text):
+        fields = entry.split()
+        if fields[:1] == ["allow"] and fields[-2:] == want:
+            return True
+    return False
+
+
+def portal_layout(router) -> dict:
+    """Detect which captive-portal layout the router actually serves.
+
+    One batched probe (PRTA #103 / fix F7): the ipk-era layout ships the
+    SPA to /etc/tollgate/tollgate-captive-portal-site/ served by a uhttpd
+    instance on :2051, while the net4sats (configwizzard) overlay brings
+    /www/net4sats/balance.html on :8090. Tests assert against the layout
+    that is present instead of skipping forever on the one that is not.
+
+    Returns {"spa_2051": bool, "net4sats": bool, "nds_splash": bool,
+    "probe": {raw probe values}} — spa_2051 requires both the directory
+    and a serving :2051, so a half-deployed portal reads False.
+    """
+    out = router.ssh(
+        "echo spa_files=$(ls /etc/tollgate/tollgate-captive-portal-site 2>/dev/null | wc -l); "
+        "echo spa_2051_code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1:2051/splash.html 2>/dev/null); "
+        "echo net4sats=$(test -f /www/net4sats/balance.html && echo yes || echo no); "
+        "echo nds_splash=$(test -f /etc/nodogsplash/htdocs/splash.html && echo yes || echo no)",
+        timeout=15,
+    )
+    probe = {}
+    for line in (out or "").splitlines():
+        if "=" in line:
+            key, _, val = line.partition("=")
+            probe[key.strip()] = val.strip()
+
+    def _int(key):
+        try:
+            return int(probe.get(key, "0"))
+        except ValueError:
+            return 0
+
+    return {
+        "spa_2051": _int("spa_files") > 0 and probe.get("spa_2051_code") == "200",
+        "net4sats": probe.get("net4sats") == "yes",
+        "nds_splash": probe.get("nds_splash") == "yes",
+        "probe": probe,
+    }

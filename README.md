@@ -29,7 +29,7 @@ python3 scripts/virtual-lab.py start-poc --host localhost
 python3 scripts/virtual-lab.py stop-poc --host localhost
 ```
 
-See [LOCAL-VM-TESTING.md](LOCAL-VM-TESTING.md) for the full guide including troubleshooting, deploying captive portal changes, and NDS/fw4 enforcement testing.
+See [docs/LOCAL-VM-TESTING.md](docs/LOCAL-VM-TESTING.md) for the full guide including troubleshooting, deploying captive portal changes, and NDS/fw4 enforcement testing.
 
 ### SHC — Sovereign Hybrid Compute (cloud VM)
 
@@ -43,7 +43,7 @@ Fire-and-forget testing on an SHC cloud VM. Identical to GCP but uses the SHC pr
 ./scripts/cloud-lab.py submit --pr 42 --backend rust-basic --publish
 
 # Test a fork branch
-./scripts/cloud-lab.py submit --pr 42 --repo Amperstrand/tollgate-module-basic-go
+./scripts/cloud-lab.py submit --pr 42 --repo OpenTollGate/tollgate-module-basic-go
 
 # Check run status
 ./scripts/cloud-lab.py status-run --run-id <run-id>
@@ -486,6 +486,7 @@ All 26 scripts in `scripts/`:
 | `build-firmware.py` | Build clean OpenWrt firmware images via ASU API with embedded SSH key and random root password. Reads from `config/routers.json`. Usage: `--router ID`, `--flash`, `--key <path>` |
 | `uboot-recover.py` | Automated U-Boot recovery for bricked routers. Supports GL.iNet GL-MT3000 and D-Link COVR-X1860. Uses pcap monitoring and event-driven state machine. Voice guidance on macOS |
 | `flash-routers.mjs` | Bulk ethernet hotplug sysupgrade flashing. Disabled unless `TOLLGATE_ENABLE_SYSUPGRADE_FLASHING=true` |
+| `bench/device-identity.sh` | **Fail-closed device pin** — claim a box (host interface + source address + its br-lan MAC), then verify before ANY destructive step. Two routers can answer on one address (2026-09-28: the wrong one was flashed); an address is not an identity — see [docs/bench-device-identity.md](docs/bench-device-identity.md) |
 
 ### Reporting and publishing
 
@@ -498,6 +499,7 @@ All 26 scripts in `scripts/`:
 | `publish-report.sh` | Publish test report to gh-pages with dashboard index. Purges old runs beyond `TOLLGATE_GH_PAGES_KEEP` |
 | `collect-results.py` | Canonical result parser — reads JUnit XML + Playwright JSON, writes `run.json` + `summary.json` into run directory |
 | `render-report.py` | Self-contained HTML report generator from canonical `run.json`/`summary.json`. No external dependencies |
+| `record-demo.py` | Synchronized demo recorder — runs a clientd session with router logs + status bar on one clock, renders a scrubbable `player.html` and optional `.webm` (make target: record-demo-clientd). See [docs/demo-recording.md](docs/demo-recording.md) |
 
 ### Setup
 

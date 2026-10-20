@@ -3,7 +3,7 @@ import os
 import pytest
 import requests
 
-pytestmark = [pytest.mark.rust_basic_only, pytest.mark.api, pytest.mark.smoke]
+pytestmark = [pytest.mark.story("R1"),pytest.mark.rust_basic_only, pytest.mark.api, pytest.mark.smoke]
 
 
 def test_pay_invalid_token_returns_400(rust_basic_server):
@@ -84,7 +84,7 @@ def _mint_test_token():
 
     Returns the token string, or None when the mint is unreachable.
     Uses the existing lib.cashu minter infrastructure rather than the
-    raw cashu CLI so we inherit retry/skip logic and HttpMinter/CdkCliWallet
+    raw cashu CLI so we inherit retry/skip logic and CdkCliWallet/CashuMint
     fallback selection.
     """
     try:

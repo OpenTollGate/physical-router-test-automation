@@ -46,9 +46,15 @@ test.describe('reboot recovery', () => {
 				if (status.includes('running')) break;
 				await new Promise(r => setTimeout(r, 3000));
 			}
-			if (!status.includes('running')) {
-				console.log(`WARN: tollgate service not running after reboot (status: ${status || 'empty'}). Binary works but init script may need manual start.`);
-			}
+			// The procd service must come back after reboot: a tollgate-wrt
+			// that stays down is a release defect, not a warning. (Gate
+			// hardening, 2026-10 verification audit — the old console.log
+			// made this check decoration.)
+			expect(
+				status.includes('running'),
+				`tollgate service not running after reboot (status: ${status || 'empty'}). ` +
+					'Binary answers but the init script did not bring the service up.'
+			).toBe(true);
 		}
 	});
 

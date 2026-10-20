@@ -23,10 +23,6 @@ from urllib.parse import urlparse
 
 from lib.constants import TEST_MINT_URL
 
-if TYPE_CHECKING:
-    import coincurve
-
-log = logging.getLogger("tollgate.cashu")
 
 
 class MintUnavailableError(Exception):
@@ -253,6 +249,74 @@ class CashuMint:
         return "cashuA" + base64.b64encode(json.dumps(payload).encode()).decode()
 
 
+class MockCashuMinter:
+    """Token fabricator for TOLLGATE_MOCK=1 runs (no mint, no router).
+
+    Produces structurally valid V3 tokens (V1 keyset ids — ``00``-prefix,
+    16 hex chars) that the mock backend in lib/mock_router.py accepts: the
+    mock's payment handler validates shape, mint URL against its accepted
+    mints, and double-spends, so the payment-tier api tests exercise their
+    full assert paths mock-side. Tokens carry no real value — they only
+    round-trip against the mock backend, never a real one.
+    """
+
+    def __init__(self, mint_url: str = "https://testnut.cashu.exchange"):
+        self.mint_url = mint_url
+        # One deterministic V1-shaped keyset id per mint URL, published via
+        # keyset_ids() — mock-mode keyset tests validate minted proofs
+        # against exactly this set (parity with a real mint's /v1/keys).
+        self.keyset_id = "00" + hashlib.sha256(mint_url.encode()).hexdigest()[:14]
+
+    def keyset_ids(self) -> set[str]:
+        return {self.keyset_id}
+
+    def keyset_keys(self) -> dict[str, str]:
+        """NUT-02 amount→pubkey map for the deterministic keyset (standard
+        power-of-2 amounts, hex pubkeys — the shape keyset tests assert)."""
+        return {
+            str(1 << i): "02" + hashlib.sha256(f"{self.mint_url}:{1 << i}".encode()).hexdigest()
+            for i in range(11)  # 1 .. 1024
+        }
+
+    def is_available(self) -> bool:
+        return True
+
+    def ensure_mint_available(self, timeout: int = 15):
+        return None
+
+    def warmup(self, timeout: int = 60) -> None:
+        return None
+
+    def _fabricate(self, amount: int, mint_url: str) -> str:
+        payload = {
+            "token": [{
+                "mint": mint_url,
+                "proofs": [{
+                    "amount": amount,
+                    "id": self.keyset_id,
+                    "secret": _secrets_mod.token_hex(16),
+                    "C": "02" + _secrets_mod.token_hex(32),
+                }],
+            }],
+            "unit": "sat",
+            "memo": None,
+        }
+        return "cashuA" + base64.b64encode(json.dumps(payload).encode()).decode()
+
+    def mint(self, amount: int = 4, legacy: bool = True, timeout: int = 120,
+             retries: int = 2) -> str:
+        return self._fabricate(amount, self.mint_url)
+
+    def mint_from_wrong_mint(self, amount: int = 4, timeout: int = 90) -> str:
+        return self.synthetic_wrong_mint_token()
+
+    @staticmethod
+    def synthetic_wrong_mint_token() -> str:
+        payload = [{"mint": "https://wrong-mint.example.com",
+                     "proofs": [{"amount": 4, "secret": "fake", "C": "fake"}]}]
+        return "cashuA" + base64.b64encode(json.dumps(payload).encode()).decode()
+
+
 _CDK_CLI_PATHS = [
     "/opt/cdk-mintd/cdk-cli",
     "/usr/local/bin/cdk-cli",
@@ -385,288 +449,26 @@ class CdkCliWallet:
         return self.synthetic_wrong_mint_token()
 
 
-class HttpMinter:
-    """Direct HTTP Cashu token minter — NUT-04 + BDHKE via coincurve.
-
-    No subprocess overhead. Uses pure HTTP requests + secp256k1 crypto
-    to mint V3 tokens directly from any Cashu mint. ~100x faster than
-    CLI-based minters under nested KVM (no process spawn overhead).
-
-    Requires ``coincurve`` (already in requirements.txt).
-    """
-
-    _DOMAIN_SEPARATOR = b"Secp256k1_HashToCurve_Cashu_"
-    # secp256k1 curve order
-    _N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
-
-    def __init__(self, mint_url: str):
-        self.mint_url = mint_url.rstrip("/")
-        self._keyset_cache: tuple[str, dict[int, str]] | None = None
-
-    # -- availability / health --
-
-    @staticmethod
-    def is_available() -> bool:
-        try:
-            import coincurve  # noqa: F401
-            return True
-        except ImportError:
-            return False
-
-    def ensure_mint_available(self, timeout: int = 15):
-        self._http_get(f"{self.mint_url}/v1/keys", timeout=timeout)
-
-    def warmup(self, timeout: int = 60) -> None:
-        """Pre-fetch keysets so the first mint() is fast."""
-        try:
-            self._get_active_keyset()
-        except Exception:
-            pass  # non-fatal
-
-    # -- public minting API --
-
-    def mint(self, amount: int = 4, legacy: bool = True, timeout: int = 30,
-             retries: int = 2) -> str:
-        """Mint tokens via direct HTTP NUT-04 flow.
-
-        Steps:
-        1. Fetch active keyset
-        2. Create mint quote (POST /v1/mint/quote/bolt11)
-        3. Wait for payment (FakeWallet auto-pays)
-        4. Mint tokens (POST /v1/mint/bolt11) with blinded messages
-        5. Unblind signatures
-        6. Serialize to V3 token
-
-        Returns: ``cashuA...`` token string.
-        """
-        import coincurve
-
-        last_err: Exception = RuntimeError("mint failed")
-        for attempt in range(1 + retries):
-            try:
-                return self._mint_inner(amount, timeout)
-            except Exception as exc:
-                last_err = exc
-                if attempt < retries:
-                    time.sleep(2 * (attempt + 1))
-        raise last_err
-
-    def mint_from_wrong_mint(self, amount: int = 4, timeout: int = 90) -> str:
-        return CashuMint.synthetic_wrong_mint_token()
-
-    @staticmethod
-    def synthetic_wrong_mint_token() -> str:
-        return CashuMint.synthetic_wrong_mint_token()
-
-    # -- internal --
-
-    def _mint_inner(self, amount: int, timeout: int) -> str:
-        import coincurve
-
-        # 1. Get active keyset
-        keyset_id, keys = self._get_active_keyset()
-
-        # 2. Decompose amount into powers of 2 and generate blinded messages
-        powers = self._amount_to_powers(amount)
-        outputs: list[dict] = []
-        blind_data: list[tuple[str, bytes]] = []  # (secret_hex, blinding_factor)
-
-        for pwr in powers:
-            secret_hex, r, b_hex = self._blind_message(pwr)
-            outputs.append({"amount": pwr, "id": keyset_id, "B_": b_hex})
-            blind_data.append((secret_hex, r))
-
-        # 3. Create mint quote
-        quote_data = self._http_post(
-            f"{self.mint_url}/v1/mint/quote/bolt11",
-            {"unit": "sat", "amount": amount},
-        )
-        quote_id = quote_data["quote"]
-
-        # 4. Wait for payment (FakeWallet auto-pays immediately)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            state = self._http_get(
-                f"{self.mint_url}/v1/mint/quote/bolt11/{quote_id}"
-            )
-            if state.get("state") == "PAID":
-                break
-            time.sleep(0.5)
-        else:
-            raise MintUnavailableError(
-                f"Mint quote {quote_id} not paid after {timeout}s"
-            )
-
-        # 5. Mint: POST /v1/mint/bolt11
-        mint_data = self._http_post(
-            f"{self.mint_url}/v1/mint/bolt11",
-            {"quote": quote_id, "outputs": outputs},
-        )
-        signatures = mint_data["signatures"]
-
-        # 6. Unblind signatures and build proofs
-        proofs = []
-        for i, sig in enumerate(signatures):
-            c_prime = coincurve.PublicKey(bytes.fromhex(sig["C_"]))
-            r = blind_data[i][1]
-            k_pub = coincurve.PublicKey(bytes.fromhex(keys[sig["amount"]]))
-
-            # C = C_ - r*K  (unblinding)
-            rK = k_pub.multiply(r)
-            neg_rK = self._negate_point(rK)
-            c = coincurve.PublicKey.combine_keys([c_prime, neg_rK])
-
-            proofs.append({
-                "amount": sig["amount"],
-                "id": sig["id"],
-                "secret": blind_data[i][0],
-                "C": c.format().hex(),
-            })
-
-        # 7. Serialize to V3 token
-        return self._serialize_v3(proofs)
-
-    # -- HTTP helpers --
-
-    def _http_get(self, url: str, timeout: int = 15) -> dict:
-        req = request.Request(url, headers={"User-Agent": "tollgate-test/1.0"})
-        try:
-            with request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read())
-        except error.HTTPError as exc:
-            body = exc.read().decode()[:200]
-            raise MintUnavailableError(f"HTTP {exc.code}: {body}") from exc
-        except (error.URLError, TimeoutError) as exc:
-            raise MintUnavailableError(f"GET {url} failed: {exc}") from exc
-
-    def _http_post(self, url: str, body: dict, timeout: int = 15) -> dict:
-        data = json.dumps(body).encode()
-        req = request.Request(
-            url, data=data,
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": "tollgate-test/1.0",
-            },
-            method="POST",
-        )
-        try:
-            with request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read())
-        except error.HTTPError as exc:
-            body_text = exc.read().decode()[:300]
-            raise MintUnavailableError(
-                f"POST {url} HTTP {exc.code}: {body_text}"
-            ) from exc
-        except (error.URLError, TimeoutError) as exc:
-            raise MintUnavailableError(f"POST {url} failed: {exc}") from exc
-
-    # -- crypto helpers --
-
-    def _get_active_keyset(self, unit: str = "sat") -> tuple[str, dict[int, str]]:
-        """Fetch and cache the active keyset for the given unit."""
-        if self._keyset_cache is not None:
-            return self._keyset_cache
-
-        data = self._http_get(f"{self.mint_url}/v1/keys")
-        for ks in data.get("keysets", []):
-            if ks.get("unit") == unit and ks.get("active", True):
-                keys = {int(k): v for k, v in ks.get("keys", {}).items()}
-                result = (ks["id"], keys)
-                self._keyset_cache = result
-                return result
-
-        raise RuntimeError(f"No active {unit} keyset at {self.mint_url}")
-
-    @classmethod
-    def _hash_to_curve(cls, message: bytes) -> coincurve.PublicKey:
-        """Deterministic map from message bytes to secp256k1 point (NUT-00)."""
-        import coincurve
-
-        msg_hash = hashlib.sha256(cls._DOMAIN_SEPARATOR + message).digest()
-        counter = 0
-        while counter < 2**32:
-            counter_bytes = counter.to_bytes(4, "little")
-            candidate = hashlib.sha256(msg_hash + counter_bytes).digest()
-            try:
-                return coincurve.PublicKey(b"\x02" + candidate)
-            except Exception:
-                counter += 1
-        raise RuntimeError("hash_to_curve: no valid point found")
-
-    @staticmethod
-    def _blind_message(amount: int) -> tuple[str, bytes, str]:
-        """Generate a blinded message for one output.
-
-        Returns (secret_hex, blinding_factor_32bytes, B__compressed_hex).
-        """
-        import coincurve
-
-        secret_hex = _secrets_mod.token_hex(32)
-        y = HttpMinter._hash_to_curve(secret_hex.encode("utf-8"))
-        r = _secrets_mod.token_bytes(32)
-
-        # B_ = Y + r*G
-        b_ = y.add(r)
-
-        return secret_hex, r, b_.format().hex()
-
-    @staticmethod
-    def _negate_point(pk: coincurve.PublicKey) -> coincurve.PublicKey:
-        """Negate a secp256k1 point (flip 02↔03 prefix)."""
-        import coincurve
-
-        raw = pk.format()
-        prefix = b"\x03" if raw[0] == 2 else b"\x02"
-        return coincurve.PublicKey(prefix + raw[1:])
-
-    @staticmethod
-    def _amount_to_powers(amount: int) -> list[int]:
-        """Decompose amount into powers of 2 (Cashu denomination scheme)."""
-        powers = []
-        power = 1
-        while amount > 0:
-            if amount & 1:
-                powers.append(power)
-            amount >>= 1
-            power <<= 1
-        return powers
-
-    def _serialize_v3(self, proofs: list[dict]) -> str:
-        """Serialize proofs to a V3 Cashu token (cashuA...)."""
-        token_obj = {
-            "token": [{"mint": self.mint_url, "proofs": proofs}],
-            "unit": "sat",
-        }
-        token_json = json.dumps(token_obj, separators=(",", ":"))
-        token_b64 = base64.urlsafe_b64encode(
-            token_json.encode()
-        ).decode().rstrip("=")
-        return "cashuA" + token_b64
-
-
 def create_minter(
     mint_url: str = TEST_MINT_URL,
     venv_path: str | None = None,
-) -> CashuMint | CdkCliWallet | HttpMinter:
-    # Prefer HttpMinter (pure HTTP, no subprocess) when coincurve is available
-    if HttpMinter.is_available():
-        try:
-            minter = HttpMinter(mint_url)
-            minter.ensure_mint_available(timeout=5)
-            log.info("create_minter: selected HttpMinter (mint=%s)", mint_url)
-            return minter
-        except Exception as exc:
-            log.warning(
-                "create_minter: HttpMinter unavailable (mint=%s, error=%s); falling back",
-                mint_url, exc,
-            )
-    else:
-        log.info("create_minter: coincurve not installed; skipping HttpMinter")
-
+) -> CdkCliWallet | CashuMint:
+    """Reference-first minter selection (#268): cdk-cli is the CDK
+    reference; the nutshell cashu CLI is the Python-reference fallback.
+    The hand-rolled HttpMinter was removed — it drifted from the spec
+    (v1-truncated keyset ids) and co-masked the portal defect in #247.
+    """
     cdk = CdkCliWallet(mint_url)
     if cdk.is_available():
-        log.info("create_minter: selected CdkCliWallet (mint=%s)", mint_url)
-        return cdk
+        try:
+            cdk.ensure_mint_available(timeout=10)
+            log.info("create_minter: selected CdkCliWallet (mint=%s)", mint_url)
+            return cdk
+        except Exception as exc:
+            log.warning(
+                "create_minter: cdk-cli present but mint unavailable (mint=%s, error=%s); falling back",
+                mint_url, exc,
+            )
 
     log.info("create_minter: selected CashuMint (mint=%s, venv=%s)", mint_url, venv_path)
     return CashuMint(venv_path=venv_path, mint_url=mint_url)
@@ -678,7 +480,7 @@ log = logging.getLogger("tollgate.token_pool")
 class TokenPool:
     _POOL_AMOUNT = 4
 
-    def __init__(self, minter: CashuMint | CdkCliWallet | HttpMinter, pool_size: int = 10):
+    def __init__(self, minter: CashuMint | CdkCliWallet, pool_size: int = 10):
         self._minter = minter
         self._pool_size = pool_size
         self._queue: deque[str] = deque()
@@ -727,6 +529,22 @@ class TokenPool:
                         threading.Thread(target=self._replenish, daemon=True).start()
                     return token
         return self._minter.mint(amount, legacy=legacy, timeout=timeout, retries=retries)
+
+    def mint_fresh(self, amount: int = 4, legacy: bool = True, timeout: int = 120, retries: int = 2) -> str:
+        # #247: bypass the pool for payment-critical tokens. A venue reset
+        # re-inits the fakewallet mint and rotates its keyset generation —
+        # pooled tokens minted before the rotation then verify as CU109
+        # (outdated mint key) and the payment silently never lands.
+        return self._minter.mint(amount, legacy=legacy, timeout=timeout, retries=retries)
+
+    def drain(self) -> int:
+        """Drop queued tokens (e.g. after a venue reset rotated the mint)."""
+        with self._lock:
+            n = len(self._queue)
+            self._queue.clear()
+        if n:
+            log.info("TokenPool: drained %d pooled tokens", n)
+        return n
 
     @property
     def mint_url(self) -> str:

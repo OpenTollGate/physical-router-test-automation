@@ -26,6 +26,8 @@ from lib.cashu_fixture import (
 # --------------------------------------------------------------------------- #
 
 
+pytestmark = [pytest.mark.story("P11")]
+
 class FakeMarker:
     def __init__(self, args):
         self.args = args
@@ -74,7 +76,7 @@ class FakeTokenPool(TokenPool):
 
 
 class FakeMinterNoWorkDir:
-    """Stands in for HttpMinter — no _work_dir, not a CashuMint/CdkCliWallet."""
+    """Stands in for any minter without _work_dir (not CashuMint/CdkCliWallet)."""
 
     def __init__(self, mint_url="https://testnut.cashu.exchange"):
         self.mint_url = mint_url
@@ -245,7 +247,7 @@ class TestCleanupToken:
         assert not work_dir.exists()
 
     def test_no_work_dir_no_crash(self):
-        """Minters without _work_dir (HttpMinter) don't crash cleanup."""
+        """Minters without _work_dir don't crash cleanup."""
         minter = FakeMinterNoWorkDir()
         mt = MintedToken(token="cashuA123", amount=4, mint_url="https://mint", minter=minter)
         mt.mark_consumed()
@@ -286,3 +288,5 @@ class TestCleanupToken:
         mt.mark_consumed()
         # Should not raise even though dir doesn't exist
         cleanup_token(mt)
+
+

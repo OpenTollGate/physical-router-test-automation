@@ -1,0 +1,103 @@
+---
+- name: Install system prerequisites
+  become: true
+  ansible.builtin.apt:
+    name:
+      - ffmpeg
+      - espeak-ng
+      - python3-venv
+      - python3-pip
+      - ca-certificates
+      - curl
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the film-voice root
+  become: true
+  ansible.builtin.file:
+    path: "{{ film_voice_root }}"
+    state: directory
+    mode: "0755"
+
+- name: Create the models directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ film_voice_models }}"
+    state: directory
+    mode: "0755"
+
+# get_url verifies each download against the pinned sha256 and replaces a
+# corrupt or drifted file, so a re-run is a check rather than a re-download.
+- name: Fetch the Kokoro model (sha256-verified)
+  become: true
+  ansible.builtin.get_url:
+    url: "{{ kokoro_model_url }}"
+    dest: "{{ film_voice_models }}/kokoro-v1.0.onnx"
+    checksum: "sha256:{{ kokoro_model_sha256 }}"
+    mode: "0644"
+
+- name: Fetch the Kokoro voice pack (sha256-verified)
+  become: true
+  ansible.builtin.get_url:
+    url: "{{ kokoro_voices_url }}"
+    dest: "{{ film_voice_models }}/voices-v1.0.bin"
+    checksum: "sha256:{{ kokoro_voices_sha256 }}"
+    mode: "0644"
+
+- name: Create the virtualenv
+  become: true
+  ansible.builtin.command:
+    cmd: "python3 -m venv {{ film_voice_venv }}"
+    creates: "{{ film_voice_venv }}/bin/python"
+
+- name: Install the Python narration backend into the venv
+  become: true
+  ansible.builtin.pip:
+    name:
+      - kokoro-onnx
+      - onnxruntime
+      - soundfile
+    state: present
+    virtualenv: "{{ film_voice_venv }}"
+
+- name: Install the Kokoro synthesis script
+  become: true
+  ansible.builtin.copy:
+    src: "{{ film_tools_src }}/kokoro-tts.py"
+    dest: "{{ film_voice_root }}/kokoro-tts.py"
+    mode: "0755"
+
+# The script needs the venv interpreter and the pinned model paths, so the
+# on-PATH command is a wrapper rather than the raw script.
+- name: Install the kokoro-tts wrapper
+  become: true
+  ansible.builtin.template:
+    src: kokoro-tts.j2
+    dest: "{{ film_voice_bin }}/kokoro-tts"
+    mode: "0755"
+
+- name: Install the film narration tool
+  become: true
+  ansible.builtin.copy:
+    src: "{{ film_tools_src }}/narrate-film.sh"
+    dest: "{{ film_voice_bin }}/narrate-film.sh"
+    mode: "0755"
+
+# A one-line check that the whole chain (venv + model + wrapper + espeak-ng)
+# is usable, so a green play is not mistaken for a working backend.
+- name: Smoke-test the narration backend
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      tmp=$(mktemp -d)
+      trap 'rm -rf "$tmp"' EXIT
+      echo "Narration backend ready." | {{ film_voice_bin }}/kokoro-tts --out "$tmp/smoke.wav"
+      ffprobe -v error -show_entries format=duration -of csv=p=0 "$tmp/smoke.wav"
+    executable: /bin/bash
+  register: film_voice_smoke
+  changed_when: false
+
+- name: Report the smoke-test duration
+  ansible.builtin.debug:
+    msg: "Kokoro backend synthesized {{ film_voice_smoke.stdout_lines | last }}s of audio."

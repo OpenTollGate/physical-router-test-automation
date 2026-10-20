@@ -1,0 +1,33 @@
+#!/bin/sh
+# /etc/rc.local — runs late in boot, after the bridges/ports and the wireless
+# config exist. Bench lab defaults:
+#   * pin the baked LAN IP on the bridge that owns a PHY-backed port
+#     (br-lan vs br-private differs per board — the uci-defaults run too early
+#     and hit the wrong bridge),
+#   * keep every radio OFF until a run enables it.
+IP="$(cat /etc/bench-lan-ip 2>/dev/null)"
+if [ -n "$IP" ]; then
+	sec=""
+	for s in lan private; do
+		d=$(uci get network.$s.device 2>/dev/null) || continue
+		for p in $(ls /sys/class/net/$d/brif 2>/dev/null); do
+			[ -e /sys/class/net/$p/device ] && { sec=$s; break 2; }
+		done
+	done
+	sec=${sec:-lan}
+	uci set network.$sec.ipaddr=$IP
+	uci set network.$sec.netmask=255.255.255.0
+	uci commit network
+	# The uci change alone does not move the running interface; apply it now.
+	/etc/init.d/network reload >/dev/null 2>&1
+fi
+
+for r in $(uci show wireless 2>/dev/null | sed -n "s/^\(wireless\.[^.]*\)\.=wifi-device$/\1/p"); do
+	uci set "$r.disabled=1"
+done
+for i in $(uci show wireless 2>/dev/null | sed -n "s/^\(wireless\.[^.]*\)\.=wifi-iface$/\1/p"); do
+	uci set "$i.disabled=1"
+done
+uci commit wireless
+wifi down 2>/dev/null || true
+exit 0

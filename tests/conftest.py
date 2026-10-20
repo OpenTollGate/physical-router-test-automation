@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import inspect
 import json
 import os
@@ -17,14 +18,13 @@ except ImportError:
     html_extras = None
 
 from lib.router import Router
-from lib.router_lock import RouterLock
 from lib.cashu import CashuMint, MintUnavailableError, TokenPool, create_minter
 from lib.clients.adb import ADBDevice
 from lib.clients.wifi import WiFi
 from lib.clients.desktop import MacWiFiClient, MacAdapter, LinuxWiFiClient, LinuxAdapter
 from lib.clients.container import ContainerClient
 from lib.clients.cuttlefish import CuttlefishClient
-from lib.constants import DEFAULT_STEP_SIZE_MS, NDS_PORTAL_PORT
+from lib.constants import DEFAULT_STEP_SIZE_MS, NDS_PORTAL_PORT, TEST_MINT_URL
 from lib.backend import BackendConfig, BACKEND_CHOICES_CLI
 
 # --- Mock mode support ---
@@ -37,7 +37,7 @@ if IS_MOCK_MODE:
 # Register the auto-minting Cashu fixture module so its `minted_token` fixture
 # (lib/cashu_fixture.py, Part A of WD6) is discoverable by any test by name.
 # Fixtures defined in a non-conftest module are otherwise invisible to pytest.
-pytest_plugins = ["lib.cashu_fixture"]
+pytest_plugins = ["lib.cashu_fixture", "lib.film_recorder"]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -78,6 +78,8 @@ _INVENTORY_ENV_MAP = {
     "arch": "TOLLGATE_ROUTER_ARCH",
     "wifiInterface": "TOLLGATE_WIFI_INTERFACE",
     "tollgateSsidPrefix": "TOLLGATE_SSID_PREFIX",
+    "captiveSsidPrefixes": "TOLLGATE_CAPTIVE_SSID_PREFIXES",
+    "privateSsidPrefix": "TOLLGATE_PRIVATE_SSID_PREFIX",
     "jumpHost": "TOLLGATE_SSH_JUMP_HOST",
     "sshPort": "TOLLGATE_SSH_PORT",
 }
@@ -108,6 +110,8 @@ def _load_router_inventory():
     entry = routers[router_id]
     for field, env_var in _INVENTORY_ENV_MAP.items():
         value = entry.get(field)
+        if isinstance(value, (list, tuple)):
+            value = ",".join(str(v) for v in value)
         if value:
             os.environ[env_var] = value
     log.info("Loaded router inventory: %s (%s)", router_id, entry.get("model", "unknown"))
@@ -124,6 +128,13 @@ def _results_dir():
 
 def _client_mode(request):
     return request.config.getoption("--client")
+
+
+def _session_args_only(config, needle: str) -> bool:
+    """True when every positional test path arg contains `needle`
+    (e.g. unit-only or parity-only sessions)."""
+    args = getattr(config, "args", []) or []
+    return bool(args) and all(needle in str(a).replace(os.sep, "/") for a in args)
 
 
 def _is_publish_mode(config):
@@ -222,11 +233,16 @@ def pytest_addoption(parser):
                      help="Restore previous binary after tests")
     parser.addoption("--no-deploy", action="store_true",
                      help="Skip portal deploy before phone tests")
+    parser.addoption("--read-only", action="store_true",
+                     help="Fail-closed commission mode (incident 2026-10-01, fix F1): "
+                          "no deploy, no state prep, router mutators raise, and "
+                          "config/destructive-marked tests skip. Use for runs against "
+                          "commissioned/live routers where only assertions may run.")
     parser.addoption("--results", default=None,
                      help="Custom results directory path")
-    parser.addoption("--client", default="adb",
-                     choices=["adb", "mac", "linux", "container"],
-                     help="WiFi client mode: adb (Android phone), mac (macOS), linux (NetworkManager/nmcli), or container (Docker via SSH)")
+    parser.addoption("--client", default=os.environ.get("TOLLGATE_CLIENT", "adb"),
+                     choices=["adb", "cuttlefish", "mac", "linux", "container"],
+                     help="WiFi client mode: adb (Android phone), cuttlefish (Android VM on a remote host, e.g. ai-legion), mac (macOS), linux (NetworkManager/nmcli), or container (Docker via SSH). Default also honors TOLLGATE_CLIENT.")
     parser.addoption("--publish", action="store_true",
                      help="Publish mode: only include screenshots from @pytest.mark.publish_screenshot tests in report")
     parser.addoption("--quick-phone", action="store_true",
@@ -253,6 +269,13 @@ def pytest_addoption(parser):
     parser.addoption("--lab-type", default=None,
                      choices=["virtual-lab", "gcloud", "physical", "browserstack"],
                      help="Lab environment type. Default: TOLLGATE_LAB_TYPE env or 'physical'")
+    parser.addoption("--preflight", default="auto", choices=["auto", "on", "off"],
+                     help="Environment autodetection: 'auto' reuses a fresh "
+                          "results/preflight-latest.json (probing when stale), "
+                          "'on' forces a fresh probe, 'off' disables entirely. "
+                          "Prints the checklist at session start and defaults "
+                          "TOLLGATE_SSH_HOST/PHONE_SERIAL to the first available "
+                          "router/phone when unset or unreachable.")
 
 
 def pytest_configure(config):
@@ -283,6 +306,16 @@ def results_dir(request):
 
 
 @pytest.fixture(scope="session")
+def preflight_snapshot(request):
+    """Environment snapshot from --preflight (None when disabled/unavailable).
+
+    Loaded or refreshed at session start (see _run_preflight_session);
+    tests may inspect routers/adb/docker/lanes from it.
+    """
+    return getattr(request.session, "_tollgate_preflight_snapshot", None)
+
+
+@pytest.fixture(scope="session")
 def backend(request):
     opt = request.config.getoption("--backend")
     return BackendConfig(backend_type=opt)
@@ -290,6 +323,10 @@ def backend(request):
 
 @pytest.fixture(scope="session")
 def router(request, backend):
+    if backend.is_rust_v2:
+        # The rust-v2 lane brings up tollgated/mintd/merchantd itself
+        # (lib/tollgate_rs.py); there is no router to drive.
+        return None
     if IS_MOCK_MODE:
         log.info("TOLLGATE_MOCK=1 — using MockRouter (no physical router needed)")
         phone_ip = os.environ.get("TOLLGATE_CLIENT_IP", "10.0.0.100")
@@ -301,6 +338,79 @@ def router(request, backend):
             backend=backend,
         )
         return mock
+
+    # Venue decision (#232 convergence): forced/direct/auto — see plan_venue.
+    # A resolved venue that then fails is FATAL (rc=4): falling back to direct
+    # while a place may be held would put two sessions on one DUT.
+    # Unit-only/parity-only sessions never touch the router, so AUTO mode must
+    # not grab a DUT place + file lock for them — deploy_session's shortcut
+    # runs only AFTER this fixture (it depends on `router`). Forced labgrid
+    # still acquires: unit-only + forced venue doubles as the cheap smoke.
+    from lib.lab_inventory import InventoryError
+    from lib.labgrid_venue import (
+        LabgridBenchError,
+        apply_venue_env,
+        plan_venue,
+        resolve_venue_mode,
+        venue_mutex,
+    )
+
+    _xdist_worker = getattr(request.config, "workerinput", None) is not None
+    _auto_skip = (
+        resolve_venue_mode() == "auto"
+        and (
+            _session_args_only(request.config, "unit")
+            or _session_args_only(request.config, "parity")
+        )
+    )
+    if _xdist_worker:
+        log.warning("router venue: xdist worker — legacy env path (venue places are per-session; acquire them in the controller-owned run, not per worker)")
+    elif _auto_skip:
+        log.info("router venue: auto skipped — unit-only/parity-only session, no DUT needed")
+    else:
+        try:
+            venue_plan = plan_venue(
+                operator_host=getattr(request.session, "_tollgate_operator_ssh_host", None),
+            )
+        except (InventoryError, LabgridBenchError) as e:
+            pytest.exit(f"labgrid venue unavailable: {e}", returncode=4)
+        if venue_plan.action == "venue":
+            # Transition invariant (#232): hold the repo file lock AND the place,
+            # so venue sessions exclude legacy Make/pymake sessions on the DUT —
+            # unless this session already holds the file lock via --lock-phase /
+            # TOLLGATE_USE_HARDWARE_LOCK (sessionstart owns acquire+release;
+            # a second acquire here would double-release, and the unconditional
+            # second unlink can delete a FOREIGN session's lock).
+            _already_locked = bool(request.config.getoption("--lock-phase")) or os.environ.get(
+                "TOLLGATE_USE_HARDWARE_LOCK", ""
+            ).lower() in ("1", "true", "yes")
+            phase = request.config.getoption("--lock-phase") or f"labgrid-venue {venue_plan.binding.entry.place}"
+            stack = contextlib.ExitStack()
+            try:
+                stack.enter_context(venue_mutex(venue_plan.binding, phase, file_lock=not _already_locked))
+            except RuntimeError as e:
+                holder = ""
+                with contextlib.suppress(Exception):
+                    holder = venue_plan.binding.who()
+                hint = (
+                    f" — place currently held by: {holder}; recovery: "
+                    f"labgrid-client -p {venue_plan.binding.place} release"
+                    if holder else ""
+                )
+                pytest.exit(f"labgrid venue mutex unavailable: {e}{hint}", returncode=4)
+            request.addfinalizer(stack.close)
+            apply_venue_env(
+                venue_plan.binding.entry,
+                respect_existing=venue_plan.origin == "address-match",
+            )
+            log.info(
+                "labgrid venue: acquired place %s + %s (%s)",
+                venue_plan.binding.entry.place,
+                "hardware lock" if not _already_locked else "existing hardware lock",
+                venue_plan.origin,
+            )
+        elif venue_plan.detail:
+            log.info("router venue: %s — legacy env path", venue_plan.detail)
 
     host = os.environ.get("TOLLGATE_SSH_HOST") or os.environ.get("ROUTER_IP")
     identity_file = os.environ.get("TOLLGATE_SSH_KEY", "")
@@ -357,7 +467,13 @@ def router(request, backend):
     # Rust backend's DhcpLeasesResolver needs the client IP in /tmp/dhcp.leases.
     # In cloud lab the container uses a static IP that never appears via DHCP.
     if client == "container" and phone_ip and phone_mac:
-        router.ensure_dhcp_lease()
+        if request.config.getoption("--read-only"):
+            log.info("--read-only: skipping ensure_dhcp_lease for container client")
+        else:
+            router.ensure_dhcp_lease()
+
+    if request.config.getoption("--read-only") and hasattr(router, "enable_read_only"):
+        router.enable_read_only()
 
     return router
 
@@ -426,8 +542,26 @@ def chain_routers(backend):
         r.close()
 
 
+def _degrade_session_to_skips(request, reason: str) -> None:
+    """Flag the session degraded: router-dependent tests skip with `reason`.
+
+    Loud by contract (issue #138): one session-level error line up front, then
+    named skips — never silence. The milestone-4 outcome gate still converts
+    a skipped `required` test into a FAILED "NOT VERIFIED", so release lanes
+    cannot quietly green themselves through the degraded path.
+    """
+    request.session._tollgate_backend_unreachable_reason = reason
+    log.error("DEGRADED SESSION: %s — router-dependent tests will skip", reason)
+    print(f"\n*** DEGRADED SESSION: {reason} — router-dependent tests will skip ***\n", flush=True)
+
+
 @pytest.fixture(scope="session", autouse=True)
-def deploy_session(request, router, backend):
+def deploy_session(request, router, backend, results_dir):
+    if backend.is_rust_v2:
+        # No deployment and no HTTP health check: the rust-v2 tests start
+        # and stop their own nodes.
+        yield
+        return
     if IS_MOCK_MODE:
         log.info("TOLLGATE_MOCK=1 — skipping deployment and health checks")
         yield
@@ -436,11 +570,7 @@ def deploy_session(request, router, backend):
 
     # Parity tests manage their own Go+Rust backends on port 2121.
     # Skip the session-level health check so the parity fixtures can bind.
-    _args = getattr(request.config, "args", []) or []
-    _parity_only = bool(_args) and all(
-        "parity" in str(a).replace(os.sep, "/") for a in _args
-    )
-    if _parity_only:
+    if _session_args_only(request.config, "parity"):
         log.info("Parity tests only — skipping session deployment and health checks")
         yield
         return
@@ -461,16 +591,36 @@ def deploy_session(request, router, backend):
     tg_arch = request.config.getoption("--tollgate-arch")
     tg_reboot = request.config.getoption("--tollgate-reboot")
     no_deploy = request.config.getoption("--no-deploy")
+    read_only = request.config.getoption("--read-only")
 
     # Unit tests don't need router connectivity. Skip deployment when running
     # only tests under tests/unit/ and no explicit deploy source is specified.
     _no_deploy_source = not binary and not tg_branch and not tg_run_id
-    _args = getattr(request.config, "args", []) or []
-    _unit_only = bool(_args) and all("unit" in str(a).replace(os.sep, "/") for a in _args)
-    if no_deploy or (_no_deploy_source and _unit_only):
+    if read_only:
+        # Commission-mode guard (incident 2026-10-01, fix F1): the Router is
+        # armed read-only by the router fixture; a stray mutating call raises.
+        if binary or tg_branch or tg_run_id:
+            pytest.exit(
+                "--read-only forbids deployment — unset --binary/--tollgate-branch/"
+                "--tollgate-run-id for a read-only commission run",
+                returncode=4,
+            )
+        log.info("--read-only: skipping deployment AND state prep (commission mode)")
+        yield
+        return
+    if no_deploy or (_no_deploy_source and _session_args_only(request.config, "unit")):
         log.info("Skipping deployment (unit tests only or --no-deploy)")
         yield
         return
+
+    # Hard-abort only when the operator explicitly asked for a deploy
+    # (--binary / --tollgate-branch / --tollgate-run-id): a requested deploy
+    # that never comes up is a genuine session failure. Otherwise a backend
+    # that is down may be a freshly installed router — exactly the state
+    # install/upgrade suites test — so the session degrades to named skips
+    # instead of dying (issue #138).
+    deploy_requested = bool(binary or tg_branch or tg_run_id)
+    degraded_reason = None
 
     if binary:
         subprocess.run(
@@ -502,20 +652,32 @@ def deploy_session(request, router, backend):
     if not no_deploy:
         code = router.api_status("/")
         if code != 200:
-            pytest.exit(f"Backend not reachable at {router.host}:2121 (HTTP {code})", returncode=1)
-
-        router.enable_debug_portal()
-        router.ensure_test_mint()
-        router.replace_mints()
-        for _ in range(60):
-            if router.api_status("/") == 200:
-                break
-            time.sleep(1)
+            if deploy_requested:
+                pytest.exit(f"Backend not reachable at {router.host}:2121 (HTTP {code})", returncode=1)
+            degraded_reason = (
+                f"backend unreachable at {router.host}:2121 (HTTP {code}) — no deploy requested"
+            )
         else:
-            pytest.exit(f"Backend not reachable after test mint setup at {router.host}:2121", returncode=1)
+            router.enable_debug_portal()
+            router.ensure_test_mint()
+            router.replace_mints([TEST_MINT_URL], force=True)
+            for _ in range(60):
+                if router.api_status("/") == 200:
+                    break
+                time.sleep(1)
+            else:
+                if deploy_requested:
+                    pytest.exit(f"Backend not reachable after test mint setup at {router.host}:2121", returncode=1)
+                degraded_reason = (
+                    f"backend unreachable after test mint setup at {router.host}:2121 "
+                    "— no deploy requested"
+                )
 
-        if _is_container_client(request.config) and os.environ.get("TOLLGATE_CLIENT_MAC"):
-            _prepare_container_nds_client(router)
+            if _is_container_client(request.config) and os.environ.get("TOLLGATE_CLIENT_MAC"):
+                _prepare_container_nds_client(router)
+
+    if degraded_reason:
+        _degrade_session_to_skips(request, degraded_reason)
 
     if _is_container_client(request.config) and os.environ.get("TOLLGATE_VIRTUAL_LAB"):
         container_host = os.environ.get("TOLLGATE_CONTAINER_HOST", "")
@@ -536,11 +698,22 @@ def deploy_session(request, router, backend):
 
     yield
 
+    # Collect session-end logs while the session still owns the DUT: this
+    # teardown runs BEFORE the router fixture's venue finalizer releases the
+    # place — post-release SSH contact (the old pytest_sessionfinish site)
+    # could race the next owner's deploy/flash. bundle="session-end" avoids
+    # overwriting per-failure bundles.
+    try:
+        router.collect_logs(results_dir, adb=None, bundle="session-end")
+        log.info("Collected session-end logs to %s", results_dir)
+    except Exception:
+        pass
+
     try:
         if restore:
             print("\n[deploy] Restoring previous binary")
     finally:
-        if not no_deploy:
+        if not no_deploy and degraded_reason is None:
             router.disable_debug_portal()
         router.close()
 
@@ -585,7 +758,8 @@ def adb(request, router):
 @pytest.fixture(scope="session")
 def cashu():
     if IS_MOCK_MODE:
-        pytest.skip("cashu fixture not available in mock mode (no real mint)")
+        from lib.cashu import MockCashuMinter
+        return MockCashuMinter()
     mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
     minter = create_minter(mint_url)
     for attempt in range(5):
@@ -601,6 +775,24 @@ def cashu():
                 time.sleep(5)
             else:
                 pytest.skip(f"cashu mint unavailable after 5 retries: {exc}")
+
+
+@pytest.fixture(scope="session")
+def m5_mint():
+    """M5 Atom hardware Cashu mint, when one is attached over USB serial.
+
+    Skips the test when no device is present, so M5-backed tests are
+    additive on benches that have the Atom and invisible elsewhere.
+    """
+    from lib.m5 import M5Mint, M5MintUnavailable
+
+    try:
+        mint = M5Mint.from_env()
+        url = mint.ensure_online()
+    except M5MintUnavailable as exc:
+        pytest.skip(f"M5 hardware mint unavailable: {exc}")
+    log.info("M5 hardware mint online: %s (keyset %s)", url, mint.keyset_id())
+    return mint
 
 
 @pytest.fixture(scope="session")
@@ -635,7 +827,11 @@ def all_routers(backend):
 @pytest.fixture(scope="session")
 def wifi(adb, router):
     ssid = os.environ.get("TOLLGATE_SSID", "TollGate")
-    return WiFi(adb=adb, router=router, ssid=ssid)
+    prefixes = (
+        [p for p in os.environ.get("TOLLGATE_CAPTIVE_SSID_PREFIXES", "").split(",") if p]
+        or None
+    )
+    return WiFi(adb=adb, router=router, ssid=ssid, captive_prefixes=prefixes)
 
 
 @pytest.fixture(autouse=True)
@@ -754,6 +950,14 @@ def screenshot_raw(adb, results_dir):
 
 
 def pytest_runtest_setup(item):
+    # Degraded session (issue #138): skip router-dependent tests before any
+    # fixture setup — module/session-scoped fixtures (e.g. a module-level
+    # `discovery` fetch) would otherwise run and error against the dead
+    # backend before a function-scoped gate could fire.
+    degraded_reason = getattr(item.session, "_tollgate_backend_unreachable_reason", None)
+    if degraded_reason and "router" in item.fixturenames:
+        pytest.skip(degraded_reason)
+
     backend_type = item.config.getoption("--backend", default=None) or os.environ.get("TOLLGATE_BACKEND", "go")
 
     if "go_only" in item.keywords and backend_type == "rust":
@@ -807,6 +1011,16 @@ def pytest_runtest_setup(item):
 
 
 def pytest_collection_modifyitems(config, items):
+    # --read-only commissions: config/destructive tests cannot run without
+    # mutating the router — skip them up front with a visible reason.
+    if config.getoption("--read-only"):
+        ro_skip = pytest.mark.skip(
+            reason="--read-only commission run: test mutates router config/state"
+        )
+        for item in items:
+            if "config" in item.keywords or "destructive" in item.keywords:
+                item.add_marker(ro_skip)
+
     # Tier hierarchy: smoke ⊂ critical ⊂ extended
     for item in items:
         if "smoke" in item.keywords:
@@ -1155,6 +1369,49 @@ def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
 
+    # Degraded session (issue #138): the first router-dependent item sets up
+    # its session fixtures in the same phase where deploy_session flags the
+    # backend unreachable, so its setup can fail before the
+    # pytest_runtest_setup gate sees the flag. Re-attribute that failure to
+    # the dead backend. Must run BEFORE the required-gate below so a skipped
+    # required test still becomes NOT VERIFIED.
+    _degraded = getattr(item.session, "_tollgate_backend_unreachable_reason", None)
+    if (
+        _degraded
+        and report.when == "setup"
+        and report.outcome == "failed"
+        and "router" in item.fixturenames
+    ):
+        first_line = str(report.longrepr).splitlines()[0][:300] if report.longrepr else ""
+        report.outcome = "skipped"
+        # Skipped reports must carry the (path, lineno, reason) tuple —
+        # pytest's terminal reporter asserts that shape.
+        report.longrepr = (
+            str(item.fspath),
+            item.location[1] or 0,
+            f"{_degraded} (setup failed against degraded backend: {first_line})",
+        )
+
+    # The fail-closed outcome gate: a REQUIRED test that skips is reported
+    # as FAILED "NOT VERIFIED" instead — a skipped required check is never
+    # a PASS (the installer-contract lane's semantics, applied suite-wide;
+    # consolidation-map milestone 4). Venue rule mirrors the collection
+    # skip in pytest_collection_modifyitems: in the virtual lab / cloud
+    # worker, hardware tests without the virtual_lab marker stay
+    # skippable by design — out of scope there, not not-verified.
+    if (
+        report.outcome == "skipped"
+        and report.when in ("setup", "call")
+        and "required" in item.keywords
+        and not (
+            os.environ.get("TOLLGATE_VIRTUAL_LAB")
+            and "hardware" in item.keywords
+            and "virtual_lab" not in item.keywords
+        )
+    ):
+        report.outcome = "failed"
+        report.longrepr = f"NOT VERIFIED — required test skipped: {str(report.longrepr)}"
+
     screenshot_extras = getattr(item, "_screenshot_extras", None)
     if screenshot_extras and report.when == "call" and html_extras is not None:
         extras = list(getattr(report, "extras", []))
@@ -1221,7 +1478,6 @@ def pytest_runtest_makereport(item, call):
                     pass
 
 
-_session_lock: RouterLock | None = None
 _hardware_lock_acquired: bool = False
 
 
@@ -1235,36 +1491,68 @@ def serial_console(router):
     return SerialConsole(port)
 
 
+def _preflight_unit_only(config) -> bool:
+    return _session_args_only(config, "unit")
+
+
+def _run_preflight_session(session) -> dict | None:
+    mode = session.config.getoption("--preflight", default="auto")
+    if mode == "off":
+        return None
+    if IS_MOCK_MODE:
+        return None
+    if os.environ.get("TOLLGATE_SKIP_PREFLIGHT", "").lower() in ("1", "true", "yes"):
+        return None
+    if _preflight_unit_only(session.config):
+        return None
+    if getattr(session.config.option, "collectonly", False):
+        return None
+
+    from lib.preflight import apply_env_defaults, format_checklist, load_snapshot, run_preflight
+
+    snapshot = load_snapshot() if mode == "auto" else None
+    if snapshot is None:
+        try:
+            snapshot = run_preflight(repo_root=SCRIPT_DIR)
+        except Exception as exc:
+            log.warning("Preflight probe failed: %s", exc)
+            return None
+    print("\n" + format_checklist(snapshot) + "\n")
+    try:
+        apply_env_defaults(snapshot, env=os.environ, logger=log)
+    except Exception as exc:
+        log.debug("Preflight env defaults not applied: %s", exc)
+    return snapshot
+
+
 def pytest_sessionstart(session):
-    global _session_lock, _hardware_lock_acquired
+    global _hardware_lock_acquired
+    # Captured BEFORE preflight: apply_env_defaults may reassign
+    # TOLLGATE_SSH_HOST to a reachable substitute when the operator's DUT is
+    # down — the venue must address-match the operator's choice, never the
+    # substitute (wrong-DUT class, venue review finding #1).
+    session._tollgate_operator_ssh_host = os.environ.get("TOLLGATE_SSH_HOST")
+    try:
+        session._tollgate_preflight_snapshot = _run_preflight_session(session)
+    except Exception as exc:
+        log.debug("Preflight skipped: %s", exc)
+
     lock_phase = session.config.getoption("--lock-phase", default=None)
     use_hardware = (
         lock_phase
         or os.environ.get("TOLLGATE_USE_HARDWARE_LOCK", "").lower() in ("1", "true", "yes")
     )
-    if use_hardware:
-        from lib.hardware_lock import acquire_hardware_lock, require_hardware_lock
-        try:
-            if lock_phase:
-                acquire_hardware_lock(lock_phase)
-                _hardware_lock_acquired = True
-            else:
-                require_hardware_lock()
-        except RuntimeError as exc:
-            pytest.exit(f"Cannot use hardware lock: {exc}", returncode=1)
+    if not use_hardware:
         return
-
-    if not lock_phase:
-        return
-    from lib.router_lock import RouterLock
-    router_id = os.environ.get("TOLLGATE_ROUTER_ID", "default")
-    branch = os.environ.get("TOLLGATE_BRANCH", "unknown")
-    lock = RouterLock()
+    from lib.hardware_lock import acquire_hardware_lock, require_hardware_lock
     try:
-        lock.acquire(router_id=router_id, phase=lock_phase, branch=branch)
+        if lock_phase:
+            acquire_hardware_lock(lock_phase)
+            _hardware_lock_acquired = True
+        else:
+            require_hardware_lock()
     except RuntimeError as exc:
-        pytest.exit(f"Cannot acquire router lock: {exc}", returncode=1)
-    _session_lock = lock
+        pytest.exit(f"Cannot use hardware lock: {exc}", returncode=1)
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -1273,28 +1561,8 @@ def pytest_sessionfinish(session, exitstatus):
     if IS_MOCK_MODE:
         return
 
-    global _session_lock, _hardware_lock_acquired
+    global _hardware_lock_acquired
     if _hardware_lock_acquired:
         from lib.hardware_lock import release_hardware_lock
         release_hardware_lock()
         _hardware_lock_acquired = False
-    if _session_lock is not None:
-        _session_lock.release()
-        _session_lock = None
-
-    # Always collect router logs at session end (not just on failure).
-    # Uses bundle="session-end" to avoid overwriting per-failure bundles.
-    if "unit" in str(getattr(session.config, "testpaths", "")):
-        return
-    for item in session.items[:1]:
-        if "router" in item.fixturenames:
-            try:
-                router = item.funcargs.get("router")
-                if router and hasattr(router, "collect_logs"):
-                    results_dir = getattr(item, "_results_dir", None)
-                    if results_dir:
-                        router.collect_logs(results_dir, adb=None, bundle="session-end")
-                        log.info("Collected session-end logs to %s", results_dir)
-            except Exception:
-                pass
-            break

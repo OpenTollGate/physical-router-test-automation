@@ -2,6 +2,54 @@
 
 This file contains hard-won operational knowledge for agents and humans working with physical OpenWrt routers (D-Link COVR-X1860, GL.iNet GL-MT3000). Read this before touching a router.
 
+## Cross-Repository Engineering Ownership and Verification
+
+**This repository (PRTA) is the canonical router integration and
+deployed-artifact acceptance-testing framework for all TollGate
+implementations.** It owns virtual OpenWrt testing, physical-router
+testing, bench/lab orchestration, end-to-end user journeys, shared router
+drivers and fixtures, release-acceptance evidence from installed artifacts,
+and cross-implementation integration contracts.
+
+Neighbors, so you never duplicate them:
+
+- Product runtime code and its unit tests live in the implementation repos
+  (`OpenTollGate/tollgate-module-basic-go`, `tollgate-rs`, …). PRTA consumes
+  and exercises real implementation behavior; it does not redefine product
+  semantics.
+- Shipping packages, version/source pins and feed publication are owned by
+  `FreedomTechFeed/packages`. PRTA *installs and verifies* feed artifacts
+  (e.g. `scripts/download-feed-release.sh`, `tests/scenarios/test_feed_package.py`);
+  it never builds or publishes shipping packages.
+- The captive portal is `OpenTollGate/tollgate-captive-portal-site`,
+  consumed at a pinned revision.
+- The wire protocol is `OpenTollGate/tollgate`.
+
+Rules for agents working here:
+
+- The cross-repository policy — ownership map, the four-level verification
+  hierarchy (source / virtual integration / physical / release acceptance),
+  and the agent operating principles — is
+  [docs/engineering-policy.md](docs/engineering-policy.md). Read it before
+  adding any runner, fixture or "temporary" test path. The live status of
+  the consolidation program — the workstream board and what tracks next —
+  is [docs/consolidation-map.md](docs/consolidation-map.md); update the
+  board in the same PR as the work it describes.
+- Verification evidence for router-visible behavior belongs here, bound to
+  the exact artifact sha256 and source SHAs; a required check that was
+  skipped or never run is reported `NOT RUN`/`NOT_VERIFIED`, never PASS.
+- Do not add a second implementation of deployment, install or minting
+  logic: use the shared seams (`lib/deploy.py`, `scripts/bench/bench.py`,
+  the scenarios+markers scheme). The consolidation decision and the M1–M4
+  milestones live in
+  [docs/authoritative-test-suite.md](docs/authoritative-test-suite.md).
+- Untracked convenience checkouts vendored inside this repo (e.g. a local
+  `src/` copy of an implementation) are never authoritative and must never
+  be committed.
+
+All money-safety, router-safety, lock, identity and secrets rules in the
+rest of this file remain in force.
+
 ## What This Repository Does
 
 This is a **multi-tier test framework** for [tollgate-module-basic-go](https://github.com/OpenTollGate/tollgate-module-basic-go) (Go v1) and [tollgate-rs](https://github.com/OpenTollGate/tollgate-rs) (Rust v1) running on physical OpenWrt routers. It tests the TollGate WiFi payment system — Cashu ecash tokens for metered internet access through captive portals.
@@ -127,6 +175,17 @@ Cross-reference incidents: link to `https://github.com/OpenTollGate/tollgate-kno
 No gating. Runs against every firmware. Use for baseline API tests (health, config format, etc.).
 
 ### Backend-Aware Skipping
+
+**Required tests are never silently skipped.** A test marked `required`
+carries release-relevant outcome semantics: if it skips, the run reports
+it as **FAILED "NOT VERIFIED"** (`tests/conftest.py`'s report gate) — a
+skipped required check is never a PASS, matching the installer-contract
+lane's outcome model. The one by-design exception mirrors the collection
+rule: in the virtual lab / cloud worker, `hardware`-marked tests without
+`virtual_lab` stay skippable (out of scope in that venue). Mark tests
+`required` deliberately — the health baseline (`tests/api/test_health.py`)
+is the seed; growing the set is curation, not a default.
+
 
 Tests marked `@pytest.mark.go_only` skip when `--backend=rust`. Tests marked `@pytest.mark.rust_only` skip when `--backend=go`. This is handled in `conftest.py` `pytest_collection_modifyitems`.
 
@@ -257,19 +316,16 @@ The `Router` class is the primary interface to the router. Key methods:
 
 ### `lib/cashu.py` — Token Minting
 
-Three token minters with fallback chain: `HttpMinter` → `CdkCliWallet` → `CashuMint`. `create_minter()` auto-selects the best available.
+Two token minters, reference-first (#268): `CdkCliWallet` (CDK reference) → `CashuMint` (Python/nutshell reference). `create_minter()` auto-selects. The hand-rolled `HttpMinter` was REMOVED (2026-10-16): its v1-truncated keyset ids co-masked the portal defect for months (see the #247 saga) — hand-rolled Cashu serialization has no place in the suite; speed comes from TokenPool parallelism, not custom crypto.
 
 | Minter | How | Speed (nested KVM) | Dependencies |
 |---|---|---|---|
-| `HttpMinter` | Direct HTTP NUT-04 + `coincurve` BDHKE crypto | ~1-2s per token | `coincurve>=18.0` (in requirements.txt) |
 | `CdkCliWallet` | `cdk-cli` subprocess | ~10-15s per token | `/opt/cdk-mintd/cdk-cli` binary |
 | `CashuMint` | `cashu` Python CLI subprocess | ~15-30s per token | `/opt/cashu-venv` Python venv |
 
-`HttpMinter` implements the full Cashu NUT-04 minting flow without subprocess overhead: fetch active keyset → create mint quote (POST `/v1/mint/quote/bolt11`) → wait for FakeWallet auto-payment → mint tokens (POST `/v1/mint/bolt11`) with blinded messages → unblind signatures via secp256k1 point math → serialize V3 token. Works with any Cashu mint (FakeWallet auto-pay, local CDK/Nutshell, or public testnut).
-
 `TokenPool` pre-fills a queue of tokens in parallel (ThreadPoolExecutor, max 5 workers) and replenishes in background threads. Tests call `pool.mint(4)` and get an instant token from the queue.
 
-The `setup-cashu.sh` script patches cashu's `models.py` for a version mismatch (missing `active` field on keysets). Only needed for `CashuMint` — `HttpMinter` and `CdkCliWallet` don't use the Python cashu CLI.
+The `setup-cashu.sh` script patches cashu's `models.py` for a version mismatch (missing `active` field on keysets). Only needed for `CashuMint` — `CdkCliWallet` doesn't use the Python cashu CLI.
 
 ### `lib/deploy.py` — CI Artifact Deployment
 
@@ -296,7 +352,7 @@ Session-scoped (created once per test run):
 | `router` | SSH connection to TollGate router (`Router` instance) |
 | `secondary_router` | Optional second router for two-router tests |
 | `adb` | Phone control — ADB, MacWiFiClient, LinuxWiFiClient, or ContainerClient |
-| `cashu` | Token minter (`HttpMinter` > `CdkCliWallet` > `CashuMint`) for testnet tokens |
+| `cashu` | Token minter (`CdkCliWallet` > `CashuMint`) for testnet tokens |
 | `deploy_session` | Auto-deploy (autouse) — deploys branch/binary before tests |
 | `results_dir` | Canonical results directory under `results/` |
 | `backend` | `BackendConfig` from `--backend` flag or env |
@@ -465,7 +521,13 @@ is deliberately shaped as the seam: `Bench` abstracts
 router-control/payment/mint-control behind one interface — a future
 `LabgridBench` can subclass it and swap SSH/QEMU control for labgrid places
 without touching scenario code. Keep scenarios written against `Bench`, never
-against raw ssh/curl.
+against raw ssh/curl. The org-wide labgrid canon — coordinator
+`192.168.13.208:20408` (`LG_COORDINATOR`; systemd unit, survives
+reboots), reservation queueing (`labgrid-client reserve --wait`,
+priority, owner-ETA convention), one-device-one-exclusion-domain, and
+the trusted-network security model — lives in **conwrt-bench
+`docs/labgrid-coordination.md`** (single source of truth; the
+`ai-legion-small-rig` android-phone exporter already follows it).
 
 ### GitHub org-Actions freeze: billing hold, not policy (2026-08-27 forensics)
 
@@ -628,7 +690,7 @@ The Go backend's wallet dependency is declared as `Origami74/gonuts-tollgate v0.
 
 > **Note (updated 2026-09-18)**: both testnut domains are currently operational —
 > live-probed: `testnut.cashu.space` answers `/v1/info` (0.17s) AND settles
-> NUT-04 quotes (verified end-to-end with HttpMinter), as does
+> NUT-04 quotes (verified end-to-end with the CdkCliWallet), as does
 > `testnut.cashu.exchange`. An earlier July 2026 note declared `.space` dead
 > (HTTP 000); that was transient or has been fixed. `.space` is the canonical
 > testnut domain (returns proper bolt11); `.exchange` remains the fallback and
@@ -1433,7 +1495,7 @@ The cloud lab uses a Debian QEMU VM (`10.99.99.100`) as the test client. Visual 
 2. Falls back to Nutshell V1 (`http://v1.testnut.nutshell.lan:8385`) for Go backend
 3. Writes chosen URL to `.env` as `TOLLGATE_TEST_MINT_URL`
 4. `conftest.py` `cashu()` fixture reads `TOLLGATE_TEST_MINT_URL` from env
-5. `create_minter()` selects the best available minter (`HttpMinter` > `CdkCliWallet` > `CashuMint`) and uses this URL for all minting operations
+5. `create_minter()` selects the best available minter (`CdkCliWallet` > `CashuMint`) and uses this URL for all minting operations
 
 **Recording lifecycle (`lib/clients/container.py`):**
 
@@ -1453,9 +1515,66 @@ The cloud lab uses a Debian QEMU VM (`10.99.99.100`) as the test client. Visual 
 
 Phone tests, physical-router LuCI Playwright, destructive sysupgrade — use `test-pr.sh` on lab hardware.
 
+## M5 Atom Hardware Cashu Mint (PRTA fixture)
+
+The M5 Atom (`~/src/m5-cashu-mint`, separate repo) runs a fake-wallet Cashu
+mint on ESP32: NUT-01/02/04/06/07 + swap on WiFi `:3338`, fake-wallet quotes
+born `state=PAID`, serial CLI (115200: `ssid <name> | psk <pass|-> | join |
+status | reset` — `reset` is FACTORY (wipes creds + seed), `join` is
+reboot-to-connect). Firmware v0.2.0 (flashed to the Atom 2026-10-01):
+persistent NVS-seeded keyset, parametrized GET routes fixed, `[http]`
+request logging.
+
+**Device identity (hard-won): a USB by-id name identifies the serial
+ADAPTER dongle, never the chip wired behind it — adapters get moved.**
+Ground truth = eFuse MAC via `esptool read-mac` + boot output. Run
+`python3 ~/src/m5-cashu-mint/tools/identify_esp.py` to map every port →
+adapter → MAC → lab name (registry: `tools/devices.yaml`). Known devices:
+atom-mint `d8:a0:1d:5e:70:7c` (the PRTA mint), mint-stick
+`4c:75:25:cb:92:9c` (retired; ran all 2026-09-30 tests). Adapter
+flash-capability also lives in the registry (Hades2001: no DTR→IO0, NOT
+flash-capable; M5STACK converter: flash-capable).
+
+PRTA integration (verified live 2026-09-30 on router 326D, rust v0.6.0-alpha4):
+
+- `lib/m5.py` — `M5Mint`: USB-serial discovery (`Hades2001`/`M5STACK` by-id,
+  override with `TOLLGATE_M5_PORT`), status parsing, health probe, and
+  `M5Minter(HttpMinter)` (historical — the class is gone; the M5 lane now wraps the reference minters) which trusts a born-PAID quote-create and only polls
+  the quote GET when the create response is not PAID (works on all fw versions).
+- `m5_mint` fixture (session) — skips tests when no Atom is attached.
+- `tests/api/test_m5_hardware_mint.py` — pins the M5 into `accepted_mints`
+  (config+wallet.db backed up, restored), mints from hardware, pays → `kind=1022`,
+  double-spends → `kind=21023`. Marker: `api critical hardware`.
+
+Operational notes:
+
+- **Payment attribution**: the rust backend grants the session to the paying
+  client's MAC (source IP → DHCP leases). The pytest host itself works as the
+  paying client when it sits on the router's LAN.
+- **Startup window**: after `restart_backend`, `:2121` answers immediately but
+  returns a `"This TollGate is starting up… retry_after: 5"` body while the
+  wallet + mint health load — readiness = the `kind=10021` ad, not a 200
+  (`_wait_backend_ready` in the test handles this).
+- **Firmware <0.2 quirks** (fixed in m5-cashu-mint v0.2.0): parametrized GET
+  routes 404 (quote/keys by id) — served via `onNotFound` prefix matching in
+  0.2; keyset regenerated every boot — 0.2 seeds a deterministic DRBG from an
+  NVS seed, so keyset (and unspent tokens) survive reboots.
+- **Power**: the bench unit is FT232-powered and brownout-reboots under load
+  (`WIFI_POWER_2dBm` mitigates). A mid-test reboot invalidates pre-0.2 keysets;
+  after 0.2 it only blips the mint offline briefly. Proper USB power removes it.
+- **Flashing**: impossible through the bench FT232 (`/dev/ttyUSB0`, Hades2001
+  adapter) — it wires RTS→EN and TX/RX but **not DTR→IO0**, so no software can
+  enter download mode (proven 2026-10-01: esptool default-reset at 115200/460800,
+  full DTR/RTS latch matrix, two-port cross-wire via the second FT232 — all no
+  sync). Flash via the Atom's **own USB-C** (`/dev/ttyACM*`, native USB serial,
+  auto-reset works — same path tollgate-demo used) or bridge IO0→GND during a
+  serial reset pulse. Post-flash verification runbook: m5-cashu-mint README.
+- Keep scenarios written against `Bench`-style abstractions: the M5 is a mint
+  fixture, not a router — do not point router-only tests at it.
+
 ## AI Agent Rules
 
-- **Bug reports filed by AI agents must go to the Amperstrand fork only** ([Amperstrand/tollgate-module-basic-go](https://github.com/Amperstrand/tollgate-module-basic-go)), NOT the upstream OpenTollGate repo. This avoids noise for upstream maintainers. Filing on OpenTollGate is acceptable only when a human explicitly requests it.
+- **Bug reports filed by AI agents go to the upstream repo** ([OpenTollGate/tollgate-module-basic-go](https://github.com/OpenTollGate/tollgate-module-basic-go)). The former working fork (`Amperstrand/tollgate-module-basic-go`) was archived on 2026-10-11 after all content was verified merged upstream — its issue tracker is read-only, so filing there is no longer possible. Historical fork issue numbers (#1–#108) predate the upstream numbering and must not be conflated with it.
 - AI agents should not review PR #86 or ask @c0brador to merge it.
 
 ## Security Notes
@@ -1474,9 +1593,16 @@ The Makefile enforces a hardware lock (`hardware.lock`) to prevent concurrent ac
 
 - `make lock PHASE="description"` creates `hardware.lock` with session info (user, hostname, branch, timestamp, phase)
 - All hardware test targets call `require_hardware_lock` and fail if the lock is missing
+- Python runners (pymake, release-matrix, pytest `--lock-phase`) gate on the **same** `./hardware.lock` via `lib/hardware_lock.py` — the module re-targets `tollgate_lab`'s canonical implementation at the repo-root lock file (its own path derivation points into site-packages when installed non-editably) and its standalone fallback mirrors the Makefile's key-value format
+- The labgrid venue takes **both** mutexes — the place AND `./hardware.lock` — via `lib/labgrid_venue.venue_mutex` (the #232 transition invariant), so venue sessions and legacy Make/pymake sessions exclude each other
+- `TOLLGATE_VENUE` selects the router-access path: `labgrid` forces the venue (unconfigured → exit 4), `direct` forces the legacy env path, unset/`auto` prefers the venue on physical runs when this host has the inventory + labgrid-client + a place mapping (explicit `TOLLGATE_LABGRID_PLACE`, or the dossier matching `TOLLGATE_SSH_HOST`). Auto falls back to legacy ONLY on missing setup — a resolved venue that then fails (unknown/protected place, contention) is fatal, never a silent direct fallback. Lane values `virtual`/`physical`/`skip` (extensive-test.sh) keep the legacy path
 - `make unlock` removes the lock
 - `make force-unlock` force-releases (use with caution)
 - ESP32 boards have separate per-board locks (`esp32/locks/board-a.lock`, etc.)
+
+### Labgrid exit criteria (do NOT remove the lock layer before these hold)
+
+The lock layer retires only when labgrid place acquisition replaces it — tracked in the "Retire the file-based hardware lock" GitHub issue. Until then it is the only mutex covering 65+ Make targets, pymake, and release-matrix on shared physical hardware.
 
 ### Router label convention
 
@@ -1861,7 +1987,7 @@ and emit the matching config.
   `CDK_MINTD_LN_*` → `CDK_MINTD_PAYMENT_BACKEND_*`.
 - `[fake_wallet]` still exists; keep `min_delay_time = 0` /
   `max_delay_time = 0` — 0.18 defaults are 1–3s, which slows every mint.
-- NUT-04/07 HTTP behavior is unchanged for our flows (HttpMinter,
+- NUT-04/07 HTTP behavior is unchanged for our flows (CdkCliWallet,
   checkstate verified live on 0.18.0: full payment E2E + unknown-Y probe
   both pass; unknown Y still reads `UNSPENT`, consistent with
   `unwrap_or(State::Unspent)` in `check_spendable.rs`).
@@ -1958,6 +2084,91 @@ in the spirit of `fix_nodogsplash_dhcp()`.
 - `tests/browser/tollgate-portal-lightning.spec.mjs` — hardware regression for
   the Lightning capability probe + balance page.
 
+Environment traps found while verifying:
+- **neverssl.com is TCP-blocked from this network** (ICMP passes) — a
+  connectivity probe must be IP-literal (1.1.1.1 serves HTTP 301) and must
+  NOT use `-L`: its redirect target needs DNS, and DNS-through-NDS is
+  governed by `users_to_router`, which allows **tcp/53 only** — UDP DNS from
+  a gated client fails. The Debian client's steady-state resolver must be
+  the router (cloud-init's 10.99.99.2 default only answers during
+  provisioning; its resolv.conf is a symlink — `rm` it before writing).
+- **Backend rate limit (tmbg#88, Go backend only)**: post-merge-14 wraps the
+  payment root in `RateLimitMiddleware` — 10 req/min per client IP. Suite
+  payment cadence + reruns trip it (`kind 21023` / `rate limit exceeded`);
+  absent in post-merge-12. Env knob `TOLLGATE_RATE_LIMIT_RPM` exists but is
+  not persistable through the init script. **Correction (2026-09-28)**: the
+  21023-means-rate-limit mapping is Go-only — on rust-basic `kind 21023` is
+  the GENERIC payment-failure kind; see the "kind 21023 was never rate
+  limiting" section below.
+- **reveal-seed is a derivation oracle now** (recontracted 2026-09-06, PRTA
+  #102): `POST /identity/reveal-seed` takes a raw 12-word BIP39 mnemonic as
+  the body (not JSON) and returns the identity derived from it — it no longer
+  reveals the stored seed. Empty/garbage body → 400 `invalid mnemonic`;
+  GET → 405; non-loopback → 403. Passwords are v2-format: six lowercase
+  BIP39 words hyphen-joined (the Nato-Nato-Nato-NN regexes are stale).
+  `tests/api/test_pr193_identity_endpoints.py` pins the full contract. (Also:
+  CORS hardening 415s busybox wget's form content-type on the payment root —
+  use curl with an explicit content-type.)
+- **OpenWrt deletes uci-defaults scripts after execution** — post-boot
+  firmware legitimately has no `/etc/uci-defaults/99-tollgate-setup`; tests
+  must presence-guard.
+- The documented signal-timeout hang class struck again
+  (`test_startup_mint_recovery_latency` >10 min past `--timeout=180`); kill
+  + rerun the remainder is still the only recourse.
+
+## User-Story Test Architecture (2026-09-27)
+
+PRTA is the **authoritative test suite** — the single point of authority on
+expected TollGate behavior across all implementations (Go, Rust, NR7101,
+ESP32). Cross-implementation drift is caught by running the same user
+stories against every device.
+
+### Key Files
+
+- `config/behavior-contract.json` — versioned expected-behavior registry
+- `lib/contract.py` — helpers for reading the contract from tests
+- `tests/scenarios/stories/` — device-agnostic user-story tests
+- `tests/scenarios/stories/conftest.py` — ClientDevice protocol + adapters
+- `lib/clients/ssid.py` — SSID auto-resolution from router
+- `lib/labgrid_topology.py` — virtual topology manager (bridges, hwsim, QEMU)
+- `config/labgrid-env.yaml` — labgrid targets for all rig devices
+
+### Running Stories
+
+```bash
+# All stories
+make pytest-stories
+
+# Individual stories
+make pytest-story-pay        # user pays and gets internet
+make pytest-story-expiry     # session expiry and repayment
+make pytest-story-degraded   # degraded mode resilience
+
+# With env vars
+TOLLGATE_SSH_HOST=192.168.13.124 \
+TOLLGATE_SSID=TollGate \
+PHONE_SERIAL=ZY326DPC7R \
+TOLLGATE_TEST_MINT_URL=http://192.168.13.221:8383 \
+pytest tests/scenarios/stories/ --no-deploy --timeout-method=signal -v
+```
+
+### Labgrid Infrastructure
+
+Coordinator runs on `192.168.13.208:20408` (ai-legion). Places:
+- `android-test` — phone mutex (AndroidADDDevice, serial ZY326DPC7R)
+- `nr7101-router` — NR7101 router (NetworkService)
+- `tollgate-s3-hil` — ESP32 S3 HIL (existing)
+
+Exporters: `ai-legion-small-rig` (phone), `ai-legion-small-microfips` (ESP32s).
+
+### Design Principles
+
+1. User stories, not implementation tests — "user joins, pays, gets internet"
+2. Film well — every test produces video + screenshots + vision validation
+3. Contract JSON — behavior changes are visible in the diff
+4. Cross-implementation matrix — same story, different devices
+5. DRY — one test file per story, parameterized across devices
+
 ### Two root causes for the Lightning flow (both bit us)
 
 1. **Mint generation must match the backend wallet.** The Go backend's Cashu
@@ -1972,3 +2183,461 @@ in the spirit of `fix_nodogsplash_dhcp()`.
 
 Also: `wallet.db` caches mint URLs, so delete it after changing mints; use
 `scp -O` for OpenWrt.
+
+## Lessons Learned — v0.6 Release-Kit Session (2026-09-27)
+
+Four test-rail root causes from building the release kit against NR7101
+(tollgate-wrt v0.6.0-alpha4, Android 15 moto g(7) bench phone):
+
+1. **A stale firewall mark masqueraded as a "backend session keeper".**
+   `no_session` deauthed the phone yet internet persisted; the backend was
+   blamed for re-authenticating a live session — even a backend restart
+   "didn't help". Truth: a per-client `iptables -t mangle ... ndsOUT ...
+   MARK --set-xmark 0x20000/0x20000` rule (the NDS 5.0.2 auth-mark
+   workaround class) that `ndsctl deauth` does not track. NDS showed
+   `State: Preauthenticated` while the mark kept the gate open. Diagnosis:
+   compare `ndsctl status | grep <mac>` with `iptables -t mangle -S ndsOUT
+   | grep <mac>`. `tests/scenarios/stories/conftest.py:_deauth_device()` now removes
+   those rules on every deauth.
+
+   **Resolved 2026-09-28 — not a firmware bug.** The Go backend has no
+   iptables code (its ipk ships only an nft enforcement bridge that READS
+   marks). The stale rule was PRTA's own old workaround
+   (`fix_nds_auth_mark_rules`: in-place `-R` rewrite to `--or-mark 0x20000`),
+   which `ndsctl deauth` cannot remove — NDS deletes only the exact rule
+   it inserted. Bench-proven on the local-lab VM: auth → rewrite → deauth
+   leaves the rule behind; without the rewrite, deauth cleans up. The
+   repair was redesigned (606fb23) to insert one client-agnostic ndsNET
+   accept rule instead — no leak. `remove_nds_auth_mark_rules`
+   (lib/router.py, wired into `reset_state`) sweeps rules leaked by the
+   old approach. No upstream issue warranted.
+
+2. **The global `--timeout=60` killed phone-driving stories.** Story tests
+   carry `slow`, not `phone`, so the pytest.ini cap applied — a wifi-cycle
+   revalidation nudge alone runs 40s. The mid-flow kill also wedged the
+   phone and contaminated the NEXT test (join failure). `tests/scenarios/stories/
+   conftest.py` now stamps `timeout(300)` on every collected story via
+   `pytest_collection_modifyitems`. Rule: any test that drives the phone
+   needs phone-tier timeouts regardless of its marker.
+
+3. **The Android supplicant can wedge after an interrupted wifi-cycle.**
+   Symptom: WiFi ON but DISCONNECTED with zero association attempts
+   reaching the AP — visible in hostapd `logread`, not in dumpsys. A radio
+   toggle (`svc wifi disable` → `svc wifi enable`) resets it. `join_wifi`
+   now retries once through a toggle before giving up.
+
+4. **Concurrent lanes clobber shared-file edits.** A replaceAll routing fix
+   in conftest.py was partially overwritten by another session's fixture
+   edit written from a stale view; the loss surfaced only as a
+   wrong-device skip two runs later. After any concurrent commit lands in
+   the shared tree, re-grep for the old pattern to confirm every site
+   still holds your change.
+
+Readiness ≠ liveness struck again: a "V4 mint broken" verdict was a
+transient mint hiccup — `/v1/info` stayed green, a manual cdk-cli repro
+minted fine, and the test had swallowed the mint-step stderr entirely.
+`_mint_v4_token` now retries once and surfaces both subprocess stderrs.
+
+Release kit: `scripts/release-test.sh --version X --router IP --ipk F.ipk`
+(labgrid lock → scp+opkg flash → story suite → portal tab-copy → markdown
+report). First v0.6.0-alpha4 baselines: payment **0.71s end-to-end**
+(mint 0.06 / submit 0.58 / auth-wait 0.07), portal load 13ms, backend
+response 682ms. Upgrade-path story activates with `TOLLGATE_RELEASE_IPK`;
+concurrent-payment story with `TOLLGATE_DEBIAN_HOST`. Cross-implementation
+client routing: `TOLLGATE_STORY_CLIENT=debian-vm|omarchy-vm|android-phone`.
+
+
+## Rogue-DHCP Discipline — fixtures never compete with the network's DHCP authorities (2026-09-28)
+
+PRTA drives physical routers on the bench/house network. The authority map and enforcement live in conwrt-bench (`docs/NETWORK-SEGMENTATION.md`, issue #28): house LAN VLAN 13 and lab island VLAN 12 are served by the ERX ONLY; bench DUT VLANs 100N by the bench switch ONLY. A fixture answering DHCPDISCOVER or emitting RA outside its own isolated VLAN is a rogue that can take down the production house WiFi.
+
+1. **Every router under test is presumed armed**: fresh/default firmware runs DHCP + RA. Before a fixture shares any segment: `dhcp.lan.ignore='1'`, `dhcp.lan.ra='disabled'`, `dhcp.lan.dhcpv6='disabled'` — commit, restart, read back.
+2. **Fixtures attach to bench DUT bays (isolated VLANs) only** — never to ERX eth3 (production chain) or any shared/management segment.
+3. **A story that needs a DHCP server runs inside an isolated VLAN** (one VLAN, one server, owned by the segment owner).
+4. After package installs on fixtures, verify dnsmasq/odhcpd did not auto-start (the `apk add dnsmasq` lesson).
+5. Detection tripwire: on the ERX, `Drop-Lab-Rogue-*` firewall counters/log hits = a rogue is transmitting — find and quiet it before continuing the run.
+
+## Lessons Learned — "kind 21023" was never rate limiting (2026-09-28)
+
+The api payment tests failed with `kind 21023` for hours on the
+virtual-lab VM, survived a backend restart, and was diagnosed (via the
+GO-backend precedent, tmbg #88) as rate limiting. Wrong on two counts:
+
+1. **kind 21023 is the GENERIC payment-failure notice on rust-basic**
+   (`src/http/routes/pay.rs`: "kind 1022 on success or kind 21023 +
+   HTTP 400 on failure"). The GO backend's 21023-means-rate-limit
+   mapping does NOT carry over — always read the `content`/`code` tags
+   before diagnosing.
+2. **The actual failure**: `failed to open gate: ndsctl auth
+   02:00:00:00:00:01 failed after 5 attempts` — the router's DHCP lease
+   table was being poisoned (`10.99.99.100 → 02:00:00:00:00:01`) while
+   ARP held the true `de:54:4e:91:49:da`. The backend resolves MAC from
+   DHCP leases first, authed a phantom MAC, and every payment consumed
+   its token then rolled back. **The poisoner was PRTA itself**:
+   `tests/conftest.py`'s container client defaulted to the CLOUD-lab
+   container NIC MAC (`02:00:00:00:00:01` — correct only there) and
+   `ensure_dhcp_lease()` injects it into `/tmp/dhcp.leases` on every
+   `--client=container` run. Fixed: MAC now resolves env
+   (`TOLLGATE_CLIENT_MAC`) → router ARP truth → legacy constant.
+
+**The "route flip" was ICMP redirects.** The poc router's WAN sits on
+the same bridge L2 as its LAN, so the router legitimately emits ICMP
+redirects ("reach 1.1.1.1 via 10.99.99.2 directly"). The Debian client
+(ens3 accept_redirects=1, the Linux default) learns a `<redirected>`
+route-cache exception for the probe destination — invisible to
+`ip route show`, visible only in `ip route show cache` — and then
+bypasses the router AND its NDS gate for that destination: false
+gate-closed failures and false gate-open successes, flapping with the
+exception's expiry. NOTE `all.accept_redirects=0` is NOT enough: Linux
+takes the max of all/per-interface — set `ens3` itself.
+
+**Durable fixes**: dnsmasq static host pinned (`dhcp.@host` mac=real,
+ip=10.99.99.100) so the lease table cannot be poisoned for the client
+IP; bogus lease purged; client `/etc/sysctl.d/99-no-icmp-redirects.conf`
+(all + default + ens3 = 0) persisted; the scenario fixture pins the
+default route via the DUT and flushes the route cache each run;
+`test_payment_regression._pay_with_retry` treats gate-open failure as
+skip-class lab state (like MAC-lookup failure) instead of failing on
+infra. Diagnosis recipe when payments fail on any rig: read the full
+notice `content` first, then compare `ip neigh` with
+`cat /tmp/dhcp.leases` for the client IP — and when gate verdicts look
+impossible, check `ip route show cache` on the client.
+
+## Omarchy VM venue — cross-lane coordination (2026-09-28)
+
+The omarchy-cashu vm-testbed (repo `/home/ubuntu/omarchy-cashu`, runtime
+`~/tollgate-virtual-lab`) shares this host with PRTA's poc VMs. PRTA lanes
+occasionally hand this venue to other agents (first case: the omarchy-cashu
+plugin lane, 2026-09-28). Facts that made that handoff work:
+
+- **Launcher**: `~/tollgate-virtual-lab/labctl start omarchy-vm` (symlink to
+  `vm-testbed/host/relaunch-omarchy-vm.sh`), then ALWAYS
+  `vm-testbed/host/lab-net-up.sh` (idempotent, flock'd — see below).
+  Source `env.sh` + `env.local.sh` first: this rig's `VM_SSH_PORT=2223`.
+- **Topology**: guest has a real in-VM wifi stack (`mac80211_hwsim radios=3`
+  + hostapd APs in `/etc/omarchy-tb/`); TollGate AP SSID **TollGate-VM**
+  (NM profile of the same name; `sudo nmcli con up TollGate-VM` flips
+  cashud's `wifi.on_tollgate_ap=true`). Host side: `tg-om-toll-br`
+  (10.99.98.2 gateway) + `tg-om-home-br` (10.99.97.2, open) + fake internet
+  at 198.51.100.10 behind the nft gate valve.
+- **Guest shell**: `ssh -i ~/.ssh/id_ed25519 -p $VM_SSH_PORT omarchy@127.0.0.1`.
+- **Screendump**: QMP at `$LAB_ROOT/run/omarchy-qmp.sock`; helper
+  `uilib.sh:ui_shot` / `qmp_screendump`.
+- **Etiquette (both directions)**: never `labctl stop` (lab-wide — kills the
+  poc VMs); only `tg-om-*` resources; teardown via `stop-omarchy-vm.sh` +
+  `lab-net-down.sh`; leave bridges down; `tg-poc-*` untouched.
+- **Partial-teardown class (2026-09-28)**: daemons from prior sessions die
+  silently and pidfiles orphan (found: dead toll dnsmasq + a root-owned
+  `gate-daemon.sh` racing the current one). `lab-net-up.sh` re-asserts
+  everything — never assume the host side is still up. Documented in the
+  vm-testbed RUNBOOK (their repo) and enforced here by handoff convention.
+
+## Lab hardware: one single source of truth (2026-09-28)
+
+All lab hardware — routers, ESP32/STM32 fixtures, switches, power, serial —
+is declared in the **private repo `Amperstrand/conwrt-lab`** (`lab.yaml`:
+devices, MACs, IPs, topology, VLANs, labgrid places). This project does NOT
+own hardware state.
+
+Rules for code and agents in this repo:
+
+1. **Never hardcode device IPs, MACs, or serial-port paths.** Resolve from the
+   registry: `CONWRT_LAB=<conwrt-lab checkout>` +
+   `python3 $CONWRT_BENCH/scripts/lab_registry.py …`, or from a labgrid place.
+2. **Access hardware through labgrid places** (coordinator `ai-legion:20408`):
+   `labgrid-client -p <place> ssh|console|power`. Acquire/release for
+   exclusivity during tests.
+3. **Flashing/adoption goes through conwrt tooling** (`Amperstrand/conwrt-bench`):
+   `scripts/dut_recover.py --from-lab <device-id>` for recovery flashes,
+   `scripts/bench_net.py` for bay/VLAN changes. These update the registry.
+4. **State changes end with a registry commit** in conwrt-lab — if you changed
+   a device (flashed, moved, adopted), lab.yaml must reflect it before you
+   walk away.
+5. **When surprised, reconcile first**:
+   `python3 $CONWRT_BENCH/scripts/lab_registry.py reconcile` detects dead
+   devices, switch reboots, and place drift in one command.
+
+Env: `CONWRT_LAB` (this registry checkout) and `CONWRT_BENCH` (conwrt-bench
+checkout) are the two paths every hardware-touching tool understands.
+
+## Lessons Learned — live-commission read-only violation (2026-10-01)
+
+Full postmortem + fix queue + labgrid plan:
+`docs/live-commission-incident-2026-10-01.md`. Short version:
+
+- **`deploy_session` (autouse) mutates live state on EVERY run that lacks
+  `--no-deploy`** — even with zero deploy flags. At `tests/conftest.py:539-556`
+  it runs `enable_debug_portal()` + `ensure_test_mint()` + `replace_mints()`,
+  which **replaced a live router's 8-mint accepted_mints with
+  testnut.cashu.exchange and restarted the backend twice** during a
+  "read-only" commissioned run against the MT3000 (tollgate-326D).
+  `--no-deploy` is named after deployment but is the ONLY suppressor of state
+  prep. **F1 LANDED (PR #231)**: `--read-only` is fail-closed — 30 mutating
+  Router methods raise `RouterReadOnlyError`, deploy flags are refused, and
+  `config`/`destructive`-marked tests skip with a visible reason. Live
+  commissions pass `--no-deploy --read-only`.
+- **`replace_mints()` has a destructive default** (`mint_urls=None` →
+  `[TEST_MINT_URL]`) — calling it bare nukes the operator's mint list
+  (`lib/router.py:834`). **F3 LANDED**: explicit list required, >1→1 shrinks
+  refused without `force` (`tests/unit/test_replace_mints_guard.py`).
+- **Detection was luck** (pytest live-log printed "Replaced accepted mints…"),
+  **recovery was luck** (`logread` boot lines enumerated the pre-run mints +
+  the m5 lane's config backup existed + mutating methods are
+  read-modify-write so only accepted_mints drifted). Snapshot/diff/restore
+  tooling is queued (F4: `scripts/live-snapshot.py`); commissioned runs get
+  template v2 (invariants + state audit + `--json-report`).
+- **Skip forests hide dead coverage**: the same commission ran 8 passed /
+  18 skipped — 15 of the skips assert the pre-PRTA-#103 net4sats portal
+  layout and can never pass on current packaging, meaning **the :2051 SPA
+  portal has zero passing pytest coverage** while the dashboard reads
+  "0 failed". **F7 LANDED (PR #231)**: `portal_layout()` detection +
+  `TestSpaPortal2051` — soak-verified 4/4 on a live VM
+  (`docs/local-lab-soak-2026-10-13.md`).
+- **Unpinned contracts found**: `:2051` bare `/` answers 403 (intended?);
+  `session-state?mac=X` returns `{"status":1,"mac":"","state":"none"}`;
+  `/usage` sentinel `-1/-1`. Queue: pin all in `config/behavior-contract.json`
+  (F8).
+- **Running-state vs on-disk config drift observed**: backend pid probed a
+  mint (`8333.space`) absent from on-disk config — either a config edit
+  without restart or wallet.db registration outliving config removal.
+  Unresolved; rig experiment queued.
+- Labgrid coordinators need reconciliation: AGENTS.md said
+  `192.168.13.208:20408` (ai-legion), the rig-adoption doc says
+  `192.168.13.221:20408` (ai-legion-small). Confirm which owns
+  physical-router places before adding the MT3000 exporter-on-laptop place
+  (F9, which also replaces hand-relayed runbooks with acquire/release +
+  snapshot-audit commissions).
+
+## Lessons Learned — 2026-10-06 bench night (latest-master prep)
+
+### `nmcli -g psk` without `--show-secrets` prints the literal mask `<hidden>`
+
+8 printable chars — it hashes, it length-checks, and it is NOT the
+password. Two failures traced to it in one night: a WPA2 auth loop on a
+freshly flashed stick ("provisioned with the right PSK" — actually
+`<hidden>`), and a router uplink UCI key committed with the mask (its
+STA can never associate). Always extract with
+`nmcli -g 802-11-wireless-security.psk --show-secrets connection show X`
+and pipe it straight into the consumer — never commit it, never trust a
+masked read. Same class as "USB by-id names adapters, not chips":
+verify what a tool actually prints before treating it as ground truth.
+
+### Building latest tollgate master locally (CI is dead since Aug 27)
+
+Upstream "Build and Publish" froze with the org billing hold — artifacts
+stop Aug 27 while main is far ahead. The repo's own
+`packaging/local-build-ipk.sh` replicates CI per-arch:
+
+```bash
+git clone https://github.com/OpenTollGate/tollgate-module-basic-go
+cd tollgate-module-basic-go
+PATH=/path/to/node-v22.17.0/bin:$PATH make portal-build   # pin! (v26 fails)
+ARCH=x86_64 GOTOOLCHAIN=go1.26.8 PKG_VERSION=vX-local bash packaging/local-build-ipk.sh
+```
+
+`make portal-build` is mandatory first — a clean checkout ships an ipk
+whose portal renders nothing (#335). Node pin per
+packaging/build-inputs.json (v22.17.0; a /tmp tarball works, no system
+change). Go pin via GOTOOLCHAIN (auto-fetches 1.26.8; system 1.27
+trips the guard). Deploy: `scp -O` to the router, `opkg install
+--force-overwrite`, `rm -f /etc/tollgate/wallet.db` (mint-cache lesson),
+restart, require the kind:10021 ad (`Router.wait_for_backend_ad`).
+
+### Labgrid bench map (ai-legion coordinator; 2026-10-06 cleanup)
+
+Places: `m5stick` (both stick adapters; the mint-stick lives here —
+restored to mint v0.2.x 2026-10-06, see m5-cashu-mint registry),
+`cyd-tollgate` (TollGate terminal CYD — terminal-project board,
+read-only for us), `tollgate-s3-hil` (our S3 HIL), `x1860-1`/`x1860-2`
+(PRTA ALPHA/BRAVO COVR-X1860; DUT-bay VLANs 104/105.x are NOT routed
+from the house LAN — bench access goes through conwrt-bench),
+`ws3915i-79b1` (PRTA CHARLIE), `nr7101-router` (place match broken —
+points at a vanished ap-lan7 NetworkService; fix before relying on it),
+`android-test` (phone exporter on ai-legion-small). Stale acquisition
+hygiene: 8-day-old holds on ALPHA/BRAVO from the dead ai-legion-small
+coordinator era were released; check `labgrid-client who` before
+blaming hardware. Known gaps: `labgrid-client console` cannot drive
+generic `SerialPort` resources (drive raw tty over SSH while holding
+the place, or convert exports to NetworkSerialPort), and a root ser2net
+(telnet :7171) squats the FT232R outside labgrid's exclusivity — one
+access pattern per device, consolidate before it bites.
+
+## Lab host WiFi is management — NEVER a test surface (hard rule)
+
+`ai-legion` and `ai-legion-small` WiFi interfaces (`wlp4s0` on small) carry
+their **management uplink** — small's only route to the house LAN is its WiFi
+(default route via wlp4s0). Joining a test SSID, scanning for test networks,
+or otherwise reconfiguring these radios **orphaned-hosts risk**: it cuts the
+path every lane uses to reach the coordinators, exporters, mint, and the
+hosts themselves. A 2026-10-14 near-miss (planned SSID swap on small for a
+client-discrimination test) was stopped by the owner before any damage —
+do not retry it. WiFi client testing needs a dedicated client: the phone,
+a USB dongle on the driver host, or a VM. If a test seems to need a lab
+host's radio, it needs a different design.
+
+### The virtual-lab VMs are shared — check for live lanes before driving them
+
+Both poc QEMUs died mid-deploy while another lane's automation was
+actively provisioning the same VM (omarchy dnsmasq up, socat serial
+bridge, console typing). Two provisioners over one lab = the exact
+resource fight labgrid exists to prevent. Before start-poc/deploy on
+the ai-legion lab: check for foreign processes (dnsmasq omarchy-tb,
+socat :7301/:7171, live provisioning in serial.log) and yield if
+present. (The 2026-09-28 omarchy handoff etiquette generalizes: the
+lab fabric is multi-lane.)
+
+## Credentials doctrine (learned from #7 — the router-password leak)
+
+Secrets have exactly three legal homes in this ecosystem. Anything else is a bug:
+
+1. **sops** (`conwrt-bench`, `secrets/`) — the vault for infrastructure secrets
+   (switch admin passwords, API keys). Reference by path in docs, never paste
+   the value.
+2. **Untracked local env files** (`.env`, `*/routers.env`, `*/boards.env`,
+   `credentials/`) — machine-local connection details. Tracked files must
+   carry ONLY `.example`/`.template` variants with placeholder values. A
+   tracked env file with real values is an incident: untrack it, rotate, and
+   add an allowlist-scoped note — see below.
+3. **The device/lab itself** — anything that must exist on a router/phone
+   (root passwords, PINs) lives there and in the operator's password manager.
+
+Rules that prevent the #7 class:
+- **Never copy a live env file into the repo tree**, not even "temporarily",
+  not even renamed, not even as `*-backup`. That exact move shipped the leak.
+- `.gitignore` covers the whole `.env.*` / `*routers.env` / `*boards.env`
+  class; tracked files override ignore rules, so the FIRST commit of any env
+  file must be its `.example` twin.
+- The pre-commit hook runs **gitleaks over your staged diff** — if it fires,
+  rotate/remove the secret. A false positive gets a scoped `.gitleaks.toml`
+  allowlist entry with a comment naming why it is safe; never weaken the
+  ruleset (the config must always EXTEND gitleaks' defaults — a bare config
+  scans with zero rules, which is how the early allowlist era saw nothing).
+- Weekly full-history scan (`gitleaks git --redact`) runs in CI (PRTA#22);
+  re-run it manually after any incident-class change.
+- Agents (opencode/codex/herdr lanes) are bound by all of the above and in
+  addition never invent, echo, or paste credential values into issues, PRs,
+  or logs — shape descriptions only ("24-char mixed-case", not the value).
+- Honest limitation: pattern scanners catch FORMAT-shaped secrets (sk-…, key=…).
+  The #7 password was formatless — for that class, the env-file rules above and
+  the gitignore are the primary defense; the scanner is the second net, not the first.
+
+## Lessons Learned — 2026-10-13 official-install-path + lean-venue session
+
+### The official install path is the tollgate-installer + FreedomTechFeed feed, not (only) Nostr
+
+`tollgate-installer` (OpenTollGate, Go binary — the old Electron README is
+stale) serves a wizard at :8099, discovers vanilla OpenWrt routers on LAN, and
+drives flash → root password → uplink → install → brand → portal → LNURL →
+health over SSH. Package source is **feed-first**: `FreedomTechFeed/packages`
+GitHub releases at deterministic per-arch URLs (`.apk` for OpenWrt 25+,
+`.ipk` for ≤24.x, offline tarballs, signed SHA256SUMS), with GitHub-release
+fallback for `aarch64_cortex-a53` only. **2026-10-08 club-scope decision:**
+the feed publishes only `aarch64_cortex-a53` (GL-MT3000/MT6000) and
+`mips_24kc` (AR300M); `x86_64` and `mipsel_24kc` are parked (404). The last
+x86_64-carrying tag is **v0.6.0-rc1-pre25** — pin it via
+`TOLLGATE_FEED_RELEASE_TAG` to run the official installer against QEMU
+venues. The headless harness is `install-and-test.sh` (curl|bash) and the
+canonical procedure is the installer repo's `docs/install-runbook.md` (§0
+resolve-newest-tag first — never paste a stale tag). Release cadence is fast:
+rc1→rc4 shipped in two days (2026-10-11..13). The Nostr kind-1063 channel
+remains the tollgate-os image lane; `lib/deploy.py`'s blossom resolver is NOT
+the installer's package path.
+
+### The lean official-installer venue (br-laneA pattern)
+
+Testing the official installer needs no full lab: one OpenWrt x86_64 QEMU on
+an isolated host-only bridge is enough (the wizard's verification is
+self-contained). Recipe (built on ai-legion-small, ~15 min, rogue-DHCP-safe
+by construction):
+
+- `br-laneA` 10.99.150.1/24 + tap + `ip_forward=1` + MASQUERADE NAT +
+  FORWARD accepts. **Scoped ufw rule for the mint** (`allow from
+  10.99.150.0/24 to any port 8383`) — small's ufw is default-deny INPUT;
+  without it the VM→mint path dies silently.
+- QEMU: `-enable-kvm -m 512 -drive …img,if=virtio -netdev tap …
+  -serial unix:console.sock,server=on,wait=off -monitor unix:…` (QEMU ≥8.2
+  rejects legacy `server=nowait`). The **ext4 combined image persists** —
+  installed packages + config survive VM restarts, so venue re-bring-up is a
+  plain relaunch.
+- Provision over the serial socket with one-shot `socat` writes (output with
+  no attached client is dropped — empty reads ≠ dead guest; ICMP is the
+  liveness truth). Set LAN static (VM gw = host bridge IP).
+- Run the harness headless: it needs `TOLLGATE_ADMIN_PASSWORD` (≥8 chars,
+  else deploy 400s), and pre-trust the VM's host key via
+`TOLLGATE_TRUST_HOST_KEY=$(ssh-keyscan …)`. **The wizard sets root =
+adminPassword mid-deploy** — the harness's own post-verify then fails
+spuriously with the old password (filed upstream); use the admin password
+afterward.
+
+### ai-legion "lab instability" is often host memory contention
+
+Bring-up cycles failing with guests freezing exactly at
+`/etc/init.d/network restart` (serial silent, no panic text, qemu alive but
+<200 MB touched) + a memcg OOM-killed lab QEMU in dmesg = the HOST is
+thrashing (that day: 7 root opencode sessions ≈ 6-7 GB + java + cuttlefish,
+19/32 GB used, 13 GB swap). Before debugging the lab or blaming issue-#21
+classes, run `free -m` + `ps -eo rss,user,comm --sort=-rss | head` and check
+dmesg for `Memory cgroup out of memory`. Yield to foreign lanes; ai-legion-small
+had 17 GB free the same day and ran the whole campaign.
+
+### rc4-era payment behaviors (verified live, 2026-10-13, lean venue + fakewallet)
+
+- **Consume-before-gate is fixed on the client-not-registered path**: paying
+  before the client touched the portal returns `kind:21023,
+  code:"client-not-registered"` WITHOUT consuming the token — the same token
+  paid (`kind:1022`, allotment 88080384, session metered `1024/88080384`,
+  NDS client tracked) after one portal fetch. The 2026-09-01
+  "every failed submit burns the token" class no longer applies here.
+- Double-spend of a paid token rejects with `kind:21023,
+  code:"payment-received-grant-pending"`.
+- Both belong in `config/behavior-contract.json` + a regression test (issue
+  filed).
+- Launch the VM via `sudo systemd-run --unit=<name> qemu-system …` (no
+  `-daemonize`): a plain `nohup … &` under an SSH session gets reaped when
+  logind tears the session scope down — the venue VM died twice at session
+  exit that way (the persisted ext4 image made relaunch cheap, but the
+  transient unit survives sessions).
+- Liveness from another host across the routed venue path is **TCP, not
+  ICMP**: ICMP can drop while SSH/HTTP flow — probe the service port
+  (`bash -c "echo > /dev/tcp/<ip>/22"`), never trust a venue-down verdict
+  from ping alone.
+- Paying-client attribution works with the pytest/lab host on the router's
+  LAN (ARP path) — no Debian client VM needed for API-level payment rails.
+
+### accepted_mints is object-format (config v0.0.10) and malformed values fall back SILENTLY
+
+`accepted_mints` takes MintConfig objects: `url, min_balance,
+balance_tolerance_percent, payout_interval_seconds, min_payout_amount,
+price_per_step, price_unit, purchase_min_steps` (struct:
+`src/config_manager/config_manager_config.go`). Writing a plain string array
+is **silently ignored** — the backend boots with a 7-public-mint default
+list (coinos, minibits, lnserver, macadamia, westernbtc, kashu, cuba).
+Dangerous on commissioned routers (silent money-path swap; same class as the
+#103 replace_mints incident). Filed upstream; until fixed, always jq-edit
+with full objects and verify via `logread | grep "Accepted Mints"`.
+
+
+## Local-lab fresh-cycle gotchas (2026-10-13, rc4 re-soak)
+
+Three ways a `--fresh` DUT overlay breaks tooling that worked against the
+persisted overlay — all found in one session, all fixed in-tree:
+
+1. **A fresh overlay changes the VM's host key.** `StrictHostKeyChecking=no`
+   does NOT save you: a CHANGED key in a real `known_hosts` is a hard ssh
+   error ("REMOTE HOST IDENTIFICATION HAS CHANGED"). Every lab ssh/scp must
+   pair the flag with `-o UserKnownHostsFile=/dev/null` (now uniform in
+   `install-package` and all 11 runner calls in `run-local-tests.sh`; the
+   rest of PRTA already did).
+2. **opkg refuses extensionless local files** ("Unknown package
+   /tmp/lane-pkg") exactly like apk3 — `install-package` stages as
+   `/tmp/tollgate-wrt-lane.$ext` on both lanes now.
+3. **A pristine base needs `opkg update` before `install-package`** — the
+   declared DEPENDS (nodogsplash/jq/ca-bundle) pull cleanly once feeds are
+   current; a fresh 24.10 base has none of them.
+
+Same session's deeper findings live in
+`docs/local-lab-soak-2026-10-13.md` (rc4 postinst reports SUCCESS over a
+husked portal — tmbg #715 evidence; entry_ui default-vs-convergence —
+tmbg #928) and the first-boot serial-timeout recovery is documented in the
+fast-start lesson above: re-run start-poc, the already-provisioned
+detection takes over.

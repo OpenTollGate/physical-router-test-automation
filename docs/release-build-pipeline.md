@@ -13,7 +13,7 @@
 | `OpenTollGate/tollgate-captive-portal-site` | The captive-portal SPA (Vite build). Embedded into the package at build time, pinned by commit |
 | `OpenTollGate/tollgate-os` | Firmware image builder — consumes the Nostr release channel, not git |
 | `net4sats/*` | Retail product identity on top of TollGate: branded portal copy, onboarding wizard, its own OpenWrt feed |
-| `Amperstrand/tollgate-module-basic-go` | Working fork (agent-filed issues live here) |
+| `Amperstrand/tollgate-module-basic-go` | ARCHIVED 2026-10-11 — all content verified merged upstream; agent-filed issues now go to `OpenTollGate/tollgate-module-basic-go` |
 
 ## How the portal is compiled into the final artifact
 

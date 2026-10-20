@@ -1,0 +1,168 @@
+# stories.yaml — machine-readable twin of user-stories.md.
+#
+# The behavioural contract PRTA tests every backend against. Statuses:
+#   pass | fail | diverges | n/a | pending | pending-venue | pending-audit
+# A `pass`/`fail` MUST name the test that proves it. `diverges` MUST carry
+# a note naming the tradeoff (full prose in user-stories.md).
+#
+# scripts/run-behavior.sh joins live pytest results onto this file; the
+# report is generated, never hand-written.
+version: 1
+doc: user-stories.md
+backends:
+  - { key: rust-v2, repo: OpenTollGate/tollgate-rs,        runner: "pytest tests/backends/ --backend rust-v2" }
+  - { key: go,       repo: OpenTollGate/tollgate-module-basic-go, runner: "pytest tests/api (needs router; see TEST_SETUP.md)" }
+  - { key: rust,     repo: Amperstrand/tollgate-rs-ai-research-and-experiments, runner: "pytest --backend rust (needs V1 binary; known gaps #42 #52)" }
+  - { key: rust-basic, repo: Amperstrand/tollgate-module-basic-rust, runner: "run_matrix.py --backend rust-basic (host venue)" }
+
+stories:
+  - id: US-P1
+    title: Prepaid, never on credit
+    backends:
+      rust-v2:  { status: pending,  note: "needs fault-ordering test; see matrix.yaml pay-kill scenarios for the v1-shaped version" }
+      go:       { status: pending-audit, note: "portal refuses auth before token clears; map to api suite" }
+      rust:     { status: pending-audit }
+      rust-basic: { status: pending-audit }
+  - id: US-P2
+    title: The metered unit is what the operator delivers
+    diverges: true
+    backends:
+      rust-v2:  { status: pass, test: "tests/backends/test_tollgate_rs_v2_host.py::test_unit_is_declared", note: "bytes; one voucher = one byte" }
+      go:       { status: diverges, note: "sells MINUTES (price_per_minute): human-legible, cheap to meter; speed is not a product" }
+      rust:     { status: diverges, note: "V1-compat API follows the go shape (minutes) on top of v2 crates" }
+      rust-basic: { status: diverges, note: "port of the go model" }
+  - id: US-P3
+    title: Reserving a rate buys time at a speed
+    backends:
+      rust-v2:  { status: pass, test: "tests/backends/test_tollgate_rs_v2_host.py::test_gateway_shapes_the_client_to_what_it_bought", note: "2 MB/s demand -> 2.5 MB/s reserved (125% headroom)" }
+      go:       { status: n/a, note: "no rate product: time only" }
+      rust:     { status: n/a }
+      rust-basic: { status: n/a }
+  - id: US-P4
+    title: Without a reservation, pay per use
+    backends:
+      rust-v2:  { status: pending, note: "needs a demand-0 + traffic test asserting usage-only draw" }
+      go:       { status: n/a }
+      rust:     { status: n/a }
+      rust-basic: { status: n/a }
+  - id: US-P5
+    title: Budget deadline - renewed, lapse is forfeit
+    backends:
+      rust-v2:  { status: pass, test: "tests/backends/test_tollgate_rs_v2_host.py::test_budget_is_renewed_not_forfeit", note: "renewal asserted; forfeit-at-deadline covered upstream by testing/forwarding (phone scenario), prta lane pending" }
+      go:       { status: diverges, note: "minutes are consumed linearly; no reserved-rate budget concept" }
+      rust:     { status: pending-audit }
+      rust-basic: { status: pending-audit }
+  - id: US-P6
+    title: A purchase takes effect on arrival
+    backends:
+      rust-v2:  { status: pending, note: "cumulative signed state; needs message-loss injection (qemu venue)" }
+      go:       { status: diverges, note: "one-shot tokens instead of channel state; replay safety by uniqueness (I3/I6 in matrix)" }
+      rust:     { status: pending-audit }
+      rust-basic: { status: pending-audit }
+  - id: US-E1
+    title: The stranger is carried far enough to pay
+    diverges: true
+    backends:
+      rust-v2:  { status: pass, test: "tests/backends/test_tollgate_rs_v2_limits.py::test_unpaid_peer_is_carried_at_minimum_flow", note: "4096 B/s allowance, session alive, not blocked" }
+      go:       { status: diverges, note: "portal BLOCKS until paid: simpler to audit, first contact needs the web UX" }
+      rust:     { status: diverges, note: "V1-compat follows go" }
+      rust-basic: { status: diverges, note: "port of the go model" }
+  - id: US-E2
+    title: The enforcer holds a peer to what it bought
+    backends:
+      rust-v2:  { status: pass, test: "tests/backends/test_tollgate_rs_v2_host.py::test_bytes_move_through_the_data_plane", note: "asserts bytes, not elapsed time" }
+      go:       { status: pending-audit, note: "data-allotment.spec.mjs measures consumption to session end; map it" }
+      rust:     { status: pending-audit }
+      rust-basic: { status: pending-audit }
+  - id: US-E3
+    title: When the money runs out, the gate closes
+    backends:
+      rust-v2:  { status: pending, note: "covered upstream by testing/forwarding; prta qemu lane pending-venue" }
+      go:       { status: pass, test: "tests/phone/test_expiry_kick.py", note: "session timer expiry kicks the client" }
+      rust:     { status: pending-audit }
+      rust-basic: { status: pending-audit }
+  - id: US-E4
+    title: The operator caps what it will promise
+    backends:
+      rust-v2:  { status: pass, test: "tests/backends/test_tollgate_rs_v2_limits.py::test_buyer_is_shaped_at_the_operator_cap_not_blocked", note: "grants.max_rate; refused terms, still carried at the cap" }
+      go:       { status: pending-audit, note: "concurrent-buyer caps exist (test_concurrent_payments.py); semantics differ, map them" }
+      rust:     { status: pending-audit }
+      rust-basic: { status: pending-audit }
+  - id: US-R1
+    title: Budgets survive a restart
+    backends:
+      rust-v2:  { status: pass, test: "tests/backends/test_tollgate_rs_v2_host.py::test_budget_survives_the_gateway_restart" }
+      go:       { status: pending-audit, note: "reboot-recovery.spec.mjs covers router reboot; map budget-vs-session semantics" }
+      rust:     { status: pending-audit }
+      rust-basic: { status: pending-audit }
+  - id: US-R2
+    title: A blipped link resumes its channels
+    backends:
+      rust-v2:  { status: pass, test: "tests/backends/test_tollgate_rs_v2_host.py::test_client_restart_comes_back_to_its_budget", note: "same channel ids, no new funding" }
+      go:       { status: n/a, note: "no channels; sessions re-established by MAC" }
+      rust:     { status: n/a }
+      rust-basic: { status: n/a }
+  - id: US-R3
+    title: Channels roll over, buying continues
+    backends:
+      rust-v2:  { status: pass, test: "tests/backends/test_tollgate_rs_v2_limits.py::test_channels_roll_over_and_buying_continues", note: "5 MB channels, several rollovers, rate maintained" }
+      go:       { status: n/a }
+      rust:     { status: n/a }
+      rust-basic: { status: n/a }
+  - id: US-R4
+    title: A failed settlement is retried, not lost
+    backends:
+      rust-v2:  { status: pending, note: "needs a flaky mint; covered upstream by unit tests (FlakySettle)" }
+      go:       { status: n/a }
+      rust:     { status: n/a }
+      rust-basic: { status: n/a }
+  - id: US-M1
+    title: "No funds disappear (I1)"
+    backends:
+      rust-v2:  { status: pending, note: "feasible: mint sqlite + wallet + control socket; not yet wired" }
+      go:       { status: pending, note: "matrix.yaml host runner supports go" }
+      rust:     { status: pending-venue, note: "matrix host_runner pending" }
+      rust-basic: { status: pending, note: "matrix host runner supported; scenario set not yet executed here" }
+  - id: US-M2
+    title: "One payment, one session (I2)"
+    backends:
+      rust-v2:  { status: pending }
+      go:       { status: pending-audit, note: "test_concurrent_payments.py is adjacent; verify retry semantics" }
+      rust:     { status: pending-audit }
+      rust-basic: { status: pending }
+  - id: US-M3
+    title: The operator can extract what it earned
+    diverges: true
+    backends:
+      rust-v2:  { status: diverges, note: "settles own mint / market (hop-by-hop liquidity); Lightning edge deferred to the market layer" }
+      go:       { status: diverges, note: "Lightning payout sweeps with profit-share splits - pays into the existing economy today" }
+      rust:     { status: pending-audit }
+      rust-basic: { status: diverges, note: "follows go" }
+  - id: US-M4
+    title: Reused value buys nothing
+    backends:
+      rust-v2:  { status: pending, note: "spent-proof set in mint sqlite; needs a replay test" }
+      go:       { status: pending-audit, note: "fund/drain suites exercise token lifecycle; verify double-spend" }
+      rust:     { status: pending-audit }
+      rust-basic: { status: pending-audit }
+  - id: US-I1
+    title: A peer is its key
+    backends:
+      rust-v2:  { status: pending, note: "key<->address binding asserted upstream (fips topology); prta lane pending" }
+      go:       { status: pending-audit, note: "nostr identity signs adverts; connection binding differs - document" }
+      rust:     { status: pending-audit }
+      rust-basic: { status: pending-audit }
+  - id: US-I2
+    title: The operator prices their own resource
+    backends:
+      rust-v2:  { status: pending, note: "price surfaces on the market (deferred); vouchers accepted_mints asserted in configs only" }
+      go:       { status: pending-audit, note: "price_per_minute + accepted_mints + profit_share in config.json" }
+      rust:     { status: pending-audit }
+      rust-basic: { status: pending-audit }
+  - id: US-I3
+    title: The unit is declared, not assumed
+    backends:
+      rust-v2:  { status: pass, test: "tests/backends/test_tollgate_rs_v2_host.py::test_unit_is_declared", note: "unit: byte in both snapshots" }
+      go:       { status: n/a, note: "single implicit unit (minutes); watt-hour/byte generality not a goal" }
+      rust:     { status: pending-audit }
+      rust-basic: { status: n/a }
