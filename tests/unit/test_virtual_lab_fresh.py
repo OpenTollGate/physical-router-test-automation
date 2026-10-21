@@ -70,7 +70,13 @@ def _make_stub_bin(tmp_path: Path) -> Path:
         "[ -n \"$STUB_SSH_RC\" ] && exit \"$STUB_SSH_RC\"\n"
         "case \"$cmd\" in\n"
         "  true) exit 0 ;;\n"
-        "  find\\ *) exec bash -c \"${cmd//\\/usr\\/bin/$STUB_USRBIN}\" ;;\n"
+        "  find\\ *)\n"
+        "    c=\"$cmd\"\n"
+        "    c=\"${c//\\/usr\\/bin/$STUB_USRBIN}\"\n"
+        "    c=\"${c//\\/usr\\/sbin/$STUB_USRSBIN}\"\n"
+        "    c=\"${c//\\/usr\\/lib/$STUB_USRLIB}\"\n"
+        "    c=\"${c//\\/lib/$STUB_LIB}\"\n"
+        "    exec bash -c \"$c\" ;;\n"
         "esac\n"
         "exit 0\n",
     )
@@ -189,15 +195,28 @@ def test_infra_script_default_keeps_idempotent_running_exit(tmp_path: Path) -> N
 
 def _run_dut_check(tmp_path: Path, usrbin_files: dict[str, int], ssh_rc: str = "") -> subprocess.CompletedProcess[str]:
     bin_dir = _make_stub_bin(tmp_path)
-    usrbin = tmp_path / "usrbin"
-    usrbin.mkdir(exist_ok=True)
+    # The doctor scan covers /usr/bin /usr/sbin /usr/lib /lib. Give EVERY one a
+    # stub tree and leave the other three empty, so "clean DUT" is an assertion
+    # about the files we placed rather than about whatever happens to exist on
+    # the machine running the suite. (Before this, only /usr/bin was rewritten
+    # and the widened scan read the real host filesystem.)
+    trees: dict[str, Path] = {}
+    for key, sub in (
+        ("STUB_USRBIN", "usrbin"),
+        ("STUB_USRSBIN", "usrsbin"),
+        ("STUB_USRLIB", "usrlib"),
+        ("STUB_LIB", "lib"),
+    ):
+        d = tmp_path / sub
+        d.mkdir(exist_ok=True)
+        trees[key] = d
     for name, size in usrbin_files.items():
-        target = usrbin / name
+        target = trees["STUB_USRBIN"] / name
         target.write_bytes(b"x" * size if size else b"")
     env = {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
-        "STUB_USRBIN": str(usrbin),
         "STUB_SSH_RC": ssh_rc,
+        **{k: str(v) for k, v in trees.items()},
     }
     return subprocess.run(
         ["bash", "-c", vl._dut_integrity_script()],
@@ -212,7 +231,7 @@ def test_doctor_dut_check_flags_zero_byte_binaries(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "DUT_ZERO_BYTE_BINARIES=1" in result.stdout
-    assert "zero-byte binaries" in result.stdout
+    assert "zero-byte system files" in result.stdout
     # find prints absolute paths (/usr/bin/<name>, rewritten to the stub
     # dir by the ssh shim) — match on the basename, and only the zeroed
     # ones: jq has real bytes and must not be reported.
@@ -227,7 +246,40 @@ def test_doctor_dut_check_clean_dut_has_no_sentinel(tmp_path: Path) -> None:
     result = _run_dut_check(tmp_path, {"nodogsplash": 900_000, "curl": 300_000})
     assert result.returncode == 0, result.stderr
     assert "DUT_ZERO_BYTE_BINARIES=1" not in result.stdout
-    assert "no zero-byte binaries" in result.stdout
+    assert "no zero-byte" in result.stdout
+
+
+def test_doctor_dut_check_does_not_read_the_real_host_filesystem(tmp_path: Path) -> None:
+    """The stub must cover EVERY path the doctor scan reaches.
+
+    Regression guard for the bug where the scan was widened to
+    `/usr/bin /usr/sbin /usr/lib /lib` but the ssh shim rewrote only
+    `/usr/bin`: the test then read the *real* host filesystem, so the result
+    depended on whether the CI/dev machine happened to have a zero-byte file
+    anywhere under those trees. It passed by luck on a clean host and failed on
+    a dirty one — the worst kind of flake.
+
+    Proof: plant a zero-byte file in each stubbed tree and assert it is reported.
+    If a tree is not rewritten, the planted file is invisible and this fails.
+    """
+    for key, sub in (
+        ("STUB_USRSBIN", "usrsbin"),
+        ("STUB_USRLIB", "usrlib"),
+        ("STUB_LIB", "lib"),
+    ):
+        d = tmp_path / sub
+        d.mkdir(exist_ok=True)
+        (d / f"planted_{sub}").write_bytes(b"")  # zero-byte, must be found
+    # _run_dut_check mkdirs with exist_ok, so the planted files survive.
+    result = _run_dut_check(tmp_path, {"nodogsplash": 900_000})
+    assert result.returncode == 0, result.stderr
+    assert "DUT_ZERO_BYTE_BINARIES=1" in result.stdout, (
+        "a zero-byte file planted under /usr/sbin, /usr/lib or /lib was NOT "
+        "reported — the ssh shim is not rewriting that tree, so the scan is "
+        f"reading the real host filesystem.\nstdout:\n{result.stdout}"
+    )
+    for sub in ("usrsbin", "usrlib", "lib"):
+        assert f"planted_{sub}" in result.stdout, f"missing planted_{sub} in output"
 
 
 def test_doctor_dut_check_unreachable_is_skip_not_failure(tmp_path: Path) -> None:
