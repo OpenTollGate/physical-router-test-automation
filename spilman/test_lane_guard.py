@@ -70,8 +70,53 @@ def case_free() -> bool:
     return ok
 
 
+def case_kills_only_own_process() -> bool:
+    """Task C: the lane must kill ONLY its own pid — a same-named decoy survives.
+
+    `stop_own` deliberately kills the pid recorded in our pidfile and never
+    matches by process name. Here a decoy process with the SAME argv[0] is left
+    running; if the lane matched by name the decoy would die too.
+    """
+    import tempfile
+    import time
+
+    # Import the lane's kill helper without running main().
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("lane_mod", LANE)
+    lane_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lane_mod)
+
+    name = "spilman_router_lane.py"
+    ours = subprocess.Popen(["bash", "-c", f"exec -a {name} sleep 60"])
+    decoy = subprocess.Popen(["bash", "-c", f"exec -a {name} sleep 60"])
+    try:
+        time.sleep(0.4)
+        with tempfile.NamedTemporaryFile("w", suffix=".pid", delete=False) as fh:
+            fh.write(str(ours.pid))
+            pidfile = fh.name
+        killed = lane_mod.stop_own(pidfile)
+        time.sleep(0.6)
+        ours_alive = ours.poll() is None
+        decoy_alive = decoy.poll() is None
+        ok = killed == ours.pid and not ours_alive and decoy_alive
+        print(f"case 4 (kill only our pid): {'PASS' if ok else 'FAIL'}"
+              f" — killed={killed} ours_alive={ours_alive} decoy_alive={decoy_alive}")
+        if not decoy_alive:
+            print("    DEFECT: a same-named decoy was killed — name matching is unsafe")
+        return ok
+    finally:
+        for p in (ours, decoy):
+            if p.poll() is None:
+                p.kill()
+        try:
+            os.unlink(pidfile)  # type: ignore[possibly-undefined]
+        except (NameError, OSError):
+            pass
+
+
 if __name__ == "__main__":
-    results = [case_serial_flock_held(), case_tty_held_without_lock(), case_free()]
+    results = [case_serial_flock_held(), case_tty_held_without_lock(), case_free(),
+               case_kills_only_own_process()]
     print()
     print("RESULT:", "all guard cases behaved correctly" if all(results) else "GUARD DEFECT")
     sys.exit(0 if all(results) else 1)
