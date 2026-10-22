@@ -62,6 +62,10 @@ first payment is several KB. The console wraps at ~80 characters. Serial is used
 | `bench-setup.sh` | Idempotent: build + start the test mint on the LAN, start the module HTTP server |
 | `bench-teardown.sh` | Reverse of setup; keeps mint data unless `--purge` |
 | `spilman_router_lane.py` | End-to-end lane against the physical router over serial |
+| `mint_proxy.py` | Counting HTTP proxy in front of the mint — the "zero mint calls" measurement |
+| `test_lane_guard.py` | Negative tests for the bench guard, incl. "kill only our own pid" |
+| `test_lane_parse.py` | Unit tests for console parsing, pinned to real captured transcripts |
+| `ROUTER-LANE.md` | The lane's contract, evidence, and how to read a SKIP vs a FAIL |
 | `README.md` | This file |
 
 ---
