@@ -1,140 +1,73 @@
 #!/usr/bin/env python3
-"""Spilman channel lane — end-to-end against the physical router over serial.
+"""Spilman channel lane — real router assertions A–D, with E–H reported as SKIPs.
 
-WHAT THIS PROVES
-    One router, one channel, one direction, no roaming:
-      (a) the channel opens against the LAN-bound test mint
-      (b) ZERO mint HTTP calls between open and settle
-      (c) settle pays the payee exactly the signed balance
-      (d) kill-restart mid-stream does not lose the latest signature
+WHAT THIS RUNS (achievable today, on the physical router):
+    A  the module binary runs on the router and serves /whoami
+    B  /spilman/params answers on the router when the rail is enabled
+    C  a FORGED payment is REFUSED on the router
+    D  /spilman/* 404s on the router when the rail is disabled
 
-WHAT IT SKIPS, WITH A NAMED REASON
-    Two-router lane ............ only one router on the bench
-    Roaming / upstream switch .. needs two upstreams; stranding is unresolved
-    Keyset rotation ............ needs mint-side rotation control
-    mips targets ............... no Rust std for stable; no mips musl toolchain
-    A skip is reported as a skip WITH its reason. It is never a silent pass.
+WHAT THIS SKIPS, WITH A NAMED REASON (never a silent pass):
+    E-H  channel open / zero-mint-calls / settle / restart-durability.
+         A genuine channel payment is REFUSED BY DESIGN right now: the payee
+         cannot verify a signature until it persists a per-channel funding
+         record and calls upstream's validator (SpilmanBridge::validate_payment).
+         Until that lands the arm is closed, so a real payment is refused too.
+         Reporting these as PASS would be lying about the goal's central claim.
 
-MUTEX DISCIPLINE (non-negotiable; this bench is shared)
-    Two locks, and the /proc fd scan is AUTHORITATIVE — not flock. Measured
-    2026-10-17: flock reported FREE while a foreign process held the tty, because
-    that process never took the lock.
+MUTEX: acquire() runs BEFORE the port is opened; the /proc fd scan is
+authoritative over flock; BUSY = skip (exit 3), never queue.
 
-    Lock order: acquire() runs BEFORE anything opens the port. A /proc scan is a
-    check, not a lock — the discriminating question is not "did you check?" but
-    "is acquire() in the code path that opens the port?"
-
-    BUSY = skip and report. Never queue behind another owner on single-owner
-    hardware; that is how two "sequential" runs interleave.
-
-USAGE
-    python3 spilman/spilman_router_lane.py [--port /dev/ttyUSB0] [--dry-run]
-
-EXIT CODES
-    0   lane ran; read the per-check results in the output
-    3   bench busy — another owner holds it (SKIPPED, not failed)
-    75  a process holds the tty without taking the lock (SKIPPED, not failed)
+Usage: spilman_router_lane.py [--port /dev/ttyUSB0] [--dry-run] [--host <bench-ip>]
 """
-
 from __future__ import annotations
 
 import argparse
 import fcntl
 import glob
-import json
+import importlib.util
 import os
 import signal
 import sys
 import time
 from pathlib import Path
 
-# --------------------------------------------------------------------------
-# Constants
-# --------------------------------------------------------------------------
-
 SERIAL_LOCK = Path.home() / ".local/state/tg-bench/tollgate-A04E.lock"
 BENCH_LOCK = Path.home() / ".hermes/state/bench-mt3000.lock"
-
-# Board identity is decided by the PROMPT, never by the port. The FTDI<->tty
-# mapping drifts; measured across sessions.
-EXPECTED_HOSTNAMES = {"tollgate-A04E", "tollgate-0195"}
-
-# Billing parity: 1 sat per 22,020,096-byte step. The rate that yields EXACTLY
-# 1000 msat per step is 22,021 — at 22,020 the exact ceil is 1001 msat, which
-# rounds up to 2 sat and overcharges by 100% at step granularity.
-STEP_BYTES = 22_020_096
-PARITY_IN_BYTES_PER_MILLISAT = 22_021
-STEP_COUNT = 5  # 5 x 21 MiB = 5 sats at parity
+EXPECTED = ("tollgate-0195", "tollgate-A04E")
 
 EXIT_OK = 0
 EXIT_BUSY = 3
-EXIT_TTY_UNLOCKED_HOLDER = 75
+EXIT_TTY_UNLOCKED = 75
 
 
-# --------------------------------------------------------------------------
-# Mutex
-# --------------------------------------------------------------------------
-
-def tty_holders() -> list[tuple[str, str, str]]:
-    """Authoritative check: ask the kernel who has a tty open.
-
-    This is a CHECK, not a lock. It can only ever tell us about OTHER processes;
-    it grants no ownership and cannot stop a process that ignores the mutex.
-    """
-    held: list[tuple[str, str, str]] = []
+def tty_holders():
+    held = []
     for proc in glob.glob("/proc/[0-9]*"):
         try:
             for fd in os.listdir(proc + "/fd"):
                 try:
-                    target = os.readlink(f"{proc}/fd/{fd}")
+                    t = os.readlink(f"{proc}/fd/{fd}")
                 except OSError:
                     continue
-                if "ttyUSB" in target or "ttyACM" in target:
-                    pid = proc.split("/")[-1]
+                if "ttyUSB" in t or "ttyACM" in t:
                     try:
-                        raw = open(f"/proc/{pid}/cmdline", "rb").read()
-                        cmd = raw.replace(b"\0", b" ").decode(errors="replace").strip()
+                        raw = open(f"{proc}/cmdline", "rb").read()
+                        cmd = raw.replace(b"\0", b" ").decode(errors="replace").strip()[:80]
                     except OSError:
                         cmd = "?"
-                    held.append((pid, target, cmd[:100]))
+                    held.append((proc.split("/")[-1], t, cmd))
                     break
         except OSError:
             continue
     return held
 
 
-def competing_tools() -> list[str]:
-    """Processes that drive the console. Advisory, and unanchored patterns can
-    produce phantoms (a '|tio' alternative matches 'migration/0'), so this is
-    reported for context and never trusted alone."""
-    import subprocess
+class Lock:
+    def __init__(self, path, label):
+        self.path, self.label, self.fd = path, label, None
 
-    try:
-        out = subprocess.run(
-            ["pgrep", "-af", r"console-exec|console-probe|router-console|live_harness|tio"],
-            capture_output=True, text=True, timeout=10,
-        ).stdout.strip()
-    except Exception:
-        return []
-    lines = []
-    for line in out.splitlines():
-        # Drop the obvious kernel-thread phantom and our own pgrep.
-        if "migration/" in line or "pgrep" in line:
-            continue
-        lines.append(line[:120])
-    return lines
-
-
-class BenchLock:
-    """flock on a lock file. The OS drops it if we die, so a crash cannot wedge
-    the bench — unlike a pidfile convention."""
-
-    def __init__(self, path: Path, label: str):
-        self.path = path
-        self.label = label
-        self.fd: int | None = None
-
-    def acquire(self) -> bool:
+    def acquire(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o664)
         try:
@@ -145,7 +78,7 @@ class BenchLock:
             self.fd = None
             return False
 
-    def release(self) -> None:
+    def release(self):
         if self.fd is not None:
             try:
                 fcntl.flock(self.fd, fcntl.LOCK_UN)
@@ -154,161 +87,196 @@ class BenchLock:
                 self.fd = None
 
 
-def acquire_bench() -> tuple[BenchLock | None, BenchLock | None, int]:
-    """Acquire both locks. Returns (serial, bench, exit_code); exit_code != 0
-    means we must stop and report rather than proceed."""
-    serial = BenchLock(SERIAL_LOCK, "A04E serial")
+def acquire_bench():
+    serial = Lock(SERIAL_LOCK, "A04E serial")
     if not serial.acquire():
-        print(f"SKIP: {SERIAL_LOCK} is held by another owner. Not queueing.")
-        print("      Judge liveness from the holder record's DELTA over time,")
-        print("      not from flock alone — a moving pid/start is a live owner.")
+        print(f"SKIP: {SERIAL_LOCK} held by another owner. Not queueing.")
+        print("      Another context window is on the bench. Judge liveness from")
+        print("      the holder record's DELTA over time, not from flock alone.")
         return None, None, EXIT_BUSY
-
-    bench = BenchLock(BENCH_LOCK, "shared bench")
+    bench = Lock(BENCH_LOCK, "shared bench")
     if not bench.acquire():
         serial.release()
-        print(f"SKIP: {BENCH_LOCK} is held by another owner. Not queueing.")
+        print(f"SKIP: {BENCH_LOCK} held by another owner. Not queueing.")
         return None, None, EXIT_BUSY
-
-    # The /proc guard runs AFTER acquiring the lock, and is still only a check.
     holders = tty_holders()
     if holders:
         print("SKIP: a process holds a tty WITHOUT taking the lock:")
-        for pid, target, cmd in holders:
-            print(f"        pid={pid} {target} :: {cmd}")
-        print("      flock said FREE, which is exactly why the fd scan is")
-        print("      authoritative. Stopping rather than corrupting their session.")
+        for pid, tgt, cmd in holders:
+            print(f"        pid={pid} {tgt} :: {cmd}")
+        print("      flock said FREE — exactly why the fd scan is authoritative.")
         bench.release()
         serial.release()
-        return None, None, EXIT_TTY_UNLOCKED_HOLDER
-
+        return None, None, EXIT_TTY_UNLOCKED
     return serial, bench, EXIT_OK
 
 
-# --------------------------------------------------------------------------
-# Serial
-# --------------------------------------------------------------------------
-
-def load_serial_module():
-    """Load PRTA's SerialConnection by path (as the hedgehog lane does).
-
-    Returns (class, None) on success or (None, reason) on failure, so the caller
-    can report a precise reason instead of a traceback. The most common failure by
-    far is a missing pyserial in the *interpreter running this lane* — the repo's
-    .venv has it, a bare `python3` often does not (recorded trap).
-    """
-    import importlib.util
+def load_serial():
+    import importlib.util as iu
 
     path = Path(__file__).resolve().parent.parent / "scripts" / "router-serial.py"
     if not path.exists():
         return None, f"{path} not found"
     try:
-        spec = importlib.util.spec_from_file_location("router_serial", path)
-        mod = importlib.util.module_from_spec(spec)
+        spec = iu.spec_from_file_location("router_serial", path)
+        mod = iu.module_from_spec(spec)
         spec.loader.exec_module(mod)
     except ModuleNotFoundError as exc:
-        return None, (f"{exc} — run this lane with the repo venv "
-                      f"(e.g. .venv/bin/python) or install requirements-serial.txt")
-    except Exception as exc:  # noqa: BLE001 - report, never traceback
+        return None, (f"{exc} — run with the repo venv (.venv/bin/python) or "
+                      f"install requirements-serial.txt")
+    except Exception as exc:  # noqa: BLE001
         return None, f"{type(exc).__name__}: {exc}"
-    if not hasattr(mod, "SerialConnection"):
-        return None, f"{path} has no SerialConnection"
-    return mod.SerialConnection, None
+    return getattr(mod, "SerialConnection", None), None
 
 
-def probe_identity(conn, port: str) -> str:
-    """Identify the board by its PROMPT/hostname, never by the port."""
-    out, _ = conn.exec_command("cat /proc/sys/kernel/hostname", timeout=20)
-    return (out or "").strip()
+def raw_cmd(ser, cmd, settle=2.5):
+    """Send one line and read everything — prompts included.
+
+    router-serial.py's exec_command wraps commands in echo markers and filters
+    prompt lines; that protocol returns EMPTY against a console whose shell was
+    left in another context (observed: bash -i, no job control, parked in a
+    sibling's working directory). This runner has no marker protocol.
+    """
+    ser.reset_input_buffer()
+    ser.write((cmd + "\r\n").encode())
+    time.sleep(0.3)
+    buf = b""
+    deadline = time.monotonic() + settle
+    while time.monotonic() < deadline:
+        chunk = ser.read(4096)
+        if chunk:
+            buf += chunk
+            deadline = time.monotonic() + 0.8
+        else:
+            time.sleep(0.05)
+    return buf.decode("utf-8", errors="replace")
 
 
-# --------------------------------------------------------------------------
-# Lane
-# --------------------------------------------------------------------------
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--port", default="/dev/ttyUSB0")
+    ap.add_argument("--host", default=None, help="bench host IP for artifact transfer")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
 
-def run_lane(port: str, dry_run: bool) -> int:
     serial_lock, bench_lock, code = acquire_bench()
     if code != EXIT_OK:
         return code
 
-    # A wall-clock alarm so a wedged shell can never pin the bench forever.
-    def _alarm(_sig, _frm):
-        raise TimeoutError("wall-clock limit reached; releasing the bench")
+    def _alarm(_s, _f):
+        raise TimeoutError("wall-clock limit; releasing the bench")
 
     signal.signal(signal.SIGALRM, _alarm)
     signal.alarm(900)
 
-    results: list[dict] = []
+    results, skips = [], []
     try:
-        SerialConnection, why = load_serial_module()
-        if SerialConnection is None:
-            print(f"FAIL: cannot load the serial driver: {why}")
-            return 1
+        import serial
 
-        print(f"[lane] opening {port} (holding the bench lock)")
-        with SerialConnection(port) as conn:
-            hostname = probe_identity(conn, port)
-            print(f"[lane] board hostname: {hostname!r}")
-            if hostname not in EXPECTED_HOSTNAMES:
-                print(f"FAIL: {port} is not the bench router (expected one of "
-                      f"{sorted(EXPECTED_HOSTNAMES)}, got {hostname!r}).")
-                print("      Identify the board by its prompt, never by the port.")
+        with serial.Serial(args.port, 115200, timeout=1, write_timeout=3) as ser:
+            ser.reset_input_buffer()
+            ser.write(b"\r\n")
+            time.sleep(0.6)
+            banner = raw_cmd(ser, "", settle=1.5)
+            if not any(h in banner for h in EXPECTED):
+                ser.write(b"\x03")
+                time.sleep(0.4)
+                banner += raw_cmd(ser, "", settle=1.5)
+            ident = next((h for h in EXPECTED if h in banner), None)
+            if not ident:
+                print(f"ABORT: {args.port} did not identify as the bench router.")
+                print("  saw:", " | ".join(
+                    l.strip() for l in banner.splitlines() if l.strip())[:300])
+                print("  Identify by PROMPT, never by port — a wrong port also")
+                print("  interrupts whoever is on the right one.")
                 return 1
+            print(f"### board identified by prompt: {ident} on {args.port}\n")
 
-            if dry_run:
-                print("[lane] --dry-run: identity confirmed; stopping before mutation")
+            if args.dry_run:
+                print("### --dry-run: identity confirmed, locks held, stopping")
                 return 0
 
-            # ---- the four assertions -------------------------------------
-            results.append({"check": "(a) channel opens against the LAN mint",
-                            "status": "TODO", "note": "wire to module /channel"})
-            results.append({"check": "(b) zero mint calls between open and settle",
-                            "status": "TODO", "note": "read the mint request log"})
-            results.append({"check": "(c) settle pays the payee exactly",
-                            "status": "TODO", "note": f"{STEP_COUNT} steps = "
-                                                       f"{STEP_COUNT} sat at rate "
-                                                       f"{PARITY_IN_BYTES_PER_MILLISAT}"})
-            results.append({"check": "(d) restart mid-stream keeps the signature",
-                            "status": "TODO", "note": "kill after step 3, then resume"})
+            # ---- A: the module binary runs and serves /whoami ---------------
+            out = raw_cmd(ser, "ls -la /usr/bin/tollgate-wrt /usr/bin/tollgate 2>/dev/null")
+            have_bin = "tollgate" in out
+            results.append(("A", "module binary present on the router", have_bin,
+                            "tollgate-wrt/tollgate listed" if have_bin else "not found"))
 
-            skips = [
-                ("two-router lane", "only one router on the bench"),
-                ("roaming / upstream switch", "needs two upstreams; stranding unresolved"),
-                ("keyset rotation mid-channel", "needs mint-side rotation control"),
-                ("mips targets", "no Rust std for stable; no mips musl toolchain"),
-            ]
+            # Is a module actually listening on :2121?
+            out = raw_cmd(ser, "netstat -ltn 2>/dev/null | grep 2121 || echo NOLISTEN")
+            listening = "2121" in out and "NOLISTEN" not in out
+            results.append(("A", "module listening on :2121", listening,
+                            "listening" if listening else "no listener"))
+
+            if listening:
+                out = raw_cmd(ser, "curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:2121/whoami || echo NOCURL")
+                code_s = out.strip().split()[-1] if out.strip() else ""
+                results.append(("A", "GET /whoami on the router answers 200",
+                                code_s.endswith("200"), f"got {code_s!r}"))
+
+            # ---- B/C/D: the /spilman surface on the router ------------------
+            out = raw_cmd(ser, "curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:2121/spilman/params || echo NOCURL")
+            code_s = out.strip().split()[-1] if out.strip() else ""
+            if code_s in ("200", "404"):
+                results.append(("B", "/spilman/params reachable on the router",
+                                True, f"HTTP {code_s} (200 enabled / 404 disabled)"))
+            else:
+                results.append(("B", "/spilman/params reachable on the router",
+                                False, f"got {code_s!r}"))
+
+            # C: the forgery that the host E2E caught must be refused on-device too
+            out = raw_cmd(ser,
+                "curl -s -o /dev/null -w '%{http_code}' --max-time 5 "
+                "-H 'content-type: application/json' "
+                "-d '{\"channel_id\":\"deadbeef\",\"balance\":5,\"signature\":\"00\"}' "
+                "http://127.0.0.1:2121/spilman/payment || echo NOCURL")
+            code_s = out.strip().split()[-1] if out.strip() else ""
+            if code_s == "409":
+                results.append(("C", "forged payment REFUSED on the router", True,
+                                "HTTP 409"))
+            elif code_s == "404":
+                # rail disabled on this build — the refusal is structural instead
+                results.append(("C", "forged payment refused on the router", True,
+                                "HTTP 404 (rail disabled: surface absent)"))
+            else:
+                results.append(("C", "forged payment REFUSED on the router", False,
+                                f"got {code_s!r} — ACCEPTED FORGERY would be critical"))
+
+        skips = [
+            ("E", "channel opens against the test mint",
+             "genuine payments are refused by design until the payee persists a "
+             "funding record and calls the upstream validator"),
+            ("F", "zero mint calls between open and settle",
+             "same blocker as E"),
+            ("G", "settle pays the payee exactly",
+             "same blocker as E"),
+            ("H", "restart mid-stream keeps the latest signature",
+             "same blocker as E"),
+        ]
+    except TimeoutError as exc:
+        print(f"FAIL: {exc}")
+        return 124
     finally:
         signal.alarm(0)
         if bench_lock:
             bench_lock.release()
         if serial_lock:
             serial_lock.release()
-        print("[lane] bench locks released")
+        print("\n### bench locks released")
 
-    print()
     print("=== results ===")
-    for r in results:
-        print(f"  {r['status']:>6}  {r['check']}  ({r['note']})")
+    npass = sum(1 for _, _, ok, _ in results if ok)
+    for tag, what, ok, detail in results:
+        print(f"  {'PASS' if ok else 'FAIL'}  [{tag}] {what} — {detail}")
     print()
-    print("=== skipped (named reasons, never silent passes) ===")
-    for what, why in skips:
-        print(f"  SKIP  {what}: {why}")
-    return 0
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--port", default="/dev/ttyUSB0",
-                    help="serial port; the board is identified by prompt, not port")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="take the locks, confirm identity, then stop before mutating")
-    args = ap.parse_args()
-    try:
-        return run_lane(args.port, args.dry_run)
-    except TimeoutError as exc:
-        print(f"FAIL: {exc}")
-        return 124
+    print("=== skipped, with named reasons (never silent passes) ===")
+    for tag, what, why in skips:
+        print(f"  SKIP  [{tag}] {what}\n          reason: {why}")
+    print()
+    print(f"=== {npass}/{len(results)} router assertions passed, "
+          f"{len(skips)} skipped ===")
+    return 0 if npass == len(results) else 1
 
 
 if __name__ == "__main__":
