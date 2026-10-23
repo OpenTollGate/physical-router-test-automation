@@ -27,8 +27,12 @@
 #   make -f Makefile r-lock PHASE="description"                 # acquire router lock
 #   make -f Makefile r-unlock                                   # release router lock
 #
-# Router mutex: all r-* targets that modify router state check routers.lock
-# first. See docs/router-mutex.md for details.
+# Router mutex: all r-* targets that modify router state assert the ONE
+# machine-global bench lease first (scripts/hw-bench-lease → lib/bench_lock).
+# This file used to keep its own `routers.lock`; that was one of the three
+# inconsistent locks PRTA-REVIVE retired (a per-worktree file, no flock, so a
+# dead session left a 93-day-old lock nobody could see). See
+# docs/router-mutex.md and docs/hw-lane-isolation.md.
 #
 # WARNING: Dual-WWAN routing conflict — do NOT create a second wwan interface
 # (e.g. wwan2) on any router. Having two wwan interfaces simultaneously breaks
@@ -91,9 +95,9 @@ YELLOW := \033[33m
 CYAN   := \033[36m
 RESET  := \033[0m
 
-ROUTER_LOCK := routers.lock
 MK_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 REPO_ROOT := $(MK_DIR)..
+BENCH_LEASE := $(REPO_ROOT)/scripts/hw-bench-lease
 
 # ---- Remote helper --------------------------------------------------------
 # Source routers.env, resolve ROUTER_<NAME>_HOST, build SSH command.
@@ -113,22 +117,16 @@ if [ -z "$$router_host" ]; then echo "$(RED)Unknown router '$(ROUTER)'. Check ro
 ssh $(SSH_OPTS) $(ROUTER_USER)@$$router_host
 
 # ---- Router mutex ---------------------------------------------------------
-# File-based advisory lock to prevent collisions between LLM sessions.
+# Assert the machine-global bench lease before touching router state.
 # See docs/router-mutex.md for usage guide.
 
 define CHECK_LOCK
-if [ -f "$(ROUTER_LOCK)" ]; then \
-	echo "$(RED)$(BOLD)Router is LOCKED by another session:$(RESET)"; \
-	echo ""; \
-	grep "^branch:" $(ROUTER_LOCK) | sed 's/^branch:/  Branch:/'; \
-	grep "^session:" $(ROUTER_LOCK) | sed 's/^session:/  Session:/'; \
-	grep "^phase:" $(ROUTER_LOCK) | sed 's/^phase:/  Phase:/'; \
-	grep "^timestamp:" $(ROUTER_LOCK) | sed 's/^timestamp:/  Since:/'; \
-	echo ""; \
-	echo "$(YELLOW)To check status: make -f Makefile r-status-lock$(RESET)"; \
-	echo "$(YELLOW)To force-release: make -f Makefile force-unlock$(RESET)"; \
+python3 "$(BENCH_LEASE)" require || { \
+	echo "$(YELLOW)Router work needs the machine-global bench lease.$(RESET)"; \
+	echo "$(YELLOW)Take it: make lock PHASE=\"description\"   (or: make -f Makefile r-lock PHASE=\"...\")$(RESET)"; \
+	echo "$(YELLOW)Status:  make lock-status$(RESET)"; \
 	exit 1; \
-fi
+}
 endef
 
 # ===========================================================================
@@ -596,66 +594,18 @@ full: ## [local] Run the full mint health test suite (~20 min)
 
 # --- Router mutex management ---
 
-r-lock: ## [remote] Acquire router lock (set PHASE="description")
-	@if [ -f "$(ROUTER_LOCK)" ]; then \
-		echo "$(RED)$(BOLD)Cannot acquire lock — routers are already locked:$(RESET)"; \
-		echo ""; \
-		grep "^branch:" $(ROUTER_LOCK) | sed 's/^branch:/  Branch:/'; \
-		grep "^phase:" $(ROUTER_LOCK) | sed 's/^phase:/  Phase:/'; \
-		grep "^timestamp:" $(ROUTER_LOCK) | sed 's/^timestamp:/  Since:/'; \
-		echo ""; \
-		echo "$(YELLOW)Use 'make -f Makefile force-unlock' to override (with caution).$(RESET)"; \
-		exit 1; \
-	fi; \
-	branch=$$(git branch --show-current 2>/dev/null || echo "unknown"); \
-	echo "locked: true" > $(ROUTER_LOCK); \
-	echo "branch: $$branch" >> $(ROUTER_LOCK); \
-	echo "session: $$USER@$$HOSTNAME" >> $(ROUTER_LOCK); \
-	echo "timestamp: $$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $(ROUTER_LOCK); \
-	echo "phase: $(PHASE)" >> $(ROUTER_LOCK); \
-	echo "$(GREEN)$(BOLD)Router lock acquired$(RESET)"; \
-	cat $(ROUTER_LOCK)
+r-lock: ## [remote] Acquire the machine-global bench lease — set PHASE="description"
+	@python3 "$(BENCH_LEASE)" hold --purpose "$(PHASE)"
 
-r-unlock: ## [remote] Release router lock
-	@if [ ! -f "$(ROUTER_LOCK)" ]; then \
-		echo "$(YELLOW)No lock file found — already unlocked.$(RESET)"; \
-		exit 0; \
-	fi; \
-	echo "$(YELLOW)Releasing router lock...$(RESET)"; \
-	rm -f $(ROUTER_LOCK); \
-	echo "$(GREEN)Router lock released.$(RESET)"
+r-unlock: ## [remote] Release the machine-global bench lease (clears a stale holder line)
+	@python3 "$(BENCH_LEASE)" release
 
-force-unlock: ## [remote] Force-release router lock (use with caution)
-	@if [ ! -f "$(ROUTER_LOCK)" ]; then \
-		echo "$(YELLOW)No lock file found — already unlocked.$(RESET)"; \
-		exit 0; \
-	fi; \
-	echo "$(RED)$(BOLD)WARNING: Force-releasing router lock!$(RESET)"; \
-	echo "$(RED)Previous holder:$(RESET)"; \
-	grep "^branch:" $(ROUTER_LOCK) | sed 's/^branch:/  Branch:/'; \
-	grep "^phase:" $(ROUTER_LOCK) | sed 's/^phase:/  Phase:/'; \
-	grep "^timestamp:" $(ROUTER_LOCK) | sed 's/^timestamp:/  Since:/'; \
-	rm -f $(ROUTER_LOCK); \
-	echo "$(GREEN)Lock force-released.$(RESET)"
+force-unlock: ## [remote] Clear a stale bench-leased holder line (cannot steal a live flock)
+	@echo "$(YELLOW)A live lease cannot be stolen: the flock drops when its holder exits.$(RESET)"
+	@python3 "$(BENCH_LEASE)" release
 
-r-status-lock: ## [remote] Show current router lock status
-	@if [ ! -f "$(ROUTER_LOCK)" ]; then \
-		echo "$(GREEN)$(BOLD)Router lock: UNLOCKED$(RESET)"; \
-		echo "Routers are available for testing."; \
-	else \
-		echo "$(RED)$(BOLD)Router lock: LOCKED$(RESET)"; \
-		echo ""; \
-		cat $(ROUTER_LOCK) | sed 's/^locked:/  Status:/;s/^branch:/  Branch:/;s/^session:/  Session:/;s/^timestamp:/  Since:/;s/^phase:/  Phase:/'; \
-		echo ""; \
-		ts=$$(grep "^timestamp:" $(ROUTER_LOCK) | cut -d' ' -f2-); \
-		if [ -n "$$ts" ]; then \
-			age=$$(($$(date +%s) - $$(date -d "$$ts" +%s 2>/dev/null || echo 0))); \
-			if [ $$age -gt 7200 ]; then \
-				echo "$(YELLOW)WARNING: Lock is over 2 hours old — likely stale.$(RESET)"; \
-				echo "$(YELLOW)Consider: make -f Makefile force-unlock$(RESET)"; \
-			fi; \
-		fi; \
-	fi
+r-status-lock: ## [remote] Show the machine-global bench lease state + holder
+	@python3 "$(BENCH_LEASE)" status
 
 # --- Router info ---
 

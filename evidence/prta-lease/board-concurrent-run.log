@@ -1,0 +1,22 @@
+== before ==
+bench lease : free
+lock file   : /home/c03rad0r/.hermes/state/esp32-board-a.lock
+holder      : <none>
+bench free — take it with `make lock` or hw-bench-lease exec/hold
+
+== agent A: hold board-a for 4s ==
+holder: worker-heavy pid=3553637 purpose=board-lease-A since=2026-10-17T18:11:40+02:00 task=- host=c03rad0r-DQ05proplus
+
+== agent B: tries the same board while A holds it ==
+BENCH BUSY: Board A is locked by profile=worker-heavy pid=3553637 purpose=board-lease-A since=2026-10-17T18:11:40+02:00 task=- host=c03rad0r-DQ05proplus [worker-heavy pid=3553637 purpose=board-lease-A since=2026-10-17T18:11:40+02:00 task=- host=c03rad0r-DQ05proplus] (/home/c03rad0r/.hermes/state/esp32-board-a.lock). Wait for that run to finish, or kill its tree (pgrep -af 3553637) and retry. [`bench-lock status` shows the current owner.] [[Errno 11] Resource temporarily unavailable]
+agent B rc=2 (want 2 = BUSY)
+
+== the bench lease is unaffected by the board lease ==
+bench lease : free
+lock file   : /home/c03rad0r/.hermes/state/bench-mt3000.lock
+
+== after A exits ==
+bench lease : free
+lock file   : /home/c03rad0r/.hermes/state/esp32-board-a.lock
+holder      : <none>
+bench free — take it with `make lock` or hw-bench-lease exec/hold

@@ -50,16 +50,23 @@ YELLOW := \033[33m
 CYAN   := \033[36m
 RESET  := \033[0m
 
-HARDWARE_LOCK := hardware.lock
+# ONE machine-global bench lease (PRTA-REVIVE). scripts/hw-bench-lease wraps
+# lib/bench_lock.BenchLock: flock authority on ~/.hermes/state/bench-mt3000.lock
+# + a holder line, interop with scripts/mt3000-bench/bench-lock.sh, and an
+# optional idle gate wired to lib/session_verify.check_balance_api. This
+# retires the three inconsistent legacy guards: the repo-local `hardware.lock`
+# presence check that used to live here, lib/hardware_lock.py's /tmp JSON and
+# lib/router_lock.py's routers.lock (both now delegate — see those modules).
+BENCH_LEASE := $(CURDIR)/scripts/hw-bench-lease
 
 include make/migration.mk
 
 define require_hardware_lock
-	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
-		echo "$(RED)$(BOLD)Hardware not locked — run 'make lock PHASE=\"description\"' first$(RESET)"; \
-		echo "$(YELLOW)Other LLM sessions may be using the hardware (ESP32 boards + routers).$(RESET)"; \
+	@python3 $(BENCH_LEASE) require || { \
+		echo "$(YELLOW)Other agent sessions may be using the hardware (ESP32 boards + routers).$(RESET)"; \
+		echo "$(YELLOW)The lease is machine-global: 'make lock PHASE=\"description\"' takes it.$(RESET)"; \
 		exit 1; \
-	fi
+	}
 endef
 
 # ===========================================================================
@@ -119,10 +126,10 @@ help: ## Show this help
 	@echo "  make serial-recovery      ROUTER=alpha CMD='wifi reload'  # emergency command"
 	@echo ""
 	@echo "$(CYAN)--- Hardware mutex (ESP32 + routers) ---$(RESET)"
-	@echo "  make lock                 PHASE='testing foo'   # acquire lock"
-	@echo "  make unlock                                      # release lock"
-	@echo "  make lock-status                                 # check lock"
-	@echo "  make force-unlock                                # force-release"
+	@echo "  make lock                 PHASE='testing foo'   # take bench lease (blocks)"
+	@echo "  make unlock                                      # release bench lease"
+	@echo "  make lock-status                                 # bench lease + ESP32 locks"
+	@echo "  make force-unlock                                # clear stale holder line"
 	@echo ""
 	@echo "$(CYAN)--- Variables ---$(RESET)"
 	@echo "  ROUTER  - router label from routers.env (default: alpha)"
@@ -246,7 +253,7 @@ test-cashu-payment: ## Run cashu e2e payment Playwright test [playwright]
 #  BENCH LANES — read-only vs mutating (see docs/hw-lane-isolation.md)
 # ===========================================================================
 
-.PHONY: check-workflows hw-readonly
+.PHONY: check-workflows hw-readonly hw-smoke-adminui
 
 check-workflows: ## Guard: no PR-reachable workflow can reach the bench (+ self-test)
 	@bash scripts/ci/check-workflow-hw-isolation.sh
@@ -257,6 +264,15 @@ hw-readonly: ## Read-only bench surface check: no creds, no mutation, no paid tr
 	@# runnable while another agent holds the bench and while a session is live.
 	@# Host via TOLLGATE_ROUTER_HOST (default 192.168.1.1).
 	@bash scripts/hw-readonly-check.sh
+
+hw-smoke-adminui: ## Zero-secret admin-UI walkthrough under the bench lease (local parity of the hw-smoke smoke lane)
+	@if [ ! -d node_modules ]; then echo "$(YELLOW)Run npm install first$(RESET)"; exit 1; fi
+	@python3 $(BENCH_LEASE) exec \
+		--purpose "hw-smoke-local" \
+		--check-idle \
+		-- npx playwright test --config=tests/browser/admin-ui.config.mjs
+
+# ===========================================================================
 #  DEMO RECORDING (docs/demo-recording.md)
 # ===========================================================================
 
@@ -632,65 +648,22 @@ hybrid-restart-and-watch: ## Restart service via SSH, verify via serial if SSH d
 
 .PHONY: lock unlock lock-status force-unlock
 
-LOCK_DIR := locks
+lock: ## Acquire the machine-global bench lease — set PHASE='description'
+	@python3 $(BENCH_LEASE) hold --purpose "$(PHASE)"
 
-lock: ## Acquire router hardware lock — set PHASE='description'
-	@if [ -f "$(HARDWARE_LOCK)" ]; then \
-		owner=$$(grep '^session:' $(HARDWARE_LOCK) | head -1 | sed 's/session: *//' | cut -d@ -f1); \
-		if [ "$$owner" = "$$USER" ]; then \
-			echo "$(YELLOW)Hardware already locked by this session — refreshing lock$(RESET)"; \
-		else \
-			echo "$(RED)$(BOLD)Cannot acquire lock — hardware locked by another session:$(RESET)"; \
-			echo ""; \
-			cat $(HARDWARE_LOCK); \
-			echo ""; \
-			echo "$(YELLOW)Use 'make force-unlock' to override (with caution).$(RESET)"; \
-			exit 1; \
-		fi; \
-	fi; \
-	branch=$$(git branch --show-current 2>/dev/null || echo "unknown"); \
-	worktree=$$(pwd); \
-	echo "locked: true" > $(HARDWARE_LOCK); \
-	echo "branch: $$branch" >> $(HARDWARE_LOCK); \
-	echo "worktree: $$worktree" >> $(HARDWARE_LOCK); \
-	echo "session: $$USER@$$(hostname)" >> $(HARDWARE_LOCK); \
-	echo "timestamp: $$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> $(HARDWARE_LOCK); \
-	echo "phase: $(PHASE)" >> $(HARDWARE_LOCK); \
-	echo "$(GREEN)$(BOLD)Router hardware lock acquired$(RESET)"; \
-	cat $(HARDWARE_LOCK)
+unlock: ## Release the bench lease (clears a stale holder line)
+	@python3 $(BENCH_LEASE) release
 
-unlock: ## Release router hardware lock
-	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
-		echo "$(YELLOW)No lock file found — already unlocked.$(RESET)"; \
-		exit 0; \
-	fi; \
-	echo "$(YELLOW)Releasing hardware lock...$(RESET)"; \
-	rm -f $(HARDWARE_LOCK); \
-	echo "$(GREEN)Hardware lock released.$(RESET)"
-
-lock-status: ## Show all lock statuses (routers + ESP32 boards)
-	@echo "$(BOLD)=== Router Lock ===$(RESET)"
-	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
-		echo "$(GREEN)Router hardware unlocked — available.$(RESET)"; \
-	else \
-		echo "$(YELLOW)$(BOLD)Router hardware locked:$(RESET)"; \
-		echo ""; \
-		cat $(HARDWARE_LOCK); \
-	fi
+lock-status: ## Show bench lease state + ESP32 board locks
+	@echo "$(BOLD)=== Bench Lease (machine-global) ===$(RESET)"
+	@python3 $(BENCH_LEASE) status
 	@echo ""
 	@echo "$(BOLD)=== ESP32 Board Locks ===$(RESET)"
 	@$(MAKE) -C esp32 lock-status
 
-force-unlock: ## Force-release router hardware lock (use with caution)
-	@if [ ! -f "$(HARDWARE_LOCK)" ]; then \
-		echo "$(YELLOW)No lock file found — already unlocked.$(RESET)"; \
-		exit 0; \
-	fi; \
-	echo "$(RED)$(BOLD)WARNING: Force-releasing router hardware lock!$(RESET)"; \
-	echo "$(RED)Previous holder:$(RESET)"; \
-	cat $(HARDWARE_LOCK); \
-	rm -f $(HARDWARE_LOCK); \
-	echo "$(GREEN)Hardware lock force-released.$(RESET)"
+force-unlock: ## Clear a stale bench lease holder line (cannot steal a live flock)
+	@echo "$(YELLOW)A live lease cannot be stolen: the flock drops when its holder exits.$(RESET)"
+	@python3 $(BENCH_LEASE) release
 
 # ===========================================================================
 #  HOSTNAME & SSL TESTS (legacy Makefile reference)

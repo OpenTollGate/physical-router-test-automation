@@ -5,8 +5,11 @@ import json
 import os
 import re
 import shlex
+import shutil
 import socket
 import subprocess
+import sys
+import tempfile
 import time
 import logging
 
@@ -1479,6 +1482,46 @@ def pytest_runtest_makereport(item, call):
 
 
 _hardware_lock_acquired: bool = False
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _hermetic_bench_lease():
+    """Keep `pytest` off the REAL machine-global bench lease by default.
+
+    PRTA-REVIVE made lib/router_lock.RouterLock a delegate to
+    lib/bench_lock.BenchLock, whose default path is the production lease
+    (~/.hermes/state/bench-mt3000.lock). Four test modules reach for
+    RouterLock() directly — TestRouterLockCoordination in test_two_router.py
+    runs with no router at all, and test_labgrid_venue.py / the poe pincycle
+    suite take it outside the conftest hardware gate — so a plain offline
+    `pytest` run would take the production bench lock and, worse, contend with
+    a live bench window or a CI dispatch.
+
+    Redirect the lease to a per-session temp file unless the caller is
+    deliberately doing hardware work (TOLLGATE_USE_HARDWARE_LOCK /
+    --lock-phase, in which case sessionstart below takes the real lease) or has
+    pointed TOLLGATE_BENCH_LOCK somewhere itself.
+
+    Test modules that assert on staleness/expiry seed their own holder lines in
+    this temp file, so real stamp files never influence the suite.
+    """
+    if os.environ.get("TOLLGATE_BENCH_LOCK"):
+        yield None
+        return
+    hardware = (
+        os.environ.get("TOLLGATE_USE_HARDWARE_LOCK", "").lower() in ("1", "true", "yes")
+        or "--lock-phase" in sys.argv
+    )
+    if hardware:
+        yield None
+        return
+    tmpdir = tempfile.mkdtemp(prefix="tg-pytest-lease-")
+    os.environ["TOLLGATE_BENCH_LOCK"] = os.path.join(tmpdir, "bench-mt3000.lock")
+    try:
+        yield tmpdir
+    finally:
+        os.environ.pop("TOLLGATE_BENCH_LOCK", None)
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 @pytest.fixture(scope="session")

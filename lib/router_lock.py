@@ -1,156 +1,119 @@
 """File-based advisory locking for multi-router test coordination.
 
-Prevents concurrent test sessions from modifying the same router simultaneously.
-Lock file uses simple key-value format. Stale locks (>2 hours) are auto-detected.
+PRTA-REVIVE: this module now DELEGATES to the ONE machine-global bench lease
+(``lib.bench_lock.BenchLock``) instead of maintaining its own
+``routers.lock`` file. Rationale (card PRTA-REVIVE, 2026-10-01): the repo had
+three inconsistent lock mechanisms — the Makefile's repo-local
+``hardware.lock`` presence check, ``lib/hardware_lock.py``'s /tmp JSON and
+this module's ``routers.lock`` — none machine-global, none flock-based, so
+two agents in two worktrees could drive the same router at the same time.
+
+The ``router_id`` / ``phase`` / ``branch`` metadata is preserved in the bench
+lease holder line's ``purpose`` field, so ``bench-lock status`` still names
+what owns the bench. ``BenchBusy``/``BenchStale`` are ``RuntimeError``
+subclasses, so existing ``except RuntimeError`` call sites are unchanged.
 """
 
-import os
-import platform
-import tempfile
 import logging
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
+from typing import Any
+
+from lib.bench_lock import BenchLock, bench_state, read_holder
 
 log = logging.getLogger("tollgate.router_lock")
 
-_STALE_THRESHOLD = timedelta(hours=2)
-
-
-def _default_lock_path() -> str:
-    """Return project-root relative default lock path."""
-    # Walk up from this file to find project root (has config/ dir)
-    here = Path(__file__).resolve().parent
-    for parent in [here] + list(here.parents):
-        if (parent / "config").is_dir():
-            return str(parent / "routers.lock")
-    return str(here / "routers.lock")
-
-
-def _session_id() -> str:
-    """Return user@hostname identifier for the current session."""
-    return f"{os.getenv('USER', 'unknown')}@{platform.node()}"
+# Kept for backwards compatibility with anything importing the constant.
+_STALE_THRESHOLD = None  # the flock is the authority now; no age heuristic
 
 
 class RouterLock:
-    """File-based advisory lock for a single router.
+    """Per-router view over the machine-global bench lease.
 
     Usage as context manager::
 
         with RouterLock(router_id="upstream", phase="mint-health-test") as lock:
-            # router is locked for this session
+            # bench is leased for this session
             ...
-        # lock released automatically
-
-    Manual usage::
-
-        lock = RouterLock(lock_path="/tmp/test.lock")
-        lock.acquire(router_id="alpha", phase="deploy", branch="main")
-        try:
-            ...
-        finally:
-            lock.release()
     """
 
     def __init__(self, lock_path: str | None = None) -> None:
-        self._lock_path: str = lock_path or _default_lock_path()
-        self._held: bool = False
+        # lock_path is accepted for API compatibility; the bench lease is
+        # machine-global by design and cannot be per-worktree.
+        self._lock: BenchLock | None = None
+        self._router_id: str = ""
 
     @property
     def lock_path(self) -> str:
-        return self._lock_path
+        from lib.bench_lock import lock_path as _lp
+
+        return _lp()
+
+    @property
+    def _held(self) -> bool:
+        return self._lock is not None and self._lock.held
 
     def acquire(self, router_id: str, phase: str, branch: str = "unknown") -> None:
-        """Acquire the lock for *router_id*.
+        """Acquire the machine-global bench lease for *router_id*.
 
-        Raises ``RuntimeError`` if the lock is already held by another session
-        (and is not stale). Stale locks (>2 hours old) emit a warning but are
-        overwritten.
+        Raises ``RuntimeError`` (BenchBusy) if another live window holds it,
+        and ``RuntimeError`` (BenchStale) if a holder line is present with no
+        flock behind it — recovery is explicit via ``force_release()``.
         """
         if self._held:
-            raise RuntimeError(f"Lock already held by this RouterLock instance ({self._lock_path})")
-
-        existing = self._read_lock()
-        if existing is not None:
-            locked = existing.get("locked", "false").lower() == "true"
-            if locked:
-                ts_str = existing.get("timestamp", "")
-                stale = False
-                try:
-                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                    if datetime.now(timezone.utc) - ts > _STALE_THRESHOLD:
-                        stale = True
-                except (ValueError, TypeError):
-                    stale = True  # unreadable timestamp => treat as stale
-
-                if stale:
-                    log.warning(
-                        "Overwriting stale lock on router %s (held by %s since %s)",
-                        existing.get("router_id", "?"),
-                        existing.get("session", "?"),
-                        ts_str,
-                    )
-                else:
-                    raise RuntimeError(
-                        "Router '"
-                        + existing.get("router_id", "?")
-                        + "' is locked by "
-                        + existing.get("session", "?")
-                        + " since "
-                        + ts_str
-                        + " (phase: "
-                        + existing.get("phase", "?")
-                        + ", branch: "
-                        + existing.get("branch", "?")
-                        + "). Use force_release() or wait for the lock to expire."
-                    )
-
-        content = (
-            f"locked: true\n"
-            f"branch: {branch}\n"
-            f"session: {_session_id()}\n"
-            f"timestamp: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
-            f"phase: {phase}\n"
-            f"router_id: {router_id}\n"
+            raise RuntimeError(
+                f"Lock already held by this RouterLock instance ({self.lock_path})"
+            )
+        lock = BenchLock(purpose=f"{router_id}:{phase}")
+        lock.acquire()
+        self._lock = lock
+        self._router_id = router_id
+        log.info(
+            "Acquired bench lease for router %s (phase=%s, branch=%s)",
+            router_id,
+            phase,
+            branch,
         )
-        self._atomic_write(content)
-        self._held = True
-        log.info("Acquired lock on router %s (phase=%s, branch=%s)", router_id, phase, branch)
 
     def release(self) -> None:
-        """Release the lock by removing the lock file."""
+        """Release the bench lease (drops the flock and clears the holder line)."""
         if not self._held:
             log.debug("release() called but lock not held")
             return
-        try:
-            os.remove(self._lock_path)
-            log.info("Released lock (%s)", self._lock_path)
-        except FileNotFoundError:
-            log.debug("Lock file already removed: %s", self._lock_path)
-        self._held = False
+        assert self._lock is not None
+        self._lock.release()
+        self._lock = None
+        log.info("Released bench lease (%s)", self.lock_path)
 
     def is_locked(self) -> bool:
-        """Check whether the lock file exists and indicates a held lock."""
-        data = self._read_lock()
-        if data is None:
-            return False
-        return data.get("locked", "false").lower() == "true"
+        """Whether the machine-global bench lease is held (by anyone)."""
+        return bench_state() == "held"
 
-    def status(self) -> dict[str, str]:
-        """Return the current lock file contents as a dict.
-
-        Returns an empty dict if no lock file exists.
-        """
-        data = self._read_lock()
-        return data if data is not None else {}
+    def status(self) -> dict[str, Any]:
+        """Current holder line as a dict (empty when free)."""
+        holder = read_holder()
+        if holder.is_empty:
+            return {}
+        data: dict[str, Any] = {
+            "locked": self.is_locked(),
+            "session": holder.profile or "?",
+            "timestamp": holder.since or "",
+            "phase": holder.purpose or "",
+            "router_id": self._router_id or "",
+            "task": holder.task or "",
+        }
+        if holder.pid:
+            data["pid"] = holder.pid
+        return data
 
     def force_release(self) -> None:
-        """Force-remove the lock file regardless of ownership."""
-        try:
-            os.remove(self._lock_path)
-            log.warning("Force-released lock (%s)", self._lock_path)
-        except FileNotFoundError:
-            log.debug("No lock file to force-release: %s", self._lock_path)
-        self._held = False
+        """Clear a STALE holder line (no flock behind it).
+
+        A live lease cannot be stolen: the flock drops when its holder's
+        process exits, by design.
+        """
+        lock = BenchLock(purpose="router-lock-force-release")
+        lock.acquire(reclaim_stale=True)
+        lock.release()
+        log.warning("Cleared stale bench holder line (%s)", self.lock_path)
 
     # -- context manager --
 
@@ -166,36 +129,3 @@ class RouterLock:
         if self._held:
             self.release()
         return None
-
-    # -- internals --
-
-    def _read_lock(self) -> dict[str, str] | None:
-        """Parse the lock file into a dict. Returns None if file missing."""
-        try:
-            with open(self._lock_path) as f:
-                text = f.read().strip()
-        except FileNotFoundError:
-            return None
-        data: dict[str, str] = {}
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or ":" not in line:
-                continue
-            key, _, val = line.partition(":")
-            data[key.strip()] = val.strip()
-        return data
-
-    def _atomic_write(self, content: str) -> None:
-        """Write *content* to the lock path atomically (write temp, rename)."""
-        parent = os.path.dirname(self._lock_path) or "."
-        fd, tmp_path = tempfile.mkstemp(dir=parent, prefix=".routers-lock-")
-        try:
-            with os.fdopen(fd, "w") as f:
-                _ = f.write(content)
-            os.replace(tmp_path, self._lock_path)
-        except BaseException:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-            raise

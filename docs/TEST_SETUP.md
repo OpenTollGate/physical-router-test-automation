@@ -102,7 +102,12 @@ Copy `routers.env.example` to `routers.env` and fill in credentials. This file i
 
 ### Router mutex
 
-All test targets acquire a lock file (`routers.lock`) to prevent concurrent test execution. Use `make lock PHASE="description"` and `make unlock`.
+All hardware targets assert ONE machine-global bench lease — a `flock` on
+`~/.hermes/state/bench-mt3000.lock` (holder line included), shared by `make`,
+pytest, the ESP32 board work, the hw-smoke CI lane and the queue poller. Use
+`make lock PHASE="description"` before hardware work and `make unlock` after;
+`make lock-status` shows the current owner. See `docs/router-mutex.md`. The old
+per-checkout `routers.lock` file is retired.
 
 ## WiFi STA Architecture
 
