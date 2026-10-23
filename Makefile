@@ -1368,6 +1368,22 @@ verify-feed-rc: ## [hardware] Verify the FreedomTechFeed RC installs+works (.ipk
 	FEED_EXPECT_COMMIT="$(FEED_EXPECT_COMMIT)" \
 	$(PYTHON) -m pytest tests/scenarios/test_feed_package.py -v -s $(PYTEST_ARGS)
 
+# --- MPTCP multi-WAN bonding (physical router; serial console) ---
+
+mptcp-bonding-test: ## MPTCP multi-WAN checks on the router (needs TOLLGATE_SERIAL_PORT) [pytest]
+	$(call require_hardware_lock)
+	@test -n "$${TOLLGATE_SERIAL_PORT:-}" || { echo "$(RED)Set TOLLGATE_SERIAL_PORT (e.g. /dev/ttyUSB1)$(RESET)"; exit 1; }
+	@echo "$(BOLD)=== mptcp-bonding-test: endpoints, limits, tunnels, subflow ===$(RESET)"
+	TOLLGATE_USE_HARDWARE_LOCK=1 $(PYTHON) -m pytest tests/mptcp -v -s $(PYTEST_ARGS)
+
+mptcp-bonding-measure: ## MPTCP subflow measurement (spends traffic; needs PEER + TUNNEL_ADDRS)
+	$(call require_hardware_lock)
+	@test -n "$${TOLLGATE_MPTCP_PEER:-}" || { echo "$(RED)Set TOLLGATE_MPTCP_PEER$(RESET)"; exit 1; }
+	@test -n "$${TOLLGATE_MPTCP_TUNNEL_ADDRS:-}" || { echo "$(RED)Set TOLLGATE_MPTCP_TUNNEL_ADDRS$(RESET)"; exit 1; }
+	TOLLGATE_USE_HARDWARE_LOCK=1 TOLLGATE_MPTCP_MEASURE=1 \
+		$(PYTHON) -m pytest tests/mptcp -v -s $(PYTEST_ARGS)
+
+
 # --- Setup (Python venv) ---
 
 setup-python:
