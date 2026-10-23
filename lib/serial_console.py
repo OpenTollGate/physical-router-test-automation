@@ -4,19 +4,24 @@ Serial console — delegates to tollgate_lab when available.
 Canonical: tollgate_lab/drivers/serial_console.py
 """
 
-try:
-    from tollgate_lab.drivers.serial_console import *
-except ImportError:
-    pass  # Fall through to local implementation
-
-"""Wrapper around scripts/router-serial.py for pymake and pytest."""
-
+# `from __future__` must be the first statement after the module docstring.
+# This file previously had the delegation try/except ABOVE the future import,
+# which is a hard SyntaxError ("from __future__ imports must occur at the
+# beginning of the file") — the module could not be imported at all, so every
+# test importing it died at collection. `ast.parse()` does NOT catch this;
+# only `compile()` does, which is why it survived unnoticed. Guarded by
+# tests/unit/test_serial_console_importable.py.
 from __future__ import annotations
 
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+try:
+    from tollgate_lab.drivers.serial_console import *  # noqa: F401,F403
+except ImportError:
+    pass  # Fall through to local implementation
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _SERIAL_SCRIPT = _PROJECT_ROOT / "scripts" / "router-serial.py"
