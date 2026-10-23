@@ -861,6 +861,30 @@ def run_protocol(ser, args, run_dir, base, proxy, record, skips, proxied_mint, l
     def tail_log(n=12):
         return marked(ser, f"tail -n {n} {log} 2>/dev/null", settle=3.0) or "(no log)"
 
+    def diagnose_missing_driver_log() -> str:
+        """Why is there no log? Three different causes, each with a different fix.
+
+        A bare "(no log)" was reported live on 2026-10-22 and it hid the real cause:
+        the driver rejected the lane's flags and exited 2 before writing anything, so
+        the empty log said nothing about the interface. Distinguishing these cases is
+        the difference between "re-run it" and "the two halves disagree".
+        """
+        exists = marked(ser, f"[ -f {log} ] && wc -c < {log} || echo MISSING")
+        if exists and exists.isdigit() and int(exists) == 0:
+            # The file exists and is empty: the process ran and printed nothing, or
+            # exited before its first line. Most likely a usage/arg error.
+            probe = marked(ser, f"cd {run_dir} && ./spilman-payer --help 2>&1 | head -2")
+            return (f"driver log exists but is EMPTY (0 bytes). Its --help says: "
+                    f"{(probe or '<no help output>')[:120]!r}. "
+                    "If the lane's flags are absent from that usage, the deployed "
+                    "driver does not implement this lane's CLI contract.")
+        if exists == "MISSING":
+            alive = marked(ser, f"ls {run_dir}/ 2>/dev/null | tr '\\n' ' '")
+            return (f"driver never created {log}. Directory holds: {(alive or '?')[:120]}. "
+                    "Either the binary is not executable/deployed, or the launch line "
+                    "failed before the redirect took effect.")
+        return f"driver log has {exists} bytes but no markers; tail: {tail_log()[:160]}"
+
     # E: open. The funding swap legitimately hits the mint — arm AFTER open.
     raw_cmd(ser, f"cd {run_dir} && ./spilman-payer --mint-url {proxied_mint} "
                  f"--module-url {base} --flow open-settle "
@@ -868,7 +892,7 @@ def run_protocol(ser, args, run_dir, base, proxy, record, skips, proxied_mint, l
 
     if not poll_count("PAYER_OPEN_OK"):
         record("E", "channel opens against the test mint", False,
-               "driver did not emit PAYER_OPEN_OK; tail: " + tail_log()[:160])
+               "driver did not emit PAYER_OPEN_OK; " + diagnose_missing_driver_log())
         skips.append(("F", "zero mint calls between open and settle",
                       "E failed — nothing to measure"))
         skips.append(("G", "settle pays the payee exactly", "E failed"))
