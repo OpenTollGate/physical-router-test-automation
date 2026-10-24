@@ -57,18 +57,33 @@ class BackendConfig:
     @property
     def repo(self) -> str:
         if self.is_rust_v2:
-            return "OpenTollGate/tollgate-rs"
-        if self.is_rust:
-            return "Amperstrand/tollgate-rs-ai-research-and-experiments"
-        if self.is_rust_basic or self.is_rust_embedded:
-            return "felixfelix-bot/tollgate-module-basic-rust"
-        return "OpenTollGate/tollgate-module-basic-go"
+            default = "OpenTollGate/tollgate-rs"
+        elif self.is_rust:
+            default = "Amperstrand/tollgate-rs-ai-research-and-experiments"
+        elif self.is_rust_basic or self.is_rust_embedded:
+            # felixfelix-bot/tollgate-module-basic-rust is migrating to the
+            # OpenTollGate org (2026-10-20); the org repo is canonical. The
+            # Amperstrand fork is ahead pending the convergence PR — point
+            # TOLLGATE_BACKEND_REPO at it to test that line.
+            default = "OpenTollGate/tollgate-module-basic-rust"
+        else:
+            default = "OpenTollGate/tollgate-module-basic-go"
+        return os.environ.get("TOLLGATE_BACKEND_REPO", default)
 
     @property
     def workflow(self) -> str:
-        if self.is_rust or self.is_rust_basic or self.is_rust_embedded or self.is_rust_v2:
-            return "Build and Package"
-        return "Build and Publish"
+        # Measured workflow names that actually produce the .ipk artifacts
+        # deploy.py consumes (2026-10-21). The old single rust-family name
+        # ("Build and Package") matched no workflow in any backend repo.
+        if self.is_rust:
+            default = "Release"  # tgrs fork: build-ipk matrix lives here
+        elif self.is_rust_v2:
+            default = "OpenWrt Package"  # OpenTollGate/tollgate-rs
+        elif self.is_rust_basic or self.is_rust_embedded:
+            default = "Cross-compile + Package"  # module-basic-rust (org + Amperstrand fork)
+        else:
+            default = "Build and Publish"  # tollgate-module-basic-go
+        return os.environ.get("TOLLGATE_BACKEND_WORKFLOW", default)
 
     @property
     def config_path(self) -> str:
