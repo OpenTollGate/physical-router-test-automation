@@ -281,15 +281,109 @@ def sha256_host(path: Path) -> str:
     return h.hexdigest()
 
 
-def discover_lan_ip() -> str:
+def candidate_lan_ips() -> list:
+    """Every IPv4 address this host holds, best-guess first.
+
+    Deliberately NOT "the address the default route uses". That heuristic answers
+    a different question -- "how do I reach the internet" -- and on a multi-homed
+    bench it answers it about a wire the router is not on. Measured 2026-10-24:
+    the default route here resolves to 192.168.2.6, where the router's ARP entry
+    is FAILED, while the same subnet on a different NIC (192.168.2.3) is
+    REACHABLE. The router never saw the artifact server and every deploy
+    assertion failed with an EMPTY sha256sum -- a symptom that blames the deploy
+    rather than the address.
+
+    So: enumerate, then let the caller PROVE reachability from the router.
+    """
+    ips = []
+    # The default-route address first: it is the right answer when single-homed,
+    # which is the common case, and it costs one syscall.
+    default = ""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("1.1.1.1", 80))
-        ip = s.getsockname()[0]
+        default = s.getsockname()[0]
         s.close()
-        return ip
     except OSError:
-        return ""
+        pass
+    if default:
+        ips.append(default)
+    # Then every other IPv4 address, excluding loopback and link-local.
+    try:
+        out = subprocess.run(["ip", "-4", "-o", "addr", "show"],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    for line in out.splitlines():
+        parts = line.split()
+        for i, tok in enumerate(parts):
+            if tok == "inet" and i + 1 < len(parts):
+                ip = parts[i + 1].split("/")[0]
+                if ip.startswith(("127.", "169.254.")):
+                    continue
+                if ip not in ips:
+                    ips.append(ip)
+    return ips
+
+
+def discover_lan_ip() -> str:
+    """Kept for callers that only want the default-route guess.
+
+    New code should use the router-reachability probe below instead; this cannot
+    distinguish a reachable address from an unreachable one.
+    """
+    ips = candidate_lan_ips()
+    return ips[0] if ips else ""
+
+
+def probe_reachable_from_router(ser, ip: str, port: int) -> bool:
+    """Can the ROUTER fetch from http://<ip>:<port>/ ?Measured, not inferred.
+
+    A pre-flight that runs on the wrong side of the link proves nothing: the host
+    could curl its own artifact server perfectly while the router, one hop away
+    on an unrouted or differently-wired subnet, could not see it at all. So the
+    probe is issued BY THE ROUTER and its own answer is the verdict.
+    """
+    out = marked(ser, "which curl wget 2>/dev/null | head -2", settle=3.0)
+    fetcher = "curl" if out and "curl" in out else ("wget" if out and "wget" in out else "")
+    if not fetcher:
+        print("### warning: the router has neither curl nor wget; cannot probe reachability")
+        return False
+    if fetcher == "curl":
+        cmd = (f"curl -s -m 4 -o /dev/null -w '%{{http_code}}' "
+               f"http://{ip}:{port}/probe-reach || echo 000")
+    else:
+        cmd = (f"wget -q -T 4 -O /dev/null http://{ip}:{port}/probe-reach "
+               f">/dev/null 2>&1 && echo 200 || echo 000")
+    code = marked(ser, cmd, settle=8.0)
+    ok = bool(code) and code.strip().startswith("2")
+    print(f"### router->host reachability probe: {fetcher} http://{ip}:{port}/ "
+          f"-> {code!r} ({'REACHABLE' if ok else 'unreachable'})")
+    return ok
+
+
+def choose_reachable_lan_ip(ser, port: int, explicit: str | None) -> str:
+    """Pick the host address the router can actually fetch from.
+
+    An explicit --host is honoured but still PROVED: an operator who passes the
+    wrong address must get a loud failure naming the address, not a deploy that
+    fails seven assertions later with an empty checksum.
+    """
+    candidates = [explicit] if explicit else candidate_lan_ips()
+    for ip in candidates:
+        if probe_reachable_from_router(ser, ip, port):
+            return ip
+        if explicit:
+            break
+    if explicit:
+        print(f"ABORT: --host {explicit} is not reachable from the router. "
+              f"Tried a fetch FROM the router, which is the only opinion that "
+              f"counts here.")
+    else:
+        print(f"ABORT: none of this host's addresses is reachable from the "
+              f"router: {candidates}. The router is on a subnet this host does "
+              f"not have an address on -- fix the wiring or pass --host.")
+    return ""
 
 
 def find_module_binary(explicit: str | None) -> Path | None:
@@ -594,14 +688,11 @@ def main():
                 print("### --dry-run: identity confirmed, locks held, stopping")
                 return EXIT_OK
 
-            lan = args.host or discover_lan_ip()
-            if not lan:
-                print("ABORT: could not discover the bench host LAN IP; pass --host")
-                return EXIT_FAIL
             # The mint the OPERATOR pointed at, if any. `None` means "run our own".
             adopted_mint = args.mint_url
             mint_origin = adopted_mint or "(none — this lane starts its own)"
-            print(f"### bench host {lan}; adopted mint: {mint_origin}")
+            # NOTE: `lan` is chosen AFTER the artifact server is up, because the
+            # only trustworthy reachability test is issued BY THE ROUTER.
 
             # ============ TASK B: DEPLOY ==============================
             module = find_module_binary(args.module_binary)
@@ -620,6 +711,15 @@ def main():
             print(f"### staged artifacts: {sorted(host_shas)}")
 
             art_srv = ArtifactServer(stage, args.http_port).start()
+
+            # Pick the host address the ROUTER can fetch from, proved by asking the
+            # router to fetch. The default avoids this whole class of failure: a
+            # wrong address used to surface as "deploy failed, empty sha256sum".
+            lan = choose_reachable_lan_ip(ser, args.http_port, args.host)
+            if not lan:
+                print(f"       (artifact server log: {art_srv.log})")
+                return EXIT_FAIL
+            print(f"### bench host {lan}; adopted mint: {mint_origin}")
             if wait_url(f"http://{lan}:{args.http_port}/") is None:
                 print(f"ABORT: artifact server not reachable on {lan}:{args.http_port}")
                 print(f"       (log: {art_srv.log})")
