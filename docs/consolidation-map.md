@@ -73,6 +73,7 @@ Updated 2026-10-13. Statuses are facts about trackers, not aspirations.
 | 16 | Installer-contract lane wired per-rc into release-check + runbook | module [#925](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/925) | module | **open — sign-off** |
 | 17 | Fail-closed outcomes for required tests (skip ≠ PASS, venue rule) | PRTA [#227](https://github.com/OpenTollGate/physical-router-test-automation/pull/227) | PRTA | **merged**; required-set curation is incremental |
 | 18 | Alpha-rig quick-test entry point (one-command cycle: feed artifact → setup → e2e suite, timed) + pytest rail | PRTA [#274](https://github.com/OpenTollGate/physical-router-test-automation/pull/274) + [#275](https://github.com/OpenTollGate/physical-router-test-automation/pull/275) | PRTA | **merged**; A/B cycles PASS (≈130 s full / 64 s steady), review-hardened, payment E2E over flat L2 proven |
+| 19 | conwrt 2.0 (Rust engine) verification lane — plan/fingerprint/apply + WireGuard tunnel e2e against the lab WG endpoint | PRTA [#323](https://github.com/OpenTollGate/physical-router-test-automation/pull/323) | PRTA + conwrt | **open**; 12/12 on the laneA QEMU venue, host tier runs routerless; closes conwrt's migration-ledger "unverified on hardware" row for plan/apply |
 
 ## Milestones ahead (smallest effective first)
 
