@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -83,8 +84,29 @@ def mint_testnuts_via_nodns(amount: int = 10) -> str | None:
     return None
 
 
+def _peer_api_reachable(timeout: float = 4.0) -> bool:
+    from urllib.parse import urlparse
+
+    u = urlparse(VPN_PEER_API)
+    port = u.port or (443 if u.scheme == "https" else 80)
+    try:
+        with socket.create_connection((u.hostname, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def test_vpn_e2e() -> dict:
     results = {"tests": {}, "passed": 0, "failed": 0}
+
+    # The default peer API (66.92.204.239, SHC Zone 7) is unreachable
+    # from Europe — skip loudly instead of burning a minted token into a
+    # dead endpoint. Set VPN_PEER_API to a live wg-jwt-peer to run this.
+    if not _peer_api_reachable():
+        if "PYTEST_CURRENT_TEST" in os.environ:
+            pytest.skip(f"peer API {VPN_PEER_API} unreachable — set VPN_PEER_API to a live wg-jwt-peer")
+        print(f"   peer API {VPN_PEER_API} unreachable — skipping")
+        return results
 
     print("1. Minting testnuts via nodns.shop...")
     token = mint_testnuts_via_nodns(10)

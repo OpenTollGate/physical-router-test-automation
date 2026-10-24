@@ -43,6 +43,11 @@ pytestmark = [
     pytest.mark.story("O6"),pytest.mark.api]
 
 CONWRT_REPO = Path(os.environ.get("CONWRT_REPO", str(Path.home() / "src" / "conwrt")))
+# WG test endpoint for the wireguard-client use case. The old default
+# (66.92.204.237, SHC Zone 7) is unreachable from Europe — the lab WG
+# test endpoint on inr2.cashu.exchange replaces it (runtime interface
+# `wgtest`, managed by the conwrt Rust suite in test_rust_conwrt.py).
+WG_ENDPOINT_HOST = os.environ.get("CONWRT_WG_ENDPOINT_HOST", "inr2.cashu.exchange")
 
 USE_CASES = [
     ("ssh-hardening", {
@@ -97,7 +102,7 @@ USE_CASES = [
             "uci set network.wg0.addresses='10.0.0.2/32'",
             "uci set network.wgpeer=wireguard_wg0",
             "uci set network.wgpeer.public_key='J6vna+T8o+ibG4qSGL3dp7cbHYQTnvFo4//+V21ctHM='",
-            "uci set network.wgpeer.endpoint_host='66.92.204.237'",
+            f"uci set network.wgpeer.endpoint_host='{WG_ENDPOINT_HOST}'",
             "uci set network.wgpeer.endpoint_port='51820'",
             "uci set network.wgpeer.allowed_ips='10.66.42.0/24'",
             "uci commit network",
