@@ -3,17 +3,54 @@
 PRTA-REVIVE: when tollgate_lab is not installed, the module delegates to the
 ONE machine-global bench lease instead of writing /tmp/tollgate_hardware.lock.
 These tests exercise the fallback path against a temp lease file.
+
+The fallback is loaded DETERMINISTICALLY: CI installs tollgate-lab
+(requirements.txt), which flips lib.hardware_lock onto its delegating branch
+and leaves the fallback branch (and its module global) undefined on that
+host. Blocking the tollgate_lab import for one private module instance keeps
+the code under test being THIS repo's fallback contract everywhere, without
+mutating sys.modules for the rest of the process or touching the real
+machine lease (each test pins TOLLGATE_BENCH_LOCK to a tmp path).
 """
 
-import os
+import importlib.util
+import sys
+from pathlib import Path
 
 import pytest
 
+import lib.hardware_lock as _hl_on_disk
 from lib.bench_lock import bench_state
 
-# Import the fallback implementation directly: the tollgate_lab path (when
-# installed) is that package's own contract, not this repo's.
-import lib.hardware_lock as hl
+
+def _load_fallback_instance():
+    spec = importlib.util.spec_from_file_location(
+        "hardware_lock_fallback_under_test", Path(_hl_on_disk.__file__)
+    )
+    module = importlib.util.module_from_spec(spec)
+    # None in sys.modules makes `import tollgate_lab` raise ImportError,
+    # which is exactly the branch these tests exist for.
+    tollgate_lab_modules = {
+        name: mod
+        for name, mod in sys.modules.items()
+        if name == "tollgate_lab" or name.startswith("tollgate_lab.")
+    }
+    blocked = {"tollgate_lab": None}
+    blocked.update({name: None for name in tollgate_lab_modules})
+    saved = dict(tollgate_lab_modules)
+    for name in tollgate_lab_modules:
+        del sys.modules[name]
+    sys.modules.update(blocked)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        for name in blocked:
+            sys.modules.pop(name, None)
+        sys.modules.update(saved)
+    return module
+
+
+hl = _load_fallback_instance()
 
 
 @pytest.fixture(autouse=True)
