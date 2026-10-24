@@ -662,9 +662,22 @@ class Router:
         if self._use_ssh_for_api():
             try:
                 out = self.ssh(f"curl -s -o /dev/null -w '%{{http_code}}' '{url}'", timeout=15)
-                return int(out.strip()) if out.strip().isdigit() else 0
+                if out.strip().isdigit():
+                    return int(out.strip())
             except Exception:
-                return 0
+                pass
+            # Fallback for curl shims (nr7101 ships an nc-based /usr/bin/curl
+            # without -w): parse the status line from busybox wget -S.
+            try:
+                out = self.ssh(f"wget -S -q -O /dev/null '{url}' 2>&1 | head -1", timeout=15)
+                # "  HTTP/1.1 200 OK" -> 200
+                parts = out.strip().split()
+                for i, tok in enumerate(parts):
+                    if tok.startswith("HTTP/") and i + 1 < len(parts) and parts[i + 1].isdigit():
+                        return int(parts[i + 1])
+            except Exception:
+                pass
+            return 0
         r = subprocess.run(
             ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
              f"http://{self.host}:{BACKEND_PORT}{path}"],
