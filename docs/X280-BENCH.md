@@ -74,6 +74,9 @@ private half in OpenBao.
 E750    enx9c69d3ca3cfe  192.168.8.244/24  -> 192.168.8.1
 MT3000  enx6c6e0750c33b  10.110.223.2/24   -> 10.110.223.1 (br-private/eth1)
 COVR    WAN 192.168.50.218                    x280-only firewall rule
+
+Serial by-id: E750 BH00DL3M, COVR BH00D6DL, MT3000 BG046H5F,
+COMFAST BG046H14. Use /dev/serial/by-id/...; ttyUSB numbers move on re-enumeration.
 ```
 
 MT3000's `192.168.1.1` LAN bridge has only AP members; the physical 1G port is
@@ -107,7 +110,7 @@ This installs:
 
 Copy `config/routers.fleet.example.json` to `config/routers.json` (gitignored)
 and keep secrets out of it. The live inventory has `e750-lab`,
-`tollgate-af92`, `tollgate-9bd4`, and `comfast-b3ba` (pending reset).
+`tollgate-af92`, `tollgate-9bd4`, and `comfast-b3ba` (stock CF-WR632AX UI verified; OpenWrt flash pending LAN link).
 
 ## Run a test
 

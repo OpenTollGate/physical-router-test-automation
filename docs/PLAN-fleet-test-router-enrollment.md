@@ -39,11 +39,12 @@ x280           fleet 192.168.50.10; FIPS; test venv; no bao; no E750 key
 E750           OpenWrt SNAPSHOT r33865; 192.168.8.1; key-only; 12 fleet keys;
                APs quiesced; OpenBao secret test-routers-e750-lab exists
 COVR-X1860     25.12.5 r33051; WAN 192.168.50.218; LAN 192.168.77.1;
-               private 192.168.78.1; serial x280 ttyUSB2; 0 keys
+               private 192.168.78.1; serial x280 BH00D6DL; 0 keys
 GL-MT3000      25.12.5 r33051; WAN 192.168.50.205; LAN 192.168.1.1 (WiFi only);
-               private 10.110.223.1 on eth1; serial x280 ttyUSB3; 0 keys
-COMFAST        dropbear, only tcp/22; 192.168.50.148; SSIDs COMFAST_B3BA_2G/5G;
-               credentials unknown; needs factory reset
+               private 10.110.223.1 on eth1; serial x280 BG046H5F; 0 keys
+COMFAST        CF-WR632AX stock V2.6.1.2; stock UI 192.168.0.1 via open
+               COMFAST_B3BA_2G; admin/c03rad0r123; LAN eth1 down; OpenWrt
+               image staged on x280
 OpenBao        T14 loopback + FIPS ULA; policy physical-router-automation exists;
                AppRole enabled; role not created
 E750 image     ~/e750-fw.bin 7,885,072 bytes sha256 80357e82...e4a1d
@@ -74,7 +75,8 @@ E750 image     ~/e750-fw.bin 7,885,072 bytes sha256 80357e82...e4a1d
       add `192.168.78.2/24`, verify. Fallback: WAN 192.168.50.218 with an
       x280-only firewall.
 - [ ] E750: already direct.
-- [ ] COMFAST: factory reset; manage via LAN direct link or WAN x280-only rule.
+- [x] COMFAST: stock UI accessed via x280 WiFi; admin password set.
+- [ ] COMFAST: OpenWrt flash; blocked on the 1GbE LAN link (eth1 down).
 
 ### 3. Enroll COVR and MT3000
 
@@ -94,7 +96,7 @@ Via serial from x280:
 ### 4. E750 to 25.12.5 + TollGate
 
 - [ ] Copy the verified image to x280; verify sha256.
-- [ ] `sysupgrade -n` with serial `ttyUSB0` attached; keep the factory image and
+- [ ] `sysupgrade -n` with serial by-id BH00DL3M attached; keep the factory image and
       `/dev/mtd1` env backup.
 - [ ] After reboot: confirm `192.168.8.1`, set root password, install fleet keys,
       key-only SSH, restrict to `192.168.8.244`.
@@ -162,10 +164,10 @@ Implemented and live:
 
 Pending:
 
-- **COMFAST** still needs a physical factory reset (hold reset ~10 s). Serial
-  `/dev/ttyUSB1` is present but every credential is rejected. Then enroll it as
-  an AP-only target unless `ubus call system board` shows a supported OpenWrt
-  target.
+- **COMFAST** stock UI is verified and secured (`admin`/`c03rad0r123`) via
+  the open 2.4 GHz AP. Its 1GbE LAN (`eth1`) is down; the verified plain
+  OpenWrt 25.12.5 image is staged on x280. Flash is pending a working LAN link
+  (or WiFi recovery after flash).
 - E750 `tollgate-wrt` is not installed yet; the test framework's deploy step
   resolves and installs the `mips_24kc` `.apk` at run time. COVR/MT3000 already
   run `tollgate-wrt-0.6.0_rc6-r1`.

@@ -28,11 +28,11 @@ T14 (hermes-lan 192.168.50.160) --ssh--> x280 (192.168.50.10)
 | ID | Model | Management | OS / arch | APs | Notes |
 |---|---|---|---|---|---|
 | `e750-lab` | GL.iNet GL-E750 | `192.168.8.1` via x280 | 25.12.5, `mips_24kc` / `ath79/nand` | `TollGate-E750` (disabled) | 2.4 GHz STA to `hermes-lan`; no 5 GHz/cellular |
-| `tollgate-af92` | D-Link COVR-X1860 A1 | `192.168.50.218` WAN | 25.12.5, `mipsel_24kc` / `ramips/mt7621` | TollGate + private (disabled) | Serial `ttyUSB2`; x280-only WAN rule |
-| `tollgate-9bd4` | GL.iNet GL-MT3000 | `10.110.223.1` private | 25.12.5, `aarch64_cortex-a53` / `mediatek/filogic` | TollGate + private (disabled) | Serial `ttyUSB3`; LAN is `br-private` |
-| `comfast-b3ba` | COMFAST | `192.168.50.148` (pending reset) | unknown | `COMFAST_B3BA_2G/5G` | AP-only target; legacy `ssh-rsa` |
+| `tollgate-af92` | D-Link COVR-X1860 A1 | `192.168.50.218` WAN | 25.12.5, `mipsel_24kc` / `ramips/mt7621` | TollGate + private (disabled) | Serial `BH00D6DL`; x280-only WAN rule |
+| `tollgate-9bd4` | GL.iNet GL-MT3000 | `10.110.223.1` private | 25.12.5, `aarch64_cortex-a53` / `mediatek/filogic` | TollGate + private (disabled) | Serial `BG046H5F`; LAN is `br-private` |
+| `comfast-b3ba` | COMFAST CF-WR632AX | `192.168.0.1` stock UI via WiFi | stock `V2.6.1.2`, `aarch64_cortex-a53` / `mediatek/filogic` | `COMFAST_B3BA_2G/5G` (open) | AP-only; `admin`/`c03rad0r123`; 1GbE LAN `eth1` down; OpenWrt image staged |
 
-All three enrolled routers have:
+The three OpenWrt routers (E750, COVR, MT3000) have:
 
 - 11 public keys in `/etc/dropbear/authorized_keys` (10 fleet + the
   lease-scoped x280 bench key); x280 general keys are deliberately absent;
@@ -46,7 +46,7 @@ Secrets live in OpenBao:
 secret/fleet/test-routers-e750-lab
 secret/fleet/test-routers-tollgate-af92
 secret/fleet/test-routers-tollgate-9bd4
-secret/fleet/test-routers-comfast-b3ba   # when enrolled
+secret/fleet/test-routers-comfast-b3ba   # stock UI; updated after OpenWrt flash
 ```
 
 Fields: `ssh_password`, `luci_password`, `ssh_key_path`. Never commit values.
@@ -148,12 +148,24 @@ sshpass -p c03rad0r123 ssh -o PubkeyAuthentication=no \
 
 ## COMFAST status
 
-The COMFAST is powered and reachable at `192.168.50.148`, but its console and
-SSH reject `root`/`admin` with `c03rad0r123`, blank, and factory defaults. It
-needs a physical factory reset (hold reset ~10 s). After reset:
+Verified live: **COMFAST CF-WR632AX**, stock firmware `CF-WR632AX-V2.6.1.2`,
+MediaTek MT7981, WAN `192.168.50.148` (2.5G, fleet), LAN/UI `192.168.0.1`.
+The open `COMFAST_B3BA_2G` AP is reachable; the stock web UI login is `admin`
+with password `c03rad0r123` (set from the factory `admin/admin`).
 
-1. log in over `/dev/ttyUSB1`;
-2. record `ubus call system board` and `/etc/openwrt_release`;
-3. if standard OpenWrt, enroll like the others; otherwise keep it AP-only
-   (`tollgate: false`) and skip package/API tests;
-4. if its SSIDs cannot be quiesced, leave it out until they can.
+Port status: `eth0` (2.5G WAN) is up; **`eth1` (1GbE LAN) is down**. The LAN
+cable currently does not link, so the stock UI is managed over WiFi only.
+
+The verified plain OpenWrt 25.12.5 image is staged on x280:
+
+```text
+openwrt-25.12.5-mediatek-filogic-comfast_cf-wr632ax-squashfs-sysupgrade.bin
+sha256 0ef234de428b7deed5c2d8bb813f5bb8ee1af4c556587b33a9d99d6996ce9b11
+```
+
+The stock UI upgrade endpoint is
+`/cgi-bin/mbox-config?method=SET&section=system_upgrade_keep` with file field
+`uploadfile`. Do not flash until the LAN port links (or the OpenWrt image is
+confirmed to bring up WiFi); otherwise there is no recovery path. After flash,
+the LAN is `192.168.1.1`, SSH root is empty, and it can be enrolled like the
+others. The stock firmware is AP-only (`tollgate: false`) until then.
