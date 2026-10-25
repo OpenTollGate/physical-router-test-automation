@@ -1,0 +1,121 @@
+{
+  "_comment": "Private-inventory example. Copy to config/routers.json (gitignored) and never add secrets. The MT6000 is deliberately absent.",
+  "default": "e750-lab",
+  "routers": {
+    "e750-lab": {
+      "model": "GL-E750",
+      "board_name": "glinet,gl-e750",
+      "luciUrl": "http://192.168.8.1",
+      "sshHost": "192.168.8.1",
+      "sshUser": "root",
+      "sshKey": "/home/c08r4d0r/.ssh/hermes_bench_ed25519",
+      "serial": "/dev/ttyUSB0",
+      "arch": "mips_24kc",
+      "mac": "94:83:c4:4d:fc:38",
+      "openwrtVersion": "25.12.5 r33051-f5dae5ece4",
+      "openwrtTarget": "ath79/nand",
+      "openwrtProfile": "glinet_gl-e750",
+      "packageFormat": "apk",
+      "role": "router",
+      "tollgate": true,
+      "mgmtZone": "lan",
+      "mgmtSource": "192.168.8.244/32",
+      "capabilities": {
+        "wifi_2g": true,
+        "wifi_5g": false,
+        "wifi_6g": false,
+        "cellular": false,
+        "ethernet_mbps": 100,
+        "ram_mb": 128
+      }
+    },
+    "tollgate-af92": {
+      "model": "COVR-X1860",
+      "board_name": "dlink,covr-x1860-a1",
+      "luciUrl": "http://192.168.50.218",
+      "sshHost": "192.168.50.218",
+      "sshUser": "root",
+      "sshKey": "/home/c08r4d0r/.ssh/hermes_bench_ed25519",
+      "sshBind": "192.168.50.10",
+      "serial": "/dev/ttyUSB2",
+      "arch": "mipsel_24kc",
+      "mac": "a8:63:7d:dc:51:65",
+      "openwrtVersion": "25.12.5 r33051-f5dae5ece4",
+      "openwrtTarget": "ramips/mt7621",
+      "openwrtProfile": "dlink_covr-x1860-a1",
+      "packageFormat": "apk",
+      "role": "router",
+      "tollgate": true,
+      "mgmtZone": "wan",
+      "mgmtSource": "192.168.50.10/32 192.168.50.180/32",
+      "capabilities": {
+        "wifi_2g": true,
+        "wifi_5g": true,
+        "wifi_6g": false,
+        "cellular": false,
+        "ethernet_mbps": 1000,
+        "ram_mb": 256
+      }
+    },
+    "tollgate-9bd4": {
+      "model": "GL-MT3000",
+      "board_name": "glinet,gl-mt3000",
+      "luciUrl": "http://10.110.223.1",
+      "sshHost": "10.110.223.1",
+      "sshUser": "root",
+      "sshKey": "/home/c08r4d0r/.ssh/hermes_bench_ed25519",
+      "serial": "/dev/ttyUSB3",
+      "arch": "aarch64_cortex-a53",
+      "mac": "94:83:c4:74:d3:03",
+      "openwrtVersion": "25.12.5 r33051-f5dae5ece4",
+      "openwrtTarget": "mediatek/filogic",
+      "openwrtProfile": "glinet_gl-mt3000",
+      "packageFormat": "apk",
+      "role": "router",
+      "tollgate": true,
+      "mgmtZone": "private",
+      "mgmtSource": "10.110.223.2/32",
+      "capabilities": {
+        "wifi_2g": true,
+        "wifi_5g": true,
+        "wifi_6g": false,
+        "cellular": false,
+        "ethernet_mbps": 2500,
+        "ram_mb": 256
+      }
+    },
+    "comfast-b3ba": {
+      "_comment": "Pending factory reset; enrolled as an AP-only target until its OS is identified.",
+      "model": "COMFAST",
+      "board_name": "unknown",
+      "luciUrl": "",
+      "sshHost": "192.168.50.148",
+      "sshUser": "root",
+      "sshKey": "/home/c08r4d0r/.ssh/hermes_bench_ed25519",
+      "serial": "/dev/ttyUSB1",
+      "arch": "unknown",
+      "mac": "8c:3d:16:35:b3:bb",
+      "openwrtVersion": "unknown",
+      "openwrtTarget": "unknown",
+      "openwrtProfile": "unknown",
+      "packageFormat": "unknown",
+      "role": "ap",
+      "tollgate": false,
+      "status": "pending-reset",
+      "mgmtZone": "wan",
+      "mgmtSource": "192.168.50.10/32",
+      "sshOptions": [
+        "-o",
+        "HostKeyAlgorithms=+ssh-rsa",
+        "-o",
+        "PubkeyAcceptedAlgorithms=+ssh-rsa"
+      ],
+      "capabilities": {
+        "wifi_2g": true,
+        "wifi_5g": true,
+        "wifi_6g": false,
+        "cellular": false
+      }
+    }
+  }
+}

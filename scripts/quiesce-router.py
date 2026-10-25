@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -99,7 +100,9 @@ def _ssh_command(router: dict) -> list[str]:
         raise RuntimeError("router has no sshHost (and TOLLGATE_SSH_HOST is unset)")
     user = router.get("sshUser") or os.environ.get("TOLLGATE_SSH_USER", "root")
     port = str(router.get("sshPort") or os.environ.get("TOLLGATE_SSH_PORT", "22"))
-    key = router.get("sshKey") or router.get("keyfile") or os.environ.get("TOLLGATE_SSH_KEY")
+    # The bench wrapper materializes a short-lived key and exports it; it must
+    # win over the inventory path so a static key is not used outside the lease.
+    key = os.environ.get("TOLLGATE_SSH_KEY") or router.get("sshKey") or router.get("keyfile")
     password = (
         router.get("sshPassword")
         or router.get("password")
@@ -107,6 +110,7 @@ def _ssh_command(router: dict) -> list[str]:
         or os.environ.get("TOLLGATE_LUCI_PASSWORD")
     )
     jump = router.get("jumpHost") or os.environ.get("TOLLGATE_SSH_JUMP")
+    bind = router.get("sshBind") or os.environ.get("TOLLGATE_SSH_BIND")
 
     opts = [
         "ssh",
@@ -119,6 +123,12 @@ def _ssh_command(router: dict) -> list[str]:
         opts += ["-i", str(key)]
     if jump:
         opts += ["-J", str(jump)]
+    if bind:
+        opts += ["-b", str(bind)]
+    extra = router.get("sshOptions") or []
+    if isinstance(extra, str):
+        extra = shlex.split(extra)
+    opts += [str(item) for item in extra]
     target = f"{user}@{host}"
     if password and not key:
         sshpass = shutil.which("sshpass")

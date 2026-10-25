@@ -1,0 +1,14 @@
+[Unit]
+Description=PRTA bench links and routes
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/prta/bench.env
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/local/sbin/prta-bench-routes.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

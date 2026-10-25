@@ -1,0 +1,9 @@
+[Unit]
+Description=Quiesce test-router APs when the bench lease is free
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PRTA_ROOT=/home/c08r4d0r/src/prta-main
+User=c08r4d0r
+ExecStart=/usr/local/sbin/prta-quiesce-watchdog.sh
