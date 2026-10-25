@@ -57,6 +57,10 @@ if [ ! -s "$KEY_FILE" ]; then
   echo "ERROR: bench key is empty" >&2
   exit 1
 fi
+# OpenBao's -field output drops the trailing newline; OpenSSH rejects that.
+if [ -n "$(tail -c 1 "$KEY_FILE" 2>/dev/null)" ]; then
+  printf '\n' >>"$KEY_FILE"
+fi
 
 export TOLLGATE_SSH_KEY="$KEY_FILE"
 "$@"

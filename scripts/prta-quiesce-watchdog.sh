@@ -17,6 +17,9 @@ if scripts/hw-bench-lease status 2>/dev/null | grep -q "bench free"; then
   trap 'rm -f "$KEY_FILE"' EXIT
   BAO_BIN="${BAO_BIN:-$HOME/.local/bin/bao}"
   if "$BAO_BIN" kv get -field=ssh_private_key secret/fleet/test-routers-bench >"$KEY_FILE" 2>/dev/null; then
+    if [ -n "$(tail -c 1 "$KEY_FILE" 2>/dev/null)" ]; then
+      printf '\n' >>"$KEY_FILE"
+    fi
     TOLLGATE_SSH_KEY="$KEY_FILE" python3 scripts/quiesce-router.py --all --allow-unlocked >/dev/null 2>&1 || true
   fi
 fi

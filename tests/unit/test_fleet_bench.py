@@ -59,6 +59,7 @@ def test_bench_wrapper_requires_lease_and_scoped_key():
     assert "trap" in body
     assert 'rm -f "$KEY_FILE"' in body
     assert body.index("quiesce-router.py") < body.index('rm -f "$KEY_FILE"')
+    assert "tail -c 1" in body
 
 
 def test_inventory_example_excludes_mt6000_and_has_capabilities():
