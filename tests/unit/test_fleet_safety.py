@@ -59,7 +59,7 @@ def test_quiesce_only_touches_ap_interfaces():
 def test_fleet_ssh_key_list_is_public_and_unique():
     doc = yaml.safe_load((ROOT / "config" / "fleet_ssh_keys.yaml").read_text())
     hosts = doc["hosts"]
-    for expected in ("t14", "x280", "cobrador", "t440", "dq05"):
+    for expected in ("t14", "bench", "cobrador", "t440", "dq05"):
         assert expected in hosts
     keys = [k["key"].strip() for h in hosts.values() for k in h["keys"]]
     assert keys

@@ -34,8 +34,8 @@ T14 (hermes-lan 192.168.50.160) --ssh--> x280 (192.168.50.10)
 
 All three enrolled routers have:
 
-- 13 public keys in `/etc/dropbear/authorized_keys` (12 fleet + the
-  lease-scoped x280 bench key);
+- 11 public keys in `/etc/dropbear/authorized_keys` (10 fleet + the
+  lease-scoped x280 bench key); x280 general keys are deliberately absent;
 - `PasswordAuth=off`, `RootPasswordAuth=off`;
 - root password `c03rad0r123` retained for LuCI/recovery (no rotation);
 - all AP interfaces disabled after enrollment (`quiesce` reports 0 APs).

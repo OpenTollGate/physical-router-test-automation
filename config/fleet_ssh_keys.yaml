@@ -22,12 +22,9 @@ hosts:
       - comment: "t14 -> e750 (dedicated)"
         key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF5a9A7+RNuBYwtPcOi2D+5rww1+gl8iVfoC1wwRgk44 t14-e750-2026"
 
-  x280:
-    keys:
-      - comment: "x280 fleet"
-        key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBXpTNvCZscqPoACa8p6YnwfvGDHTEIot1GmE56D7Hl+ tollgate-virtual-lab"
-      - comment: "x280 id_fleet"
-        key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGBqQqpx8GD2PCyB3Vlu6LtWK5wZ6byMUKL7NwtIjcUs c08r4d0r@x280"
+  # x280 is represented by the lease-scoped `bench` key above, not by its
+  # general fleet keys. This makes a direct `ssh -i ~/.ssh/id_fleet` fail on
+  # test routers; the wrapper must materialize the bench key under a lease.
 
   cobrador:
     keys:
