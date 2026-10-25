@@ -85,9 +85,9 @@
       }
     },
     "comfast-b3ba": {
-      "_comment": "COMFAST CF-WR632AX flashed with OpenWrt 25.12.5. Management is the 2.5G WAN at 192.168.50.219 (x280-only firewall); the 1GbE LAN port (eth1) is down. TollGate-COMFAST APs are disabled until a test enables them.",
+      "_comment": "COMFAST CF-WR632AX flashed with OpenWrt 25.12.5. Management is the physical 2.5G WAN (netdev wan) at 192.168.50.219 behind an x280-only firewall. TollGate-COMFAST APs are disabled until a test enables them.",
       "model": "COMFAST CF-WR632AX",
-      "board_name": "comfast_cf-wr632ax",
+      "board_name": "comfast,cf-wr632ax",
       "luciUrl": "http://192.168.50.219",
       "sshHost": "192.168.50.219",
       "sshUser": "root",
@@ -104,17 +104,13 @@
       "status": "openwrt-enrolled",
       "mgmtZone": "wan",
       "mgmtSource": "192.168.50.10/32 192.168.50.180/32",
-      "sshOptions": [
-        "-o",
-        "HostKeyAlgorithms=+ssh-rsa",
-        "-o",
-        "PubkeyAcceptedAlgorithms=+ssh-rsa"
-      ],
       "capabilities": {
         "wifi_2g": true,
         "wifi_5g": true,
         "wifi_6g": false,
-        "cellular": false
+        "cellular": false,
+        "ethernet_mbps": 2500,
+        "ram_mb": 256
       }
     }
   }

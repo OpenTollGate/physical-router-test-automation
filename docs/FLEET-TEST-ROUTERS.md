@@ -1,6 +1,6 @@
 # Fleet test routers, bench topology, and mutex
 
-Status: **live** (2026-10-25). x280 is the only test manager; T14 is a control
+Status: **live** (2026-10-26). x280 is the only test manager; T14 is a control
 console; the MT6000 is production infrastructure.
 
 ## Topology
@@ -30,14 +30,14 @@ T14 (hermes-lan 192.168.50.160) --ssh--> x280 (192.168.50.10)
 | `e750-lab` | GL.iNet GL-E750 | `192.168.8.1` via x280 | 25.12.5, `mips_24kc` / `ath79/nand` | `TollGate-E750` (disabled) | 2.4 GHz STA to `hermes-lan`; no 5 GHz/cellular |
 | `tollgate-af92` | D-Link COVR-X1860 A1 | `192.168.50.218` WAN | 25.12.5, `mipsel_24kc` / `ramips/mt7621` | TollGate + private (disabled) | Serial `BH00D6DL`; x280-only WAN rule |
 | `tollgate-9bd4` | GL.iNet GL-MT3000 | `10.110.223.1` private | 25.12.5, `aarch64_cortex-a53` / `mediatek/filogic` | TollGate + private (disabled) | Serial `BG046H5F`; LAN is `br-private` |
-| `comfast-b3ba` | COMFAST CF-WR632AX | `192.168.50.219` WAN | 25.12.5, `aarch64_cortex-a53` / `mediatek/filogic` | `TollGate-COMFAST`, `TollGate-COMFAST-5G` (disabled) | Serial `BG046H14`; 1GbE LAN `eth1` down; WAN management |
+| `comfast-b3ba` | COMFAST CF-WR632AX | `192.168.50.219` WAN | 25.12.5, `aarch64_cortex-a53` / `mediatek/filogic` | `TollGate-COMFAST`, `TollGate-COMFAST-5G` (disabled) | Serial `BG046H14`; WAN management; LAN not on x280 |
 
 All four enrolled OpenWrt routers (E750, COVR, MT3000, COMFAST) have:
 
 - 11 public keys in `/etc/dropbear/authorized_keys` (10 fleet + the
   lease-scoped x280 bench key); x280 general keys are deliberately absent;
 - `PasswordAuth=off`, `RootPasswordAuth=off`;
-- root password `c03rad0r123` retained for LuCI/recovery (no rotation);
+- root/LuCI password stored in OpenBao, retained without rotation;
 - all AP interfaces disabled after enrollment (`quiesce` reports 0 APs).
 
 Secrets live in OpenBao:
@@ -46,7 +46,7 @@ Secrets live in OpenBao:
 secret/fleet/test-routers-e750-lab
 secret/fleet/test-routers-tollgate-af92
 secret/fleet/test-routers-tollgate-9bd4
-secret/fleet/test-routers-comfast-b3ba   # stock UI; updated after OpenWrt flash
+secret/fleet/test-routers-comfast-b3ba
 ```
 
 Fields: `ssh_password`, `luci_password`, `ssh_key_path`. Never commit values.
@@ -134,7 +134,8 @@ scripts/hw-bench-lease exec --purpose verify -- \
 Password auth must fail:
 
 ```bash
-sshpass -p c03rad0r123 ssh -o PubkeyAuthentication=no \
+# Fetch ssh_password from OpenBao into ROUTER_PASSWORD; never commit it.
+sshpass -p "$ROUTER_PASSWORD" ssh -o PubkeyAuthentication=no \
   -o PreferredAuthentications=password root@192.168.8.1 true
 # Permission denied (publickey)
 ```
@@ -161,13 +162,13 @@ Live: **COMFAST CF-WR632AX**, MediaTek MT7981, OpenWrt **25.12.5**
 flashed via its WebUI, then `firstboot -y` wiped the vendor overlay.
 
 ```text
-WAN  eth0 2.5G  192.168.50.219 (DHCP reservation), x280-only management
-LAN  br-lan     192.168.1.1/24, DHCP for AP clients
+WAN  netdev wan (physical 2.5G)  192.168.50.219, x280-only management
+LAN  br-lan (netdev lan)         192.168.1.1/24, DHCP for AP clients
 APs  TollGate-COMFAST (2.4 GHz ch11) / TollGate-COMFAST-5G (5 GHz ch36)
      disabled until a leased test enables them
 SSH  root@192.168.50.219, key-only, 11 keys, password auth off
-LuCI http://192.168.50.219/ (root password c03rad0r123)
-1GbE LAN port eth1 is down; management is the 2.5G WAN
+LuCI http://192.168.50.219/ (credential in OpenBao)
+LAN port has link, but is not wired to an x280 adapter; management is WAN
 ```
 
 The test framework can deploy `tollgate-wrt` and run the suite over the WAN.

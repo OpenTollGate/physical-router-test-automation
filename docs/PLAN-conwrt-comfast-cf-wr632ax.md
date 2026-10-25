@@ -28,8 +28,9 @@ Target/profile    mediatek/filogic, comfast_cf-wr632ax
 Stock firmware    CF-WR632AX-V2.6.1.2, WebUI at 192.168.0.1
 Flash path        stock WebUI -> official OpenWrt 25.12.5 sysupgrade ->
                   firstboot -y -> clean LAN 192.168.1.1
-Management        2.5G WAN DHCP, x280-only firewall
-1GbE LAN          eth1 did not link on the tested unit
+Management        physical 2.5G WAN (netdev wan) DHCP, x280-only firewall
+1GbE LAN          stock UI showed eth1 down; OpenWrt link came up at 1Gbps,
+                  but management used the 2.5G WAN
 APs               TollGate-COMFAST / -5G (disabled; arm/quiesce verified)
 SSH               key-only, 11 keys, password auth off
 Canary            lease=PASS reach=PASS dns=PASS UP
@@ -54,19 +55,19 @@ serials, captures, keys, inventory, and `config.toml`.
 
 Only `models/comfast-cf-wr632ax.json`:
 
-- [ ] `openwrt.release: "25.12.5"`; add `openwrt.board_name` only if
-      `ubus call system board` confirms it.
-- [ ] `mac_oui`: add `8C:3D:16` (vendor OUI, not a full MAC).
-- [ ] `stock_default_ip: "192.168.0.1"`; keep U-Boot recovery at
+- [x] `openwrt.release: "25.12.5"`; `openwrt.board_name` confirmed by
+      `ubus call system board` as `comfast,cf-wr632ax`.
+- [x] `mac_oui`: add `8C:3D:16` (vendor OUI, not a full MAC).
+- [x] `stock_default_ip: "192.168.0.1"`; U-Boot recovery stays
       `192.168.1.1`.
-- [ ] Add a `tested_hardware` entry:
+- [x] Add a `tested_hardware` entry:
       `stock_webui_openwrt_25_12_5` with `tested: true`, date `2026-10-25`,
       and notes covering the stock UI, upload endpoint, `firstboot -y`, 2.5G
-      WAN, eth1 down, and the unexercised U-Boot recovery.
-- [ ] Add `signatures.stock_webui` with login and upload paths, default IP.
-- [ ] Add notes distinguishing the stock UI IP from the U-Boot recovery IP and
-      recording the dead 1GbE LAN port.
-- [ ] Do **not** add a new `stock-webui` flash method in this PR. The remote
+      WAN, the LAN link, and the unexercised U-Boot recovery.
+- [x] Add `signatures.stock_webui` with login and upload paths, default IP.
+- [x] Add notes distinguishing the stock UI IP from the U-Boot recovery IP and
+      recording the LAN/management facts.
+- [x] Do **not** add a new `stock-webui` flash method in this PR. The remote
       master has transition annotations (`resources_required`/`envelope`) and
       an unannotated method fails CI. The existing recovery/tftp/sysupgrade
       methods stay; the stock-WebUI evidence goes under `tested_hardware` and
@@ -88,7 +89,8 @@ Only `models/comfast-cf-wr632ax.json`:
 
 ## Validation checklist
 
-- [ ] JSON schema and id/filename match.
-- [ ] `validate_models` passes; no false claim that U-Boot recovery was tested.
-- [ ] `git diff --check`; no secrets/specimen MAC/serial/IP.
-- [ ] PR opens and CI starts.
+- [x] JSON schema and id/filename match.
+- [x] `validate_models` passes; no false claim that U-Boot recovery was tested.
+- [x] `git diff --check`; no secrets/specimen MAC/serial/IP.
+- [x] PR opens and CI starts.
+- [ ] PR merged; blocked on the unrelated Rust-parity CI failure.

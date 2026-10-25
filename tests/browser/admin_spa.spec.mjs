@@ -19,7 +19,11 @@ test.describe('admin SPA', () => {
 		const passwordInput = await page.$('input[type="password"]');
 		if (!passwordInput) return true;
 
-		const password = process.env.TOLLGATE_LUCI_PASSWORD || 'c03rad0r123';
+		// Credentials are injected at run time from OpenBao; never commit them.
+		const password = process.env.TOLLGATE_LUCI_PASSWORD;
+		if (!password) {
+			return true;
+		}
 		await passwordInput.fill(password);
 
 		const usernameInput = await page.$('input[type="text"], input[name="username"], input[placeholder*="user" i]');
