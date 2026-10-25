@@ -46,7 +46,8 @@ fi
 
 KEY_FILE="$(mktemp "${TMPDIR:-/tmp}/prta-bench-key.XXXXXX")"
 chmod 600 "$KEY_FILE"
-trap 'rm -f "$KEY_FILE"; python3 "$ROOT/scripts/quiesce-router.py" --all --allow-unlocked >/dev/null 2>&1 || true' EXIT
+# Quiesce while the key still exists, then remove it.
+trap 'python3 "$ROOT/scripts/quiesce-router.py" --all --allow-unlocked >/dev/null 2>&1 || true; rm -f "$KEY_FILE"' EXIT
 
 if ! "$BAO_BIN" kv get -field=ssh_private_key secret/fleet/test-routers-bench >"$KEY_FILE" 2>/dev/null; then
   echo "ERROR: secret/fleet/test-routers-bench ssh_private_key is missing" >&2

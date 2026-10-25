@@ -104,7 +104,8 @@ scripts/hw-bench-lease exec --purpose "test-pr 42" -- \
 ```
 
 `prta-bench-run.sh` refuses without the lease, fetches the bench key from
-OpenBao, exports `TOLLGATE_SSH_KEY`, and quiesces on exit.
+OpenBao, exports `TOLLGATE_SSH_KEY`, and quiesces before removing the key. The
+2-minute watchdog also fetches the bench key for cleanup when the lease is free.
 
 ## Verification
 

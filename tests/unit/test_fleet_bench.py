@@ -55,8 +55,10 @@ def test_bench_wrapper_requires_lease_and_scoped_key():
     assert "TOLLGATE_SSH_KEY" in body
     assert "quiesce-router.py" in body
     assert "--allow-unlocked" in body
-    # The key is removed on every exit.
-    assert "trap 'rm -f" in body
+    # The key is removed on every exit, after quiesce.
+    assert "trap" in body
+    assert 'rm -f "$KEY_FILE"' in body
+    assert body.index("quiesce-router.py") < body.index('rm -f "$KEY_FILE"')
 
 
 def test_inventory_example_excludes_mt6000_and_has_capabilities():
