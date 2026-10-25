@@ -14,7 +14,7 @@ python3 -m venv /home/c08r4d0r/.tollgate-test-venv
 /home/c08r4d0r/.tollgate-test-venv/bin/pip install -r requirements.txt
 ```
 
-The live x280 uses `origin/main` at `cf1b29d` (or newer) and the pre-created
+The live x280 uses `origin/main` at `3c4a3cc` (or newer) and the pre-created
 venv `/home/c08r4d0r/.tollgate-test-venv`.
 
 ## OpenBao AppRole
@@ -53,6 +53,20 @@ cp ~/.local/bin/bao ~/.local/bin/bao   # install the OpenBao CLI
 
 The policy (`config/openbao-policy.hcl`) can read
 `secret/data/fleet/test-routers-*` and nothing under `mt6000-*`.
+
+## Bench key
+
+The public half is committed under `bench` in `config/fleet_ssh_keys.yaml`
+(`ssh-ed25519 ... x280-bench`). The private half is in OpenBao
+`secret/fleet/test-routers-bench:ssh_private_key`; it is not on disk.
+
+`prta-bench-run.sh` fetches it only inside the lease, writes a 0600 temp file,
+exports `TOLLGATE_SSH_KEY`, and deletes it after quiesce. x280's general
+`id_fleet`/`id_ed25519` are deliberately not authorized on test routers.
+
+To rotate it, generate a new ed25519 key on x280, replace the `bench` public key
+in git, install the key set on each router inside the lease, and store the new
+private half in OpenBao.
 
 ## Bench links
 
