@@ -8,6 +8,11 @@
 # may refuse RSA). Add a key here only after deciding it should be able to log
 # in to lab routers.
 hosts:
+  bench:
+    keys:
+      - comment: "x280 bench (lease-scoped, private half in OpenBao)"
+        key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDYmUXXHpo10VPacKhXLnUojyHo2rr4/V3gTd2G3gJbF x280-bench"
+
   t14:
     keys:
       - comment: "t14 tollgate-virtual-lab"

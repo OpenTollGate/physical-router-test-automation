@@ -661,7 +661,8 @@ lock-status: ## Show bench lease state + ESP32 board locks
 	@echo "$(BOLD)=== ESP32 Board Locks ===$(RESET)"
 	@$(MAKE) -C esp32 lock-status
 
-.PHONY: quiesce quiesce-all fleet-keys check-protected
+.PHONY: quiesce quiesce-all fleet-keys check-protected bench-run bench-install \
+	openbao-approle mgmt-firewall
 
 quiesce: ## Disable APs on ROUTER after a run (bench lease required)
 	@python3 scripts/quiesce-router.py --router "$(ROUTER)"
@@ -675,6 +676,23 @@ fleet-keys: ## Install committed fleet SSH public keys on ROUTER
 check-protected: ## Fail closed if ROUTER_IP is a production/control device
 	@test -n "$(ROUTER_IP)" || { echo "set ROUTER_IP=<address>" >&2; exit 2; }
 	@python3 scripts/check-protected.py --address "$(ROUTER_IP)"
+
+bench-run: ## Run CMD under the bench lease with the OpenBao bench key
+	@test -n "$(CMD)" || { echo "set CMD='<command>'" >&2; exit 2; }
+	@scripts/hw-bench-lease exec --purpose "$(or $(PHASE),make bench-run)" -- \
+		scripts/prta-bench-run.sh -- $(CMD)
+
+bench-install: ## Install x280 bench routes + quiesce watchdog (run on x280)
+	@sudo PRTA_ROOT="$(CURDIR)" ./deploy/x280/install-bench.sh
+
+openbao-approle: ## Create the test-automation policy/AppRole (admin BAO_TOKEN)
+	@./scripts/openbao-approle-apply.sh --role-id-file "$(HOME)/.config/prta/role-id"
+
+mgmt-firewall: ## Apply the x280-only management rule on ROUTER
+	@test -n "$(ROUTER)" || { echo "set ROUTER=<id>" >&2; exit 2; }
+	@python3 scripts/bench/apply-mgmt-firewall.py --router "$(ROUTER)" \
+		$(if $(ZONE),--zone "$(ZONE)",) $(if $(SRC_IP),--src-ip "$(SRC_IP)",) \
+		$(if $(DENY_OTHERS),--deny-others,)
 
 force-unlock: ## Clear a stale bench lease holder line (cannot steal a live flock)
 	@echo "$(YELLOW)A live lease cannot be stolen: the flock drops when its holder exits.$(RESET)"

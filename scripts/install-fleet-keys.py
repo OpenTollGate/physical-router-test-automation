@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -94,7 +95,8 @@ def ssh_command(router: dict) -> list[str]:
         raise RuntimeError("router has no sshHost")
     user = router.get("sshUser") or os.environ.get("TOLLGATE_SSH_USER", "root")
     port = str(router.get("sshPort") or os.environ.get("TOLLGATE_SSH_PORT", "22"))
-    key = router.get("sshKey") or router.get("keyfile") or os.environ.get("TOLLGATE_SSH_KEY")
+    # Prefer the lease-scoped key injected by scripts/prta-bench-run.sh.
+    key = os.environ.get("TOLLGATE_SSH_KEY") or router.get("sshKey") or router.get("keyfile")
     password = (
         router.get("sshPassword")
         or router.get("password")
@@ -102,6 +104,7 @@ def ssh_command(router: dict) -> list[str]:
         or os.environ.get("TOLLGATE_LUCI_PASSWORD")
     )
     jump = router.get("jumpHost") or os.environ.get("TOLLGATE_SSH_JUMP")
+    bind = router.get("sshBind") or os.environ.get("TOLLGATE_SSH_BIND")
     opts = [
         "ssh", "-o", "ConnectTimeout=10",
         "-o", "StrictHostKeyChecking=accept-new",
@@ -112,6 +115,12 @@ def ssh_command(router: dict) -> list[str]:
         opts += ["-i", str(key)]
     if jump:
         opts += ["-J", str(jump)]
+    if bind:
+        opts += ["-b", str(bind)]
+    extra = router.get("sshOptions") or []
+    if isinstance(extra, str):
+        extra = shlex.split(extra)
+    opts += [str(item) for item in extra]
     target = f"{user}@{host}"
     if password and not key:
         sp = shutil.which("sshpass")
