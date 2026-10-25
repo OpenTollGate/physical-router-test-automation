@@ -180,6 +180,11 @@ cleanup_router_aps() {
 }
 trap cleanup_router_aps EXIT
 
+# Arm the APs for this leased run; the EXIT trap quiesces them again.
+if [[ "${TOLLGATE_QUIESCE_ON_EXIT:-1}" != "0" && -n "${ROUTER_ID:-}" ]]; then
+  python3 "$SCRIPT_DIR/quiesce-router.py" --router "$ROUTER_ID" --enable --allow-unlocked >/dev/null 2>&1 || true
+fi
+
 # Check for password
 if [[ -z "$TOLLGATE_LUCI_PASSWORD" && -z "$TOLLGATE_SSH_PASSWORD" ]]; then
   echo "ERROR: TOLLGATE_LUCI_PASSWORD or TOLLGATE_SSH_PASSWORD is required" >&2

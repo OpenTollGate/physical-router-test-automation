@@ -38,4 +38,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if [ -n "$ROUTER_ID" ]; then
+  python3 "$SCRIPT_DIR/quiesce-router.py" --router "$ROUTER_ID" --enable --allow-unlocked >/dev/null 2>&1 || true
+fi
+
 "$@"

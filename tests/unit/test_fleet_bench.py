@@ -109,3 +109,21 @@ def test_docs_call_out_mt6000_protection_and_quiesce():
     assert "quiesce" in text.lower()
     assert "x280" in text
     assert "T14" in text
+
+
+def test_ap_arm_and_quiesce_hooks():
+    q = (ROOT / "scripts" / "quiesce-router.py").read_text()
+    assert "REMOTE_ENABLE" in q
+    assert '"--enable"' in q
+    assert "ENABLE_DONE" in q
+    assert "QUIESCE_DONE" in q
+
+    test_pr = (ROOT / "scripts" / "test-pr.sh").read_text()
+    assert "--enable" in test_pr
+    assert "cleanup_router_aps" in test_pr
+
+    conftest = (ROOT / "tests" / "conftest.py").read_text()
+    assert '"--enable"' in conftest
+
+    runner = (ROOT / "scripts" / "run-with-quiesce.sh").read_text()
+    assert "--enable" in runner

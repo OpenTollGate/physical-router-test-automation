@@ -1581,6 +1581,20 @@ def pytest_sessionstart(session):
     except Exception as exc:
         log.debug("Preflight skipped: %s", exc)
 
+    # Arm the APs for a leased physical test; pytest_sessionfinish quiesces.
+    _router_id = os.environ.get("TOLLGATE_ROUTER_ID", "").strip()
+    if _router_id and not IS_MOCK_MODE and os.environ.get("TOLLGATE_QUIESCE_ON_EXIT", "1").lower() not in ("0", "false", "no"):
+        _quiesce = Path(__file__).resolve().parent.parent / "scripts" / "quiesce-router.py"
+        if _quiesce.is_file():
+            try:
+                subprocess.run(
+                    [sys.executable, str(_quiesce), "--router", _router_id, "--enable", "--allow-unlocked"],
+                    cwd=str(_quiesce.parent.parent),
+                    capture_output=True, text=True, timeout=90, check=False,
+                )
+            except Exception as exc:  # noqa: BLE001 - setup must not mask results
+                log.warning("pre-test AP enable failed for %s: %s", _router_id, exc)
+
     lock_phase = session.config.getoption("--lock-phase", default=None)
     use_hardware = (
         lock_phase

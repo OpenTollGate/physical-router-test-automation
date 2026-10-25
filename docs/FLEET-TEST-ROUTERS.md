@@ -90,12 +90,20 @@ hardening step.
 ## AP quiesce
 
 `scripts/quiesce-router.py` disables every `mode=ap` interface and reloads
-WiFi; STA/LAN management is untouched. It is called by:
+WiFi; STA/LAN management is untouched. Tests arm them for a leased run with
+`--enable`, and the exit hooks quiesce again:
 
-- the pytest `sessionfinish` hook;
-- `scripts/test-pr.sh` on exit;
-- `scripts/prta-bench-run.sh` on exit;
-- `scripts/prta-quiesce-watchdog.sh` every 2 minutes when the lease is free.
+```bash
+# inside the bench lease, before the test
+python3 scripts/quiesce-router.py --router comfast-b3ba --enable --allow-unlocked
+# after the test
+python3 scripts/quiesce-router.py --router comfast-b3ba --allow-unlocked
+```
+
+`scripts/test-pr.sh`, the pytest `sessionstart` hook, and
+`scripts/run-with-quiesce.sh` call `--enable`; the pytest `sessionfinish` hook,
+`test-pr.sh`'s EXIT trap, `prta-bench-run.sh`, and the 2-minute watchdog call
+the quiesce path.
 
 A router that cannot be quiesced must be marked broken and, if possible, have
 its power or switch port cut. The E750's battery means cutting the charger does

@@ -71,6 +71,38 @@ fi
 echo "QUIESCE_DONE"
 """
 
+REMOTE_ENABLE = r"""
+set -e
+if ! command -v uci >/dev/null 2>&1; then
+  echo "NOT_OPENWRT"
+  exit 0
+fi
+changed=0
+for s in $(uci show wireless 2>/dev/null | sed -n "s/^wireless\.\([^.]*\)=wifi-iface$/\1/p"); do
+  [ "$(uci -q get "wireless.$s.mode")" = "ap" ] || continue
+  if [ "$(uci -q get "wireless.$s.disabled")" != "0" ]; then
+    uci set "wireless.$s.disabled=0"
+    changed=1
+    echo "enabled $s"
+  fi
+done
+if [ "$changed" = "1" ]; then
+  uci commit wireless
+  wifi reload >/dev/null 2>&1 || wifi up >/dev/null 2>&1 || true
+  sleep 5
+fi
+echo "--AP interfaces after enable--"
+for s in $(uci show wireless 2>/dev/null | sed -n "s/^wireless\.\([^.]*\)=wifi-iface$/\1/p"); do
+  [ "$(uci -q get "wireless.$s.mode")" = "ap" ] || continue
+  echo "ap $s ssid=$(uci -q get "wireless.$s.ssid") disabled=$(uci -q get "wireless.$s.disabled")"
+done
+if command -v iw >/dev/null 2>&1; then
+  echo "--iw AP count--"
+  iw dev 2>/dev/null | grep -c "type AP" || true
+fi
+echo "ENABLE_DONE"
+"""
+
 
 def inventory_path() -> Path:
     return Path(os.environ.get("TOLLGATE_ROUTER_INVENTORY", DEFAULT_INVENTORY)).expanduser()
@@ -139,7 +171,7 @@ def _ssh_command(router: dict) -> list[str]:
     return [*opts, "-o", "BatchMode=yes", target]
 
 
-def quiesce_router(router_id: str, router: dict, *, dry_run: bool = False, skip_protected: bool = False) -> int:
+def quiesce_router(router_id: str, router: dict, *, dry_run: bool = False, skip_protected: bool = False, enable: bool = False) -> int:
     try:
         assert_not_protected(
             board_name=router.get("board_name") or router.get("model"),
@@ -155,16 +187,19 @@ def quiesce_router(router_id: str, router: dict, *, dry_run: bool = False, skip_
         print(f"REFUSED {router_id}: {exc}", file=sys.stderr)
         return 2
 
+    action = "enable" if enable else "quiesce"
+    remote = REMOTE_ENABLE if enable else REMOTE_QUIESCE
+    done_token = "ENABLE_DONE" if enable else "QUIESCE_DONE"
     if dry_run:
-        print(f"# quiesce {router_id}: {router.get('sshHost') or os.environ.get('TOLLGATE_SSH_HOST')}")
-        print(REMOTE_QUIESCE)
+        print(f"# {action} {router_id}: {router.get('sshHost') or os.environ.get('TOLLGATE_SSH_HOST')}")
+        print(remote)
         return 0
 
     cmd = _ssh_command(router)
-    print(f"==> quiescing {router_id} via {router.get('sshHost') or os.environ.get('TOLLGATE_SSH_HOST')}")
+    print(f"==> {action}ing {router_id} via {router.get('sshHost') or os.environ.get('TOLLGATE_SSH_HOST')}")
     proc = subprocess.run(
         [*cmd, "sh -s"],
-        input=REMOTE_QUIESCE,
+        input=remote,
         text=True,
         capture_output=True,
         timeout=90,
@@ -174,10 +209,10 @@ def quiesce_router(router_id: str, router: dict, *, dry_run: bool = False, skip_
         sys.stdout.write(proc.stdout)
     if proc.returncode != 0:
         print(proc.stderr.strip(), file=sys.stderr)
-        print(f"QUIESCE_FAILED {router_id} rc={proc.returncode}", file=sys.stderr)
+        print(f"{action.upper()}_FAILED {router_id} rc={proc.returncode}", file=sys.stderr)
         return proc.returncode or 1
-    if "QUIESCE_DONE" not in proc.stdout:
-        print(f"QUIESCE_INCOMPLETE {router_id}", file=sys.stderr)
+    if done_token not in proc.stdout:
+        print(f"{action.upper()}_INCOMPLETE {router_id}", file=sys.stderr)
         return 1
     return 0
 
@@ -195,6 +230,7 @@ def main() -> int:
     ap.add_argument("--router", help="router id from config/routers.json")
     ap.add_argument("--all", action="store_true", help="quiesce every non-protected router")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--enable", action="store_true", help="arm APs for a leased test (inverse of quiesce)")
     ap.add_argument("--allow-unlocked", action="store_true", help="cleanup hook (no bench lease)")
     args = ap.parse_args()
     if not args.router and not args.all:
@@ -216,13 +252,17 @@ def main() -> int:
     if args.all:
         rc = 0
         for rid in sorted(routers):
-            rc |= quiesce_router(rid, routers[rid], dry_run=args.dry_run, skip_protected=True)
+            rc |= quiesce_router(
+                rid, routers[rid], dry_run=args.dry_run, skip_protected=True, enable=args.enable
+            )
         return rc
 
     if args.router not in routers:
         print(f"ERROR: router {args.router!r} not in inventory (known: {sorted(routers)})", file=sys.stderr)
         return 1
-    return quiesce_router(args.router, routers[args.router], dry_run=args.dry_run)
+    return quiesce_router(
+        args.router, routers[args.router], dry_run=args.dry_run, enable=args.enable
+    )
 
 
 if __name__ == "__main__":
