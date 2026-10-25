@@ -684,6 +684,9 @@ bench-run: ## Run CMD under the bench lease with the OpenBao bench key
 
 bench-install: ## Install x280 bench routes + quiesce watchdog (run on x280)
 	@sudo PRTA_ROOT="$(CURDIR)" ./deploy/x280/install-bench.sh
+comfast-apply: ## Reapply the COMFAST OpenWrt test-target config
+	@scripts/bench/comfast_apply.sh
+
 
 openbao-approle: ## Create the test-automation policy/AppRole (admin BAO_TOKEN)
 	@./scripts/openbao-approle-apply.sh --role-id-file "$(HOME)/.config/prta/role-id"

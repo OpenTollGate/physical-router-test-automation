@@ -127,3 +127,22 @@ def test_ap_arm_and_quiesce_hooks():
 
     runner = (ROOT / "scripts" / "run-with-quiesce.sh").read_text()
     assert "--enable" in runner
+
+
+def test_comfast_openwrt_config_is_codified():
+    script = ROOT / "scripts" / "bench" / "comfast_apply.sh"
+    assert script.is_file() and script.stat().st_mode & 0o111
+    body = script.read_text()
+    for needle in (
+        "TollGate-COMFAST",
+        "TollGate-COMFAST-5G",
+        "192.168.1.1",
+        "192.168.50.219",
+        "allow_x280_mgmt",
+        "default_radio0.disabled",
+        "default_radio1.disabled",
+        "COMF_APPLY_DONE",
+    ):
+        assert needle in body, needle
+    assert "comfast-apply:" in (ROOT / "Makefile").read_text()
+    assert "comfast_apply.sh" in (ROOT / "docs" / "FLEET-TEST-ROUTERS.md").read_text()

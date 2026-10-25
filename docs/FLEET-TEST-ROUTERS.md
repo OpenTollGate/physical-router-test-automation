@@ -173,3 +173,14 @@ LuCI http://192.168.50.219/ (root password c03rad0r123)
 The test framework can deploy `tollgate-wrt` and run the suite over the WAN.
 The APs are quiesced by default and after every test; the WAN stays reachable.
 The old stock UI at `192.168.0.1` no longer exists.
+
+The post-flash OpenWrt config is reproducible:
+
+```bash
+scripts/hw-bench-lease exec --purpose "comfast apply" -- \
+  scripts/prta-bench-run.sh -- scripts/bench/comfast_apply.sh
+```
+
+It is idempotent and leaves both APs disabled. The root/LuCI password stays in
+OpenBao; the script never writes it. Run `scripts/install-fleet-keys.py` before
+relying on key-only SSH.
