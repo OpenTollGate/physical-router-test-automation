@@ -929,7 +929,7 @@ def deploy(router, ipk_path: Path, reboot: bool = False, backend=None) -> dict[s
             " && /etc/init.d/tollgate-wrt restart"
             " && /etc/init.d/tollgate-basic restart 2>/dev/null"
             "; /etc/init.d/uhttpd restart 2>/dev/null"
-            "; rm -f /tmp/tollgate-wrt.ipk",
+            f"; rm -f /tmp/{remote_name}",
             timeout=120,
         )
         version_out = router.ssh("apk info -e tollgate-wrt 2>/dev/null || opkg list-installed | grep tollgate-wrt", timeout=10)

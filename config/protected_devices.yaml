@@ -1,0 +1,33 @@
+# Devices that must never be used as test targets.
+#
+# This is a fail-closed safety list, independent of the private router
+# inventory. A test framework bug or a stale inventory entry must not be able
+# to turn the production gateway into a lab router.
+protected:
+  - id: mt6000-gateway
+    reason: production gateway; hermes must stay online
+    board_names: ["glinet,gl-mt6000"]
+    models: ["GL-MT6000", "gl-mt6000", "OpenMPTCProuter"]
+    macs: ["94:83:c4:d1:57:56"]
+    hostnames: ["OpenMPTCProuter", "MT6000"]
+    addresses: ["192.168.50.1"]
+
+  - id: x280
+    reason: serial/controller host
+    hostnames: ["x280"]
+    addresses: ["192.168.50.10"]
+
+  - id: cobrador
+    reason: fleet manager/controller host
+    hostnames: ["cobrador", "CobradorWave"]
+    addresses: ["192.168.50.200", "192.168.2.121"]
+
+  - id: dq05
+    reason: fleet control host
+    hostnames: ["dq05"]
+    addresses: ["192.168.50.32"]
+
+  - id: t14
+    reason: operator/controller host
+    hostnames: ["T14Gen5", "t14"]
+    addresses: ["192.168.50.160", "192.168.50.161", "192.168.2.165"]

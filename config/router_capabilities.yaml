@@ -1,0 +1,24 @@
+# Test-router capabilities. Used by operators to decide which suites apply.
+# The test suite also feature-detects at runtime; this table makes the limits
+# explicit before a run.
+e750-lab:
+  model: GL-E750
+  board_name: glinet,gl-e750
+  arch: mips_24kc
+  target: ath79/nand
+  profile: glinet_gl-e750
+  package_formats: [apk, ipk]
+  openwrt_versions: ["24.10.x", "25.x"]
+  wifi_2g: true
+  wifi_5g: false
+  wifi_6g: false
+  cellular: false
+  ethernet_mbps: 100
+  ram_mb: 128
+  storage: 128MB NAND
+  sysupgrade_default: false
+  notes: >
+    Single 2.4 GHz radio; no SIM. Use Ethernet or a 2.4 GHz STA upstream.
+    U-Boot web recovery does not work over the port-replicator Ethernet;
+    serial U-Boot + the repaired bootcmd is the recovery path. Keep package
+    installs as the default test path and sysupgrade/flashing opt-in only.
