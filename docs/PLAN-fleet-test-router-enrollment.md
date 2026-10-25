@@ -102,8 +102,8 @@ path. COMFAST was verified to go 0 -> 2 APs during a leased run and back to 0.
 - Gateway: bare `master` (and `feat/mt6000-mptcp-gateway`) at `08d5fee92`.
   Contains the MT6000 OMR IaC and the COMFAST `.219` DHCP reservation.
 - conwrt: PR https://github.com/Amperstrand/conwrt/pull/567, branch
-  `feat/comfast-cf-wr632ax-tested` at `9d318af`; model validation passes. The
-  PR is open, not merged; see follow-ups.
+  `feat/comfast-cf-wr632ax-tested` at `e950d95`; model validation and all CI
+  checks pass. The PR is open and mergeable, awaiting maintainer merge.
 - x280 tracks `origin/main` and runs
   `deploy/x280/install-bench.sh`; the live `config/routers.json` is the
   gitignored instance of `config/routers.fleet.example.json`.
@@ -134,11 +134,9 @@ Protected check            MT6000 REFUSED; no MT6000 in inventory
 
 ## Follow-ups (not blockers)
 
-- **conwrt PR #567** is open and mergeable but its required `test (3.13)` check
-  fails in seven Rust parity tests while 5,151 Python tests pass. The failure is
-  a runner rustup conflict (`clippy-preview` / `bin/cargo-clippy`), not the
-  model; `changes`, `rust`, and `firmware-esp32s3` pass. Needs a maintainer
-  rerun or runner-toolchain fix.
+- **conwrt PR #567** is open and mergeable with all required checks green
+  (`changes`, `rust`, `firmware-esp32s3`, `test` 3.10-3.13). It is an upstream
+  PR; a conwrt maintainer still needs to merge it.
 - **COMFAST LAN L2**: the 1G LAN port links at 1 Gbps, but it is not wired to
   an x280 adapter. Management is the 2.5G WAN with an x280-only firewall. For
   full L2 isolation, wire LAN to `enx9c69d3c70689`, give x280

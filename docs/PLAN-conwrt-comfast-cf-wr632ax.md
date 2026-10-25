@@ -1,15 +1,13 @@
 # conwrt PR: COMFAST CF-WR632AX tested-hardware enrollment
 
-Status: **PR opened** (2026-10-25): https://github.com/Amperstrand/conwrt/pull/567
+Status: **PR green, awaiting maintainer merge** (2026-10-26):
+https://github.com/Amperstrand/conwrt/pull/567
 
-Validation: `make validate-models` OK; 86 targeted model tests + 3 transition
-annotation tests pass. GitHub CI: `changes`, `rust`, and `firmware-esp32s3`
-pass; the Python `test (3.13)` job fails only in 7 Rust parity tests because the
-runner's rustup cannot install `clippy-preview` (`bin/cargo-clippy` conflict);
-5,151 Python tests pass. The other Python matrix jobs were cancelled by
-fail-fast. This is a runner/toolchain issue, not a model-validation failure.
-The PR is open and mergeable; a maintainer rerun/fix is needed for a green
-required check.
+Head: `e950d95` on `feat/comfast-cf-wr632ax-tested`.
+Validation: `make validate-models` OK; 89 targeted model/transition tests pass.
+GitHub CI: `changes`, `rust`, `firmware-esp32s3`, and `test` (3.10, 3.11, 3.12,
+3.13) all pass; merge state is CLEAN. Only the upstream maintainer merge
+remains.
 
 ## Goal
 
@@ -93,4 +91,4 @@ Only `models/comfast-cf-wr632ax.json`:
 - [x] `validate_models` passes; no false claim that U-Boot recovery was tested.
 - [x] `git diff --check`; no secrets/specimen MAC/serial/IP.
 - [x] PR opens and CI starts.
-- [ ] PR merged; blocked on the unrelated Rust-parity CI failure.
+- [ ] PR merged by a conwrt maintainer (all checks green).
