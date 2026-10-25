@@ -141,6 +141,8 @@ def test_comfast_openwrt_config_is_codified():
         "allow_x280_mgmt",
         "default_radio0.disabled",
         "default_radio1.disabled",
+        "network.wan.device='wan'",
+        "network-changed",
         "COMF_APPLY_DONE",
     ):
         assert needle in body, needle

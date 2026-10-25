@@ -70,8 +70,12 @@ uci set network.lan.device='br-lan'
 uci set network.lan.proto='static'
 uci set network.lan.ipaddr='192.168.1.1'
 uci set network.lan.netmask='255.255.255.0'
-uci set network.wan.device='eth0'
+# MT7981 uses DSA: the WAN netdev is `wan`, not `eth0`.
+uci set network.wan.device='wan'
 uci set network.wan.proto='dhcp'
+uci -q get network.wan6 >/dev/null 2>&1 || uci set network.wan6=interface
+uci set network.wan6.device='wan'
+uci set network.wan6.proto='dhcpv6'
 uci set wireless.radio0.channel='11'
 uci set wireless.radio0.country='DE'
 uci set wireless.radio0.htmode='HE20'
@@ -105,6 +109,8 @@ if [ "$(grep -c '^ssh-' /etc/dropbear/authorized_keys 2>/dev/null || echo 0)" -g
   uci set dropbear.main.PasswordAuth='off'
   uci set dropbear.main.RootPasswordAuth='off'
 fi
+NET_CHANGED=0
+[ -n "$(uci changes network 2>/dev/null)" ] && NET_CHANGED=1
 uci commit system
 uci commit network
 uci commit wireless
@@ -123,6 +129,10 @@ echo "-- aps --"; uci show wireless | grep -E 'default_radio[01]\.(ssid|disabled
 echo "-- firewall --"; uci show firewall.allow_x280_mgmt
 echo "-- dropbear --"; uci show dropbear | grep -E 'PasswordAuth|RootPasswordAuth'
 echo "-- ap count --"; iw dev 2>/dev/null | grep -c 'type AP' || true
+echo "-- network-changed --"; echo "$NET_CHANGED"
+if [ "$NET_CHANGED" = "1" ]; then
+  echo "NOTE: network config changed; reboot before expecting the WAN address."
+fi
 echo "COMF_APPLY_DONE"
 EOS
 )"

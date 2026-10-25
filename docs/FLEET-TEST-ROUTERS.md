@@ -184,3 +184,8 @@ scripts/hw-bench-lease exec --purpose "comfast apply" -- \
 It is idempotent and leaves both APs disabled. The root/LuCI password stays in
 OpenBao; the script never writes it. Run `scripts/install-fleet-keys.py` before
 relying on key-only SSH.
+
+The MT7981 port names are DSA names: WAN is netdev `wan`, LAN is `lan` inside
+`br-lan`. Do **not** use `eth0`; that was the vendor layout and leaves OpenWrt
+with `NO_DEVICE`. If the script prints `network-changed -- 1`, reboot before
+expecting the WAN address.
