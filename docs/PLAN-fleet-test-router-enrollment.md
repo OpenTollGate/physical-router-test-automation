@@ -75,8 +75,8 @@ E750 image     ~/e750-fw.bin 7,885,072 bytes sha256 80357e82...e4a1d
       add `192.168.78.2/24`, verify. Fallback: WAN 192.168.50.218 with an
       x280-only firewall.
 - [ ] E750: already direct.
-- [x] COMFAST: stock UI accessed via x280 WiFi; admin password set.
-- [ ] COMFAST: OpenWrt flash; blocked on the 1GbE LAN link (eth1 down).
+- [x] COMFAST: flashed OpenWrt 25.12.5, `firstboot -y`, WAN management
+      `192.168.50.219`, APs `TollGate-COMFAST` set and disabled, key-only.
 
 ### 3. Enroll COVR and MT3000
 
@@ -164,10 +164,9 @@ Implemented and live:
 
 Pending:
 
-- **COMFAST** stock UI is verified and secured (`admin`/`c03rad0r123`) via
-  the open 2.4 GHz AP. Its 1GbE LAN (`eth1`) is down; the verified plain
-  OpenWrt 25.12.5 image is staged on x280. Flash is pending a working LAN link
-  (or WiFi recovery after flash).
+- **COMFAST** is flashed to OpenWrt 25.12.5 and enrolled at WAN
+  `192.168.50.219`; APs are disabled, 11 keys installed, password auth off.
+  The 1GbE LAN port remains down; management is the 2.5G WAN.
 - E750 `tollgate-wrt` is not installed yet; the test framework's deploy step
   resolves and installs the `mips_24kc` `.apk` at run time. COVR/MT3000 already
   run `tollgate-wrt-0.6.0_rc6-r1`.

@@ -79,8 +79,8 @@ def test_inventory_example_excludes_mt6000_and_has_capabilities():
     assert routers["e750-lab"]["openwrtProfile"] == "glinet_gl-e750"
     assert routers["tollgate-9bd4"]["sshHost"] == "10.110.223.1"
     assert routers["tollgate-af92"]["mgmtZone"] == "wan"
-    assert routers["comfast-b3ba"]["role"] == "ap"
-    assert routers["comfast-b3ba"]["tollgate"] is False
+    assert routers["comfast-b3ba"]["role"] == "router"
+    assert routers["comfast-b3ba"]["tollgate"] is True
     assert "ssh-rsa" in " ".join(routers["comfast-b3ba"]["sshOptions"])
 
 

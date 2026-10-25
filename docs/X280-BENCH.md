@@ -110,7 +110,7 @@ This installs:
 
 Copy `config/routers.fleet.example.json` to `config/routers.json` (gitignored)
 and keep secrets out of it. The live inventory has `e750-lab`,
-`tollgate-af92`, `tollgate-9bd4`, and `comfast-b3ba` (stock CF-WR632AX UI verified; OpenWrt flash pending LAN link).
+`tollgate-af92`, `tollgate-9bd4`, and `comfast-b3ba` (OpenWrt 25.12.5, WAN 192.168.50.219, APs disabled).
 
 ## Run a test
 
