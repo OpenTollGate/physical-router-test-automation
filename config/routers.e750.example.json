@@ -1,0 +1,31 @@
+{
+  "default": "e750-lab",
+  "routers": {
+    "e750-lab": {
+      "model": "GL-E750",
+      "luciUrl": "http://<e750-lab-ip>",
+      "sshHost": "<e750-lab-ip>",
+      "sshUser": "root",
+      "arch": "mips_24kc",
+      "wifiInterface": "<client-wifi-iface>",
+      "tollgateSsidPrefix": "TollGate-",
+      "captiveSsidPrefixes": ["TollGate-", "Net4sats-"],
+      "privateSsidPrefix": "c08r4d0r",
+      "openwrtVersion": "24.10.x or 25.x",
+      "openwrtTarget": "ath79/nand",
+      "openwrtProfile": "glinet_gl-e750",
+      "packageFormat": "apk-or-ipk",
+      "capabilities": {
+        "wifi_2g": true,
+        "wifi_5g": false,
+        "wifi_6g": false,
+        "cellular": false,
+        "ethernet_mbps": 100,
+        "ram_mb": 128,
+        "storage": "128MB NAND"
+      },
+      "recovery": "serial-uboot (web recovery unavailable on the port replicator)",
+      "protected": false
+    }
+  }
+}

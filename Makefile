@@ -661,6 +661,21 @@ lock-status: ## Show bench lease state + ESP32 board locks
 	@echo "$(BOLD)=== ESP32 Board Locks ===$(RESET)"
 	@$(MAKE) -C esp32 lock-status
 
+.PHONY: quiesce quiesce-all fleet-keys check-protected
+
+quiesce: ## Disable APs on ROUTER after a run (bench lease required)
+	@python3 scripts/quiesce-router.py --router "$(ROUTER)"
+
+quiesce-all: ## Disable APs on every non-protected router (cleanup sweep)
+	@python3 scripts/quiesce-router.py --all --allow-unlocked
+
+fleet-keys: ## Install committed fleet SSH public keys on ROUTER
+	@python3 scripts/install-fleet-keys.py --router "$(ROUTER)"
+
+check-protected: ## Fail closed if ROUTER_IP is a production/control device
+	@test -n "$(ROUTER_IP)" || { echo "set ROUTER_IP=<address>" >&2; exit 2; }
+	@python3 scripts/check-protected.py --address "$(ROUTER_IP)"
+
 force-unlock: ## Clear a stale bench lease holder line (cannot steal a live flock)
 	@echo "$(YELLOW)A live lease cannot be stolen: the flock drops when its holder exits.$(RESET)"
 	@python3 $(BENCH_LEASE) release

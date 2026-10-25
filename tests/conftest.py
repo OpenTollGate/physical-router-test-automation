@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -1603,6 +1604,22 @@ def pytest_sessionfinish(session, exitstatus):
 
     if IS_MOCK_MODE:
         return
+
+    # Post-test safety: never leave a lab router's AP beaconing. This runs on
+    # pass, fail, error and timeout (pytest_sessionfinish), and is deliberately
+    # best-effort so a cleanup failure cannot mask the test result.
+    _router_id = os.environ.get("TOLLGATE_ROUTER_ID", "").strip()
+    if _router_id and os.environ.get("TOLLGATE_QUIESCE_ON_EXIT", "1").lower() not in ("0", "false", "no"):
+        _quiesce = Path(__file__).resolve().parent.parent / "scripts" / "quiesce-router.py"
+        if _quiesce.is_file():
+            try:
+                subprocess.run(
+                    [sys.executable, str(_quiesce), "--router", _router_id, "--allow-unlocked"],
+                    cwd=str(_quiesce.parent.parent),
+                    capture_output=True, text=True, timeout=90, check=False,
+                )
+            except Exception as exc:  # noqa: BLE001 - cleanup must not mask results
+                log.warning("post-test quiesce failed for %s: %s", _router_id, exc)
 
     global _hardware_lock_acquired
     if _hardware_lock_acquired:

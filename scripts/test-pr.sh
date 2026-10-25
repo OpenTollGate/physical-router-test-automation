@@ -117,18 +117,68 @@ if [[ -n "${TOLLGATE_PROFILE:-}" ]]; then
   exit $?
 fi
 
-if [[ ! -f "$REPO_DIR/.env" ]]; then
-  echo "ERROR: .env file not found at $REPO_DIR/.env" >&2
-  exit 1
+if [[ -f "$REPO_DIR/.env" ]]; then
+  set -a
+  source "$REPO_DIR/.env"
+  set +a
+else
+  echo "WARN: .env not found; relying on OpenBao/environment" >&2
 fi
 
-set -a
-source "$REPO_DIR/.env"
-set +a
-
-# ── Set defaults ────────────────────────────────────────────────────────
+# ── Set defaults / inventory ────────────────────────────────────────────
 ROUTER_IP="${ROUTER_IP:-${TOLLGATE_SSH_HOST:-}}"
 ROUTER_ID="${ROUTER_ID:-${TOLLGATE_ROUTER_ID:-}}"
+
+if [[ -n "$ROUTER_ID" && -f "$REPO_DIR/config/routers.json" ]]; then
+  INV="$(python3 - "$REPO_DIR/config/routers.json" "$ROUTER_ID" <<'INV'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+r = (doc.get("routers") or {}).get(sys.argv[2]) or {}
+print("|".join(str(r.get(k, "") or "") for k in ("sshHost", "jumpHost", "sshKey", "luciUrl", "model")))
+INV
+)"
+  IFS='|' read -r INV_IP INV_JUMP INV_KEY INV_LUCI INV_MODEL <<< "$INV"
+  [[ -z "$ROUTER_IP" && -n "$INV_IP" ]] && ROUTER_IP="$INV_IP"
+  [[ -z "${TOLLGATE_SSH_JUMP:-}" && -n "$INV_JUMP" ]] && export TOLLGATE_SSH_JUMP="$INV_JUMP"
+  [[ -z "${TOLLGATE_SSH_KEY:-}" && -n "$INV_KEY" ]] && export TOLLGATE_SSH_KEY="$INV_KEY"
+  [[ -z "${TOLLGATE_LUCI_URL:-}" && -n "$INV_LUCI" ]] && export TOLLGATE_LUCI_URL="$INV_LUCI"
+  [[ -z "${TOLLGATE_ROUTER_MODEL:-}" && -n "$INV_MODEL" ]] && export TOLLGATE_ROUTER_MODEL="$INV_MODEL"
+fi
+
+# OpenBao delivery (no secrets on disk, no values printed).
+if [[ -x "$SCRIPT_DIR/openbao-env.sh" && "${TOLLGATE_OPENBAO:-1}" != "0" ]]; then
+  # shellcheck disable=SC1091
+  . "$SCRIPT_DIR/openbao-env.sh" --router "${ROUTER_ID:-default}" || true
+fi
+[[ -n "$ROUTER_IP" ]] && export TOLLGATE_SSH_HOST="${TOLLGATE_SSH_HOST:-$ROUTER_IP}"
+
+JUMP_OPTS=()
+[[ -n "${TOLLGATE_SSH_JUMP:-}" ]] && JUMP_OPTS=(-J "$TOLLGATE_SSH_JUMP")
+KEY_OPTS=()
+[[ -n "${TOLLGATE_SSH_KEY:-}" ]] && KEY_OPTS=(-i "$TOLLGATE_SSH_KEY")
+
+# ── Protected-device + mutex preflight (fail closed) ────────────────────
+if [[ -n "$ROUTER_IP" ]]; then
+  if ! python3 "$SCRIPT_DIR/check-protected.py" --address "$ROUTER_IP" >/dev/null 2>&1; then
+    echo "ERROR: $ROUTER_IP is a protected production/control device; refusing." >&2
+    exit 1
+  fi
+fi
+if [[ "${TOLLGATE_ALLOW_UNLOCKED:-0}" != "1" ]]; then
+  if ! (cd "$REPO_DIR" && python3 -c 'from lib.hardware_lock import require_hardware_lock; require_hardware_lock()' >/dev/null 2>&1); then
+    echo "ERROR: the machine-global bench lease is not held; refusing to test." >&2
+    echo "Run: scripts/hw-bench-lease exec --purpose 'test-pr' -- $0 ..." >&2
+    exit 1
+  fi
+fi
+
+cleanup_router_aps() {
+  if [[ "${TOLLGATE_QUIESCE_ON_EXIT:-1}" == "0" || -z "${ROUTER_ID:-}" ]]; then
+    return 0
+  fi
+  python3 "$SCRIPT_DIR/quiesce-router.py" --router "$ROUTER_ID" --allow-unlocked >/dev/null 2>&1 || true
+}
+trap cleanup_router_aps EXIT
 
 # Check for password
 if [[ -z "$TOLLGATE_LUCI_PASSWORD" && -z "$TOLLGATE_SSH_PASSWORD" ]]; then
@@ -184,11 +234,11 @@ SSH_CHECK_KEY="${TOLLGATE_SSH_KEY:-}"
 _ssh_cmd() {
   if [[ -n "$SSH_CHECK_KEY" ]]; then
     ssh -i "$SSH_CHECK_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      -o ConnectTimeout=5 -o LogLevel=ERROR "root@${ROUTER_IP}" "$1"
+      -o ConnectTimeout=5 -o LogLevel=ERROR "${JUMP_OPTS[@]}" "${KEY_OPTS[@]}" "root@${ROUTER_IP}" "$1"
   else
     export SSHPASS="${TOLLGATE_SSH_PASSWORD:-$TOLLGATE_LUCI_PASSWORD}"
     sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      -o ConnectTimeout=5 -o LogLevel=ERROR "root@${ROUTER_IP}" "$1"
+      -o ConnectTimeout=5 -o LogLevel=ERROR "${JUMP_OPTS[@]}" "${KEY_OPTS[@]}" "root@${ROUTER_IP}" "$1"
   fi
 }
 _check_ssh() { _ssh_cmd 'echo ok' &>/dev/null; }
@@ -239,7 +289,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message
 from lib.router import Router
 from lib.deploy import firstboot_reset
 r = Router(host='${ROUTER_IP}', phone_ip='', phone_mac='', domain='',
-           identity_file=os.environ.get('TOLLGATE_SSH_KEY') or None)
+           identity_file=os.environ.get('TOLLGATE_SSH_KEY') or None,
+           jump_host=os.environ.get('TOLLGATE_SSH_JUMP') or None)
 result = firstboot_reset(r, expected_mac='${TOLLGATE_EXPECTED_MAC:-}')
 print(f'result={result[\"success\"]}')
 sys.exit(0 if result['success'] else 1)
@@ -257,6 +308,7 @@ from lib.backend import BackendConfig
 backend = BackendConfig('${BACKEND}')
 r = Router(host='${ROUTER_IP}', phone_ip='', phone_mac='', domain='',
            identity_file=os.environ.get('TOLLGATE_SSH_KEY') or None,
+           jump_host=os.environ.get('TOLLGATE_SSH_JUMP') or None,
            backend=backend)
 result = deploy_branch(r, '${TOLLGATE_BRANCH}', arch='${TOLLGATE_ROUTER_ARCH:-}',
                        run_id=None, force=True, reboot=False,
