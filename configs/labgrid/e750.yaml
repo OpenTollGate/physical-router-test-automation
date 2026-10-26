@@ -42,12 +42,25 @@
 # nudging with CR. (Note: Ctrl-C is NOT a safe nudge — it is mutating and has
 # silently rebooted a board on this bench before.)
 #
-# SERIAL CAVEAT 2 — TX CORRUPTION. The FTDI in front of this UART is a CLONE
-# and corrupts roughly one character per transmitted line (RX stays clean).
-# conwrt scripts/conwrt_serial_bridge.py and scripts/serial_transport.py are the
-# in-house answers to this (askfirst activation + RC-marker execution). Do NOT
-# hand-roll long commands over this line; use SSH for anything that mutates.
-# RawSerialPort is declared for PASSIVE boot-log capture only; it has no driver.
+# SERIAL CAVEAT 2 — THIS UART IS TX-ONLY. Do not try to drive a shell over it.
+# Proven 2026-10-25 by closed-loop marker tests against the E750's own ttyS0:
+#   E750 -> host:  "echo KMARKER_... > /dev/kmsg" over SSH appeared BYTE-CLEAN
+#                  on ...BH00DL3M.  => TX works, host RX is clean, and this
+#                  adapter IS this unit's UART (not a floating line).
+#   host -> E750:  "stty -F /dev/ttyS0 raw 115200; timeout 6 cat /dev/ttyS0
+#                  > /tmp/rx.txt" on the unit while the FTDI transmitted
+#                  RXTEST_...  =>  /tmp/rx.txt was EMPTY. Nothing the host sends
+#                  reaches the unit.
+# Consistent with /proc/consoles reporting "ttyS0 -W- (EC a)" (write-only) and
+# /etc/inittab using "::askconsole:". So a login prompt here will NEVER answer a
+# keystroke, and an askfirst nudge is pointless on this unit — it is not a stuck
+# console, it is TX-only. (The nudge rule above applies to units that DO accept
+# input; conwrt scripts/conwrt_serial_bridge.py is the right tool for those.)
+#
+# Consequence: serial is CAPTURE ONLY (boot logs, panic output, recovery
+# evidence when SSH is down). Every mutating action goes over SSH.
+# RawSerialPort is declared for that passive capture and deliberately has NO
+# SerialDriver/ShellDriver — a ShellDriver here would hang until timeout.
 targets:
   main:
     resources:
