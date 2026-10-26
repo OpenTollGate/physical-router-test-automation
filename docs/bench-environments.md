@@ -105,6 +105,65 @@ replug):**
 | `BG046H14` | COMFAST CF-WR632AX | `comfast-b3ba` | OpenWrt 25.12.5, `aarch64_cortex-a53`, mediatek/filogic | `root@192.168.50.219` |
 | `BG046H5F` | GL-MT3000 | `tollgate-9BD4` | OpenWrt 25.12.5, `aarch64_cortex-a53`, **`tollgate-wrt` installed** | `root@10.110.223.1` (br-private; the WAN-side `192.168.50.205` refuses :22) |
 | `BH00D6DL` | D-Link COVR-X1860 A1 | `tollgate-AF92` | OpenWrt 25.12.5, `mipsel_24kc`, **`tollgate-wrt` installed** | `root@192.168.50.218` |
+| `BH00DL3M` | GL-E750 (Mudi) | `e750-lab` | OpenWrt 25.12.5, `mips_24kc`, ath79/nand | `root@192.168.8.1` (console **dark**) |
+
+Three state changes worth recording against older docs:
+
+- The COVR of Environment 5 is **no longer onboarding-only**: it runs
+  `tollgate-wrt` (hostname `tollgate-AF92`), so it is a real mipsel DUT now.
+- PR #316's "serial is the only way in" no longer holds for these units: the
+  bench publickey (`~/.ssh/id_bench` on the bench host, overridable via
+  `TOLLGATE_BENCH_KEY`) is enrolled in dropbear on all four live units. Serial
+  remains the recovery path where the console is wired.
+- The previously "DARK" FTDI `BH00DL3M` is the **GL-E750** (`e750-lab`, stock
+  25.12.5, mips_24kc). Its console is electrically silent at every baud
+  (9600–1500000: floating-RX noise, no printable bytes) — the adapter is not on
+  a live UART. It is enrolled **network-only** (`console_enrolled: false`), so
+  the probe reports the console as not wired instead of failing the unit.
+
+**The contract and the probe** (the committed source of truth — no ad-hoc
+console scripts for evidence runs):
+
+- `configs/labgrid/x280-serial-fleet.json` — enrollment + identity contract,
+  including the DARK port (kept visible, not silently dropped).
+- `configs/labgrid/x280-serial-fleet.yaml` — local-mode labgrid env (no
+  coordinator on this bench; the farm's coordinator is not reachable from the
+  serial fleet hosts).
+- `scripts/bench/serial-fleet-probe.py` — proves console + SSH + identity per
+  enrolled unit; non-zero exit if any enrolled unit fails. Run it before and
+  after every evidence session.
+- `tests/bench/test_serial_fleet_health.py` — the pytest gate over the same
+  contract; skips cleanly on hosts without FTDI consoles.
+
+**No power control on this bench.** The USB hubs switch the *adapters*, not the
+routers. A power cycle is a manual bench action; tests must not assume one, and
+the env deliberately declares no PowerPort.
+
+## The confusion this doc exists to kill
+
+| If a session sees... | It is... | Verdict |
+|---|---|---|
+| `TollGate-326D` / `192.168.1.1` | Env 2 (laptop bench) | Ours; test via laptop bridge |
+| `TollGate-1690` / `TollGate-D1C6` / `100.90.x` | Env 3 (external NetBird) | Out of scope |
+| WS3915i / x1860 / PoE control | Env 1 (labgrid farm) | Ours; use the coordinator |
+| `tollgate-52BE` / `tollgate-A04E`, `10.57.113.1` / `10.63.101.1`, serial on T440/x280 | Env 4 (serial fleet bench) | Ours; reach on the **management net**, not `192.168.1.1` |
+| `192.168.1.1` **from the gateway** | post-install box (Env 4) at a dead address | routes out the WAN — use `ip route get` |
+| "MT3000 (arm64)" with no other identity | AMBIGUOUS — must be pinned before use | Identity check mandatory |
+
+## Bench lane tooling — the x280 serial fleet, measured 2026-10-26
+
+Complements Environment 4/5 (and PR #316): the same serial fleet, now with a
+committed enrollment contract, a probe that proves each unit is what it claims,
+and working SSH alongside the consoles.
+
+**The measured map (resolve by FTDI serial, never by index — the index drifts on
+replug):**
+
+| FTDI serial | Unit | Hostname | Identity | SSH (bench key) |
+|---|---|---|---|---|
+| `BG046H14` | COMFAST CF-WR632AX | `comfast-b3ba` | OpenWrt 25.12.5, `aarch64_cortex-a53`, mediatek/filogic | `root@192.168.50.219` |
+| `BG046H5F` | GL-MT3000 | `tollgate-9BD4` | OpenWrt 25.12.5, `aarch64_cortex-a53`, **`tollgate-wrt` installed** | `root@10.110.223.1` (br-private; the WAN-side `192.168.50.205` refuses :22) |
+| `BH00D6DL` | D-Link COVR-X1860 A1 | `tollgate-AF92` | OpenWrt 25.12.5, `mipsel_24kc`, **`tollgate-wrt` installed** | `root@192.168.50.218` |
 | `BH00DL3M` | DARK | — | garbage bytes at 115200 (wrong baud or unpowered) | — |
 
 Two state changes worth recording against older docs:

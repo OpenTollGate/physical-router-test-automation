@@ -6,6 +6,9 @@
 #   bench-comfast-wr632ax  COMFAST CF-WR632AX  (aarch64, apk-era 25.12.5, no TollGate)
 #   bench-mt3000-tollgate  GL-MT3000 tollgate-9BD4 (TollGate installed; SSH on br-private)
 #   bench-covr-x1860-tollgate  D-Link COVR-X1860 A1 tollgate-AF92 (TollGate installed, mipsel)
+#   bench-e750-lab             GL-E750 e750-lab (stock 25.12.5, mips_24kc) — SSH ONLY;
+#                              its FTDI console (BH00DL3M) is electrically silent, so no
+#                              USBSerialPort is declared for it on purpose.
 #
 # Consoles resolve by FTDI serial (ID_SERIAL_SHORT) — NEVER by ttyUSB index;
 # the index drifts on replug (docs/bench-environments.md, PR #316).
@@ -53,6 +56,15 @@ targets:
         speed: 115200
       NetworkService:
         address: "192.168.50.218"
+        username: "root"
+    drivers:
+      SSHDriver: {}
+  bench-e750-lab:
+    resources:
+      NetworkService:
+        # br-lan over the USB NIC; console (FTDI BH00DL3M) is not wired — see
+        # configs/labgrid/x280-serial-fleet.json console_notes.
+        address: "192.168.8.1"
         username: "root"
     drivers:
       SSHDriver: {}

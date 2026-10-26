@@ -174,17 +174,24 @@ def main() -> int:
             entry["port_present"] = Path(port).exists()
             report.append(entry)
             continue
-        con = probe_console(unit)
-        entry["console_ok"] = con["error"] is None
-        entry["console_error"] = con["error"]
         want = unit.get("identity") or {}
-        if con["error"] is None:
-            ok, detail = identity_matches(con["console"], want)
-            entry["console_identity"] = detail
-            if not ok:
-                failures.append(f"{unit['name']}: console identity — {detail}")
+        entry["console_enrolled"] = unit.get("console_enrolled", True)
+        if entry["console_enrolled"]:
+            con = probe_console(unit)
+            entry["console_ok"] = con["error"] is None
+            entry["console_error"] = con["error"]
+            if con["error"] is None:
+                ok, detail = identity_matches(con["console"], want)
+                entry["console_identity"] = detail
+                if not ok:
+                    failures.append(f"{unit['name']}: console identity — {detail}")
+            else:
+                failures.append(f"{unit['name']}: console — {con['error']}")
         else:
-            failures.append(f"{unit['name']}: console — {con['error']}")
+            # Enrolled over the network only; the console is a known gap, named.
+            entry["console_ok"] = None
+            entry["console_identity"] = "not wired (console_enrolled=false)"
+            entry["console_error"] = unit.get("console_notes", "console not enrolled")
         ssh_res = probe_ssh(unit, Path(args.key))
         entry["ssh_ok"] = ssh_res["error"] is None
         entry["ssh_error"] = ssh_res["error"]

@@ -8,7 +8,10 @@
       "ftdi_serial": "BG046H14",
       "baud": 115200,
       "console_prompt_host": "comfast-b3ba",
-      "ssh": {"address": "192.168.50.219", "username": "root"},
+      "ssh": {
+        "address": "192.168.50.219",
+        "username": "root"
+      },
       "identity": {
         "model": "COMFAST CF-WR632AX",
         "board": "comfast,cf-wr632ax",
@@ -25,7 +28,11 @@
       "ftdi_serial": "BG046H5F",
       "baud": 115200,
       "console_prompt_host": "tollgate-9BD4",
-      "ssh": {"address": "10.110.223.1", "username": "root", "note": "br-private management net; the WAN/LAN 192.168.50.205 iface refuses 22 by firewall"},
+      "ssh": {
+        "address": "10.110.223.1",
+        "username": "root",
+        "note": "br-private management net; the WAN/LAN 192.168.50.205 iface refuses 22 by firewall"
+      },
       "identity": {
         "model": "GL.iNet GL-MT3000",
         "board": "glinet,mt3000",
@@ -42,7 +49,10 @@
       "ftdi_serial": "BH00D6DL",
       "baud": 115200,
       "console_prompt_host": "tollgate-AF92",
-      "ssh": {"address": "192.168.50.218", "username": "root"},
+      "ssh": {
+        "address": "192.168.50.218",
+        "username": "root"
+      },
       "identity": {
         "model": "D-Link COVR-X1860 A1",
         "board": "dlink,covr-x1860-a1",
@@ -54,13 +64,27 @@
       "notes": "mipsel coverage + the onboarding lane from PR #316; now TollGate-installed (supersedes #316's 'not validated' state)."
     },
     {
-      "name": "bench-dark-port",
-      "enrolled": false,
+      "name": "bench-e750-lab",
+      "enrolled": true,
+      "console_enrolled": false,
       "ftdi_serial": "BH00DL3M",
       "baud": 115200,
-      "ssh": null,
-      "identity": null,
-      "notes": "Garbage bytes at 115200 on 2026-10-26 — wrong baud or unpowered/unplugged unit. Kept here so the probe reports it as DARK rather than the port silently vanishing."
+      "ssh": {
+        "address": "192.168.8.1",
+        "username": "root",
+        "note": "br-lan via the USB NIC 00CA3CFE; bench key enrolled 2026-10-26"
+      },
+      "identity": {
+        "model": "GL.iNet GL-E750",
+        "board": "glinet,gl-e750",
+        "distro": "OpenWrt 25.12.5",
+        "arch": "mips_24kc",
+        "target": "ath79/nand",
+        "hostname": "e750-lab"
+      },
+      "tollgate_installed": false,
+      "console_notes": "Electrically silent at every baud (9600-1500000: floating-RX noise only, no printable bytes) \u2014 the adapter is not on a live UART. Network access is the enrolled lane; console is unverified until the cable/port is physically checked.",
+      "notes": "E750 Mudi (ath79/nand, mips_24kc), stock 25.12.5 (LuCI on 80/443, no TollGate board). The previously 'DARK' FTDI BH00DL3M is this unit's adapter; the console remains dark while SSH works."
     }
   ]
 }

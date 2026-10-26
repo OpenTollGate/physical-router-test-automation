@@ -86,11 +86,12 @@ def test_contract_shape(fleet):
             assert (u.get("ssh") or {}).get("address"), f"{u['name']}: enrolled unit has no ssh address"
 
 
-def test_dark_ports_are_recorded(fleet, probe_report):
-    """A dark port must stay in the contract as an explicit decision."""
-    dark = {u["name"] for u in fleet["units"] if not u.get("enrolled", True)}
-    reported = {u["unit"] for u in probe_report["units"] if not u.get("enrolled", True)}
-    assert dark == reported, f"contract/probe disagree on dark units: {dark} vs {reported}"
+def test_console_gaps_are_named(fleet):
+    """An enrolled unit with no console must say so, not silently pass."""
+    for u in fleet["units"]:
+        if u.get("enrolled", True) and not u.get("console_enrolled", True):
+            assert u.get("console_notes"), \
+                f"{u['name']}: console_enrolled=false needs console_notes explaining the gap"
 
 
 @pytest.mark.parametrize("unit_name", [
@@ -98,10 +99,15 @@ def test_dark_ports_are_recorded(fleet, probe_report):
     if u.get("enrolled", True)
 ] if FLEET_DEFAULT.is_file() else [])
 def test_unit_console_and_ssh(fleet, probe_report, unit_name):
+    unit = next(u for u in fleet["units"] if u["name"] == unit_name)
     entry = next(u for u in probe_report["units"] if u["unit"] == unit_name)
-    assert entry.get("console_ok"), f"{unit_name}: console failed: {entry.get('console_error')}"
-    assert entry.get("console_identity") == "identity ok", \
-        f"{unit_name}: console identity: {entry.get('console_identity')}"
+    if unit.get("console_enrolled", True):
+        assert entry.get("console_ok"), f"{unit_name}: console failed: {entry.get('console_error')}"
+        assert entry.get("console_identity") == "identity ok", \
+            f"{unit_name}: console identity: {entry.get('console_identity')}"
+    else:
+        assert entry.get("console_ok") is None, \
+            f"{unit_name}: console_enrolled=false must report console as not wired"
     assert entry.get("ssh_ok"), f"{unit_name}: ssh failed: {entry.get('ssh_error')}"
     assert entry.get("ssh_identity") == "identity ok", \
         f"{unit_name}: ssh identity: {entry.get('ssh_identity')}"
