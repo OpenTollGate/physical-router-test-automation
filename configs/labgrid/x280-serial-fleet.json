@@ -1,0 +1,66 @@
+{
+  "_comment": "x280 serial-fleet bench: enrollment + health contract. Consoles resolve by FTDI serial (by-id), never by ttyUSB index (index drifts on replug). Addresses are the bench-side reachable ones measured 2026-10-26. No passwords live here: access is the bench publickey (default ~/.ssh/id_bench, overridable TOLLGATE_BENCH_KEY). The dark port is recorded, not hidden: it stays enrolled=false until it answers.",
+  "bench_host": "x280",
+  "units": [
+    {
+      "name": "bench-comfast-wr632ax",
+      "enrolled": true,
+      "ftdi_serial": "BG046H14",
+      "baud": 115200,
+      "console_prompt_host": "comfast-b3ba",
+      "ssh": {"address": "192.168.50.219", "username": "root"},
+      "identity": {
+        "model": "COMFAST CF-WR632AX",
+        "board": "comfast,cf-wr632ax",
+        "distro": "OpenWrt 25.12.5",
+        "arch": "aarch64_cortex-a53",
+        "target": "mediatek/filogic"
+      },
+      "tollgate_installed": false,
+      "notes": "apk-era 25.12.5 unit for packaging/install-lane evidence; TollGate not installed."
+    },
+    {
+      "name": "bench-mt3000-tollgate",
+      "enrolled": true,
+      "ftdi_serial": "BG046H5F",
+      "baud": 115200,
+      "console_prompt_host": "tollgate-9BD4",
+      "ssh": {"address": "10.110.223.1", "username": "root", "note": "br-private management net; the WAN/LAN 192.168.50.205 iface refuses 22 by firewall"},
+      "identity": {
+        "model": "GL.iNet GL-MT3000",
+        "board": "glinet,mt3000",
+        "distro": "OpenWrt 25.12.5",
+        "arch": "aarch64_cortex-a53",
+        "target": "mediatek/filogic"
+      },
+      "tollgate_installed": true,
+      "notes": "Primary TollGate-installed DUT (tollgate-wrt present)."
+    },
+    {
+      "name": "bench-covr-x1860-tollgate",
+      "enrolled": true,
+      "ftdi_serial": "BH00D6DL",
+      "baud": 115200,
+      "console_prompt_host": "tollgate-AF92",
+      "ssh": {"address": "192.168.50.218", "username": "root"},
+      "identity": {
+        "model": "D-Link COVR-X1860 A1",
+        "board": "dlink,covr-x1860-a1",
+        "distro": "OpenWrt 25.12.5",
+        "arch": "mipsel_24kc",
+        "target": "ramips/mt7621"
+      },
+      "tollgate_installed": true,
+      "notes": "mipsel coverage + the onboarding lane from PR #316; now TollGate-installed (supersedes #316's 'not validated' state)."
+    },
+    {
+      "name": "bench-dark-port",
+      "enrolled": false,
+      "ftdi_serial": "BH00DL3M",
+      "baud": 115200,
+      "ssh": null,
+      "identity": null,
+      "notes": "Garbage bytes at 115200 on 2026-10-26 — wrong baud or unpowered/unplugged unit. Kept here so the probe reports it as DARK rather than the port silently vanishing."
+    }
+  ]
+}
