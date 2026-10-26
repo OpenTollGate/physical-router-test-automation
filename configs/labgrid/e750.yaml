@@ -28,9 +28,25 @@
 #   pytest --lg-env=configs/labgrid/e750.yaml --no-deploy <test>
 #   python -c "from labgrid import Environment; e=Environment('configs/labgrid/e750.yaml'); t=e.get_target('main'); d=t.get_driver('SSHDriver'); t.activate(d); print(d.run('cat /tmp/sysinfo/board_name'))"
 #
-# SERIAL CAVEAT: the FTDI in front of this UART is a CLONE and corrupts roughly
-# one character per transmitted line (RX stays clean). Do NOT use the serial
-# console for automated command entry — use SSH for anything that mutates.
+# SERIAL CAVEAT 1 — ASKFIRST. An OpenWrt console that prints
+# "Please press Enter to activate this console." answers NOTHING until it
+# receives a bare CR. A passive read of this port returns zero bytes and looks
+# like a dead console; send "\r" first, then read. This is documented upstream:
+#   conwrt crates/conwrt-serial/src/lib.rs
+#     "OpenWrt consoles use askfirst: send Enter to activate, then interact."
+#   conwrt crates/conwrt-serial/src/watch.rs  — nudge sent every ~10 s
+#   conwrt docs/BENCH-SWITCH-PATTERN.md       — "serial console (115200,
+#                                                askfirst, root)"
+# Measured here: 120 s of passive read gave 1 NUL byte; one bare CR produced
+# "root@tollgate-9BD4:~#". Do not conclude a board is dead from silence before
+# nudging with CR. (Note: Ctrl-C is NOT a safe nudge — it is mutating and has
+# silently rebooted a board on this bench before.)
+#
+# SERIAL CAVEAT 2 — TX CORRUPTION. The FTDI in front of this UART is a CLONE
+# and corrupts roughly one character per transmitted line (RX stays clean).
+# conwrt scripts/conwrt_serial_bridge.py and scripts/serial_transport.py are the
+# in-house answers to this (askfirst activation + RC-marker execution). Do NOT
+# hand-roll long commands over this line; use SSH for anything that mutates.
 # RawSerialPort is declared for PASSIVE boot-log capture only; it has no driver.
 targets:
   main:
