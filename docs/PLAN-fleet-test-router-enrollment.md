@@ -99,7 +99,7 @@ path. COMFAST was verified to go 0 -> 2 APs during a leased run and back to 0.
   Contains the router inventory template, fleet keys, mutex/bench wrapper,
   quiesce/arm logic, x280 deployment, and the reproducible COMFAST post-flash
   config (`scripts/bench/comfast_apply.sh`, `make comfast-apply`).
-- Gateway: bare `master` (and `feat/mt6000-mptcp-gateway`) at `08d5fee92`.
+- Gateway: bare `master` (and `feat/mt6000-mptcp-gateway`) at `27a8303b4`.
   Contains the MT6000 OMR IaC and the COMFAST `.219` DHCP reservation.
 - conwrt: PR https://github.com/Amperstrand/conwrt/pull/567, branch
   `feat/comfast-cf-wr632ax-tested` at `e950d95`; model validation and all CI
