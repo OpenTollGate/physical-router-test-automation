@@ -1,0 +1,50 @@
+# PRTA venue — GL.iNet GL-E750 "Mudi" (gl-e750), ath79/nand, mips_24kc.
+#
+# HOST: x280 (the bench laptop). The unit is attached to x280 TWICE:
+#   ethernet  -> enx9c69d3ca3cfe; x280 holds 192.168.8.244/24, unit is 192.168.8.1
+#   serial    -> FTDI BH00DL3M at 115200 8N1 (see SERIAL CAVEAT below)
+#
+# Identity is pinned by MAC, not by address: the unit's br-lan is
+# 94:83:c4:4d:fc:38 — the same value as bridge id 7fff.9483c44dfc38 in its own
+# logs. If a future board answers on 192.168.8.1, check that MAC first.
+#
+# AUTH: key auth only, ~/.ssh/id_bench. Verified 2026-10-25:
+#   ssh -i ~/.ssh/id_bench root@192.168.8.1 'cat /tmp/sysinfo/board_name'
+#   -> glinet,gl-e750
+# The fleet's other keys (id_ed25519, id_fleet, id_dq05) are REFUSED by this
+# unit — do not "fix" a login failure by swapping in a general key.
+#
+# FIRMWARE AT ENROLLMENT: OpenWrt 25.12.5 r33051-f5dae5ece4, kernel 6.12.94,
+# br-lan 192.168.8.1/24, dropbear on :22, uhttpd on :80/:443.
+# 2.4 GHz (radio0, platform/ahb/18100000.wmac) works. The 5 GHz QCA9887 is DEAD
+# with "failed to read calibration data from EEPROM: -22" — see
+# felixfelix-bot/e750-repair. Tests must NOT assume a working 5 GHz radio.
+#
+# NO PowerPort: the unit runs on an internal battery and has no switched power
+# on this bench. Power-cycling is a MANUAL action. Tests must not assume they
+# can reboot it remotely and be sure it comes back.
+#
+# Run, from anywhere on x280 (no labgrid coordinator needed):
+#   pytest --lg-env=configs/labgrid/e750.yaml --no-deploy <test>
+#   python -c "from labgrid import Environment; e=Environment('configs/labgrid/e750.yaml'); t=e.get_target('main'); d=t.get_driver('SSHDriver'); t.activate(d); print(d.run('cat /tmp/sysinfo/board_name'))"
+#
+# SERIAL CAVEAT: the FTDI in front of this UART is a CLONE and corrupts roughly
+# one character per transmitted line (RX stays clean). Do NOT use the serial
+# console for automated command entry — use SSH for anything that mutates.
+# RawSerialPort is declared for PASSIVE boot-log capture only; it has no driver.
+targets:
+  main:
+    resources:
+      NetworkService:
+        address: "192.168.8.1"
+        port: 22
+        username: "root"
+      RawSerialPort:
+        port: "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BH00DL3M-if00-port0"
+        speed: 115200
+    drivers:
+      SSHDriver:
+        keyfile: "~/.ssh/id_bench"
+        username: "root"
+        stderr_merge: true
+        connection_timeout: 60.0
