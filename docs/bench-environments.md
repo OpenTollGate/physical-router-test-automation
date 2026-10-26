@@ -80,6 +80,40 @@ moves to br-private, so `192.168.1.1` routes out the WAN and is firewalled. See
 for the `ip route get` discovery recipe. From `cobrador` the MT3000 answers on
 `10.57.113.1` (portal `:2051`, board `https://…/`).
 
+## Environment 5 — the GL-E750 "Mudi" (x280, SSH + capture-only serial)
+
+**Device:** GL.iNet **GL-E750**, board `glinet,gl-e750`, `ath79/nand`,
+`mips_24kc`, br-lan MAC **94:83:c4:4d:fc:38**. OpenWrt 25.12.5
+(`r33051-f5dae5ece4`), kernel 6.12.94. Battery-powered.
+
+**Where:** on **x280**, wired to `enx9c69d3ca3cfe` (x280 holds 192.168.8.244/24)
+at **192.168.8.1**; serial on FTDI **`BH00DL3M`** (115200 8N1).
+
+**Venue file:** [`configs/labgrid/e750.yaml`](../configs/labgrid/e750.yaml)
+
+```bash
+pytest --lg-env=configs/labgrid/e750.yaml --no-deploy <test>
+```
+
+**Access:** key auth only — `ssh -i ~/.ssh/id_bench root@192.168.8.1`. The
+fleet's `id_ed25519`, `id_fleet` and `id_dq05` are **refused** by this unit.
+
+**Two traps, both measured:**
+
+1. **The serial console is TX-ONLY.** Its output arrives byte-clean, but
+   nothing you send reaches the unit: with `cat /dev/ttyS0 > /tmp/rx.txt`
+   running on the box, a marker transmitted from the FTDI never appeared.
+   `/proc/consoles` agrees (`ttyS0 -W-`, write-only). So the serial link is
+   **capture only** (boot logs, panics, recovery evidence) — there is no shell
+   over it, and an askfirst nudge will not produce a prompt. Mutate via SSH.
+2. **It has ONE radio, not two.** The 5 GHz QCA9887 never probes
+   (`could not probe fw (-22)`), so there is no `phy0` and no 5 GHz interface at
+   all. The surviving 2.4 GHz ath9k (`phy1`) is currently a **client** on SSID
+   `hermes-lan`, not an AP. Do not assume a second radio or a serving AP.
+   Diagnosis: felixfelix-bot/e750-repair (`docs/EVIDENCE.md` §3).
+
+**No PowerPort:** power-cycling is a manual bench action.
+
 ## The confusion this doc exists to kill
 
 | If a session sees... | It is... | Verdict |
@@ -89,4 +123,6 @@ for the `ip route get` discovery recipe. From `cobrador` the MT3000 answers on
 | WS3915i / x1860 / PoE control | Env 1 (labgrid farm) | Ours; use the coordinator |
 | `tollgate-52BE` / `tollgate-A04E`, `10.57.113.1` / `10.63.101.1`, serial on T440/x280 | Env 4 (serial fleet bench) | Ours; reach on the **management net**, not `192.168.1.1` |
 | `192.168.1.1` **from the gateway** | post-install box (Env 4) at a dead address | routes out the WAN — use `ip route get` |
+| `glinet,gl-e750` / `192.168.8.1` / `mips_24kc` / br-lan `94:83:c4:4d:fc:38` | Env 5 (E750 Mudi on x280) | Ours; `ssh -i ~/.ssh/id_bench`; serial is capture-only |
+| An E750 showing only `phy1` and no `phy0` | Env 5, expected for this unit | Not a fault — the 5 GHz QCA9887 never probes; ONE radio only |
 | "MT3000 (arm64)" with no other identity | AMBIGUOUS — must be pinned before use | Identity check mandatory |

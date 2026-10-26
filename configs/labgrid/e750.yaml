@@ -16,9 +16,16 @@
 #
 # FIRMWARE AT ENROLLMENT: OpenWrt 25.12.5 r33051-f5dae5ece4, kernel 6.12.94,
 # br-lan 192.168.8.1/24, dropbear on :22, uhttpd on :80/:443.
-# 2.4 GHz (radio0, platform/ahb/18100000.wmac) works. The 5 GHz QCA9887 is DEAD
-# with "failed to read calibration data from EEPROM: -22" — see
-# felixfelix-bot/e750-repair. Tests must NOT assume a working 5 GHz radio.
+# RADIO STATE — measured 2026-10-25, and it is NOT what "two radios" implies:
+#   * Only ONE phy exists: phy1, DRIVER=ath9k, 2.4 GHz, channel 11 (2462 MHz),
+#     HT20, MAC 94:83:c4:4d:fc:39.
+#   * The 5 GHz QCA9887 never probes ("could not probe fw (-22)"), so there is
+#     NO phy0 and no 5 GHz interface AT ALL — see felixfelix-bot/e750-repair.
+#     Do not assume a second radio exists; `iw dev` shows only phy1.
+#   * phy1 is currently a CLIENT (type managed, SSID "hermes-lan"), NOT an AP.
+#     So this unit has no AP serving either, and it reaches the fleet by
+#     joining hermes-lan as a station.
+# Tests must assume neither a 5 GHz radio nor a running AP.
 #
 # NO PowerPort: the unit runs on an internal battery and has no switched power
 # on this bench. Power-cycling is a MANUAL action. Tests must not assume they
