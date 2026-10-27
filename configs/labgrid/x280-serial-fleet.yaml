@@ -1,0 +1,70 @@
+# x280 serial-fleet bench — LOCAL labgrid env (no coordinator).
+#
+# Three enrolled units, all measured 2026-10-26 (see the contract JSON next to
+# this file for identity expectations and the probe that proves them):
+#
+#   bench-comfast-wr632ax  COMFAST CF-WR632AX  (aarch64, apk-era 25.12.5, no TollGate)
+#   bench-mt3000-tollgate  GL-MT3000 tollgate-9BD4 (TollGate installed; SSH on br-private)
+#   bench-covr-x1860-tollgate  D-Link COVR-X1860 A1 tollgate-AF92 (TollGate installed, mipsel)
+#   bench-e750-lab             GL-E750 e750-lab (stock 25.12.5, mips_24kc) — SSH ONLY;
+#                              its FTDI console (BH00DL3M) is electrically silent, so no
+#                              USBSerialPort is declared for it on purpose.
+#
+# Consoles resolve by FTDI serial (ID_SERIAL_SHORT) — NEVER by ttyUSB index;
+# the index drifts on replug (docs/bench-environments.md, PR #316).
+#
+# SSH is the deploy/test path (bench publickey, default ~/.ssh/id_bench);
+# serial is the recovery path and the only lane that works when dropbear or
+# the network is wedged. There is NO power control on this bench: the USB
+# hubs switch the adapters, not the routers — a power cycle is a manual bench
+# action and tests must not assume otherwise.
+#
+# Health gate before any evidence run:
+#   ./.venv/bin/python scripts/bench/serial-fleet-probe.py
+#   ./.venv/bin/python -m pytest tests/bench/test_serial_fleet_health.py -v
+targets:
+  bench-comfast-wr632ax:
+    resources:
+      USBSerialPort:
+        match:
+          ID_SERIAL_SHORT: "BG046H14"
+        speed: 115200
+      NetworkService:
+        address: "192.168.50.219"
+        username: "root"
+    drivers:
+      SSHDriver: {}
+
+  bench-mt3000-tollgate:
+    resources:
+      USBSerialPort:
+        match:
+          ID_SERIAL_SHORT: "BG046H5F"
+        speed: 115200
+      NetworkService:
+        # br-private management net; the 192.168.50.x WAN iface refuses :22
+        address: "10.110.223.1"
+        username: "root"
+    drivers:
+      SSHDriver: {}
+
+  bench-covr-x1860-tollgate:
+    resources:
+      USBSerialPort:
+        match:
+          ID_SERIAL_SHORT: "BH00D6DL"
+        speed: 115200
+      NetworkService:
+        address: "192.168.50.218"
+        username: "root"
+    drivers:
+      SSHDriver: {}
+  bench-e750-lab:
+    resources:
+      NetworkService:
+        # br-lan over the USB NIC; console (FTDI BH00DL3M) is not wired — see
+        # configs/labgrid/x280-serial-fleet.json console_notes.
+        address: "192.168.8.1"
+        username: "root"
+    drivers:
+      SSHDriver: {}
