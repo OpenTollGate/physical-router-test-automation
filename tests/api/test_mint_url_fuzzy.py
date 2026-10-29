@@ -31,7 +31,7 @@ def _get_config_mint_url(router):
 def _set_and_wait(router, new_url, timeout=90):
     router.ssh(
         f"jq '.accepted_mints[0].url = \"{new_url}\"' /etc/tollgate/config.json"
-        f" > /tmp/cfg.json && mv /tmp/cfg.json /etc/tollgate/config.json",
+        f" > /etc/tollgate/.cfg.tmp && mv /etc/tollgate/.cfg.tmp /etc/tollgate/config.json",
         timeout=10,
     )
     router.restart_backend(timeout=45)

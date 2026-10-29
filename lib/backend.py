@@ -17,7 +17,12 @@ class BackendConfig:
 
     @property
     def is_rust(self) -> bool:
-        return self.type == "rust"
+        # Family-wide: a test asking is_rust means "the SUT is a Rust binary
+        # with Rust-shaped behaviors" — under rust-basic the narrow check
+        # never fired and Go-calibrated assertions ran anyway (the
+        # M1-documented guard miss, resurfaced in the 2026-10-28 gates).
+        # Tests that need the tollgate-rs backend specifically use == "rust".
+        return self.type in ("rust", "rust-basic", "rust-embedded")
 
     @property
     def is_rust_family(self) -> bool:
