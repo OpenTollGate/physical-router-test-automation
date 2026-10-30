@@ -55,9 +55,10 @@ import shutil
 import sqlite3
 import subprocess
 import time
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any
 
 from lib.fleet_capacity import (
     CapacityError,
@@ -777,9 +778,9 @@ def read_authority_reservations(
     try:
         conn.row_factory = sqlite3.Row
         try:
+            placeholders = ",".join("?" * len(_AUTHORITY_OCCUPYING_STATES))
             rows = conn.execute(
-                "SELECT run_id, state, demand, expires_at FROM allocations WHERE state IN (%s)"
-                % ",".join("?" * len(_AUTHORITY_OCCUPYING_STATES)),
+                f"SELECT run_id, state, demand, expires_at FROM allocations WHERE state IN ({placeholders})",
                 _AUTHORITY_OCCUPYING_STATES,
             ).fetchall()
         except sqlite3.DatabaseError as exc:

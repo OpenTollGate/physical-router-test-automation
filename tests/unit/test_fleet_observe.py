@@ -25,6 +25,7 @@ import pytest
 
 from lib.fleet_capacity import (
     HostDemand,
+    ManifestError,
     Reason,
     ResourceKind,
     State,
@@ -916,7 +917,7 @@ def test_collect_reports_an_acquired_place_as_refused(manifest, tmp_path):
 
 def test_collect_refuses_unconfigured_fleets_without_contacting_anything(manifest, tmp_path):
     runner = _collect_runner()
-    with pytest.raises(Exception):
+    with pytest.raises(ManifestError):
         collect(
             manifest,
             limits=ProbeLimits(ttl_s=TTL),
@@ -1051,7 +1052,7 @@ def test_place_state_defaults():
 def test_manifest_fixture_matches_the_committed_example_schema():
     """The example manifest must stay loadable — it is the documented schema."""
     example = REPO / "config" / "fleets.example.yaml"
-    with pytest.raises(Exception):
+    with pytest.raises(ManifestError):
         load_manifest(example)  # placeholders are refused by design
 
 

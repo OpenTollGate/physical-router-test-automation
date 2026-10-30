@@ -11,6 +11,7 @@ separate from admission; never claim parallel execution from a CLI alone).
 """
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import os
@@ -291,11 +292,11 @@ def test_parse_guest_with_ticks():
 
 
 def test_parse_guest_requires_both_parts():
-    with pytest.raises(Exception):
+    with pytest.raises(argparse.ArgumentTypeError):
         _cli._parse_guest("lane-a")
-    with pytest.raises(Exception):
+    with pytest.raises(argparse.ArgumentTypeError):
         _cli._parse_guest("=/tmp/lane.pid")
-    with pytest.raises(Exception):
+    with pytest.raises(argparse.ArgumentTypeError):
         _cli._parse_guest("lane-a=")
 
 
