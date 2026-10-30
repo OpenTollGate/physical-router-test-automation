@@ -10,13 +10,16 @@ per fleet and in total:
   3. idle existing QEMU guests (needs identity + health + topology + lease),
   4. additional VM slots (host admission — reported raw, marked NOT_QUALIFIED).
 
-Number 4 is never a promise. There is no host-wide reservation accounting yet,
-so per-lane budgets cannot be summed; the CLI therefore prints a raw headroom
-estimate and the word NOT_QUALIFIED next to it, and refuses to say "you may
-start N VMs". Nothing here starts a VM, acquires a place, flashes hardware or
-enables parallel execution. ``--from-snapshot`` re-decides saved evidence, which
-is how an operator watches a stale snapshot decay into refusals without any
-probe running at all.
+Number 4 is never a promise. The host pool exists (slice 2), but this CLI
+cannot honestly turn it into a slot count: `cpu_committed` is unmeasured from
+`/proc`, and the authority store is opened **read-only** here, so the pool's
+headroom is deliberately not consulted. The CLI prints a raw headroom estimate
+and the word NOT_QUALIFIED next to it, and refuses to say "you may start N
+VMs". Admission with an owned, fenced lease happens in the runner
+(`lib/run_admission.py`), never here. Nothing in this CLI starts a VM, acquires
+a place, flashes hardware or enables parallel execution. `--from-snapshot`
+re-decides saved evidence, which is how an operator watches a stale snapshot
+decay into refusals without any probe running at all.
 
 Exit codes:
   0  the report was produced (including "no capacity" — that is a result),
@@ -53,8 +56,6 @@ from lib.fleet_capacity import (  # noqa: E402
 )
 from lib.fleet_authority import (  # noqa: E402
     ENV_AUTHORITY_PATH,
-    FleetAuthority,
-    AuthorityError,
 )
 from lib.fleet_observe import (  # noqa: E402
     ADMISSION_DETAIL,
@@ -67,6 +68,7 @@ from lib.fleet_observe import (  # noqa: E402
     build_report,
     collect,
     decide,
+    read_authority_epoch,
     resolve_host_demand,
 )
 
@@ -102,15 +104,16 @@ def _authority_epoch(path: Path | str | None, explicit: int | None) -> int:
     """The authority's own epoch, never a guess.
 
     A fresh read of the store's ``meta.epoch`` is what makes old evidence
-    refusable. When no store is configured the CLI requires an explicit epoch
+    refusable. The read is **read-only** (``read_authority_epoch``): the CLI must
+    not construct ``FleetAuthority``, because that constructor creates the store.
+    When no readable store is configured the CLI requires an explicit epoch
     rather than defaulting to 1, because a made-up epoch silently "matches"
     everything it should not.
     """
     if path:
-        try:
-            return FleetAuthority(path, busy_timeout_ms=5000).epoch
-        except (AuthorityError, OSError, ValueError):
-            pass
+        epoch = read_authority_epoch(path)
+        if epoch is not None:
+            return epoch
     if explicit is None:
         raise ObservationRefused(
             "no authority epoch available — pass --epoch or configure the host authority store; "

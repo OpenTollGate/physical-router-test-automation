@@ -227,6 +227,34 @@ def test_missing_epoch_without_authority_is_a_refusal(manifest_path, fake_client
     assert "no authority epoch" in err
 
 
+def test_cli_does_not_create_an_authority_store_it_only_reads(manifest_path, fake_client, tmp_path, capsys):
+    """`--authority <absent path>` must not be turned into a store by looking at it."""
+    fake_client(_runner())
+    absent = tmp_path / "authority.sqlite3"
+    assert not absent.exists()
+    rc = _cli.main(["--manifest", str(manifest_path), "--authority", str(absent), "--epoch", "4"])
+    capsys.readouterr()
+    assert rc == 0
+    assert not absent.exists(), (
+        "the CLI created an authority store at an absent --authority path; "
+        "an observation command must not be a writer on a live bench"
+    )
+
+
+def test_cli_reads_a_real_authority_epoch_instead_of_the_override(manifest_path, fake_client, tmp_path, capsys):
+    """A configured store is authoritative: --epoch must not mask a different one."""
+    from lib.fleet_authority import FleetAuthority
+
+    fake_client(_runner())
+    store = tmp_path / "authority.sqlite3"
+    authority = FleetAuthority(store)
+    authority.reconcile()
+    rc = _cli.main(["--manifest", str(manifest_path), "--authority", str(store), "--json"])
+    assert rc == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["authority_epoch"] == authority.epoch
+
+
 def test_bad_snapshot_schema_is_exit_3(manifest_path, tmp_path, capsys):
     snapshot = tmp_path / "ev.json"
     snapshot.write_text(json.dumps({"schema_version": 99}))

@@ -110,6 +110,7 @@ __all__ = [
     "read_local_host",
     "read_local_guest",
     "read_authority_reservations",
+    "read_authority_epoch",
     "host_observation_from_metrics",
     "collect",
     "decide",
@@ -117,15 +118,28 @@ __all__ = [
 ]
 
 #: One word an operator cannot misread: this slice observes, it does not admit.
-#: The shared host-pool accounting that would make *new* VM slots allocatable is
-#: missing (it is the FLEET-CAP-5 gate), so no number this module prints may be
-#: read as "you may start this many VMs".
+#: The *reason* changed when the host pool landed (slice 2 / host aggregate): the
+#: accounting now exists, but this CLI still may not turn it into a slot count.
+#: Two independent reasons, both structural rather than polite disclaimers:
+#:   * ``cpu_committed`` is an unmeasured dimension here (``/proc`` cannot say how
+#:     many vCPUs running guests have already claimed), and an unmeasured
+#:     dimension makes any slot arithmetic a guess in the dangerous direction;
+#:   * the operator CLI reads the authority store **read-only**
+#:     (``file:...?mode=ro``), so it deliberately does not call
+#:     ``FleetAuthority.host_headroom()`` — that constructor opens the store as a
+#:     writer, and an observation tool must never be a writer on a live bench.
+#: Admission belongs to ``lib/run_admission.py`` inside the runner, which holds
+#: a real owned lease. No number this module prints may be read as "you may
+#: start this many VMs".
 ADMISSION_STATUS = "NOT_QUALIFIED"
 
 ADMISSION_DETAIL = (
-    "read-only observation only: there is no host-wide reservation accounting yet, so "
-    "per-lane budgets cannot be summed safely. Raw headroom is reported; no new-VM slot "
-    "count is allocatable and nothing here starts a VM or enables parallel execution."
+    "read-only observation only: this report measures the host and the "
+    "coordinators, it does not admit. Slot arithmetic is withheld because "
+    "cpu_committed is unmeasured from /proc and because the CLI opens the "
+    "authority store read-only, so it cannot consult the host pool's headroom. "
+    "Admission (with an owned, fenced lease) happens in the runner via "
+    "lib/run_admission.py; nothing here starts a VM or enables parallel execution."
 )
 
 EVIDENCE_SCHEMA_VERSION = 1
@@ -740,6 +754,43 @@ _AUTHORITY_OCCUPYING_STATES = (
     "cleanup_pending",
     "quarantined",
 )
+
+
+def read_authority_epoch(path: Path | str | None) -> int | None:
+    """Read the authority's epoch **without becoming a writer on its store**.
+
+    ``FleetAuthority.__init__`` runs ``_init_store()``, which CREATES the file,
+    creates every table and inserts the meta row. An observation tool that used
+    it would silently mint a 64 KB authority store at whatever ``--authority``
+    path it was pointed at — a side effect from a command whose contract is "I
+    only look". Measured on this branch: the CLI created the store before this
+    function existed.
+
+    Returns ``None`` when there is no readable authority epoch (absent path, not
+    a store, unreadable) so the caller can refuse explicitly instead of
+    defaulting to a made-up epoch.
+    """
+    if path is None or not str(path).strip():
+        return None
+    src = Path(path).expanduser()
+    if not src.is_file():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=5.0)
+    except sqlite3.Error:
+        return None
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", ("epoch",)).fetchone()
+    except sqlite3.DatabaseError:
+        return None
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True)

@@ -46,10 +46,20 @@ code from `lib.fleet_capacity.Reason` and the CLI prints it inline.
 `ADMISSION_STATUS = "NOT_QUALIFIED"` is printed with every report, in text and
 JSON, and `new_vm_slots` is labelled `raw`.
 
-The reason is structural: the host-wide reservation accounting that would let
-per-lane budgets be summed safely does not exist yet (that is the FLEET-CAP-5
-gate). Per-lane budgets can each look valid while an aggregate over three lanes
-exceeds host RAM/CPU/disk. So this adapter:
+The reason is structural, and it is **two** reasons now that slice 2 landed —
+neither is "we forgot to build accounting":
+
+1. `cpu_committed` cannot be measured from `/proc`. A running QEMU guest's vCPU
+   claim is not a host-level counter, so any slot arithmetic that needs it is a
+   guess in the dangerous direction (a busy host would look free).
+2. This CLI opens the authority store **read-only** (`file:...?mode=ro`).
+   `FleetAuthority.__init__` creates/migrates the store, i.e. it is a writer, and
+   an observation tool must never be a writer on a live bench. So the CLI
+   deliberately does not call `host_headroom()`.
+
+Admission therefore lives in the runner (`lib/run_admission.py`), which holds a
+real owned, fenced lease against the host pool before it spawns anything. This
+adapter:
 
 * measures real host numbers (CPU count, `/proc/meminfo`, `statvfs`,
   `/dev/kvm`) — **not** a laptop's guess about a remote box;

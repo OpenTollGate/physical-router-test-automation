@@ -56,6 +56,7 @@ from lib.fleet_observe import (
     host_observation_from_metrics,
     is_local_endpoint,
     parse_place_show,
+    read_authority_epoch,
     read_authority_reservations,
     read_coordinator,
     read_local_guest,
@@ -511,8 +512,21 @@ def test_ram_committed_is_measured_not_assumed():
 
 
 def test_admission_status_constant_is_not_qualified():
+    """The status must stay NOT_QUALIFIED, and for reasons that are still TRUE.
+
+    On this branch the host-pool accounting EXISTS (slice 2 host aggregate), so a
+    detail string that justified the refusal with "there is no host-wide
+    reservation accounting yet" would be a stale claim in the operator's face.
+    The two real reasons are pinned here instead: an unmeasured dimension, and a
+    read-only authority handle that therefore cannot consult the host pool.
+    """
     assert ADMISSION_STATUS == "NOT_QUALIFIED"
-    assert "no host-wide reservation accounting" in ADMISSION_DETAIL
+    assert "cpu_committed" in ADMISSION_DETAIL
+    assert "unmeasured" in ADMISSION_DETAIL
+    assert "read-only" in ADMISSION_DETAIL
+    assert "run_admission" in ADMISSION_DETAIL
+    # The accounting exists on this branch; the detail must not pretend otherwise.
+    assert "there is no host-wide reservation accounting" not in ADMISSION_DETAIL
 
 
 # ---------------------------------------------------------------------------
@@ -618,6 +632,46 @@ def test_pidfile_with_garbage_is_not_a_pid(tmp_path):
 # ---------------------------------------------------------------------------
 # 7. Reservations come from the authority, read-only
 # ---------------------------------------------------------------------------
+def test_epoch_read_does_not_create_the_store(tmp_path):
+    """A read-only observation must not mint an authority store as a side effect.
+
+    ``FleetAuthority.__init__`` -> ``_init_store()`` creates the file, the tables
+    and the meta row. Measured on this branch: the CLI pointed at an absent
+    ``--authority`` path CREATED a 64 KB store, so a command whose whole contract
+    is "I only look" was a writer. The epoch reader must leave the path alone.
+    """
+    absent = tmp_path / "never-existed.sqlite3"
+    assert read_authority_epoch(absent) is None
+    assert not absent.exists(), "reading the epoch must not create an authority store"
+
+
+def test_epoch_is_read_from_a_real_store_and_is_its_own_value(tmp_path):
+    from lib.fleet_authority import FleetAuthority
+
+    store = tmp_path / "fleet-authority.sqlite3"
+    authority = FleetAuthority(store)
+    authority.reconcile()
+    assert read_authority_epoch(store) == authority.epoch
+
+    before = store.read_bytes()
+    assert read_authority_epoch(store) == authority.epoch
+    assert store.read_bytes() == before, "the epoch read must not write to the store"
+
+
+def test_epoch_of_a_non_authority_database_is_unknown(tmp_path):
+    bogus = tmp_path / "bogus.sqlite3"
+    conn = sqlite3.connect(bogus)
+    conn.execute("CREATE TABLE something (x INTEGER)")
+    conn.commit()
+    conn.close()
+    assert read_authority_epoch(bogus) is None
+
+
+def test_epoch_without_a_path_is_unknown():
+    assert read_authority_epoch(None) is None
+    assert read_authority_epoch("") is None
+
+
 def test_reservations_without_a_store_are_unavailable_not_zero():
     read = read_authority_reservations(None, now=NOW)
     assert read.available is False
