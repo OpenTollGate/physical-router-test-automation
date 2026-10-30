@@ -651,6 +651,9 @@ class Reason(str, enum.Enum):
     CPU_INSUFFICIENT = "cpu_insufficient"
     DISK_INSUFFICIENT = "disk_insufficient"
     INODE_INSUFFICIENT = "inode_insufficient"
+    #: The reservation set is known to be *incomplete* (an occupying allocation
+    #: could not be sized), so headroom cannot be computed. Never zero-as-free.
+    RESERVATIONS_UNSIZED = "reservations_unsized"
 
 
 @dataclass(frozen=True)
@@ -1244,6 +1247,7 @@ def new_vm_slots(
     now: float,
     authority_epoch: int,
     reservations: Sequence[Reservation] = (),
+    reservations_incomplete: bool = False,
     limit: int | None = None,
     required_architecture: str | None = None,
 ) -> SpawnVerdict:
@@ -1251,6 +1255,11 @@ def new_vm_slots(
     guests, because an idle guest still consumes the host it runs on.
 
     Every dimension must be known and must fit. Unknown yields zero.
+
+    ``reservations_incomplete`` means the caller knows at least one *occupying*
+    allocation could not be sized (a corrupt ``demand`` column, an unreadable
+    store). Sub-tracting only the rows it could parse would silently price that
+    claim at zero, so the answer is refused outright rather than under-counted.
     """
     if host is None:
         return SpawnVerdict(
@@ -1304,6 +1313,16 @@ def new_vm_slots(
     # already inside *_committed and subtracting them again would over-report
     # headroom in the safe direction — but it would also make an idle guest
     # look free, which is the bug this model exists to prevent.
+    if reservations_incomplete:
+        # An occupier we cannot size is not a zero-cost occupier. Refuse before
+        # any arithmetic: a number derived from a partial ledger is a guess.
+        return SpawnVerdict(
+            **base,
+            state=State.UNKNOWN,
+            slots=0,
+            reasons=(Reason.RESERVATIONS_UNSIZED,),
+            detail="reservation set is incomplete: at least one occupying allocation could not be sized",
+        )
     outstanding = [r for r in reservations if not r.started and r.expires_at > now]
     claimed_cpu = sum(r.demand.vcpus for r in outstanding)
     claimed_ram = sum(r.demand.ram_mib for r in outstanding)

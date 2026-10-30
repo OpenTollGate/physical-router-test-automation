@@ -118,16 +118,16 @@ __all__ = [
 ]
 
 #: One word an operator cannot misread: this slice observes, it does not admit.
-#: The *reason* changed when the host pool landed (slice 2 / host aggregate): the
-#: accounting now exists, but this CLI still may not turn it into a slot count.
-#: Two independent reasons, both structural rather than polite disclaimers:
+#: Two *independent, structural* reasons, and both must stay true:
 #:   * ``cpu_committed`` is an unmeasured dimension here (``/proc`` cannot say how
 #:     many vCPUs running guests have already claimed), and an unmeasured
 #:     dimension makes any slot arithmetic a guess in the dangerous direction;
-#:   * the operator CLI reads the authority store **read-only**
-#:     (``file:...?mode=ro``), so it deliberately does not call
-#:     ``FleetAuthority.host_headroom()`` — that constructor opens the store as a
-#:     writer, and an observation tool must never be a writer on a live bench.
+#:   * ``FleetAuthority.host_headroom()`` is only reachable through
+#:     ``FleetAuthority.__init__``, which runs ``_init_store()`` and therefore
+#:     CREATES a 64 KB store at whatever path it is given. An observation tool
+#:     that used it would be a writer on a live bench. (Read-only-ness of the
+#:     connection is not the obstacle — reading a store and reading a *pool*
+#:     are both SELECTs; minting the store is the obstacle.)
 #: Admission belongs to ``lib/run_admission.py`` inside the runner, which holds
 #: a real owned lease. No number this module prints may be read as "you may
 #: start this many VMs".
@@ -136,13 +136,14 @@ ADMISSION_STATUS = "NOT_QUALIFIED"
 ADMISSION_DETAIL = (
     "read-only observation only: this report measures the host and the "
     "coordinators, it does not admit. Slot arithmetic is withheld because "
-    "cpu_committed is unmeasured from /proc and because the CLI opens the "
-    "authority store read-only, so it cannot consult the host pool's headroom. "
+    "cpu_committed is unmeasured from /proc and because the only handle that "
+    "can read the host pool (FleetAuthority) creates the authority store in its "
+    "constructor, so using it here would make an observation command a writer. "
     "Admission (with an owned, fenced lease) happens in the runner via "
     "lib/run_admission.py; nothing here starts a VM or enables parallel execution."
 )
 
-EVIDENCE_SCHEMA_VERSION = 1
+EVIDENCE_SCHEMA_VERSION = 2
 
 #: The complete set of coordinator operations this module may issue. Anything
 #: else — including every mutating verb — is refused before a process starts.
@@ -278,6 +279,12 @@ class LabgridReadOnlyClient:
         There is no free-form argument passthrough on purpose: the shape of the
         command line is fixed here, so a caller cannot smuggle ``power``/``flash``
         in through an ``args`` sequence.
+
+        ``coordinator`` and ``place`` are *values*, not flags: labgrid-client's
+        own argparse would happily re-tokenize a leading ``-``, so a value
+        starting with ``-`` is refused here rather than handed to it. Pinning
+        only the subcommand token would leave option confusion open at the two
+        positions that precede it.
         """
         if subcommand not in READ_ONLY_SUBCOMMANDS:
             raise ObservationRefused(
@@ -286,6 +293,10 @@ class LabgridReadOnlyClient:
             )
         if not coordinator or ":" not in coordinator:
             raise ObservationRefused(f"coordinator {coordinator!r} is not host:port")
+        if coordinator.startswith("-"):
+            raise ObservationRefused(f"coordinator {coordinator!r} looks like a flag, not an address")
+        if place is not None and (not place or place.startswith("-")):
+            raise ObservationRefused(f"place {place!r} looks like a flag, not a place name")
         argv = [self._binary, "-x", coordinator]
         if place is not None:
             argv += ["-p", place]
@@ -776,7 +787,7 @@ def read_authority_epoch(path: Path | str | None) -> int | None:
     if not src.is_file():
         return None
     try:
-        conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=5.0)
+        conn = sqlite3.connect(_read_only_uri(src), uri=True, timeout=5.0)
     except sqlite3.Error:
         return None
     try:
@@ -795,12 +806,32 @@ def read_authority_epoch(path: Path | str | None) -> int | None:
 
 @dataclass(frozen=True)
 class ReservationRead:
-    """Outstanding claims as the *host authority* reports them."""
+    """Outstanding claims as the *host authority* reports them.
+
+    ``available`` is ``False`` whenever the claim set cannot be trusted as a
+    *complete* account of what occupies the host — no store, unreadable store,
+    or an occupying row whose demand cannot be sized. ``unsized`` names the
+    rows that caused the last case, so an operator can fix the row instead of
+    reading "no reservations".
+    """
 
     source: str
     available: bool
     reservations: tuple[Reservation, ...] = ()
+    unsized: tuple[str, ...] = ()
     detail: str = ""
+
+
+def _read_only_uri(path: Path) -> str:
+    """A ``mode=ro`` SQLite URI for an arbitrary filesystem path.
+
+    ``f"file:{path}?mode=ro"`` is not a path — it is text interpolation into a
+    URI. A store at ``/var/lib/prta/a?b#c.sqlite3`` opened ``/var/lib/prta/a``
+    (measured), so the real store was reported as "not found" and something else
+    could have been read in its place. ``Path.as_uri()`` percent-encodes ``?``,
+    ``#`` and ``%``; ``mode=ro`` is then appended as the query string.
+    """
+    return Path(path).expanduser().resolve().as_uri() + "?mode=ro"
 
 
 def read_authority_reservations(
@@ -823,7 +854,7 @@ def read_authority_reservations(
     if not src.is_file():
         return ReservationRead(source=str(src), available=False, detail="host authority store not found")
     try:
-        conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=5.0)
+        conn = sqlite3.connect(_read_only_uri(src), uri=True, timeout=5.0)
     except sqlite3.Error as exc:
         return ReservationRead(source=str(src), available=False, detail=redact(f"cannot open store: {exc}"))
     try:
@@ -842,7 +873,9 @@ def read_authority_reservations(
         conn.close()
 
     out: list[Reservation] = []
+    unsized: list[str] = []
     for row in rows:
+        run_id = str(row["run_id"])
         try:
             demand = json.loads(row["demand"])
             host_demand = HostDemand(
@@ -852,17 +885,33 @@ def read_authority_reservations(
                 disk_inodes=int(demand["inodes"]),
             )
         except (ValueError, KeyError, TypeError):
-            continue  # unreadable row: it still occupies, but we cannot size it
+            # This row occupies the host but cannot be priced. Dropping it would
+            # make its demand look like zero — the dangerous direction. Record
+            # it, keep the sized rows, and make the whole read unavailable.
+            unsized.append(run_id)
+            continue
         state = str(row["state"])
         out.append(
             Reservation(
-                run_id=str(row["run_id"]),
+                run_id=run_id,
                 demand=host_demand,
                 expires_at=float(row["expires_at"]),
                 # Anything past RESERVED is already inside the host's committed
                 # counters; treating it as outstanding would double-count.
                 started=state != "reserved",
             )
+        )
+    if unsized:
+        return ReservationRead(
+            source=str(src),
+            available=False,
+            reservations=tuple(out),
+            unsized=tuple(unsized),
+            detail=redact(
+                "occupying allocation(s) cannot be sized: "
+                + ", ".join(unsized)
+                + " — headroom is unknown, not free"
+            ),
         )
     return ReservationRead(source=str(src), available=True, reservations=tuple(out))
 
@@ -898,6 +947,9 @@ class Evidence:
     reservations: tuple[Reservation, ...] = ()
     reservation_source: str = ""
     reservation_detail: str = ""
+    #: Occupying allocations that exist (per the store) but cannot be sized, so
+    #: the reservation vector above is a *lower bound*, not the whole claim set.
+    reservations_unsized: tuple[str, ...] = ()
     coordinators_read: Mapping[str, CoordinatorRead] = field(default_factory=dict)
     refusals: tuple[Refusal, ...] = ()
     schema_version: int = EVIDENCE_SCHEMA_VERSION
@@ -931,6 +983,7 @@ class Evidence:
             ],
             "reservation_source": self.reservation_source,
             "reservation_detail": self.reservation_detail,
+            "reservations_unsized": list(self.reservations_unsized),
             "coordinators_read": {
                 k: {
                     "fleet_id": v.fleet_id,
@@ -1012,6 +1065,7 @@ class Evidence:
             ),
             reservation_source=str(doc.get("reservation_source") or ""),
             reservation_detail=str(doc.get("reservation_detail") or ""),
+            reservations_unsized=tuple(str(r) for r in (doc.get("reservations_unsized") or ())),
             coordinators_read={
                 k: CoordinatorRead(
                     fleet_id=str(v["fleet_id"]),
@@ -1340,6 +1394,16 @@ def collect(
         )
 
     reservation_read = read_authority_reservations(authority_path, now=now)
+    if reservation_read.unsized:
+        # Not a silent omission: an occupier we cannot price is a refusal with a
+        # reason code, exactly like a dead exporter.
+        refusals.append(
+            Refusal(
+                subject="host authority reservations",
+                reason="reservations_unsized",
+                detail=reservation_read.detail,
+            )
+        )
     return Evidence(
         observed_at=now,
         authority_epoch=probed_epoch,
@@ -1352,6 +1416,7 @@ def collect(
         reservations=reservation_read.reservations,
         reservation_source=reservation_read.source,
         reservation_detail=reservation_read.detail,
+        reservations_unsized=reservation_read.unsized,
         coordinators_read=reads,
         refusals=tuple(refusals),
     )
@@ -1475,6 +1540,9 @@ def decide(
                 now=now,
                 authority_epoch=evidence.authority_epoch,
                 reservations=evidence.reservations,
+                # A partial ledger is not a complete one. Without this the rows
+                # that could not be sized would be priced at zero.
+                reservations_incomplete=bool(evidence.reservations_unsized),
                 limit=manifest.fleets[fleet_id].capacity_limits.max_new_vm_slots,
             )
         )
@@ -1593,6 +1661,8 @@ def build_report(
         "reservations": {
             "source": evidence.reservation_source,
             "detail": evidence.reservation_detail,
+            "complete": not evidence.reservations_unsized,
+            "unsized": list(evidence.reservations_unsized),
             "outstanding": [
                 {
                     "run_id": r.run_id,

@@ -15,6 +15,7 @@ import argparse
 import importlib.util
 import json
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -28,7 +29,12 @@ _cli = importlib.util.module_from_spec(_spec)
 sys.modules["fleet_capacity_cli"] = _cli  # dataclasses introspection requires registration
 _spec.loader.exec_module(_cli)
 
-from lib.fleet_observe import ADMISSION_STATUS, CommandResult, LabgridReadOnlyClient  # noqa: E402
+from lib.fleet_observe import (  # noqa: E402
+    ADMISSION_STATUS,
+    EVIDENCE_SCHEMA_VERSION,
+    CommandResult,
+    LabgridReadOnlyClient,
+)
 
 pytestmark = [pytest.mark.story("P11")]
 
@@ -300,7 +306,7 @@ def test_saved_evidence_is_redacted(manifest_path, fake_client, tmp_path, capsys
     assert _cli.main(["--manifest", str(manifest_path), "--epoch", "1", "--save-evidence", str(evidence_path)]) == 0
     payload = evidence_path.read_text()
     assert "password=" not in payload.lower()
-    assert json.loads(payload)["schema_version"] == 1
+    assert json.loads(payload)["schema_version"] == EVIDENCE_SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -472,3 +478,117 @@ def test_unknown_fleet_selection_is_a_refusal(manifest_path, fake_client, capsys
     rc = _cli.main(["--manifest", str(manifest_path), "--epoch", "1", "--fleet", "nope"])
     assert rc == 3
     assert "not configured" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# 8. An incomplete reservation ledger is visible, and is a refusal
+# ---------------------------------------------------------------------------
+def _corrupt_store(tmp_path):
+    """A real authority store with one occupying allocation it cannot size."""
+    from lib.fleet_authority import Demand, FleetAuthority, HostSpec, LaneSpec
+
+    store = tmp_path / "authority.sqlite3"
+    authority = FleetAuthority(store)
+    authority.reconcile()
+    authority.register_host(
+        HostSpec(vcpus_total=8, ram_mib_total=8192, disk_mib_total=65536, inodes_total=100_000)
+    )
+    authority.register_lane(
+        LaneSpec(
+            lane_id="lane-1",
+            fleet_id="local-lab",
+            resource_id="router-a1",
+            vcpus_total=8,
+            ram_mib_total=8192,
+            disk_mib_total=65536,
+            inodes_total=10_000,
+            max_concurrent=2,
+        )
+    )
+    granted = authority.try_reserve(
+        lane_id="lane-1", demand=Demand(vcpus=2, ram_mib=1024, disk_mib=4096, inodes=1), run_id="run-broken"
+    )
+    assert granted.granted, granted.detail
+    conn = sqlite3.connect(store)
+    conn.execute("UPDATE allocations SET demand = ? WHERE run_id = ?", ('{"vcpus": 2}', "run-broken"))
+    conn.commit()
+    conn.close()
+    return store
+
+
+def test_cli_prints_an_incomplete_reservation_ledger_as_incomplete(manifest_path, fake_client, tmp_path, capsys):
+    """Before the fix this printed "none readable" — i.e. zero claims — for a
+    store that held exactly one occupying, unsized claim."""
+    fake_client(_runner())
+    store = _corrupt_store(tmp_path)
+    rc = _cli.main(["--manifest", str(manifest_path), "--authority", str(store)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "INCOMPLETE" in out
+    assert "run-broken" in out
+    assert "unknown, not free" in out
+    assert "none readable" not in out
+
+
+def test_cli_json_marks_the_reservation_ledger_incomplete(manifest_path, fake_client, tmp_path, capsys):
+    fake_client(_runner())
+    store = _corrupt_store(tmp_path)
+    rc = _cli.main(["--manifest", str(manifest_path), "--authority", str(store), "--json"])
+    assert rc == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["reservations"]["complete"] is False
+    assert report["reservations"]["unsized"] == ["run-broken"]
+    assert any(r["reason"] == "reservations_unsized" for r in report["refusals"])
+
+
+def test_render_text_marks_a_partial_ledger_even_with_sized_rows():
+    report = {
+        "generated_at": "now",
+        "age_s": 0.0,
+        "ttl_s": 60.0,
+        "manifest": "m",
+        "authority_epoch": 1,
+        "admission": {"status": ADMISSION_STATUS, "detail": "d"},
+        "declared_lane_demand": {"vcpus": 1, "ram_mib": 1, "disk_mib": 1, "disk_inodes": 1},
+        "fleets": [],
+        "totals": {
+            "reachable_fleets": 0,
+            "configured_fleets": 0,
+            "idle_physical_routers": 0,
+            "idle_existing_guests": 0,
+            "exported_available": 0,
+            "new_vm_slots_raw": 0,
+        },
+        "reservations": {
+            "source": "/tmp/store.sqlite3",
+            "detail": "occupying allocation(s) cannot be sized: run-broken",
+            "complete": False,
+            "unsized": ["run-broken"],
+            "outstanding": [
+                {
+                    "run_id": "run-ok",
+                    "started": False,
+                    "expires_at": 1_000_060.0,
+                    "demand": {"vcpus": 2, "ram_mib": 1024, "disk_mib": 4096, "disk_inodes": 1},
+                }
+            ],
+        },
+        "refusals": [],
+    }
+    text = _cli._render_text(report)
+    # The sized rows are still shown...
+    assert "run-ok pending 2vCPU/1024MiB/4096MiB" in text
+    # ...and the ledger is still explicitly incomplete.
+    assert "INCOMPLETE" in text
+    assert "run-broken" in text
+
+
+def test_admission_detail_names_the_real_hazard_not_read_only_ness():
+    """The review's MEDIUM: "the store is read-only, so headroom is not
+    consulted" was a non-sequitur — reservations ARE read from that store."""
+    from lib.fleet_observe import ADMISSION_DETAIL
+
+    assert "creates the authority store" in ADMISSION_DETAIL
+    assert "writer" in ADMISSION_DETAIL
+    # The old, misleading clause is gone.
+    assert "opens the authority store read-only" not in ADMISSION_DETAIL

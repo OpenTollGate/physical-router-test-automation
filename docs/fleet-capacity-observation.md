@@ -144,10 +144,42 @@ line shape is fixed (no free-form argument passthrough), so `acquire`,
 `ObservationRefused` **before** any subprocess exists. A unit test asserts the
 refusal for each of them and that the runner was never called.
 
+The allowlist pins the *subcommand*; the two values that precede it are pinned
+too. `-x <coordinator>` and `-p <place>` are values, and labgrid-client's own
+argparse would re-tokenize a leading `-` — so a coordinator or place id starting
+with `-` is refused here rather than offered to it. Without that check a manifest
+value of `--help` reached labgrid as a flag, and "the command line shape is
+fixed" would only have meant "position 5 is fixed".
+
 Place discovery uses the manifest's `allowed_places`, never the coordinator's
 place list: reading the list would turn observation into discovery, and
 discovery is not authorization. `resources` is read only as narrative evidence
 that an exporter is publishing.
+
+## An unreadable reservation is a refusal, not a zero
+
+Reading the host authority is a `SELECT` over `file:...?mode=ro`, built with
+`Path.as_uri()` so a store path containing `?`, `#` or `%` is escaped. Text
+interpolation (`f"file:{path}?mode=ro"`) truncates the URI at the first `?`:
+measured, `.../a?b#c%d.sqlite3` opened `.../a`, so a real store was reported
+"not found" and a different file could have been read in its place.
+
+If an *occupying* allocation's `demand` column cannot be parsed, the read does
+not silently drop it. Dropping it would price a live claim at zero — the
+dangerous direction — so instead:
+
+* `ReservationRead.available` is `False` and `ReservationRead.unsized` names the
+  run ids;
+* the rows that *could* be priced are still returned (losing them would be a
+  second silent loss of evidence);
+* `collect()` records a `Refusal` with reason `reservations_unsized`;
+* `new_vm_slots(..., reservations_incomplete=True)` returns `unknown`/0 with
+  that reason code instead of a slot count derived from a partial ledger;
+* the CLI prints `outstanding reservations: INCOMPLETE — ... headroom is
+  unknown, not free` and the JSON report carries `reservations.complete: false`.
+
+Evidence snapshots are schema version 2: the version bump is what makes an
+old snapshot refusable rather than reinterpreted under the new field set.
 
 ## Secret safety
 

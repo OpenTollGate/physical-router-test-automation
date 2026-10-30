@@ -12,14 +12,22 @@ per fleet and in total:
 
 Number 4 is never a promise. The host pool exists (slice 2), but this CLI
 cannot honestly turn it into a slot count: `cpu_committed` is unmeasured from
-`/proc`, and the authority store is opened **read-only** here, so the pool's
-headroom is deliberately not consulted. The CLI prints a raw headroom estimate
+`/proc`, and the only handle that reads the pool (`FleetAuthority`) creates the
+authority store in its constructor — so consulting it here would make an
+observation command a *writer* on a live bench. The real hazard is the store
+being minted, not the read: outstanding reservations ARE read from the store,
+over `file:...?mode=ro`. The CLI prints a raw headroom estimate
 and the word NOT_QUALIFIED next to it, and refuses to say "you may start N
 VMs". Admission with an owned, fenced lease happens in the runner
 (`lib/run_admission.py`), never here. Nothing in this CLI starts a VM, acquires
 a place, flashes hardware or enables parallel execution. `--from-snapshot`
 re-decides saved evidence, which is how an operator watches a stale snapshot
 decay into refusals without any probe running at all.
+
+An occupying allocation whose `demand` column cannot be parsed is *not* dropped
+on the floor: the report says `reservations: incomplete`, names the run ids, and
+the new-VM admission verdict refuses with `reservations_unsized` instead of
+pricing an unpriced claim at zero.
 
 Exit codes:
   0  the report was produced (including "no capacity" — that is a result),
@@ -197,6 +205,7 @@ def _render_text(report: dict) -> str:
                 out.append(f"    {entry['resource_id']}: {entry['state']} ({reasons}){detail}")
 
     reservations = report["reservations"]
+    complete = reservations.get("complete", True)
     out.append("")
     if reservations["outstanding"]:
         out.append(f"outstanding reservations ({reservations['source']}):")
@@ -208,8 +217,17 @@ def _render_text(report: dict) -> str:
                 f"{demand['vcpus']}vCPU/{demand['ram_mib']}MiB/{demand['disk_mib']}MiB "
                 f"expires={_now_iso(item['expires_at'])}"
             )
-    else:
+    elif complete:
         out.append(f"outstanding reservations: none readable ({reservations['detail'] or 'empty store'})")
+
+    if not complete:
+        # "none readable" would be false here: there IS at least one occupying
+        # claim, we just cannot price it.
+        out.append(
+            "outstanding reservations: INCOMPLETE — "
+            f"{len(reservations['unsized'])} occupying allocation(s) cannot be sized "
+            f"({', '.join(reservations['unsized'])}); host headroom is unknown, not free"
+        )
 
     if report["refusals"]:
         out.append("")
