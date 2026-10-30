@@ -1057,6 +1057,21 @@ class TestSummaryHonesty:
         with pytest.raises(Exception):
             summarize(manifest, [stray])
 
+    def test_summarize_errors_are_redacted(self, manifest: FleetManifest):
+        """Every string this module raises passes through ``redact`` — including
+        the ownership-mismatch path, so a secret-shaped id cannot leak from it.
+        """
+        import lib.fleet_capacity as fc
+
+        secret_fleet = "ghp_" + "z" * 36
+        stray = router_capacity(manifest, "alpha-ap", now=NOW, authority_epoch=EPOCH)
+        object.__setattr__(stray, "fleet_id", secret_fleet)
+        with pytest.raises(fc.CapacityError) as err:
+            summarize(manifest, [stray])
+        assert secret_fleet not in str(err.value)
+        assert "[REDACTED" in str(err.value)
+        assert fc.redact(secret_fleet) != secret_fleet
+
     def test_fleet_with_no_evidence_reports_zeros(self, manifest: FleetManifest):
         summaries = summarize(manifest, [])
         assert {s.fleet_id for s in summaries} == {"alpha", "beta"}

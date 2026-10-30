@@ -1447,7 +1447,9 @@ def summarize(manifest: FleetManifest, verdicts: Iterable[Verdict | SpawnVerdict
             )
         if verdict.fleet_id and verdict.fleet_id != owner:
             raise CapacityError(
-                f"verdict claims fleet {verdict.fleet_id!r} but {verdict.resource_id!r} belongs to {owner!r}"
+                redact(
+                    f"verdict claims fleet {verdict.fleet_id!r} but {verdict.resource_id!r} belongs to {owner!r}"
+                )
             )
         per_fleet[owner].append(verdict)
 
