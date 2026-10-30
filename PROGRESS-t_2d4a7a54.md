@@ -70,11 +70,35 @@ run by the harness's own admission gate, which refuses (exit 3) rather than proc
 
 ## Current state / limits
 
-* Coordinator qualification (gate 7) is low-resource and is being finished now.
+* Coordinator qualification (gate 7): **measured**, see `docs/FLEET-CAP-3-QUALIFICATION.md`.
 * QEMU throughput measurement (gate 8): harness + admission gate published; **numbers pending
-  the resource blocker above**. A measured "blocked" is reported, never an invented speedup.
+  the resource blocker above**. Latest qualification run exits 1 (NOT QUALIFIED) with gate E
+  REFUSED. A measured "blocked" is reported, never an invented speedup.
+* Aggregate host admission across independent lanes: **MISSING in slice 2** and recorded as an
+  owed capability (`tests/unit/test_fleet_authority_aggregate.py`, `--runxfail` for the verdict).
+  Per-lane budgets only, so a runner can admit three 256 MiB lanes onto a 512 MiB host.
 * `lib/fleet_scheduler.py` is imported only by its unit tests — `scripts/run-profile.py` does
   not reference it. Scheduler measurements are therefore library-level, and "parallel runner"
   is not yet a product feature.
 * Slice 1 is classification only: `lib/fleet_capacity.run_probes` requires an injected
   callable and no module in the tree supplies a real coordinator/exporter/VM-host adapter.
+  There is also no operator-facing `fleet-capacity` command at all.
+
+## Handoff for the next bounded implementation
+
+Ordered, minimal, no new scheduler or provisioner:
+
+1. `lib/observation_probes.py` — `LabgridProbe`: shell `labgrid-client -x <addr> resources|
+   places|show -p <place>` for each `ProbeTarget` yielded by `observation_plan()`, emit
+   `coordinator_observation`, `exporter_observation`, `router_observation`. Feed it to
+   `fleet_capacity.run_probes(manifest, probe)`.
+2. `scripts/fleet-capacity.py` — argparse CLI over the manifest; prints per fleet: available
+   resources, healthy idle routers, idle QEMU guests, additional VM slots, each with
+   `observed_at` + reason code. ~150 lines, no new abstraction.
+3. `scripts/run-profile.py` — wrap the existing child spawn in
+   `FleetScheduler.allocate(ScheduleRequest(...))` and supervise with `lease.run(poll_s=...)`.
+4. Host pool in `lib/fleet_authority.py` — aggregate `ram_mib_total` across registered lanes
+   plus a `host_headroom()` accessor; un-`xfail` `test_fleet_authority_aggregate.py`.
+
+VM-host observations should reuse `lib/qemu_lane.py` primitives (pid, `/proc/<pid>/status`
+`VmHWM`, overlay presence, console reachability) rather than re-deriving them.
