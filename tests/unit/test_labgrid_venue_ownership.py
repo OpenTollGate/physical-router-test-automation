@@ -160,6 +160,42 @@ class TestIdentity:
 
 
 # --------------------------------------------------------------------------- #
+# identity collisions: sanitization and truncation must not merge two runs
+# --------------------------------------------------------------------------- #
+class TestRunIdentityCollisions:
+    """Two different run ids must never yield one coordinator owner.
+
+    The coordinator keys ownership on a single opaque ``<host>/<user>`` string,
+    so merging two runs onto one owner re-opens the very race slice 2 fixed: run
+    B "owns" run A's place and its conditional release matches.
+    """
+
+    def test_sanitized_run_ids_that_normalize_alike_stay_distinct(self):
+        # Both sanitize to "run-1" under the old rule.
+        a = ClientIdentity.for_run("run/1")
+        b = ClientIdentity.for_run("run-1")
+        assert a.owner != b.owner
+
+    def test_run_ids_sharing_a_long_prefix_stay_distinct(self):
+        prefix = "20261030T120000Z-" + "x" * 60
+        a = ClientIdentity.for_run(prefix + "-alpha")
+        b = ClientIdentity.for_run(prefix + "-bravo")
+        assert a.owner != b.owner
+
+    def test_differing_only_in_the_last_character_stays_distinct(self):
+        base = "r" * 80
+        assert ClientIdentity.for_run(base + "0").owner != ClientIdentity.for_run(base + "1").owner
+
+    def test_identity_stays_within_the_owner_length_budget(self):
+        ident = ClientIdentity.for_run("z" * 400)
+        assert len(ident.user) <= 63
+        assert ident.owner.count("/") == 1
+
+    def test_same_run_id_still_reconciles_to_the_same_owner(self):
+        assert ClientIdentity.for_run("run-7").owner == ClientIdentity.for_run("run-7").owner
+
+
+# --------------------------------------------------------------------------- #
 # THE BUG: acquire error must never release somebody else's place
 # --------------------------------------------------------------------------- #
 class TestAcquireDoesNotReleaseOthers:

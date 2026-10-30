@@ -35,6 +35,7 @@ import pytest
 from lib.fleet_authority import (
     Demand,
     FleetAuthority,
+    HostSpec,
     LaneSpec,
     NotGranted,
     State,
@@ -57,6 +58,11 @@ DEMAND = Demand(vcpus=2, ram_mib=2048, disk_mib=8192)
 @pytest.fixture
 def authority(tmp_path):
     a = FleetAuthority(tmp_path / "authority.db")
+    # A lane is only admissible when the host it lives on has a registered
+    # budget for it (host aggregate admission fails CLOSED otherwise, which is
+    # the whole point of the shared pool). These fixtures model one lane on one
+    # host, so the host budget must cover that lane exactly.
+    a.register_host(HostSpec(vcpus_total=2, ram_mib_total=2048, disk_mib_total=8192, inodes_total=100_000))
     a.register_lane(
         LaneSpec(
             lane_id="lane-a",
@@ -335,10 +341,14 @@ class TestSupervision:
 CHILD = textwrap.dedent(
     """
     import sys, time
-    from lib.fleet_authority import Demand, FleetAuthority, LaneSpec
+    from lib.fleet_authority import Demand, FleetAuthority, HostSpec, LaneSpec
     from lib.fleet_scheduler import FleetScheduler, ScheduleRequest
 
     a = FleetAuthority(sys.argv[1])
+    # Host budget must cover the lane: aggregate admission fails closed on an
+    # unregistered host, so a child that skips this can never be admitted.
+    a.register_host(HostSpec(vcpus_total=2, ram_mib_total=2048,
+                             disk_mib_total=8192, inodes_total=100000))
     a.register_lane(LaneSpec(lane_id="lane-a", fleet_id="fleet-a",
                              resource_id="router-a", vcpus_total=2,
                              ram_mib_total=2048, disk_mib_total=8192))
