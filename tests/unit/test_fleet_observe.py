@@ -642,11 +642,15 @@ def test_reservations_from_a_non_authority_database_are_unavailable(tmp_path):
 
 
 def test_reservations_are_read_from_a_real_authority_store(tmp_path):
-    from lib.fleet_authority import Demand, FleetAuthority, LaneSpec
+    from lib.fleet_authority import Demand, FleetAuthority, HostSpec, LaneSpec
 
     store = tmp_path / "fleet-authority.sqlite3"
     authority = FleetAuthority(store)
     authority.reconcile()
+    # Aggregate admission fails CLOSED on an unregistered host, so a bare lane
+    # registration is no longer admissible. These fixtures declare the host
+    # budget that actually backs the lane.
+    authority.register_host(HostSpec(vcpus_total=8, ram_mib_total=8192, disk_mib_total=65536, inodes_total=100_000))
     authority.register_lane(
         LaneSpec(lane_id="lane-1", fleet_id="fleet-a", resource_id="lane-a1", vcpus_total=8, ram_mib_total=8192)
     )
@@ -666,11 +670,15 @@ def test_reservations_are_read_from_a_real_authority_store(tmp_path):
 
 
 def test_started_reservations_are_not_double_counted(tmp_path):
-    from lib.fleet_authority import Demand, FleetAuthority, LaneSpec
+    from lib.fleet_authority import Demand, FleetAuthority, HostSpec, LaneSpec
 
     store = tmp_path / "fleet-authority.sqlite3"
     authority = FleetAuthority(store)
     authority.reconcile()
+    # Aggregate admission fails CLOSED on an unregistered host, so a bare lane
+    # registration is no longer admissible. These fixtures declare the host
+    # budget that actually backs the lane.
+    authority.register_host(HostSpec(vcpus_total=8, ram_mib_total=8192, disk_mib_total=65536, inodes_total=100_000))
     authority.register_lane(
         LaneSpec(lane_id="lane-1", fleet_id="fleet-a", resource_id="lane-a1", vcpus_total=8, ram_mib_total=8192)
     )

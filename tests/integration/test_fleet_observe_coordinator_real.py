@@ -410,11 +410,16 @@ def test_local_host_metrics_are_measured_and_admission_is_not_qualified(lab: Lab
 
 
 def test_reservations_are_read_from_a_real_authority_store(lab: Lab, tmp_path: Path):
-    from lib.fleet_authority import Demand, FleetAuthority, LaneSpec
+    from lib.fleet_authority import Demand, FleetAuthority, HostSpec, LaneSpec
 
     store = tmp_path / "authority.sqlite3"
     authority = FleetAuthority(store)
     authority.reconcile()
+    # Aggregate admission is host-authoritative: without a registered host
+    # budget this reservation is refused as host_unknown, correctly.
+    authority.register_host(
+        HostSpec(vcpus_total=2, ram_mib_total=1024, disk_mib_total=4096, inodes_total=1024)
+    )
     authority.register_lane(
         LaneSpec(
             lane_id=f"lane-{PLACE_FREE}",
