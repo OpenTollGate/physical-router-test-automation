@@ -38,6 +38,7 @@ follows from that:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import shutil
 import subprocess
@@ -54,6 +55,16 @@ from lib.lab_inventory import (
 )
 
 _RUN_TIMEOUT = 60
+
+#: The coordinator stores one owner string per place; labgrid splits it into
+#: ``host``/``user`` on a single ``/`` and its CLI help/limits assume a login
+#: name, so a run identity must stay inside the usual 63-character budget.
+_MAX_USER_LEN = 63
+_RUN_PREFIX = "prta-"
+#: Characters of the ORIGINAL run id hashed into every per-run identity. 16 hex
+#: chars (64 bits) is far beyond collision range for the handful of runs that
+#: share one coordinator, and it survives both sanitization and truncation.
+_RUN_DIGEST_LEN = 16
 
 
 class LabgridBenchError(RuntimeError):
@@ -121,17 +132,32 @@ class ClientIdentity:
 
         Deterministic in the run id (so a retry of the same run reconciles to
         the same owner) and unique per run (so two runs never share an owner).
+
+        Sanitization alone is NOT injective and the coordinator's owner field is
+        truncated, so the identity carries a digest of the ORIGINAL run id:
+
+        * ``"run/1"`` and ``"run-1"`` both sanitize to ``"run-1"``;
+        * two run ids sharing a 60-character prefix but differing at the end
+          both truncate to the same 63-character owner.
+
+        Either case would collapse two runs onto one coordinator owner — the
+        exact collision that lets one run release the other's place. The digest
+        is computed from the full, untruncated run id, so it cannot be fooled by
+        normalization or by the length cap.
         """
-        token = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in (run_id or "").strip())
+        raw = (run_id or "").strip()
+        token = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in raw)
         token = token.strip("-")
         if not token:
             raise ValueError("run_id is required for a per-run client identity")
+        digest = hashlib.sha256(raw.encode()).hexdigest()[:_RUN_DIGEST_LEN]
+        budget = max(1, _MAX_USER_LEN - len(_RUN_PREFIX) - 1 - _RUN_DIGEST_LEN)
         base_host = host or os.environ.get("LG_HOSTNAME", "").strip()
         if not base_host:
             import socket
 
             base_host = socket.gethostname()
-        return cls(host=base_host, user=f"prta-{token}"[:63])
+        return cls(host=base_host, user=f"{_RUN_PREFIX}{token[:budget]}-{digest}")
 
     @classmethod
     def parse(cls, owner: str) -> ClientIdentity | None:
