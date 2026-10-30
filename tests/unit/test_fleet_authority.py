@@ -30,6 +30,7 @@ from lib.fleet_authority import (
     Demand,
     Fenced,
     FleetAuthority,
+    HostSpec,
     LaneSpec,
     NotGranted,
     State,
@@ -71,6 +72,7 @@ def store(tmp_path) -> Path:
 @pytest.fixture()
 def authority(store) -> FleetAuthority:
     auth = FleetAuthority(store)
+    auth.register_host(HostSpec(1000, 1000000, 1000000, 1000000))
     auth.register_lane(_spec("lane-a"))
     # A fresh store starts with needs_reconcile=1: nothing is scheduled until a
     # restart has been reconciled. Every test therefore starts from the same
@@ -425,6 +427,7 @@ class TestCleanupPending:
 class TestEpoch:
     def test_fresh_store_requires_reconcile_before_admission(self, tmp_path):
         auth = FleetAuthority(tmp_path / "fresh.sqlite3")
+        auth.register_host(HostSpec(1000, 1000000, 1000000, 1000000))
         auth.register_lane(_spec("lane-a"))
         refused = auth.try_reserve(lane_id="lane-a", demand=DEMAND, run_id="run-1")
         assert not refused.granted
@@ -434,6 +437,7 @@ class TestEpoch:
 
     def test_restart_invalidates_epoch_and_quarantines_inflight(self, store):
         auth = FleetAuthority(store)
+        auth.register_host(HostSpec(1000, 1000000, 1000000, 1000000))
         auth.register_lane(_spec("lane-a"))
         auth.reconcile()
         alloc = auth.try_reserve(lane_id="lane-a", demand=DEMAND, run_id="run-1").allocation
@@ -456,6 +460,7 @@ class TestEpoch:
 
     def test_epoch_invalidation_fences_old_tokens(self, store):
         auth = FleetAuthority(store)
+        auth.register_host(HostSpec(1000, 1000000, 1000000, 1000000))
         auth.register_lane(_spec("lane-a"))
         auth.reconcile()
         alloc = auth.try_reserve(lane_id="lane-a", demand=DEMAND, run_id="run-1").allocation
@@ -465,6 +470,7 @@ class TestEpoch:
 
     def test_schema_mismatch_refused(self, store):
         auth = FleetAuthority(store)
+        auth.register_host(HostSpec(1000, 1000000, 1000000, 1000000))
         auth.register_lane(_spec("lane-a"))
         import sqlite3
 
@@ -570,6 +576,7 @@ class TestLastSlotContention:
 
     def _one_slot_store(self, store: Path) -> Path:
         auth = FleetAuthority(store)
+        auth.register_host(HostSpec(1000, 1000000, 1000000, 1000000))
         auth.register_lane(
             _spec(
                 "lane-a",
@@ -686,6 +693,7 @@ class TestLastSlotContention:
 class TestCrossProcess:
     def test_sigkill_of_holder_leaves_lane_quarantined_not_reassigned(self, store, tmp_path):
         auth = FleetAuthority(store)
+        auth.register_host(HostSpec(1000, 1000000, 1000000, 1000000))
         auth.register_lane(_spec("lane-a"))
         auth.reconcile()
 

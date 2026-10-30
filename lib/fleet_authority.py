@@ -71,6 +71,8 @@ __all__ = [
     "UnknownRun",
     "Demand",
     "LaneSpec",
+    "HostSpec",
+    "HostHeadroom",
     "Allocation",
     "Decision",
     "LaneHeadroom",
@@ -81,7 +83,7 @@ __all__ = [
 #: Bumped whenever the on-disk schema changes incompatibly. An older store is
 #: refused instead of migrated in place: half-migrated capacity state is worse
 #: than no capacity state.
-AUTHORITY_SCHEMA_VERSION = 1
+AUTHORITY_SCHEMA_VERSION = 2
 
 #: Explicit path to the authority store. There is no implicit default that
 #: points at somebody else's bench — see ``default_authority_path``.
@@ -132,7 +134,7 @@ class State(str, Enum):
 #: released/aborted run frees the lane; a fenced run does not, because fencing
 #: says "that token is dead", not "the DUT is clean" — cleanup does that.
 OCCUPYING = frozenset(
-    {State.RESERVED, State.ACTIVE, State.RELEASING, State.CLEANUP_PENDING, State.QUARANTINED}
+    {State.RESERVED, State.ACTIVE, State.RELEASING, State.CLEANUP_PENDING, State.QUARANTINED, State.FENCED}
 )
 
 #: States a run may renew or activate from.
@@ -233,6 +235,44 @@ class LaneSpec:
 
 
 @dataclass(frozen=True)
+class HostSpec:
+    """Explicit budget for this store's ONE host, shared by every lane/fleet.
+
+    Baseline excludes managed allocations. Lane baselines are lane ceilings,
+    not additional host charges. All contributors must use this same store.
+    """
+
+    vcpus_total: int
+    ram_mib_total: int
+    disk_mib_total: int
+    inodes_total: int
+    ram_mib_reserve: int = 0
+    baseline_vcpus: int = 0
+    baseline_ram_mib: int = 0
+    baseline_disk_mib: int = 0
+    baseline_inodes: int = 0
+
+    def __post_init__(self) -> None:
+        for dim in DIMENSIONS:
+            for prefix, suffix, minimum in (("", "_total", 1), ("baseline_", "", 0)):
+                name = prefix + dim + suffix
+                value = getattr(self, name)
+                if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                    raise ValueError(f"HostSpec.{name} must be an integer >= {minimum}")
+        value = self.ram_mib_reserve
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("HostSpec.ram_mib_reserve must be a non-negative integer")
+
+
+@dataclass(frozen=True)
+class HostHeadroom:
+    free: Mapping[str, int]
+    used: Mapping[str, int]
+    baseline: Mapping[str, int]
+    allocations: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Allocation:
     """A decided claim. ``token`` and ``fence`` together authenticate it."""
 
@@ -313,6 +353,10 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS host_pool (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    spec TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS lanes (
     lane_id        TEXT PRIMARY KEY,
@@ -475,6 +519,60 @@ class FleetAuthority:
             (self._clock(), kind, lane_id, run_id, detail),
         )
 
+    # -- host registration -------------------------------------------------
+    def register_host(self, spec: HostSpec) -> None:
+        """Set the explicit host pool; refreshing never erases existing debits.
+
+        Schema v2 refuses v1 stores, preventing older authorities from admitting
+        into a shared store without enforcing its host budget.
+        """
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO host_pool (singleton, spec) VALUES (1, ?) "
+                "ON CONFLICT(singleton) DO UPDATE SET spec = excluded.spec",
+                (json.dumps(vars(spec), sort_keys=True),),
+            )
+            self._event(conn, "host_registered")
+            conn.execute("COMMIT")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.close()
+
+    def host_headroom(self) -> HostHeadroom:
+        """Consistent aggregate snapshot; never filter by submitting owner_host."""
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN")
+            return self._host_headroom(conn)
+        finally:
+            conn.close()
+
+    def _host_headroom(self, conn: sqlite3.Connection) -> HostHeadroom:
+        row = conn.execute("SELECT spec FROM host_pool WHERE singleton = 1").fetchone()
+        if row is None:
+            raise NotGranted("host_unknown", "register this host's budget before admission")
+        spec = HostSpec(**json.loads(row["spec"]))
+        rows = conn.execute(
+            "SELECT run_id, demand FROM allocations WHERE state IN (%s)"
+            % ",".join("?" * len(OCCUPYING)),
+            tuple(s.value for s in OCCUPYING),
+        ).fetchall()
+        used = dict.fromkeys(DIMENSIONS, 0)
+        for row in rows:
+            demand = json.loads(row["demand"])
+            for dim in DIMENSIONS:
+                used[dim] += int(demand[dim])
+        baseline = {dim: getattr(spec, "baseline_" + dim) for dim in DIMENSIONS}
+        free = {dim: getattr(spec, dim + "_total") - baseline[dim] - used[dim]
+                for dim in DIMENSIONS}
+        free["ram_mib"] -= spec.ram_mib_reserve
+        return HostHeadroom(free, used, baseline, tuple(str(r["run_id"]) for r in rows))
+
     # -- lane registration -------------------------------------------------
     def register_lane(self, spec: LaneSpec) -> None:
         """Declare or re-declare a lane's budget and conflict domains.
@@ -569,11 +667,36 @@ class FleetAuthority:
             conn.close()
 
     def clear_quarantine(self, lane_id: str, *, note: str = "") -> None:
-        """Return a quarantined lane to service — only after verified cleanup."""
+        """Return a quarantined lane to service — only after verified cleanup.
+
+        Clearing the quarantine is the operator's statement that the DUT is
+        clean, so allocations that were quarantined *by the authority* must
+        retire with it: an epoch-invalidated or failed-cleanup claim otherwise
+        counts as occupying (fencing kills the token, it does not clean the
+        DUT), and the lane stayed ``lane_busy`` forever after a verified
+        cleanup.
+
+        ``CLEANUP_PENDING`` is deliberately NOT retired here. It is the durable
+        "this run still owes a teardown" signal, and it has its own redemption
+        path (``clear_cleanup_pending``); clearing a lane's quarantine must not
+        silently forgive a run that never finished cleaning up.
+        """
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute("DELETE FROM quarantine WHERE lane_id = ?", (lane_id,))
+            conn.execute(
+                "UPDATE allocations SET state = ?, cleanup_pending = 0, released_clean = 1, "
+                "updated_at = ?, note = ? WHERE lane_id = ? AND state IN (?, ?)",
+                (
+                    State.RELEASED.value,
+                    self._clock(),
+                    f"released by verified cleanup: {note}".strip().rstrip(":"),
+                    lane_id,
+                    State.FENCED.value,
+                    State.QUARANTINED.value,
+                ),
+            )
             self._event(conn, "lane_unquarantined", lane_id=lane_id, detail=note)
             conn.execute("COMMIT")
         except Exception:
@@ -766,6 +889,7 @@ class FleetAuthority:
 
             try:
                 lane = self._lane_row(conn, lane_id)
+                host_room = self._host_headroom(conn)
             except NotGranted as exc:
                 conn.execute("ROLLBACK")
                 return Decision(False, reason=exc.reason, detail=exc.detail, lane_id=lane_id)
@@ -859,6 +983,18 @@ class FleetAuthority:
                     headroom=dict(room.free),
                     queue_position=position,
                     lane_id=lane_id,
+                )
+
+            short = [dim for dim in DIMENSIONS if host_room.free[dim] < budget[dim]]
+            if short:
+                position = self._enqueue_locked(conn, lane_id, demand, requested_domains, now, run_id)
+                conn.execute("COMMIT")
+                return Decision(
+                    False,
+                    reason="host_resource_vector_insufficient",
+                    detail="host does not fit: " + ", ".join(
+                        f"{d} free={host_room.free[d]} need={budget[d]}" for d in short),
+                    headroom=dict(host_room.free), queue_position=position, lane_id=lane_id,
                 )
 
             granted_run_id = run_id or f"run-{uuid.uuid4().hex[:16]}"
@@ -1192,10 +1328,13 @@ class FleetAuthority:
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT state FROM allocations WHERE run_id = ?", (run_id,)).fetchone()
+            row = conn.execute("SELECT state, fence FROM allocations WHERE run_id = ?", (run_id,)).fetchone()
             if row is None:
                 conn.execute("ROLLBACK")
                 raise UnknownRun(f"no allocation {run_id!r} on this authority")
+            if State(row["state"]) in {State.RELEASED, State.ABORTED}:
+                conn.execute("COMMIT")
+                return int(row["fence"])
             fence = self._next_fence(conn)
             conn.execute(
                 "UPDATE allocations SET state = ?, fence = ?, updated_at = ?, note = ? WHERE run_id = ?",
@@ -1232,6 +1371,9 @@ class FleetAuthority:
             now = self._clock()
             row = self._authenticate_locked(conn, run_id, fence)
             lane_id = str(row["lane_id"])
+            if State(row["state"]) in {State.RELEASED, State.ABORTED}:
+                conn.execute("COMMIT")
+                return _row_to_allocation(row)
             state = State.RELEASED if clean else State.CLEANUP_PENDING
             conn.execute(
                 "UPDATE allocations SET state = ?, updated_at = ?, cleanup_pending = ?, "

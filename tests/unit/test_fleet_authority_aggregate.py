@@ -1,140 +1,143 @@
-"""Aggregate host admission across INDEPENDENT lanes — the gap slice 2 leaves open.
-
-**What this is, precisely:** an UNSUPPORTED CONFIGURATION, not a violated
-configured budget. ``FleetAuthority`` has no host-pool concept at all — there is
-no field, argument or row in which a operator could declare "this host has
-512 MiB to give". So nothing was ignored; the capability does not exist. The
-consequence is still real and load-bearing for the throughput claim, because a
-runner that admits per-lane will overcommit a host.
-
-Slice 2's ``FleetAuthority`` budgets **per lane**: ``LaneSpec.ram_mib_total`` is a
-per-lane ceiling, and ``max_concurrent`` is a per-lane slot count. Two lanes each
-declaring 256 MiB are each admitted 256 MiB of a host that only has 512 MiB to
-give, and a third lane declaring another 256 MiB is admitted too — 768 MiB of
-demand against 512 MiB of host. Nothing in the store computes the aggregate, so
-"no oversubscription beyond the admitted budget" holds per lane and fails across
-lanes.
-
-That matters for the card's headline claim: a scheduler that admits two lanes on
-a host sized for one has produced a busier machine, not a faster one, and the
-refusal that should have happened never appears.
-
-These tests encode the invariant the throughput benchmark needs:
-
-    Before ANY guest process is spawned, the summed demand of all admitted
-    lanes must fit the host's declared pool.
-
-The ``xfail(strict=True)`` on the failing cases is deliberate documentation of an
-owed capability, and it is deliberately NOT the qualification verdict: pytest
-exits 0 on expected failures, so the qualification command in
-``docs/FLEET-CAP-3-QUALIFICATION.md`` re-runs this file with ``--runxfail`` and
-requires a nonzero exit. Strict xfail means that when a shared pool IS
-implemented the tests turn XPASS and the suite breaks until someone flips the
-marker — the gap cannot quietly disappear, and cannot quietly be claimed fixed.
-"""
-from __future__ import annotations
+"""Host-pool regression tests. No guests, adapters or physical access."""
+from dataclasses import replace
+import multiprocessing
 
 import pytest
 
 from lib.fleet_authority import Demand, FleetAuthority, LaneSpec
 
-#: 512 MiB of host RAM is the whole pool; each lane *claims* 256 MiB.
-HOST_RAM_MIB = 512
-LANE_RAM_MIB = 256
+DEMAND = Demand(1, 256, 1024, 10)
 
 
-def _authority(tmp_path, lanes: int = 3) -> FleetAuthority:
-    auth = FleetAuthority(tmp_path / "authority.db")
-    # A fresh store refuses until something has looked at what is outstanding
-    # (slice 2's startup gate); with nothing in flight that is a no-op pass.
+def _authority(tmp_path, **overrides):
+    from lib.fleet_authority import HostSpec
+    auth = FleetAuthority(tmp_path / 'authority.db')
+    auth.register_host(HostSpec(**dict(dict(vcpus_total=2, ram_mib_total=512,
+                                          disk_mib_total=2048, inodes_total=20), **overrides)))
     auth.reconcile()
-    for i in range(lanes):
-        auth.register_lane(
-            LaneSpec(
-                lane_id=f"lane-{i + 1}",
-                fleet_id="test-fleet",
-                resource_id=f"test-fleet/lane-{i + 1}",
-                # Every lane gets the same per-lane budget: this is what slice 2
-                # models, and it is the only thing it models.
-                vcpus_total=1,
-                ram_mib_total=LANE_RAM_MIB,
-                disk_mib_total=1024,
-                inodes_total=1000,
-                max_concurrent=1,
-            )
-        )
+    for i in range(3):
+        auth.register_lane(LaneSpec(f'lane-{i}', f'fleet-{i}', f'resource-{i}',
+                                    vcpus_total=10, ram_mib_total=4096,
+                                    disk_mib_total=10000, inodes_total=1000))
     return auth
 
 
-def _demand() -> Demand:
-    return Demand(vcpus=1, ram_mib=LANE_RAM_MIB, disk_mib=1024, inodes=1)
+def _admit(auth, i):
+    return auth.try_reserve(lane_id=f'lane-{i}', run_id=f'run-{i}', demand=DEMAND)
 
 
-def _admit(auth: FleetAuthority, lane_id: str, run_id: str):
-    return auth.try_reserve(lane_id=lane_id, demand=_demand(), run_id=run_id, ttl_s=600)
+def test_unknown_host_fails_closed(tmp_path):
+    auth = FleetAuthority(tmp_path / 'authority.db')
+    auth.register_lane(LaneSpec('lane-0', 'fleet', 'resource'))
+    auth.reconcile()
+    assert _admit(auth, 0).reason == 'host_unknown'
 
 
-class TestPerLaneBudgetIsWhatExists:
-    """What slice 2 DOES enforce — asserted so the report cannot overstate it."""
-
-    def test_one_lane_cannot_exceed_its_own_budget(self, tmp_path):
-        auth = _authority(tmp_path)
-        assert _admit(auth, "lane-1", "r1").granted is True
-        # A second claim on the SAME lane is refused by that lane's slot count.
-        second = _admit(auth, "lane-1", "r2")
-        assert second.granted is False
-        assert second.reason == "lane_busy"
-
-    def test_a_single_lane_refuses_demand_above_its_budget(self, tmp_path):
-        auth = _authority(tmp_path)
-        decision = auth.try_reserve(
-            lane_id="lane-1",
-            demand=Demand(vcpus=1, ram_mib=LANE_RAM_MIB + 1, disk_mib=1024, inodes=1),
-            run_id="too-big",
-            ttl_s=600,
-        )
-        assert decision.granted is False
-        assert decision.reason == "resource_vector_insufficient"
+def test_two_fit_third_refused_and_host_headroom(tmp_path):
+    auth = _authority(tmp_path)
+    assert _admit(auth, 0).granted
+    assert _admit(auth, 1).granted
+    assert _admit(auth, 2).reason == 'host_resource_vector_insufficient'
+    assert auth.host_headroom().used == {k: 2*v for k, v in DEMAND.as_dict().items()}
+    assert all(v == 0 for v in auth.host_headroom().free.values())
+    assert auth.headroom('lane-2').free['ram_mib'] == 4096
+    assert len(auth.queue()) == 1
 
 
-class TestAggregateHostBudgetIsMissing:
-    def test_two_lanes_each_within_budget_are_both_admitted(self, tmp_path):
-        """The intended case: 2 x 256 = 512 fits the pool. Must stay allowed."""
-        auth = _authority(tmp_path)
-        assert _admit(auth, "lane-1", "r1").granted is True
-        assert _admit(auth, "lane-2", "r2").granted is True
+@pytest.mark.parametrize('dim', ['vcpus', 'ram_mib', 'disk_mib', 'inodes'])
+def test_each_host_dimension_is_binding(tmp_path, dim):
+    auth = _authority(tmp_path, **{dim + '_total': getattr(DEMAND, dim)})
+    assert _admit(auth, 0).granted
+    assert _admit(auth, 1).reason == 'host_resource_vector_insufficient'
+    assert len(auth.allocations()) == 1
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "UNIMPLEMENTED: FleetAuthority has no host-level pool. Three lanes of "
-            "256 MiB are admitted on a 512 MiB host because each lane only sees "
-            "its own budget. Slice 2 gap found during slice 3 qualification."
-        ),
-    )
-    def test_third_lane_is_refused_once_the_host_pool_is_exhausted(self, tmp_path):
-        auth = _authority(tmp_path)
-        assert _admit(auth, "lane-1", "r1").granted is True
-        assert _admit(auth, "lane-2", "r2").granted is True
-        # 2 x 256 = 512 = the whole pool. This MUST be refused.
-        third = _admit(auth, "lane-3", "r3")
-        assert third.granted is False, (
-            "three 256 MiB lanes were admitted on a 512 MiB host — the authority "
-            "enforces per-lane budgets only, so nothing stops aggregate overcommit"
-        )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="UNIMPLEMENTED: no aggregate headroom view across lanes.",
-    )
-    def test_headroom_is_reported_for_the_host_not_only_per_lane(self, tmp_path):
-        auth = _authority(tmp_path)
-        assert _admit(auth, "lane-1", "r1").granted is True
-        assert _admit(auth, "lane-2", "r2").granted is True
-        lane3 = auth.headroom("lane-3")
-        # Per-lane view says "256 MiB free" — true for the lane, false for the host.
-        assert lane3.free["ram_mib"] >= LANE_RAM_MIB
-        # What a scheduler actually needs: the host pool, minus everything admitted.
-        assert hasattr(auth, "host_headroom"), (
-            "no host-level headroom accessor: a runner cannot know the host is full"
-        )
+def test_baseline_reserve_and_refresh_do_not_erase_allocations(tmp_path):
+    from lib.fleet_authority import HostSpec
+    auth = _authority(tmp_path, ram_mib_total=1024, ram_mib_reserve=256, baseline_ram_mib=256)
+    a = _admit(auth, 0).allocation
+    auth.activate(a.run_id, a.fence)
+    assert auth.host_headroom().free['ram_mib'] == 256
+    auth.register_host(HostSpec(1, 256, 1024, 10))
+    assert auth.host_headroom().free['ram_mib'] == 0
+    assert not _admit(auth, 1).granted
+
+
+@pytest.mark.parametrize('transition', ['pending', 'active', 'cleanup', 'expire', 'epoch', 'fence'])
+def test_all_unclean_states_keep_host_debit(tmp_path, transition):
+    auth = _authority(tmp_path)
+    a = _admit(auth, 0).allocation
+    assert _admit(auth, 1).granted
+    if transition == 'active':
+        auth.activate(a.run_id, a.fence)
+    elif transition == 'cleanup':
+        auth.complete(a.run_id, a.fence, clean=False)
+        auth.clear_quarantine(a.lane_id)
+    elif transition == 'expire':
+        auth.expire(now=a.expires_at + 1)
+    elif transition == 'epoch':
+        auth.invalidate_epoch()
+        auth.reconcile()
+    elif transition == 'fence':
+        auth.fence(a.run_id)
+    assert _admit(auth, 2).reason == 'host_resource_vector_insufficient'
+    assert auth.host_headroom().used['ram_mib'] == 512
+
+
+def test_replay_and_clean_release_do_not_double_charge_or_free(tmp_path):
+    auth = _authority(tmp_path)
+    a = _admit(auth, 0).allocation
+    assert _admit(auth, 0).allocation == a
+    assert auth.host_headroom().used['ram_mib'] == 256
+    auth.complete(a.run_id, a.fence, clean=False)
+    auth.clear_cleanup_pending(a.run_id)
+    auth.complete(a.run_id, a.fence, clean=True)
+    assert auth.host_headroom().used['ram_mib'] == 0
+    # Delayed failure/re-fence must not resurrect a released allocation.
+    auth.complete(a.run_id, a.fence, clean=False)
+    auth.fence(a.run_id)
+    assert auth.host_headroom().used['ram_mib'] == 0
+    assert not _admit(auth, 0).granted  # run id cannot be reused
+    b = _admit(auth, 1).allocation
+    auth.abort(b.run_id, b.fence)
+    assert auth.host_headroom().used['ram_mib'] == 0
+
+
+def test_conflict_refusal_does_not_debit_host(tmp_path):
+    auth = _authority(tmp_path)
+    for i in (0, 1):
+        auth.register_lane(LaneSpec(f'lane-{i}', 'fleet', f'resource-{i}', domains=('power',)))
+    assert _admit(auth, 0).granted
+    assert _admit(auth, 1).reason == 'domain_conflict'
+    assert auth.host_headroom().used['ram_mib'] == 256
+
+
+def _racer(path, i, barrier, output):
+    auth = FleetAuthority(path, owner_host=f'contributor-{i}')
+    barrier.wait(timeout=15)
+    d = _admit(auth, i)
+    output.put((d.granted, d.reason))
+
+
+def test_three_separate_processes_two_host_slots(tmp_path):
+    auth = _authority(tmp_path)
+    ctx = multiprocessing.get_context('spawn')
+    barrier, output = ctx.Barrier(3), ctx.Queue()
+    processes = [ctx.Process(target=_racer, args=(auth.path, i, barrier, output)) for i in range(3)]
+    try:
+        for p in processes:
+            p.start()
+        results = [output.get(timeout=25) for _ in processes]
+        for p in processes:
+            p.join(timeout=10)
+            assert p.exitcode == 0
+    finally:
+        for p in processes:
+            if p.is_alive():
+                p.kill()
+                p.join()
+        output.close()
+    assert sum(granted for granted, _ in results) == 2
+    assert [reason for granted, reason in results if not granted] == ['host_resource_vector_insufficient']
+    assert len(auth.allocations()) == 2
+    assert auth.host_headroom().used['ram_mib'] == 512
