@@ -8,8 +8,16 @@
 # 94:83:c4:4d:fc:38 — the same value as bridge id 7fff.9483c44dfc38 in its own
 # logs. If a future board answers on 192.168.8.1, check that MAC first.
 #
-# AUTH: key auth only, ~/.ssh/id_bench. Verified 2026-10-25:
-#   ssh -i ~/.ssh/id_bench root@192.168.8.1 'cat /tmp/sysinfo/board_name'
+# AUTH: key auth only. THE KEY HAS CHANGED ONCE ALREADY — re-check before use.
+#   2026-10-25: ~/.ssh/id_bench worked, id_ed25519/id_fleet/id_dq05 refused.
+#   2026-10-30: INVERTED — id_bench now REFUSED, ~/.ssh/id_ed25519 works.
+# The unit was re-provisioned between those dates. Probe both before concluding
+# the unit is down, and update this file when it flips:
+#   for k in id_ed25519 id_bench; do
+#     ssh -i ~/.ssh/$k -o BatchMode=yes root@192.168.8.1 true && echo "$k works"
+#   done
+# A `Permission denied (publickey)` means "wrong key", NOT "box offline" — the
+# box can be answering ping and :22 the whole time.
 #   -> glinet,gl-e750
 # The fleet's other keys (id_ed25519, id_fleet, id_dq05) are REFUSED by this
 # unit — do not "fix" a login failure by swapping in a general key.
@@ -49,25 +57,25 @@
 # nudging with CR. (Note: Ctrl-C is NOT a safe nudge — it is mutating and has
 # silently rebooted a board on this bench before.)
 #
-# SERIAL CAVEAT 2 — THIS UART IS TX-ONLY. Do not try to drive a shell over it.
-# Proven 2026-10-25 by closed-loop marker tests against the E750's own ttyS0:
-#   E750 -> host:  "echo KMARKER_... > /dev/kmsg" over SSH appeared BYTE-CLEAN
-#                  on ...BH00DL3M.  => TX works, host RX is clean, and this
-#                  adapter IS this unit's UART (not a floating line).
-#   host -> E750:  "stty -F /dev/ttyS0 raw 115200; timeout 6 cat /dev/ttyS0
-#                  > /tmp/rx.txt" on the unit while the FTDI transmitted
-#                  RXTEST_...  =>  /tmp/rx.txt was EMPTY. Nothing the host sends
-#                  reaches the unit.
-# Consistent with /proc/consoles reporting "ttyS0 -W- (EC a)" (write-only) and
-# /etc/inittab using "::askconsole:". So a login prompt here will NEVER answer a
-# keystroke, and an askfirst nudge is pointless on this unit — it is not a stuck
-# console, it is TX-only. (The nudge rule above applies to units that DO accept
-# input; conwrt scripts/conwrt_serial_bridge.py is the right tool for those.)
+# SERIAL CAVEAT 2 — OUTPUT WORKS, INPUT DOES NOT. Capture only.
+# Measured 2026-10-30 against the E750's own ttyS0, with SSH as the reference:
+#   board -> host: "echo FIXTEST_... > /dev/kmsg" over SSH arrived BYTE-CLEAN
+#                  on this adapter (38 bytes, marker intact). So the adapter IS
+#                  this unit's UART and host RX is clean.
+#   host -> board: the board's own UART counters show bytes arriving
+#                  (/proc/tty/driver/serial: "tx:22461 rx:1785 fe:5" — 5 framing
+#                  errors), but NOTHING ever comes back. Sent CR, LF, CRLF and
+#                  24+ bare CRs across two sessions: zero bytes returned, and
+#                  askfirst never produced a prompt.
+#   The unit runs "/sbin/askfirst /usr/libexec/login.sh" on ttyS0 and
+#   /proc/consoles reports "ttyS0 -W- (EC a)" — write-only as the kernel sees it.
+# So: output is reliable, input is not usable, and a prompt will not appear.
+# Do NOT add SerialDriver/ShellDriver here expecting an interactive console —
+# it will block until timeout and look like a dead board. Mutations go over SSH.
 #
-# Consequence: serial is CAPTURE ONLY (boot logs, panic output, recovery
-# evidence when SSH is down). Every mutating action goes over SSH.
-# RawSerialPort is declared for that passive capture and deliberately has NO
-# SerialDriver/ShellDriver — a ShellDriver here would hang until timeout.
+# Note this replaced an earlier, blunter claim that the UART was outright
+# "TX-only": that was wrong in the details (bytes DO reach the board and framing
+# errors are counted). The operationally correct statement is the one above.
 targets:
   main:
     resources:
@@ -80,7 +88,7 @@ targets:
         speed: 115200
     drivers:
       SSHDriver:
-        keyfile: "~/.ssh/id_bench"
+        keyfile: "~/.ssh/id_ed25519"
         username: "root"
         stderr_merge: true
         connection_timeout: 60.0
