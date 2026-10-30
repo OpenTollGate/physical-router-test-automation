@@ -1487,3 +1487,38 @@ film-narrate: ## Narrate a recording: make film-narrate VIDEO=clip.mp4 TIMELINE=
 
 film-publish: ## Publish film artifacts to Blossom: make film-publish RUN=results/films/<id>
 	@python3 scripts/publish-film.py --run $(RUN) $(if $(SERVER),--server $(SERVER),)
+
+# --- MeshLink <-> TollGate QEMU interop lane ---
+
+MESHLINK_LAB := scripts/meshlink-lab.py
+
+.PHONY: meshlink-lab-prepare meshlink-lab-up meshlink-lab-down meshlink-lab-status meshlink-lab-provision meshlink-lab-smoke meshlink-lab-buy meshlink-lab-replay meshlink-lab-buyer meshlink-interop
+
+meshlink-lab-prepare: ## Prepare MeshLink gateway/client QEMU overlays and seeds
+	python3 $(MESHLINK_LAB) prepare
+
+meshlink-lab-up: ## Start the MeshLink upstream/mesh/mgmt bridges, mint, and VMs
+	python3 $(MESHLINK_LAB) start
+
+meshlink-lab-down: ## Stop the MeshLink VMs, mint, and bridges
+	python3 $(MESHLINK_LAB) stop
+
+meshlink-lab-status: ## Show MeshLink lab VM/mint/bridge status
+	python3 $(MESHLINK_LAB) status
+
+meshlink-lab-provision: ## Install the MeshLink gateway + broker inside the lab VM
+	python3 $(MESHLINK_LAB) provision
+
+meshlink-lab-smoke: ## Check broker health, advert shape, and client visibility
+	python3 $(MESHLINK_LAB) smoke
+
+meshlink-lab-buy: ## Buy a session from MeshLink with tollgate-agent
+	python3 $(MESHLINK_LAB) buy
+
+meshlink-lab-replay: ## Redeem one token twice; reject replay and wrong mint
+	python3 $(MESHLINK_LAB) replay
+
+meshlink-lab-buyer: ## Exercise the broker buyer against a local mock TollGate
+	python3 $(MESHLINK_LAB) buyer
+
+meshlink-interop: meshlink-lab-smoke meshlink-lab-buy meshlink-lab-replay ## Seller acceptance: advert + agent purchase + replay + internet
