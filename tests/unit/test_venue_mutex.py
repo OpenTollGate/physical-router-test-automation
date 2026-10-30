@@ -17,11 +17,36 @@ from lib.labgrid_venue import LabgridBench, LabgridBenchError, VenueBinding, ven
 
 
 def _fake_runner(calls: list[str], fail_on: str = ""):
+    """A one-place coordinator: acquire/release-from/show with real ownership.
+
+    ``show`` must answer with the ACTUAL holder, because release verifies the
+    lease afterwards instead of trusting ``release-from``'s exit code.
+    """
+    state = {"owner": ""}
+
     def run(cmd, **kwargs):
         args = cmd[5:]  # strip <bin> -x <coordinator> -p <place>
         calls.append(" ".join(args))
-        rc = 1 if fail_on and fail_on in args else 0
-        return subprocess.CompletedProcess(cmd, rc, stdout="", stderr=f"boom: {fail_on}")
+        env = kwargs.get("env") or {}
+        me = f"{env.get('LG_HOSTNAME', 'fake-host')}/{env.get('LG_USERNAME', 'fake-user')}"
+        verb = args[0] if args else ""
+        if verb == "show":
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=f"  acquired: {state['owner'] or 'None'}\n", stderr=""
+            )
+        if fail_on and fail_on in args:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=f"boom: {fail_on}")
+        if verb == "acquire":
+            state["owner"] = state["owner"] or me
+            return subprocess.CompletedProcess(cmd, 0, stdout="acquired\n", stderr="")
+        if verb == "release-from":
+            target = args[1] if len(args) > 1 else ""
+            if state["owner"] == target:
+                state["owner"] = ""
+            # Real CLI exits 0 whether or not it matched.
+            return subprocess.CompletedProcess(cmd, 0, stdout="released\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
     return run
 
 
@@ -50,13 +75,18 @@ def lock_calls(monkeypatch):
     return calls
 
 
+def _verbs(calls: list[str]) -> list[str]:
+    return [c.split()[0] for c in calls if c]
+
+
 def test_acquires_file_lock_then_place_releases_reverse(lock_calls):
     calls: list[str] = []
     with venue_mutex(_binding(calls), phase="venu-test"):
         assert lock_calls == ["lock+ venu-test"]
-        assert calls == ["acquire"]
+        assert _verbs(calls) == ["acquire"]
     assert lock_calls == ["lock+ venu-test", "lock-"]
-    assert calls == ["acquire", "release"]
+    # Conditional release, verified by re-reading ownership.
+    assert _verbs(calls) == ["acquire", "show", "release-from", "show"]
 
 
 def test_place_acquire_failure_releases_file_lock(lock_calls):
@@ -65,16 +95,26 @@ def test_place_acquire_failure_releases_file_lock(lock_calls):
         with venue_mutex(_binding(calls, fail_on="acquire"), phase="p"):
             pass
     assert lock_calls == ["lock+ p", "lock-"]
-    # best-effort undo: a possibly-granted acquire is released before failing
-    assert calls == ["acquire", "release"]
+    # REGRESSION (audit 2026-10-30): a failed acquire must NEVER release. The
+    # old best-effort undo could release a colleague's live acquisition; the
+    # only recovery is reconciliation (read ownership back).
+    assert "release" not in _verbs(calls)
+    assert "release-from" not in _verbs(calls)
 
 
 def test_place_release_failure_still_releases_file_lock(lock_calls):
+    """A failed handback must not leak the repo lock, and must be reported.
+
+    The teardown error is recorded on the bench rather than raised, so it can
+    never overwrite the test verdict — see venue_mutex's docstring.
+    """
     calls: list[str] = []
-    with pytest.raises(LabgridBenchError):
-        with venue_mutex(_binding(calls, fail_on="release"), phase="p"):
-            pass
+    binding = _binding(calls, fail_on="release-from")
+    with venue_mutex(binding, phase="p"):
+        pass
     assert lock_calls == ["lock+ p", "lock-"]
+    assert binding.bench.cleanup_pending is True
+    assert binding.bench.acquired is True
 
 
 def test_body_exception_releases_both(lock_calls):
@@ -83,7 +123,29 @@ def test_body_exception_releases_both(lock_calls):
         with venue_mutex(_binding(calls), phase="p"):
             raise RuntimeError("scenario blew up")
     assert lock_calls == ["lock+ p", "lock-"]
-    assert calls == ["acquire", "release"]
+    assert _verbs(calls) == ["acquire", "show", "release-from", "show"]
+
+
+def test_teardown_failure_does_not_mask_the_body_exception(lock_calls):
+    """Release status is captured separately from the test verdict."""
+    calls: list[str] = []
+    binding = _binding(calls, fail_on="release-from")
+    with pytest.raises(RuntimeError, match="scenario blew up"):
+        with venue_mutex(binding, phase="p"):
+            raise RuntimeError("scenario blew up")
+    assert binding.bench.cleanup_pending is True
+    assert binding.bench.acquired is True
+
+
+def test_teardown_failure_does_not_invent_a_failure_when_body_passed(lock_calls):
+    calls: list[str] = []
+    binding = _binding(calls, fail_on="release-from")
+    with venue_mutex(binding, phase="p"):
+        pass
+    # The body succeeded, so the context exits cleanly; the unverified release
+    # is reported as its own fact rather than as a fake test failure.
+    assert binding.bench.cleanup_pending is True
+    assert lock_calls == ["lock+ p", "lock-"]
 
 
 def test_file_lock_failure_never_touches_coordinator(monkeypatch):
@@ -104,9 +166,9 @@ def test_file_lock_false_skips_repo_lock_entirely(lock_calls):
     calls: list[str] = []
     with venue_mutex(_binding(calls), phase="p", file_lock=False):
         assert lock_calls == []
-        assert calls == ["acquire"]
+        assert _verbs(calls) == ["acquire"]
     assert lock_calls == []
-    assert calls == ["acquire", "release"]
+    assert _verbs(calls) == ["acquire", "show", "release-from", "show"]
 
 
 class TestClientFailureContracts:
@@ -127,17 +189,27 @@ class TestClientFailureContracts:
         with pytest.raises(LabgridBenchError, match="timed out"):
             bench.acquire()
 
-    def test_failed_acquire_attempts_best_effort_release(self):
+    def test_failed_acquire_never_releases(self):
+        """REGRESSION (audit 2026-10-30): no undo on the acquire error path.
+
+        Releasing here would free whichever run actually holds the place when
+        the failure was contention or an ambiguous timeout.
+        """
         import subprocess as sp
         calls: list[str] = []
         def behavior(args):
             if "acquire" in args:
                 return sp.CompletedProcess([], 1, stdout="", stderr="held")
-            return sp.CompletedProcess([], 0, stdout="", stderr="")
+            return sp.CompletedProcess([], 0, stdout="  acquired: None\n", stderr="")
         bench = self._bench(calls, behavior)
         with pytest.raises(LabgridBenchError):
             bench.acquire()
-        assert calls == ["acquire", "release"]  # the possibly-granted place is undone
+        verbs = [c.split()[0] for c in calls]
+        assert "release" not in verbs
+        assert "release-from" not in verbs
+        # It reconciled instead: read ownership, saw it was not ours, refused.
+        assert verbs == ["acquire", "show"]
+        assert bench.acquired is False
 
     def test_who_returns_holder(self):
         import subprocess as sp
