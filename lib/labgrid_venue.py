@@ -10,11 +10,35 @@ feeds it (see ``venue_env``).
 The labgrid python package is NOT imported here: the client binary is
 driven as a subprocess, so unit tests inject a fake runner and CI needs no
 coordinator at all.
+
+Ownership (the 2026-10-30 audit's "critical existing race")
+-----------------------------------------------------------
+A place has exactly ONE owner string on the coordinator: ``<host>/<user>``,
+taken from ``LG_HOSTNAME``/``LG_USERNAME`` (labgrid 26.0.1,
+``labgrid/remote/client.py:102-106``). Everything about safe concurrency
+follows from that:
+
+* Every run gets its OWN identity (``ClientIdentity.for_run``), so two runs on
+  one host are two owners, not one shared ``user`` that can trip over itself.
+* ``acquire()`` NEVER releases on an error path. The old implementation did a
+  best-effort ``release`` on any failure, which — under a shared identity —
+  released whichever run actually held the place. An ambiguous failure (a
+  timeout after the grant landed) is instead **reconciled**: read ownership
+  back and accept the grant if it is ours.
+* ``release()`` is conditional: ``release-from <our host/user>``, which the
+  coordinator honours only for the matching owner
+  (``labgrid/remote/coordinator.py:909-914``). We never ``--kick``.
+* ``release-from`` exits 0 even when it released nothing, so success is
+  re-verified by reading ownership back. If the release did not take effect,
+  local state is KEPT and ``cleanup_pending`` is set — that flag is the durable
+  "this lane owes a cleanup" signal, and it is what keeps the lane out of
+  service instead of being handed to the next run.
 """
 
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import shutil
 import subprocess
@@ -31,6 +55,16 @@ from lib.lab_inventory import (
 )
 
 _RUN_TIMEOUT = 60
+
+#: The coordinator stores one owner string per place; labgrid splits it into
+#: ``host``/``user`` on a single ``/`` and its CLI help/limits assume a login
+#: name, so a run identity must stay inside the usual 63-character budget.
+_MAX_USER_LEN = 63
+_RUN_PREFIX = "prta-"
+#: Characters of the ORIGINAL run id hashed into every per-run identity. 16 hex
+#: chars (64 bits) is far beyond collision range for the handful of runs that
+#: share one coordinator, and it survives both sanitization and truncation.
+_RUN_DIGEST_LEN = 16
 
 
 class LabgridBenchError(RuntimeError):
@@ -57,24 +91,129 @@ def _default_client_bin() -> str:
 Runner = Callable[..., subprocess.CompletedProcess]
 
 
-class LabgridBench:
-    """Acquire/power/release one labgrid place via the client binary."""
+@dataclass(frozen=True)
+class ClientIdentity:
+    """Who the coordinator thinks we are: one ``<host>/<user>`` string.
 
-    def __init__(self, coordinator: str, place: str, runner: Runner | None = None):
+    The coordinator stores ownership as a single opaque string, so the only way
+    two concurrent runs stay distinguishable is to give them different
+    identities. ``host`` stays real — it is how operators and ``who`` identify
+    the machine — while ``user`` carries the run.
+    """
+
+    host: str
+    user: str
+
+    @property
+    def owner(self) -> str:
+        return f"{self.host}/{self.user}"
+
+    def env(self) -> dict[str, str]:
+        return {"LG_HOSTNAME": self.host, "LG_USERNAME": self.user}
+
+    @classmethod
+    def current(cls) -> ClientIdentity:
+        """This host and this OS user — the legacy shared-identity behaviour."""
+        import getpass
+        import socket
+
+        host = os.environ.get("LG_HOSTNAME", "").strip() or socket.gethostname()
+        user = os.environ.get("LG_USERNAME", "").strip()
+        if not user:
+            try:
+                user = getpass.getuser()
+            except Exception:  # noqa: BLE001 - no passwd entry (containers)
+                user = f"uid{os.getuid()}"
+        return cls(host=host, user=user)
+
+    @classmethod
+    def for_run(cls, run_id: str, *, host: str | None = None) -> ClientIdentity:
+        """A unique identity for one run, derived from its run id.
+
+        Deterministic in the run id (so a retry of the same run reconciles to
+        the same owner) and unique per run (so two runs never share an owner).
+
+        Sanitization alone is NOT injective and the coordinator's owner field is
+        truncated, so the identity carries a digest of the ORIGINAL run id:
+
+        * ``"run/1"`` and ``"run-1"`` both sanitize to ``"run-1"``;
+        * two run ids sharing a 60-character prefix but differing at the end
+          both truncate to the same 63-character owner.
+
+        Either case would collapse two runs onto one coordinator owner — the
+        exact collision that lets one run release the other's place. The digest
+        is computed from the full, untruncated run id, so it cannot be fooled by
+        normalization or by the length cap.
+        """
+        raw = (run_id or "").strip()
+        token = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in raw)
+        token = token.strip("-")
+        if not token:
+            raise ValueError("run_id is required for a per-run client identity")
+        digest = hashlib.sha256(raw.encode()).hexdigest()[:_RUN_DIGEST_LEN]
+        budget = max(1, _MAX_USER_LEN - len(_RUN_PREFIX) - 1 - _RUN_DIGEST_LEN)
+        base_host = host or os.environ.get("LG_HOSTNAME", "").strip()
+        if not base_host:
+            import socket
+
+            base_host = socket.gethostname()
+        return cls(host=base_host, user=f"{_RUN_PREFIX}{token[:budget]}-{digest}")
+
+    @classmethod
+    def parse(cls, owner: str) -> ClientIdentity | None:
+        owner = (owner or "").strip()
+        if not owner or "/" not in owner:
+            return None
+        host, user = owner.split("/", 1)
+        if not host or not user:
+            return None
+        return cls(host=host, user=user)
+
+
+class LabgridBench:
+    """Acquire/power/release one labgrid place via the client binary.
+
+    ``identity`` is the run's ownership claim. Defaulting it to
+    ``ClientIdentity.current()`` keeps single-run behaviour identical to before;
+    concurrent callers pass ``ClientIdentity.for_run(run_id)``.
+    """
+
+    def __init__(
+        self,
+        coordinator: str,
+        place: str,
+        runner: Runner | None = None,
+        identity: ClientIdentity | None = None,
+    ):
         if not coordinator or ":" not in coordinator:
             raise LabgridBenchError(
                 "coordinator address must be host:port (inventory 'coordinator.address')"
             )
         self.coordinator = coordinator
         self.place = place
+        self.identity = identity or ClientIdentity.current()
         self._runner = runner or subprocess.run
         self._bin = _default_client_bin() if runner is None else "labgrid-client"
+        #: True only while WE hold a verified lease.
         self._acquired = False
+        #: Durable "this place still owes a release" flag. Set when a release
+        #: could not be confirmed; only a confirmed release clears it.
+        self._cleanup_pending = False
+
+    # -- state (read-only, so a caller cannot fake ownership) --------------
+    @property
+    def acquired(self) -> bool:
+        return self._acquired
+
+    @property
+    def cleanup_pending(self) -> bool:
+        return self._cleanup_pending
 
     def _client(self, *args: str) -> str:
         cmd = [self._bin, "-x", self.coordinator, "-p", self.place, *args]
+        env = {**os.environ, **self.identity.env()}
         try:
-            proc = self._run(cmd)
+            proc = self._run(cmd, env=env)
         except OSError as e:
             raise LabgridBenchError(f"labgrid-client failed to start: {e}") from None
         except subprocess.TimeoutExpired:
@@ -93,28 +232,115 @@ class LabgridBench:
             )
         return proc.stdout or ""
 
-    def _run(self, cmd: list[str]) -> subprocess.CompletedProcess:
-        return self._runner(cmd, capture_output=True, text=True, timeout=_RUN_TIMEOUT)
+    def _run(self, cmd: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+        return self._runner(cmd, capture_output=True, text=True, timeout=_RUN_TIMEOUT, env=env)
 
+    # -- ownership ---------------------------------------------------------
+    def owner(self) -> str:
+        """The coordinator's owner string for this place, or "" when free.
+
+        ``show`` prints ``acquired: <host>/<user>`` or ``acquired: None``. The
+        parse is deliberately strict: if we cannot read it, we return "" and
+        the caller must treat ownership as UNKNOWN rather than assume either
+        way — guessing "free" is how a run tramples a colleague's place.
+        """
+        out = self._client("show")
+        for raw in out.splitlines():
+            line = raw.strip()
+            if not line.startswith("acquired:"):
+                continue
+            value = line.split(":", 1)[1].strip()
+            if not value or value.lower() in {"none", "null"}:
+                return ""
+            return value
+        raise LabgridBenchError(
+            f"could not read ownership of place {self.place!r} from 'labgrid-client show' — "
+            "refusing to guess whether it is free"
+        )
+
+    def owns(self) -> bool:
+        """True when the coordinator says OUR identity holds this place."""
+        return self.owner() == self.identity.owner
+
+    def verify(self) -> bool:
+        """Re-read the lease: still ours?"""
+        try:
+            held = self.owns()
+        except LabgridBenchError:
+            return False
+        if not held:
+            self._acquired = False
+        return held
+
+    # -- lifecycle ---------------------------------------------------------
     def acquire(self) -> None:
+        """Acquire the place, distinguishing "refused" from "unknown".
+
+        A failure here NEVER issues a release: a release under contention would
+        return whichever run actually holds the place. The only recovery for an
+        ambiguous failure is reconciliation — read ownership back and accept the
+        grant if it is ours.
+        """
         try:
             self._client("acquire")
         except LabgridBenchError:
-            # An acquire that failed after the request was sent may have been
-            # granted anyway; release() would no-op while _acquired is False,
-            # leaking the place. Best-effort undo, then surface the failure.
-            with contextlib.suppress(LabgridBenchError):
-                self._client("release")
+            # Did the grant land anyway (timeout after grant, lost reply)?
+            # Only OUR identity counts: someone else's claim is their result.
+            if self._reconciled_as_owner():
+                self._acquired = True
+                return
             raise
         self._acquired = True
 
+    def _reconciled_as_owner(self) -> bool:
+        try:
+            return self.owns()
+        except LabgridBenchError:
+            # Ownership unreadable: we cannot prove the grant was ours, so we
+            # do not claim it and we do not release it.
+            return False
+
     def release(self) -> None:
+        """Release only OUR lease, and only believe it after re-reading.
+
+        ``release-from`` is conditional server-side and returns success even
+        when the owner did not match, so the return code cannot be trusted.
+        When the lease is still there afterwards, local state is kept and
+        ``cleanup_pending`` stays set: the place is still ours to clean up.
+        """
         if not self._acquired:
             return
         try:
-            self._client("release")
-        finally:
+            held_by = self.owner()
+        except LabgridBenchError:
+            held_by = None  # unknown: attempt the conditional release anyway
+        if held_by is not None and held_by and held_by != self.identity.owner:
+            # Somebody else holds it now (we were fenced or replaced). Kicking
+            # them would be the cross-run destructive action this fixes.
             self._acquired = False
+            self._cleanup_pending = False
+            return
+        try:
+            self._client("release-from", self.identity.owner)
+        except LabgridBenchError:
+            self._cleanup_pending = True
+            raise
+        # release-from exits 0 whether or not it matched; verify.
+        try:
+            still_held_by = self.owner()
+        except LabgridBenchError as e:
+            self._cleanup_pending = True
+            raise LabgridBenchError(
+                f"release of place {self.place!r} could not be confirmed: {e}"
+            ) from None
+        if still_held_by == self.identity.owner:
+            self._cleanup_pending = True
+            raise LabgridBenchError(
+                f"labgrid-client release-from on place {self.place!r} reported success but the "
+                f"lease is still held by {still_held_by!r} — treating cleanup as pending"
+            )
+        self._acquired = False
+        self._cleanup_pending = False
 
     def power(self, on: bool) -> None:
         self._client("power", "on" if on else "off")
@@ -346,6 +572,13 @@ def venue_mutex(binding: "VenueBinding", phase: str, *, file_lock: bool = True) 
     --lock-phase or TOLLGATE_USE_HARDWARE_LOCK (sessionstart/pymake owns
     acquire and release there) — acquiring again here would double-release,
     and the second unconditional unlink can delete a FOREIGN session's lock.
+
+    Release status is recorded on the bench (``acquired``/
+    ``cleanup_pending``) and NEVER replaces the body's outcome: a teardown
+    that fails must not turn a test failure into a teardown error, nor a
+    teardown success into a pass. The caller reads
+    ``binding.bench.cleanup_pending`` afterwards and reports it as its own
+    fact.
     """
     if file_lock:
         hardware_lock.acquire_hardware_lock(phase)
@@ -354,7 +587,12 @@ def venue_mutex(binding: "VenueBinding", phase: str, *, file_lock: bool = True) 
         try:
             yield binding.bench
         finally:
-            binding.bench.release()
+            try:
+                binding.bench.release()
+            except LabgridBenchError:
+                # cleanup_pending is already set on the bench; do not mask the
+                # body exception (or invent one when the body succeeded).
+                pass
     finally:
         if file_lock:
             hardware_lock.release_hardware_lock()

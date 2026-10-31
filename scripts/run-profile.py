@@ -16,12 +16,26 @@ from typing import Any
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.run_admission import (  # noqa: E402  (path set above)
+    Admission,
+    AdmissionRefused,
+    AdmissionRequest,
+    demand_from_mapping,
+    resolve_target,
+)
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = Path(__file__).resolve().parent
 PLANS_DIR = REPO_DIR / "plans"
 RESULTS_ROOT = REPO_DIR / "results"
 TESTS_DIR = REPO_DIR / "tests"
+
+#: Exit code for a run that never started because admission refused it.
+#: Distinct from pytest's own codes so a caller can tell "no capacity" from
+#: "tests failed" without parsing output.
+ADMISSION_EXIT = 75
 
 
 def eprint(message: str) -> None:
@@ -194,6 +208,47 @@ def tee_run(
             sys.stdout.write(line)
             log_file.write(line)
         return process.wait()
+
+
+def admission_from_args(args: argparse.Namespace, run_id: str) -> Admission | None:
+    """Build the run's reservation, or None when admission is not requested.
+
+    Absent ``--fleet-manifest`` means the run is not taking a lane. Present
+    means it must be granted before anything executes; every problem below is
+    a refusal, never a fallback to running anyway.
+    """
+    if not args.fleet_manifest:
+        return None
+
+    from lib.fleet_authority import FleetAuthority
+    from lib.fleet_capacity import load_manifest
+
+    manifest = load_manifest(args.fleet_manifest)
+    target = resolve_target(
+        fleet_id=args.fleet,
+        lane_id=args.lane,
+        resource_id=args.resource or args.lane,
+        domains=tuple(args.domain or ()),
+        manifest=manifest,
+    )
+    demand = demand_from_mapping(
+        {
+            "vcpus": args.demand_vcpus,
+            "ram_mib": args.demand_ram_mib,
+            "disk_mib": args.demand_disk_mib,
+            "inodes": args.demand_inodes,
+        },
+    )
+    authority = FleetAuthority(Path(args.authority_store))
+    return Admission(
+        authority,
+        AdmissionRequest(
+            run_id=run_id,
+            target=target,
+            demand=demand,
+            ttl_s=float(args.lease_ttl),
+        ),
+    )
 
 
 def build_pytest_command(
@@ -453,6 +508,28 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing them")
     parser.add_argument("--run-dir", default=None, help="Reuse or force a specific run directory")
     parser.add_argument("--no-render", action="store_true", help="Skip collect-results.py and render-report.py")
+    parser.add_argument(
+        "--fleet-manifest",
+        default=None,
+        help=(
+            "Authorized fleet manifest. When given, the run MUST be granted a lane "
+            "reservation before any test executes; refusing is the default on any problem."
+        ),
+    )
+    parser.add_argument("--fleet", default=None, help="Fleet id from the manifest")
+    parser.add_argument("--lane", default=None, help="Lane id to reserve (inferred if the manifest has one)")
+    parser.add_argument("--resource", default=None, help="Resource id this run drives")
+    parser.add_argument("--domain", action="append", default=None, help="Exclusive conflict domain (repeatable)")
+    parser.add_argument(
+        "--authority-store",
+        default=str(REPO_DIR / ".fleet-authority.sqlite3"),
+        help="Fleet authority SQLite store used for admission",
+    )
+    parser.add_argument("--lease-ttl", type=float, default=900.0, help="Reservation TTL in seconds")
+    parser.add_argument("--demand-vcpus", type=int, default=None, help="Lane demand: vCPUs")
+    parser.add_argument("--demand-ram-mib", type=int, default=None, help="Lane demand: RAM MiB")
+    parser.add_argument("--demand-disk-mib", type=int, default=None, help="Lane demand: disk MiB")
+    parser.add_argument("--demand-inodes", type=int, default=None, help="Lane demand: inodes")
     args, extra_args = parser.parse_known_args()
 
     os.chdir(REPO_DIR)
@@ -500,13 +577,78 @@ def main() -> int:
     else:
         raise ValueError(f"Unsupported runner: {runner_kind}")
 
-    test_exit = tee_run(
-        command,
-        cwd=command_cwd,
-        env=command_env,
-        log_path=layout["runner"] / "output.log",
-        dry_run=args.dry_run,
-    )
+    # --- admission: reserve the lane BEFORE anything executes ----------------
+    # This is the seam that stops two runs fighting over one DUT. A refusal
+    # here ends the run with a distinct exit code and no test executes.
+    #
+    # A dry run is excluded on purpose. It executes nothing, so it must debit
+    # nothing: previously it acquired, activated and *completed* a real
+    # reservation, so the authority recorded a clean run that never happened and
+    # any concurrent run sharing a conflict domain was refused `domain_conflict`
+    # for the whole lease TTL. `admission_from_args` is skipped entirely rather
+    # than only the acquire, because `FleetAuthority.__init__` mints the store —
+    # a dry run must not create one either.
+    if args.dry_run and args.fleet_manifest:
+        eprint("==> DRY RUN: no lane reservation taken and no authority store touched.")
+        admission = None
+    else:
+        try:
+            admission = admission_from_args(args, run_id)
+        except AdmissionRefused as exc:
+            eprint(f"==> ADMISSION REFUSED: {exc.reason}: {exc.detail}")
+            eprint("==> No test was executed. The lane was not reserved.")
+            return ADMISSION_EXIT
+        except Exception as exc:  # noqa: BLE001 - manifest/config errors are refusals too
+            eprint(f"==> ADMISSION REFUSED: {type(exc).__name__}: {exc}")
+            eprint("==> No test was executed. Refusing is the default when a manifest is given.")
+            return ADMISSION_EXIT
+
+    if admission is not None:
+        try:
+            allocation = admission.acquire()
+        except AdmissionRefused as exc:
+            eprint(f"==> ADMISSION REFUSED: {exc.reason}: {exc.detail}")
+            eprint("==> No test was executed. The lane was not reserved.")
+            return ADMISSION_EXIT
+        print(f"==> Reserved:  {allocation.lane_id} fence={allocation.fence} state={allocation.state.value}")
+
+    # `mark_started()` runs INSIDE the try whose finally releases. It can raise
+    # (`AdmissionRefused("not_acquired")`, or an `AuthorityError`/`FenceMismatch`
+    # from `authority.activate`), and when it sat above this `try` a raise leaked
+    # the lease for the whole TTL and exited with a traceback instead of the
+    # documented ADMISSION_EXIT.
+    try:
+        if admission is not None:
+            try:
+                admission.mark_started()
+            except AdmissionRefused as exc:
+                eprint(f"==> ADMISSION REFUSED: {exc.reason}: {exc.detail}")
+                eprint("==> No test was executed. The lease was never activated.")
+                return ADMISSION_EXIT
+            except Exception as exc:  # noqa: BLE001 - activate failures are refusals too
+                eprint(f"==> ADMISSION REFUSED: {type(exc).__name__}: {exc}")
+                eprint("==> No test was executed. The lease was never activated.")
+                return ADMISSION_EXIT
+        test_exit = tee_run(
+            command,
+            cwd=command_cwd,
+            env=command_env,
+            log_path=layout["runner"] / "output.log",
+            dry_run=args.dry_run,
+        )
+    finally:
+        if admission is not None:
+            # Cleanup is recorded separately from the test verdict: a failed
+            # teardown must not overwrite the result, and a clean test must not
+            # hide an unconfirmed release.
+            try:
+                clean = admission.release(clean=True, detail="run-profile finished")
+            except AdmissionRefused as exc:
+                clean = False
+                eprint(f"==> RELEASE UNCONFIRMED: {exc.reason}: {exc.detail}")
+                eprint("==> The lane stays occupied until this is reconciled.")
+            if not clean:
+                eprint("==> WARNING: lane not released cleanly; capacity remains consumed.")
 
     if runner_kind == "playwright" and not args.dry_run:
         move_playwright_report(layout["runner"])
