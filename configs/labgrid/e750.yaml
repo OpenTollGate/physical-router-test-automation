@@ -1,0 +1,94 @@
+# PRTA venue — GL.iNet GL-E750 "Mudi" (gl-e750), ath79/nand, mips_24kc.
+#
+# HOST: x280 (the bench laptop). The unit is attached to x280 TWICE:
+#   ethernet  -> enx9c69d3ca3cfe; x280 holds 192.168.8.244/24, unit is 192.168.8.1
+#   serial    -> FTDI BH00DL3M at 115200 8N1 (see SERIAL CAVEAT below)
+#
+# Identity is pinned by MAC, not by address: the unit's br-lan is
+# 94:83:c4:4d:fc:38 — the same value as bridge id 7fff.9483c44dfc38 in its own
+# logs. If a future board answers on 192.168.8.1, check that MAC first.
+#
+# AUTH: key auth only. THE KEY HAS CHANGED ONCE ALREADY — re-check before use.
+#   2026-10-25: ~/.ssh/id_bench worked, id_ed25519/id_fleet/id_dq05 refused.
+#   2026-10-30: INVERTED — id_bench now REFUSED, ~/.ssh/id_ed25519 works.
+# The unit was re-provisioned between those dates. Probe both before concluding
+# the unit is down, and update this file when it flips:
+#   for k in id_ed25519 id_bench; do
+#     ssh -i ~/.ssh/$k -o BatchMode=yes root@192.168.8.1 true && echo "$k works"
+#   done
+# A `Permission denied (publickey)` means "wrong key", NOT "box offline" — the
+# box can be answering ping and :22 the whole time.
+#   -> glinet,gl-e750
+# The fleet's other keys (id_ed25519, id_fleet, id_dq05) are REFUSED by this
+# unit — do not "fix" a login failure by swapping in a general key.
+#
+# FIRMWARE AT ENROLLMENT: OpenWrt 25.12.5 r33051-f5dae5ece4, kernel 6.12.94,
+# br-lan 192.168.8.1/24, dropbear on :22, uhttpd on :80/:443.
+# RADIO STATE — measured 2026-10-25, and it is NOT what "two radios" implies:
+#   * Only ONE phy exists: phy1, DRIVER=ath9k, 2.4 GHz, channel 11 (2462 MHz),
+#     HT20, MAC 94:83:c4:4d:fc:39.
+#   * The 5 GHz QCA9887 never probes ("could not probe fw (-22)"), so there is
+#     NO phy0 and no 5 GHz interface AT ALL — see felixfelix-bot/e750-repair.
+#     Do not assume a second radio exists; `iw dev` shows only phy1.
+#   * phy1 is currently a CLIENT (type managed, SSID "hermes-lan"), NOT an AP.
+#     So this unit has no AP serving either, and it reaches the fleet by
+#     joining hermes-lan as a station.
+# Tests must assume neither a 5 GHz radio nor a running AP.
+#
+# NO PowerPort: the unit runs on an internal battery and has no switched power
+# on this bench. Power-cycling is a MANUAL action. Tests must not assume they
+# can reboot it remotely and be sure it comes back.
+#
+# Run, from anywhere on x280 (no labgrid coordinator needed):
+#   pytest --lg-env=configs/labgrid/e750.yaml --no-deploy <test>
+#   python -c "from labgrid import Environment; e=Environment('configs/labgrid/e750.yaml'); t=e.get_target('main'); d=t.get_driver('SSHDriver'); t.activate(d); print(d.run('cat /tmp/sysinfo/board_name'))"
+#
+# SERIAL CAVEAT 1 — ASKFIRST. An OpenWrt console that prints
+# "Please press Enter to activate this console." answers NOTHING until it
+# receives a bare CR. A passive read of this port returns zero bytes and looks
+# like a dead console; send "\r" first, then read. This is documented upstream:
+#   conwrt crates/conwrt-serial/src/lib.rs
+#     "OpenWrt consoles use askfirst: send Enter to activate, then interact."
+#   conwrt crates/conwrt-serial/src/watch.rs  — nudge sent every ~10 s
+#   conwrt docs/BENCH-SWITCH-PATTERN.md       — "serial console (115200,
+#                                                askfirst, root)"
+# Measured here: 120 s of passive read gave 1 NUL byte; one bare CR produced
+# "root@tollgate-9BD4:~#". Do not conclude a board is dead from silence before
+# nudging with CR. (Note: Ctrl-C is NOT a safe nudge — it is mutating and has
+# silently rebooted a board on this bench before.)
+#
+# SERIAL CAVEAT 2 — OUTPUT WORKS, INPUT DOES NOT. Capture only.
+# Measured 2026-10-30 against the E750's own ttyS0, with SSH as the reference:
+#   board -> host: "echo FIXTEST_... > /dev/kmsg" over SSH arrived BYTE-CLEAN
+#                  on this adapter (38 bytes, marker intact). So the adapter IS
+#                  this unit's UART and host RX is clean.
+#   host -> board: the board's own UART counters show bytes arriving
+#                  (/proc/tty/driver/serial: "tx:22461 rx:1785 fe:5" — 5 framing
+#                  errors), but NOTHING ever comes back. Sent CR, LF, CRLF and
+#                  24+ bare CRs across two sessions: zero bytes returned, and
+#                  askfirst never produced a prompt.
+#   The unit runs "/sbin/askfirst /usr/libexec/login.sh" on ttyS0 and
+#   /proc/consoles reports "ttyS0 -W- (EC a)" — write-only as the kernel sees it.
+# So: output is reliable, input is not usable, and a prompt will not appear.
+# Do NOT add SerialDriver/ShellDriver here expecting an interactive console —
+# it will block until timeout and look like a dead board. Mutations go over SSH.
+#
+# Note this replaced an earlier, blunter claim that the UART was outright
+# "TX-only": that was wrong in the details (bytes DO reach the board and framing
+# errors are counted). The operationally correct statement is the one above.
+targets:
+  main:
+    resources:
+      NetworkService:
+        address: "192.168.8.1"
+        port: 22
+        username: "root"
+      RawSerialPort:
+        port: "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BH00DL3M-if00-port0"
+        speed: 115200
+    drivers:
+      SSHDriver:
+        keyfile: "~/.ssh/id_ed25519"
+        username: "root"
+        stderr_merge: true
+        connection_timeout: 60.0
