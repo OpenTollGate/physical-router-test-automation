@@ -83,24 +83,25 @@ class AdmissionOutcome:
     notes: list[str] = field(default_factory=list)
 
 
-def demand_from_mapping(
-    values: Mapping[str, Any], *, require_all: bool = True
-) -> Demand:
+def demand_from_mapping(values: Mapping[str, Any]) -> Demand:
     """Build a ``Demand`` from declared values.
 
-    ``require_all`` keeps the strict path strict: a partially declared lane is
-    refused rather than defaulted, because "I forgot to say how much disk this
-    needs" must never silently mean "no disk".
+    **Every dimension must be declared.** A dimension the caller did not declare
+    is never assumed to be a number: "I forgot to say how much disk this needs"
+    must not silently mean "no disk", and it must not silently mean "the default
+    disk" either. This function used to take a ``require_all=False`` flag that
+    substituted ``DEFAULT_DEMAND`` for absent dimensions — measured,
+    ``demand_from_mapping({"ram_mib": 32768}, require_all=False)`` returned
+    ``vcpus=2, ram_mib=32768, disk_mib=4096, inodes=1``, i.e. an undeclared
+    vector bought admission while charging less than a declared one. The flag is
+    gone: there is no permissive path to select.
     """
     provided: dict[str, Any] = {}
     missing: list[str] = []
     for name in DIMENSIONS:
         raw = values.get(name)
         if raw is None:
-            if require_all:
-                missing.append(name)
-            else:
-                provided[name] = DEFAULT_DEMAND[name]
+            missing.append(name)
             continue
         if isinstance(raw, bool) or not isinstance(raw, int):
             raise AdmissionRefused(

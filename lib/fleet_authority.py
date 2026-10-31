@@ -871,7 +871,17 @@ class FleetAuthority:
         touch the lane.
         """
         if ttl_s <= 0:
-            raise ValueError("ttl_s must be positive")
+            # A refusal, not a raise: every other rejection below is a
+            # ``Decision(False, reason=...)`` and the runner only catches
+            # ``AdmissionRefused``. A bare ValueError here escaped as a
+            # traceback instead of the documented ADMISSION_EXIT, so
+            # ``--lease-ttl 0`` crashed the runner rather than refusing it.
+            return Decision(
+                False,
+                reason="ttl_invalid",
+                detail=f"lease ttl must be positive (got {ttl_s!r})",
+                lane_id=lane_id,
+            )
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -902,10 +912,24 @@ class FleetAuthority:
                 existing = conn.execute("SELECT * FROM allocations WHERE run_id = ?", (run_id,)).fetchone()
                 if existing is not None:
                     prior = _row_to_allocation(existing)
+                    # Compare against the STORED grant, not the live lane row.
+                    # ``register_lane`` may add a conflict domain under a live
+                    # allocation and is documented never to touch it, so
+                    # recomputing the expected set from ``lanes`` (the old code)
+                    # made a byte-identical retry of a lost grant reply answer
+                    # ``duplicate_run_id ... with a different request`` —
+                    # refusing precisely the case idempotency exists for.
+                    #
+                    # A grant's stored domains are its own domains ∪ its lane's
+                    # domains at grant time. Re-registration can only ever ADD
+                    # lane domains, so the requested set is covered iff it is a
+                    # subset of what the grant already holds. A retry asking for
+                    # exclusive domains the grant does not hold is not the same
+                    # request.
                     same_request = (
                         prior.lane_id == lane_id
                         and prior.demand == demand
-                        and set(prior.domains) == set((*_split(lane["domains"]), *domains))
+                        and set(domains) <= set(prior.domains)
                     )
                     conn.execute("ROLLBACK")
                     if prior.state in _LIVE and same_request:

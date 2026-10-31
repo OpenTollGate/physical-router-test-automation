@@ -238,7 +238,6 @@ def admission_from_args(args: argparse.Namespace, run_id: str) -> Admission | No
             "disk_mib": args.demand_disk_mib,
             "inodes": args.demand_inodes,
         },
-        require_all=True,
     )
     authority = FleetAuthority(Path(args.authority_store))
     return Admission(
@@ -581,16 +580,28 @@ def main() -> int:
     # --- admission: reserve the lane BEFORE anything executes ----------------
     # This is the seam that stops two runs fighting over one DUT. A refusal
     # here ends the run with a distinct exit code and no test executes.
-    try:
-        admission = admission_from_args(args, run_id)
-    except AdmissionRefused as exc:
-        eprint(f"==> ADMISSION REFUSED: {exc.reason}: {exc.detail}")
-        eprint("==> No test was executed. The lane was not reserved.")
-        return ADMISSION_EXIT
-    except Exception as exc:  # noqa: BLE001 - manifest/config errors are refusals too
-        eprint(f"==> ADMISSION REFUSED: {type(exc).__name__}: {exc}")
-        eprint("==> No test was executed. Refusing is the default when a manifest is given.")
-        return ADMISSION_EXIT
+    #
+    # A dry run is excluded on purpose. It executes nothing, so it must debit
+    # nothing: previously it acquired, activated and *completed* a real
+    # reservation, so the authority recorded a clean run that never happened and
+    # any concurrent run sharing a conflict domain was refused `domain_conflict`
+    # for the whole lease TTL. `admission_from_args` is skipped entirely rather
+    # than only the acquire, because `FleetAuthority.__init__` mints the store —
+    # a dry run must not create one either.
+    if args.dry_run and args.fleet_manifest:
+        eprint("==> DRY RUN: no lane reservation taken and no authority store touched.")
+        admission = None
+    else:
+        try:
+            admission = admission_from_args(args, run_id)
+        except AdmissionRefused as exc:
+            eprint(f"==> ADMISSION REFUSED: {exc.reason}: {exc.detail}")
+            eprint("==> No test was executed. The lane was not reserved.")
+            return ADMISSION_EXIT
+        except Exception as exc:  # noqa: BLE001 - manifest/config errors are refusals too
+            eprint(f"==> ADMISSION REFUSED: {type(exc).__name__}: {exc}")
+            eprint("==> No test was executed. Refusing is the default when a manifest is given.")
+            return ADMISSION_EXIT
 
     if admission is not None:
         try:
@@ -600,9 +611,24 @@ def main() -> int:
             eprint("==> No test was executed. The lane was not reserved.")
             return ADMISSION_EXIT
         print(f"==> Reserved:  {allocation.lane_id} fence={allocation.fence} state={allocation.state.value}")
-        admission.mark_started()
 
+    # `mark_started()` runs INSIDE the try whose finally releases. It can raise
+    # (`AdmissionRefused("not_acquired")`, or an `AuthorityError`/`FenceMismatch`
+    # from `authority.activate`), and when it sat above this `try` a raise leaked
+    # the lease for the whole TTL and exited with a traceback instead of the
+    # documented ADMISSION_EXIT.
     try:
+        if admission is not None:
+            try:
+                admission.mark_started()
+            except AdmissionRefused as exc:
+                eprint(f"==> ADMISSION REFUSED: {exc.reason}: {exc.detail}")
+                eprint("==> No test was executed. The lease was never activated.")
+                return ADMISSION_EXIT
+            except Exception as exc:  # noqa: BLE001 - activate failures are refusals too
+                eprint(f"==> ADMISSION REFUSED: {type(exc).__name__}: {exc}")
+                eprint("==> No test was executed. The lease was never activated.")
+                return ADMISSION_EXIT
         test_exit = tee_run(
             command,
             cwd=command_cwd,
