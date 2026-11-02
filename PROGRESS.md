@@ -1,3 +1,25 @@
+# Runner lifecycle gate — bounded milestone
+
+- Worktree `~/worktrees/prta-runner-lifecycle`, branch `pr/fleet-runner-lifecycle`,
+  base `d5e5fc30a8f0bd27ea3b5f26adcd3b38438eb7b2`.
+- Read `~/reports/reviews/prta-334-runner-safety.md`; inspected
+  `FleetScheduler`/`Lease`/`LabgridBench.for_run` and `tests/conftest.py` venue fixture
+  before deciding. No scheduler code reused or duplicated.
+- RED first: new gate tests `5 failed, 3 passed`; the primary failure was the audit's
+  blocker reproduced end-to-end (`assert 7 == 75` — lane reserved, real child spawned,
+  child status returned).
+- Shipped the permitted fail-closed fallback: fleet execution refused with exit 75 /
+  `fleet_lifecycle_unavailable` before store creation, results dir, reservation or spawn.
+  Authorization fix, read-only dry-run and non-fleet log/exit behaviour preserved.
+- GREEN `8 passed`; focused suite `60 passed`. Added executable lines: 12/12 covered.
+  File-level runner coverage 49% (CLI render/collect paths out of scope).
+- Remaining to enable fleet execution: place binding, fixture ownership handoff,
+  renewal/fencing-proof teardown, release evidence, plus tests — listed in REPORT.md.
+- Not done, by instruction: no hardware/QEMU/coordinator acquisition, no PR334 push,
+  no upstream PR, no card transition, no main merge.
+
+---
+
 # Runner authorization bounded milestone
 
 - Isolated worktree created at exact PR334 base f345f1b828a956a3d686f7f83b849872b8885be3.

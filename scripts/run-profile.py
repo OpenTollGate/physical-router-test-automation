@@ -37,6 +37,22 @@ TESTS_DIR = REPO_DIR / "tests"
 #: "tests failed" without parsing output.
 ADMISSION_EXIT = 75
 
+#: Fleet execution is DISABLED until the runner owns a supervised lifecycle.
+#:
+#: A granted SQLite reservation is not permission to drive a coordinator-owned
+#: DUT. `lib/fleet_scheduler.FleetScheduler`/`Lease` exist, but this runner has
+#: no profile→place binding, no credential handoff, and no way to stop the
+#: in-tree pytest fixture (`tests/conftest.py` router fixture) from acquiring
+#: the same place a second time. Scheduler supervision also does not yet prove
+#: process-group death or treat an unconfirmed coordinator release as dirty.
+#: Wiring the happy path before those hold would trade a visible refusal for an
+#: invisible two-owner DUT, so the refusal is the shipped behaviour.
+#:
+#: Re-enable only together with: manifest resource → profile endpoint/env
+#: binding, fixture ownership handoff, verified teardown, and renewal/fencing
+#: failure tests. See REPORT.md ("Remaining work to enable fleet execution").
+FLEET_LIFECYCLE_UNAVAILABLE = "fleet_lifecycle_unavailable"
+
 
 def eprint(message: str) -> None:
     print(message, file=sys.stderr)
@@ -210,12 +226,38 @@ def tee_run(
         return process.wait()
 
 
+def require_supported_fleet_lifecycle(args: argparse.Namespace) -> None:
+    """Refuse fleet execution that this runner cannot supervise safely.
+
+    Called BEFORE any authority store is opened (``FleetAuthority.__init__``
+    mints the database), before a reservation, and before any child spawns.
+    Raising here is deliberate: the authorization helpers below still encode
+    the manifest policy, and they stay tested, but no production path may use
+    them to put a DUT under one owner while pytest acquires it under another.
+    """
+    if not getattr(args, "fleet_manifest", None):
+        return
+    raise AdmissionRefused(
+        FLEET_LIFECYCLE_UNAVAILABLE,
+        "fleet execution needs a coordinator-owned supervised lifecycle (place "
+        "binding, fixture handoff, verified teardown); this runner cannot provide "
+        "it, so no lane is reserved and nothing executes",
+    )
+
+
 def admission_from_args(args: argparse.Namespace, run_id: str) -> Admission | None:
     """Build the run's reservation, or None when admission is not requested.
 
     Absent ``--fleet-manifest`` means the run is not taking a lane. Present
     means it must be granted before anything executes; every problem below is
     a refusal, never a fallback to running anyway.
+
+    **Not reachable from ``main()`` while fleet execution is gated.** The
+    manifest policy encoded here (membership, permitted actions, declared
+    conflicts, lane identity) is still the contract the coordinator lifecycle
+    must satisfy, and it stays tested; ``require_supported_fleet_lifecycle``
+    runs earlier so no store is minted or lane reserved for an execution path
+    that cannot supervise the DUT.
     """
     if not args.fleet_manifest:
         return None
@@ -548,6 +590,19 @@ def main() -> int:
 
     env["TOLLGATE_PROFILE"] = profile_name
     env["TOLLGATE_LAB_TYPE"] = require_string(matrix.get("lab"), "matrix.lab")
+
+    # --- lifecycle gate: refuse BEFORE any local or coordinator side effect ---
+    # No authority store is opened, no results tree is created, no reservation
+    # is taken and no child is spawned. Dry runs deliberately pass: they
+    # execute nothing, so they must neither be blocked nor acquire anything
+    # (the dry-run branch below still skips admission construction entirely).
+    if not args.dry_run:
+        try:
+            require_supported_fleet_lifecycle(args)
+        except AdmissionRefused as exc:
+            eprint(f"==> ADMISSION REFUSED: {exc.reason}: {exc.detail}")
+            eprint("==> No test was executed, no lane was reserved, no store was created.")
+            return ADMISSION_EXIT
 
     run_id = env.get("TOLLGATE_RUN_ID") or f"{utc_stamp()}-{profile_name}-{git_short_sha()}"
     results_dir = resolve_run_dir(args.run_dir, env, run_id)
