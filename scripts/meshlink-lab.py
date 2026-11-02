@@ -512,6 +512,12 @@ def host_route_to(address: str) -> tuple[str | None, str]:
 
 def host_upstream_route(seller_ip: str = BETA_SELLER_IP) -> None:
     via, dev = host_route_to(seller_ip)
+    if via and seller_ip != BETA_SELLER_IP:
+        raise SystemExit(
+            f"physical seller {seller_ip} is off-link on {dev} via {via}; "
+            "MeshLink guest traffic cannot use it as a default gateway. "
+            "Use an on-link seller or validate payment/renewal only."
+        )
     run(["sudo", "ip", "rule", "del", "from", GATEWAY_WAN_IP, "lookup", "2121"], check=False)
     run(["sudo", "ip", "rule", "del", "fwmark", "0x2121", "lookup", "2121"], check=False)
     run(["sudo", "ip", "rule", "add", "fwmark", "0x2121", "lookup", "2121", "pref", "900"])
