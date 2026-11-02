@@ -1492,13 +1492,16 @@ film-publish: ## Publish film artifacts to Blossom: make film-publish RUN=result
 
 MESHLINK_LAB := scripts/meshlink-lab.py
 
-.PHONY: meshlink-lab-prepare meshlink-lab-up meshlink-lab-down meshlink-lab-status meshlink-lab-provision meshlink-lab-smoke meshlink-lab-buy meshlink-lab-replay meshlink-lab-buyer meshlink-interop
+.PHONY: meshlink-lab-prepare meshlink-lab-up meshlink-lab-up-with-beta meshlink-lab-down meshlink-lab-status meshlink-lab-provision meshlink-lab-smoke meshlink-lab-buy meshlink-lab-replay meshlink-lab-buyer meshlink-lab-beta meshlink-lab-chain meshlink-interop
 
 meshlink-lab-prepare: ## Prepare MeshLink gateway/client QEMU overlays and seeds
 	python3 $(MESHLINK_LAB) prepare
 
 meshlink-lab-up: ## Start the MeshLink upstream/mesh/mgmt bridges, mint, and VMs
 	python3 $(MESHLINK_LAB) start
+
+meshlink-lab-up-with-beta: ## Start the MeshLink lab plus the Beta seller and mint
+	python3 $(MESHLINK_LAB) --with-beta start
 
 meshlink-lab-down: ## Stop the MeshLink VMs, mint, and bridges
 	python3 $(MESHLINK_LAB) stop
@@ -1520,5 +1523,11 @@ meshlink-lab-replay: ## Redeem one token twice; reject replay and wrong mint
 
 meshlink-lab-buyer: ## Exercise the broker buyer against a local mock TollGate
 	python3 $(MESHLINK_LAB) buyer
+
+meshlink-lab-beta: ## Start/status the Beta seller and mint
+	python3 $(MESHLINK_LAB) beta-start
+
+meshlink-lab-chain: ## Pay Beta, steer guest traffic through it, verify renewal
+	python3 $(MESHLINK_LAB) chain
 
 meshlink-interop: meshlink-lab-smoke meshlink-lab-buy meshlink-lab-replay ## Seller acceptance: advert + agent purchase + replay + internet
