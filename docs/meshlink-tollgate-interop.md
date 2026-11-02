@@ -1,8 +1,10 @@
 # MeshLink ↔ TollGate Interoperability Plan
 
-Status: seller lane passing; buyer core tested, Beta chain pending
+Status: seller lane passing; full host → Beta → MeshLink → client chain passes, including traffic and automatic renewal.
+
+Remaining-work plan and checklist: `docs/meshlink-tollgate-interop-plan.md`.
 Owner: PRTA / TollGate lab
-Last updated: 2026-10-30
+Last updated: 2026-11-02
 
 ## Goal
 
@@ -113,27 +115,28 @@ Acceptance:
 - [x] Classify `200/1022`, `400/21023` codes, and `5xx`/timeout as ambiguous.
 - [x] NUT-07 reconciliation; never blind-retry an ambiguous payment.
 - [x] Persist spend totals and proofs; never log tokens.
-- [ ] Poll `/usage`, renew near expiry (renewal timer exists, usage polling pending).
+- [x] Poll `/usage`, renew near expiry. Byte grants poll usage; millisecond grants keep the time fallback.
 - [x] Expose status at `/api/meshlink/upstream`.
 
 Acceptance:
 
 - [x] MeshLink discovers Beta and pays it (`granted`, 1 sat).
 - [x] Beta `/usage` advances (`9216/154140672` after portal traffic).
-- [ ] MeshLink guest reaches the internet through the paid upstream.
-  Blocked by the Beta VM acting as a one-armed gateway: its nodogsplash
-  `ndsAUT`/forward path rejects the double-NAT return path even with a paid
-  host session. Payment and usage are proven; traffic steering is next.
-- [ ] One renewal completes (usage-poll renewal implemented; Beta allotment
-  is too large to hit 80% without a working traffic path).
+- [x] MeshLink guest reaches the internet through the paid upstream.
+  Beta is a one-armed NoDogSplash gateway. The lab pays a netns client at
+  `10.99.99.3`, removes the netns, gives `tg-poc-br` the paid MAC, and SNATs
+  MeshLink WAN traffic to `.3`. Beta NATs `.3` to `.1`; host conntrack
+  de-SNATs the return path. Guest HTTPS and a 250 MB download pass.
+- [x] One renewal completes automatically from Beta `/usage` polling
+  (`purchases: 3`, new allotment reflected in `/api/meshlink/upstream`).
 - [x] Price above cap causes no purchase (unit-tested in the buyer core).
 
 ## Phase 4 — chain, labgrid, docs
 
-- [ ] Chain test: host → Beta → MeshLink → client.
+- [x] Chain test: host → Beta → MeshLink → client.
 - [ ] Physical labgrid place mode (`--seller-place`).
 - [ ] `tests/interop/` suite with story/TIP markers.
-- [ ] `docs/meshlink-tollgate-interop.md` kept current.
+- [x] `docs/meshlink-tollgate-interop.md` kept current.
 - [ ] Update `docs/virtual-lab.md`.
 
 ## Test matrix
@@ -202,7 +205,11 @@ Known lab constraints:
   "dailyBudget": 100,
   "renewAtPercent": 80,
   "autoMint": false,
-  "pollIntervalMs": 60
+  "pollIntervalMs": 60,
+  "routeThrough": true,
+  "routeTable": 2121,
+  "routeNexthop": "10.99.98.1",
+  "guestInterface": "br-guest"
 }
 ```
 
@@ -233,3 +240,9 @@ Status: `GET /api/meshlink/upstream` on the broker (`:3000`).
 - 2026-10-30: buyer renewal now polls `/usage` and only repurchases at
   `renewAtPercent`; millisecond grants keep the time-based fallback. Installer
   verification retries listeners for up to 30s instead of false-failing.
+- 2026-11-02: added `upstream-route.ts` (`routeThrough`, `routeTable`,
+  `routeNexthop`, guest fwmark, local bypass rules) and `route`/`purchases`
+  status. `make meshlink-lab-chain` now pays Beta, SNATs MeshLink guest
+  traffic to the paid `.3` session, restores the paid MAC on `tg-poc-br`,
+  downloads 250 MB through the chain, and reaches `purchases: 3` after
+  automatic `/usage`-driven renewals. Client HTTPS and Beta usage both pass.

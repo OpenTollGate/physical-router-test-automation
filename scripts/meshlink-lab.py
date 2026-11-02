@@ -48,6 +48,20 @@ GATEWAY_WAN_IP = "10.99.98.10"
 GATEWAY_MGMT_IP = "10.99.97.15"
 CLIENT_MGMT_IP = "10.99.97.16"
 MESH_GUEST_IP = "10.99.100.1"
+BETA_BRIDGE = "tg-poc-br"
+BETA_TAP = "tg-poc-tap"
+BETA_HOST_IP = "10.99.99.2"
+BETA_SELLER_IP = "10.99.99.1"
+BETA_MINT_PORT = 3338
+BETA_MINT_URL = f"http://{BETA_HOST_IP}:{BETA_MINT_PORT}"
+BETA_CLIENT_NETNS = "ml-beta-client"
+BETA_CLIENT_IF = "ml-beta-n"
+BETA_HOST_IF = "ml-beta-h"
+BETA_CLIENT_IP = "10.99.99.3"
+BETA_HOST_BRIDGE_MAC = "72:fc:b0:ec:4c:09"
+BETA_CLIENT_MAC = "02:00:00:00:99:03"
+HOST_DNS_IP = UP_HOST_IP
+BETA_SERIAL = "beta-serial.sock"
 
 WAN_TAP = "ml-wan"
 GUEST_TAP = "ml-guest"
@@ -103,12 +117,18 @@ def configure_host_nat() -> None:
     sudo(["sysctl", "-w", "net.ipv4.ip_forward=1"])
     rules = [
         ["iptables", "-C", "INPUT", "-i", UP_BRIDGE, "-p", "tcp", "--dport", str(MINT_PORT), "-j", "ACCEPT"],
+        ["iptables", "-C", "INPUT", "-i", UP_BRIDGE, "-p", "tcp", "--dport", str(BETA_MINT_PORT), "-j", "ACCEPT"],
+        ["iptables", "-C", "INPUT", "-i", UP_BRIDGE, "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
+        ["iptables", "-C", "INPUT", "-i", UP_BRIDGE, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"],
         ["iptables", "-t", "nat", "-C", "POSTROUTING", "-s", "10.99.98.0/24", "!", "-o", UP_BRIDGE, "-j", "MASQUERADE"],
         ["iptables", "-C", "FORWARD", "-i", UP_BRIDGE, "-j", "ACCEPT"],
         ["iptables", "-C", "FORWARD", "-o", UP_BRIDGE, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
     ]
     adds = [
         ["iptables", "-I", "INPUT", "1", "-i", UP_BRIDGE, "-p", "tcp", "--dport", str(MINT_PORT), "-j", "ACCEPT"],
+        ["iptables", "-I", "INPUT", "1", "-i", UP_BRIDGE, "-p", "tcp", "--dport", str(BETA_MINT_PORT), "-j", "ACCEPT"],
+        ["iptables", "-I", "INPUT", "1", "-i", UP_BRIDGE, "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
+        ["iptables", "-I", "INPUT", "1", "-i", UP_BRIDGE, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"],
         ["iptables", "-t", "nat", "-A", "POSTROUTING", "-s", "10.99.98.0/24", "!", "-o", UP_BRIDGE, "-j", "MASQUERADE"],
         ["iptables", "-A", "FORWARD", "-i", UP_BRIDGE, "-j", "ACCEPT"],
         ["iptables", "-A", "FORWARD", "-o", UP_BRIDGE, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
@@ -278,6 +298,18 @@ def mint_pid_path(workdir: Path) -> Path:
     return workdir / "run" / "mint.pid"
 
 
+def host_dns_pid_path(workdir: Path) -> Path:
+    return workdir / "run" / "host-dns.pid"
+
+
+def beta_pid_path(workdir: Path) -> Path:
+    return workdir / "run" / "beta.pid"
+
+
+def beta_mint_pid_path(workdir: Path) -> Path:
+    return workdir / "run" / "beta-mint.pid"
+
+
 def start_mint(workdir: Path, cdk: Path) -> None:
     if not cdk.exists():
         raise SystemExit(f"cdk-mintd not found at {cdk}")
@@ -333,6 +365,207 @@ max_delay_time = 0
         raise SystemExit(f"mint did not start; see {workdir / 'logs' / 'mint.log'}")
 
 
+def stop_pid(pid: int) -> None:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+    for _ in range(20):
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return
+        time.sleep(0.25)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def start_host_dns(workdir: Path) -> None:
+    if run(["ss", "-lun"], check=False).stdout and f"{HOST_DNS_IP}:53" in run(["ss", "-lun"], check=False).stdout:
+        print(f"host DNS already listening on {HOST_DNS_IP}:53")
+        return
+    dnsmasq = shutil.which("dnsmasq") or "/usr/sbin/dnsmasq"
+    if not Path(dnsmasq).exists():
+        raise SystemExit("dnsmasq not found for the host lab DNS proxy")
+    log = open(workdir / "logs" / "host-dnsmasq.log", "ab")
+    proc = subprocess.Popen(
+        ["sudo", "-n", dnsmasq, "--keep-in-foreground", f"--listen-address={HOST_DNS_IP}",
+         "--bind-interfaces", "--no-resolv", "--server=127.0.0.53",
+         "--cache-size=1000", f"--pid-file={workdir / 'run' / 'host-dnsmasq.pid'}",
+         "--log-facility=-"],
+        stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+    )
+    host_dns_pid_path(workdir).write_text(str(proc.pid))
+    if not wait_for(["getent", "hosts", "example.com"], 10):
+        print("warning: host DNS proxy started but example.com did not resolve immediately", file=sys.stderr)
+
+
+def stop_host_dns(workdir: Path) -> None:
+    path = host_dns_pid_path(workdir)
+    if not path.exists():
+        return
+    try:
+        pid = int(path.read_text().strip())
+    except ValueError:
+        pid = 0
+    if pid:
+        sudo(["kill", str(pid)], check=False)
+        for _ in range(20):
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                break
+            time.sleep(0.25)
+        else:
+            sudo(["kill", "-9", str(pid)], check=False)
+    path.unlink(missing_ok=True)
+
+
+def start_beta_mint(workdir: Path, args: argparse.Namespace) -> None:
+    mint_dir = expand(args.beta_mint_dir)
+    mint = mint_dir / "cdk-mintd"
+    if not mint.exists():
+        raise SystemExit(f"Beta mint binary missing at {mint}; pass --beta-mint-dir")
+    if wait_for(["curl", "-fsS", "-m", "2", f"{BETA_MINT_URL}/v1/info"], 2):
+        print(f"Beta mint already reachable at {BETA_MINT_URL}")
+        return
+    path = beta_mint_pid_path(workdir)
+    if path.exists():
+        try:
+            stop_pid(int(path.read_text().strip()))
+        except ValueError:
+            pass
+        path.unlink(missing_ok=True)
+    log = open(workdir / "logs" / "beta-mint.log", "ab")
+    env = os.environ.copy()
+    env["CDK_MINTD_MNEMONIC"] = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+    proc = subprocess.Popen(
+        [str(mint), "-w", "./datadir", "--enable-logging"],
+        cwd=str(mint_dir), env=env, stdout=log, stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    path.write_text(str(proc.pid))
+    if not wait_for(["curl", "-fsS", "-m", "2", f"{BETA_MINT_URL}/v1/info"], 30):
+        raise SystemExit(f"Beta mint did not start; see {workdir / 'logs' / 'beta-mint.log'}")
+
+
+def stop_beta_mint(workdir: Path) -> None:
+    path = beta_mint_pid_path(workdir)
+    if not path.exists():
+        return
+    try:
+        stop_pid(int(path.read_text().strip()))
+    except ValueError:
+        pass
+    path.unlink(missing_ok=True)
+
+
+def start_beta(workdir: Path, args: argparse.Namespace) -> None:
+    beta_workdir = expand(args.beta_workdir)
+    overlay = beta_workdir / "overlays" / "tollgate.qcow2"
+    if not overlay.exists():
+        raise SystemExit(f"Beta overlay missing at {overlay}; pass --beta-workdir")
+    pidfile = beta_pid_path(workdir)
+    if pidfile.exists():
+        try:
+            os.kill(int(pidfile.read_text().strip()), 0)
+            print("Beta seller already running")
+            return
+        except (OSError, ValueError):
+            pidfile.unlink(missing_ok=True)
+
+    ensure_bridge(BETA_BRIDGE, f"{BETA_HOST_IP}/24")
+    ensure_tap(BETA_TAP, BETA_BRIDGE)
+    start_beta_mint(workdir, args)
+
+    log = beta_workdir / "logs" / "serial.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "qemu-system-x86_64", "-enable-kvm", "-m", "512", "-smp", "2",
+        "-drive", f"file={overlay},if=virtio,format=qcow2",
+        "-netdev", f"tap,id=beta,ifname={BETA_TAP},script=no,downscript=no",
+        "-device", "virtio-net-pci,netdev=beta,mac=52:54:00:88:88:01",
+        "-display", "none", "-serial", f"unix:{beta_workdir / 'run' / BETA_SERIAL},server,nowait",
+        "-daemonize", "-pidfile", str(pidfile),
+    ]
+    run(cmd, timeout=30)
+    if not wait_for(["curl", "-fsS", "-m", "3", f"http://{BETA_SELLER_IP}:2121/"], 180):
+        raise SystemExit(f"Beta seller did not answer; see {log}")
+
+
+def beta_client_unsnat() -> None:
+    sudo(["iptables", "-t", "nat", "-D", "POSTROUTING", "-s", "10.99.98.0/24", "-o", BETA_BRIDGE,
+          "-j", "SNAT", "--to-source", BETA_CLIENT_IP], check=False)
+    sudo(["iptables", "-t", "nat", "-D", "POSTROUTING", "-s", "10.99.98.0/24",
+          "-o", BETA_BRIDGE, "-j", "RETURN"], check=False)
+
+
+def host_upstream_route() -> None:
+    run(["sudo", "ip", "rule", "del", "from", GATEWAY_WAN_IP, "lookup", "2121"], check=False)
+    run(["sudo", "ip", "rule", "del", "fwmark", "0x2121", "lookup", "2121"], check=False)
+    run(["sudo", "ip", "rule", "add", "fwmark", "0x2121", "lookup", "2121", "pref", "900"])
+    rule = ["-t", "mangle", "-C", "PREROUTING", "-i", UP_BRIDGE, "-s", GATEWAY_WAN_IP,
+            "-j", "MARK", "--set-xmark", "0x2121/0xffffffff"]
+    if run(["sudo", "iptables", *rule], check=False).returncode != 0:
+        run(["sudo", "iptables", "-t", "mangle", "-I", "PREROUTING", "1", "-i", UP_BRIDGE,
+             "-s", GATEWAY_WAN_IP, "-j", "MARK", "--set-xmark", "0x2121/0xffffffff"])
+    run(["sudo", "ip", "route", "replace", "table", "2121", "10.99.99.0/24", "dev", BETA_BRIDGE])
+    run(["sudo", "ip", "route", "replace", "table", "2121", "default", "via", BETA_SELLER_IP, "dev", BETA_BRIDGE])
+    masq = ["-t", "nat", "-C", "POSTROUTING", "-s", "10.99.99.0/24", "!", "-o", BETA_BRIDGE, "-j", "MASQUERADE"]
+    if run(["sudo", "iptables", *masq], check=False).returncode != 0:
+        run(["sudo", "iptables", "-t", "nat", "-I", "POSTROUTING", "1", "-s", "10.99.99.0/24",
+             "!", "-o", BETA_BRIDGE, "-j", "MASQUERADE"])
+
+
+def host_upstream_route_remove() -> None:
+    run(["sudo", "ip", "rule", "del", "from", GATEWAY_WAN_IP, "lookup", "2121"], check=False)
+    run(["sudo", "ip", "rule", "del", "fwmark", "0x2121", "lookup", "2121"], check=False)
+    run(["sudo", "iptables", "-t", "mangle", "-D", "PREROUTING", "-i", UP_BRIDGE, "-s", GATEWAY_WAN_IP,
+         "-j", "MARK", "--set-xmark", "0x2121/0xffffffff"], check=False)
+    run(["sudo", "iptables", "-t", "nat", "-D", "POSTROUTING", "-s", "10.99.99.0/24",
+         "!", "-o", BETA_BRIDGE, "-j", "MASQUERADE"], check=False)
+    run(["sudo", "ip", "route", "flush", "table", "2121"], check=False)
+
+
+def stop_beta_client() -> None:
+    beta_client_unsnat()
+    sudo(["iptables", "-t", "nat", "-D", "POSTROUTING", "-s", "10.99.98.0/24", "-d", BETA_SELLER_IP,
+          "-p", "tcp", "--dport", "2121", "-o", BETA_BRIDGE, "-j", "SNAT", "--to-source", BETA_CLIENT_IP],
+         check=False)
+    sudo(["iptables", "-t", "nat", "-D", "POSTROUTING", "-s", "10.99.98.0/24",
+          "-o", BETA_BRIDGE, "-j", "RETURN"], check=False)
+    sudo(["ip", "netns", "del", BETA_CLIENT_NETNS], check=False)
+    delete_link(BETA_HOST_IF)
+
+
+def stop_beta(workdir: Path) -> None:
+    path = beta_pid_path(workdir)
+    if path.exists():
+        try:
+            stop_pid(int(path.read_text().strip()))
+        except ValueError:
+            pass
+        path.unlink(missing_ok=True)
+    stop_beta_mint(workdir)
+
+
+def beta_status(workdir: Path) -> None:
+    pid = None
+    path = beta_pid_path(workdir)
+    if path.exists():
+        try:
+            pid = int(path.read_text().strip())
+            os.kill(pid, 0)
+        except (OSError, ValueError):
+            pid = None
+    print(f"beta: {'running pid ' + str(pid) if pid else 'stopped'}")
+    for name, url in (("beta-mint", f"{BETA_MINT_URL}/v1/info"), ("beta-seller", f"http://{BETA_SELLER_IP}:2121/")):
+        ok = wait_for(["curl", "-fsS", "-m", "2", url], 1)
+        print(f"{name}: {'ok' if ok else 'down'}")
+
+
 def vm_pid(workdir: Path, kind: str) -> int | None:
     path = workdir / "run" / f"{kind}.pid"
     if not path.exists():
@@ -366,7 +599,7 @@ def launch_vm(workdir: Path, kind: str, taps: list[tuple[str, str]], macs: list[
         ]
     cmd += [
         "-virtfs", f"local,path={repos},mount_tag=hostrepos,security_model=none,readonly=on",
-        "-display", "none", "-serial", f"file:{log}",
+        "-display", "none", "-serial", f"unix:{beta_workdir / 'run' / BETA_SERIAL},server,nowait",
         "-daemonize", "-pidfile", str(pidfile),
     ]
     run(cmd, timeout=30)
@@ -391,6 +624,7 @@ def start(args: argparse.Namespace) -> int:
     configure_host_nat()
 
     start_mint(workdir, expand(args.cdk_mintd))
+    start_host_dns(workdir)
     launch_vm(
         workdir, "gateway",
         [("wan", WAN_TAP), ("guest", GUEST_TAP), ("mgmt", MGMT_TAP)],
@@ -403,12 +637,17 @@ def start(args: argparse.Namespace) -> int:
         ["52:54:00:4d:4c:11", "52:54:00:4d:4c:12"],
         args.client_memory, repos,
     )
+    if getattr(args, "with_beta", False):
+        start_beta(workdir, args)
     print(f"started; gateway mgmt {GATEWAY_MGMT_IP}, client mgmt {CLIENT_MGMT_IP}, mint {MINT_URL}")
     return 0
 
 
 def stop(args: argparse.Namespace) -> int:
     workdir = expand(args.workdir)
+    stop_beta(workdir)
+    stop_beta_client()
+    stop_host_dns(workdir)
     for kind in ("client", "gateway"):
         pid = vm_pid(workdir, kind)
         if pid:
@@ -437,6 +676,9 @@ def stop(args: argparse.Namespace) -> int:
 
     for rule in (
         ["iptables", "-D", "INPUT", "-i", UP_BRIDGE, "-p", "tcp", "--dport", str(MINT_PORT), "-j", "ACCEPT"],
+        ["iptables", "-D", "INPUT", "-i", UP_BRIDGE, "-p", "tcp", "--dport", str(BETA_MINT_PORT), "-j", "ACCEPT"],
+        ["iptables", "-D", "INPUT", "-i", UP_BRIDGE, "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
+        ["iptables", "-D", "INPUT", "-i", UP_BRIDGE, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"],
         ["iptables", "-D", "INPUT", "-i", UP_BRIDGE, "-p", "tcp", "--dport", "2121", "-j", "ACCEPT"],
         ["iptables", "-D", "INPUT", "-i", UP_BRIDGE, "-p", "tcp", "--dport", "3338", "-j", "ACCEPT"],
         ["iptables", "-t", "nat", "-D", "POSTROUTING", "-s", "10.99.98.0/24", "-o", "tg-poc-br", "-j", "MASQUERADE"],
@@ -467,6 +709,9 @@ def status(args: argparse.Namespace) -> int:
     healthy = run(["curl", "-fsS", "-m", "2", f"{MINT_URL}/v1/info"], check=False).returncode == 0
     print(f"mint: {'ok' if healthy else 'down'} ({MINT_URL})")
     ok = ok and healthy
+    beta_status(workdir)
+    dns_ok = bool(run(["ss", "-lun"], check=False).stdout and f"{HOST_DNS_IP}:53" in run(["ss", "-lun"], check=False).stdout)
+    print(f"host-dns: {'ok' if dns_ok else 'down'} ({HOST_DNS_IP}:53)")
     for bridge in (UP_BRIDGE, MESH_BRIDGE, MGMT_BRIDGE):
         result = run(["ip", "link", "show", bridge], check=False)
         print(f"bridge {bridge}: {'up' if result.returncode == 0 else 'missing'}")
@@ -506,7 +751,7 @@ rsync -a --delete --exclude node_modules --exclude dist --exclude .git /mnt/host
 rsync -a /mnt/hostrepos/meshlink-broker/dist/ /opt/meshlink/broker/dist/
 cd /opt/meshlink/gateway
 MESHLINK_LAB_PREBUILT=1 bash install.sh --lab-qemu --guest-interface guest0 --wan-interface wan0 \
-  --broker-dir /opt/meshlink/broker --mint-url """ + MINT_URL + " --ap-ip " + MESH_GUEST_IP + "\n"
+  --broker-dir /opt/meshlink/broker --mint-url """ + MINT_URL + " --ap-ip " + MESH_GUEST_IP + " --dns-server " + UP_HOST_IP + "\n"
     result = ssh(GATEWAY_MGMT_IP, script, timeout=args.timeout)
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)
@@ -596,7 +841,7 @@ data["upstream"] = {
     "maxPricePerStep": 10,
     "maxCostPerMinute": 2,
     "dailyBudget": 100,
-    "renewAtPercent": 80,
+    "renewAtPercent": 50,
     "autoMint": True,
     "pollIntervalMs": 60,
 }
@@ -662,16 +907,217 @@ printf '%s' "$wrong" | grep -q 'payment-error-invalid-token'
     return result.returncode
 
 
+def beta_start_cmd(args: argparse.Namespace) -> int:
+    workdir = expand(args.workdir)
+    start_beta(workdir, args)
+    beta_status(workdir)
+    return 0
+
+
+def beta_stop_cmd(args: argparse.Namespace) -> int:
+    stop_beta(expand(args.workdir))
+    return 0
+
+
+def beta_status_cmd(args: argparse.Namespace) -> int:
+    beta_status(expand(args.workdir))
+    return 0
+
+
+def beta_client_reset() -> None:
+    sudo(["ip", "link", "set", "dev", BETA_BRIDGE, "address", BETA_HOST_BRIDGE_MAC], check=False)
+    sudo(["ip", "netns", "del", BETA_CLIENT_NETNS], check=False)
+    delete_link(BETA_HOST_IF)
+    sudo(["ip", "netns", "add", BETA_CLIENT_NETNS])
+    sudo(["ip", "link", "add", BETA_HOST_IF, "type", "veth", "peer", "name", BETA_CLIENT_IF])
+    sudo(["ip", "link", "set", BETA_HOST_IF, "master", BETA_BRIDGE])
+    sudo(["ip", "link", "set", BETA_HOST_IF, "up"])
+    sudo(["ip", "link", "set", BETA_CLIENT_IF, "netns", BETA_CLIENT_NETNS])
+    sudo(["ip", "netns", "exec", BETA_CLIENT_NETNS, "ip", "link", "set", "lo", "up"])
+    sudo(["ip", "netns", "exec", BETA_CLIENT_NETNS, "ip", "link", "set", BETA_CLIENT_IF,
+          "address", BETA_CLIENT_MAC, "up"])
+    sudo(["ip", "netns", "exec", BETA_CLIENT_NETNS, "ip", "addr", "replace",
+          f"{BETA_CLIENT_IP}/24", "dev", BETA_CLIENT_IF])
+    sudo(["ip", "netns", "exec", BETA_CLIENT_NETNS, "ip", "route", "replace",
+          "default", "via", BETA_SELLER_IP, "dev", BETA_CLIENT_IF])
+
+
+def host_claim_paid_mac() -> None:
+    run(["sudo", "ip", "link", "set", "dev", BETA_BRIDGE, "address", BETA_CLIENT_MAC])
+    run(["sudo", "ip", "neigh", "flush", "dev", BETA_BRIDGE], check=False)
+
+
+def beta_client_snat() -> None:
+    rule = ["-t", "nat", "-C", "POSTROUTING", "-s", "10.99.98.0/24", "-o", BETA_BRIDGE,
+            "-j", "SNAT", "--to-source", BETA_CLIENT_IP]
+    if sudo(["iptables", *rule], check=False).returncode != 0:
+        sudo(["iptables", "-t", "nat", "-I", "POSTROUTING", "1", "-s", "10.99.98.0/24",
+              "-o", BETA_BRIDGE, "-j", "SNAT", "--to-source", BETA_CLIENT_IP])
+    for direction in ("-i", "-o"):
+        if sudo(["iptables", "-C", "FORWARD", direction, BETA_BRIDGE, "-j", "ACCEPT"], check=False).returncode != 0:
+            sudo(["iptables", "-I", "FORWARD", "1", direction, BETA_BRIDGE, "-j", "ACCEPT"])
+
+
+def beta_client_pay(repos: Path) -> None:
+    for url in (f"http://{BETA_SELLER_IP}:2050/splash.html", f"http://{BETA_SELLER_IP}:2051/splash.html"):
+        run(["sudo", "-n", "ip", "netns", "exec", BETA_CLIENT_NETNS, "curl", "-fsS", "-m", "5", url],
+            check=False)
+    token = run(["npx", "tsx", "scripts/tollgate-test-token.ts", BETA_MINT_URL, "1"],
+                check=True, timeout=120, cwd=str(repos / "meshlink-broker")).stdout.strip()
+    result = run([
+        "sudo", "-n", "ip", "netns", "exec", BETA_CLIENT_NETNS,
+        "curl", "-sS", "-m", "20", "-H", "Content-Type: text/plain",
+        "-w", "\n%{http_code}", "-X", "POST", "--data-binary", token,
+        f"http://{BETA_SELLER_IP}:2121/",
+    ], check=False)
+    body, _, code = result.stdout.rpartition("\n")
+    if code.strip() != "200" or '"kind":1022' not in body:
+        raise SystemExit(f"Beta payment failed (HTTP {code.strip()}): {body[-300:]}")
+    print("beta-client: paid")
+
+
+def configure_gateway_upstream() -> None:
+    script = f"""set -eu
+ip route replace 10.99.99.0/24 via 10.99.98.1 dev wan0
+python3 - <<'PYCFG'
+import json
+path = "/opt/meshlink/broker/server/config/meshlink-config.json"
+data = json.load(open(path))
+data["upstream"] = {{
+    "enabled": True,
+    "url": "http://{BETA_SELLER_IP}:2121",
+    "unit": "sat",
+    "steps": 1,
+    "maxPricePerStep": 10,
+    "maxCostPerMinute": 2,
+    "dailyBudget": 100,
+    "renewAtPercent": 50,
+    "autoMint": True,
+    "pollIntervalMs": 10,
+    "routeThrough": True,
+    "routeTable": 2121,
+    "routeNexthop": "10.99.98.1",
+    "guestInterface": "br-guest",
+}}
+json.dump(data, open(path, "w"), indent=2)
+PYCFG
+systemctl restart meshlink-broker
+for i in $(seq 1 90); do
+  status=$(curl -fsS --max-time 3 http://127.0.0.1:3000/api/meshlink/upstream || true)
+  case "$status" in *'"route":"installed"'*) echo "$status"; exit 0;; *failed*|*ambiguous*) echo "$status"; exit 1;; esac
+  sleep 2
+done
+echo "upstream route did not install: $status"
+exit 1
+"""
+    result = ssh(GATEWAY_MGMT_IP, script, timeout=300)
+    sys.stdout.write(result.stdout)
+    sys.stderr.write(result.stderr)
+    if result.returncode != 0:
+        raise SystemExit("gateway upstream configuration failed")
+
+
+def chain(args: argparse.Namespace) -> int:
+    """Pay Beta from a netns, steer MeshLink guest traffic, and verify renewal."""
+    workdir = expand(args.workdir)
+    repos = expand(args.repos_dir)
+    if not wait_ssh(GATEWAY_MGMT_IP, 60) or not wait_ssh(CLIENT_MGMT_IP, 60):
+        print("MeshLink VMs are not reachable", file=sys.stderr)
+        return 1
+    if not wait_for(["curl", "-fsS", "-m", "2", f"http://{BETA_SELLER_IP}:2121/"], 10):
+        start_beta(workdir, args)
+    beta_client_reset()
+    beta_client_unsnat()
+    beta_client_pay(repos)
+    stop_beta_client()
+    beta_client_snat()
+    host_claim_paid_mac()
+    beta_allow_chain_source()
+    beta_upstream_setup()
+    host_upstream_route()
+    configure_gateway_upstream()
+    if buy(args) != 0:
+        print("client could not buy a MeshLink session after enabling upstream", file=sys.stderr)
+        return 1
+
+    print("beta usage before:", run(["curl", "-fsS", "-m", "3", f"http://{BETA_SELLER_IP}:2121/usage"], check=False).stdout.strip())
+    traffic = ssh(CLIENT_MGMT_IP, """set -eu
+getent hosts example.com >/dev/null
+for i in 1 2 3 4 5; do
+  curl -fsS --max-time 180 -o /dev/null -w 'traffic %{http_code} %{size_download}\n' \
+    'https://speed.cloudflare.com/__down?bytes=50000000'
+done
+""", timeout=660)
+    sys.stdout.write(traffic.stdout)
+    sys.stderr.write(traffic.stderr)
+    if traffic.returncode != 0:
+        print("chain traffic failed", file=sys.stderr)
+        return traffic.returncode
+
+    print("beta usage after:", run(["curl", "-fsS", "-m", "3", f"http://{BETA_SELLER_IP}:2121/usage"], check=False).stdout.strip())
+    deadline = time.monotonic() + 300
+    last = ""
+    while time.monotonic() < deadline:
+        last = ssh(GATEWAY_MGMT_IP, "curl -fsS --max-time 3 http://127.0.0.1:3000/api/meshlink/upstream || true", timeout=15).stdout
+        if '"purchases":2' in last or '"purchases":3' in last or '"purchases":4' in last:
+            print(last)
+            return 0
+        time.sleep(5)
+    print(f"renewal did not complete: {last}", file=sys.stderr)
+    return 1
+
+
+def beta_serial(script: str, timeout: int = 10) -> str:
+    socket = expand(default_beta_workdir()) / "run" / BETA_SERIAL
+    settle = max(1, timeout - 2)
+    command = (
+        f"(sleep 1; printf '\\n%s\\n' {shlex.quote(script)}; sleep {settle}) "
+        f"| timeout {timeout} socat - UNIX-CONNECT:{shlex.quote(str(socket))}"
+    )
+    result = subprocess.run(command, shell=True, text=True, capture_output=True, check=False)
+    return result.stdout
+
+def default_workdir() -> str:
+    return os.environ.get("MESHLINK_LAB_WORKDIR", DEFAULT_WORKDIR)
+
+
+def default_beta_workdir() -> str:
+    return os.environ.get("MESHLINK_BETA_WORKDIR", str(Path.home() / "tollgate-virtual-lab-clean"))
+
+
+def beta_allow_chain_source() -> None:
+    commands = [
+        "nft insert rule ip filter nds_enforce_forward ip saddr 10.99.99.3 counter accept 2>/dev/null || true",
+        "nft insert rule ip filter nds_enforce_forward ip saddr 10.99.98.0/24 counter accept 2>/dev/null || true",
+        "nft list chain ip filter FORWARD | grep -q 'ip saddr 10.99.99.3' || nft insert rule ip filter FORWARD ip saddr 10.99.99.3 counter accept",
+        "nft list chain ip filter FORWARD | grep -q 'ip daddr 10.99.99.3' || nft insert rule ip filter FORWARD ip daddr 10.99.99.3 counter accept",
+        "nft list chain ip filter FORWARD | grep -q 'ip saddr 10.99.98.0/24' || nft insert rule ip filter FORWARD ip saddr 10.99.98.0/24 counter accept",
+        "nft list chain ip filter FORWARD | grep -q 'ip daddr 10.99.98.0/24' || nft insert rule ip filter FORWARD ip daddr 10.99.98.0/24 counter accept",
+    ]
+    for command in commands:
+        beta_serial(command, timeout=8)
+
+
+def beta_upstream_setup() -> None:
+    beta_serial("ip route del 10.99.99.3/32 via 10.99.99.2 dev br-lan 2>/dev/null || true", timeout=8)
+    beta_serial("nft list chain ip nat POSTROUTING >/dev/null 2>&1 || nft add chain ip nat POSTROUTING '{ type nat hook postrouting priority 100; policy accept; }'", timeout=8)
+    beta_serial("nft list chain ip nat POSTROUTING | grep -q 'ip saddr 10.99.99.3 masquerade' || nft add rule ip nat POSTROUTING oifname \"br-lan\" ip saddr 10.99.99.3 masquerade", timeout=8)
+    beta_serial("nft list chain ip nat POSTROUTING | grep -q 'ip saddr 10.99.98.0/24 masquerade' || nft add rule ip nat POSTROUTING oifname \"br-lan\" ip saddr 10.99.98.0/24 masquerade", timeout=8)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workdir", default=DEFAULT_WORKDIR)
     parser.add_argument("--repos-dir", default=DEFAULT_REPOS)
     parser.add_argument("--cdk-mintd", default=str(Path.home() / "cdk-mint" / "cdk-mintd"))
+    parser.add_argument("--beta-workdir", default=str(Path.home() / "tollgate-virtual-lab-clean"))
+    parser.add_argument("--beta-mint-dir", default=str(Path.home() / "cdk-mint"))
+    parser.add_argument("--with-beta", action="store_true", help="start the Beta OpenWrt seller with the lab")
     parser.add_argument("--gateway-memory", type=int, default=2048)
     parser.add_argument("--client-memory", type=int, default=1024)
     parser.add_argument("--timeout", type=int, default=1800)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name, func in (("prepare", prepare), ("start", start), ("stop", stop), ("status", status), ("provision", provision), ("smoke", smoke), ("buy", buy), ("buyer", buyer), ("replay", replay)):
+    for name, func in (("prepare", prepare), ("start", start), ("stop", stop), ("status", status), ("provision", provision), ("smoke", smoke), ("buy", buy), ("buyer", buyer), ("replay", replay), ("beta-start", beta_start_cmd), ("beta-stop", beta_stop_cmd), ("beta-status", beta_status_cmd), ("chain", chain)):
         sub.add_parser(name, help=func.__doc__ or name).set_defaults(func=func)
     return parser
 
