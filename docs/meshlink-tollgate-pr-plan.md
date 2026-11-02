@@ -1,6 +1,6 @@
 # MeshLink ↔ TollGate Physical Chain PR Plan
 
-Status: in progress
+Status: complete
 Owner: MeshLink interop lab
 Last updated: 2026-11-03
 
@@ -20,6 +20,12 @@ body; the gateway and PRTA PRs link back to it.
 | `MeshLinkFoundation/meshlink-wifi-gateway` | `felixfelix-bot:labgrid-tollgate-interop` | `main` | QEMU lab mode, TollGate seller listener, DNS override |
 | `OpenTollGate/physical-router-test-automation` | `felixfelix-bot:meshlink-interop-pr` | `main` | MeshLink interop lab harness, pytest lane, docs, physical runbook |
 
+## Draft PR links
+
+- Broker: https://github.com/meshlinkfoundation/broker/pull/1
+- Gateway: https://github.com/meshlinkfoundation/meshlink-wifi-gateway/pull/3
+- PRTA: https://github.com/OpenTollGate/physical-router-test-automation/pull/336
+
 ## Diff size
 
 Focused PR diffs against current upstream `main`:
@@ -28,11 +34,11 @@ Focused PR diffs against current upstream `main`:
 |---|---:|---:|
 | Broker | 14 | +1520 / −21 |
 | Gateway | 2 | +218 / −48 |
-| PRTA | 7 | +1807 / −0 |
-| Combined | 23 | +3545 / −69 |
+| PRTA | 8 | +1958 / −0 |
+| Combined | 24 | +3696 / −69 |
 
 The PRTA branch should be cut from upstream `main` and contain only the six
-MeshLink commits:
+MeshLink interop commits plus the PR plan commit:
 
 - `83f736e` Add MeshLink TollGate interop lab
 - `68d5c1f` meshlink: prove tollgate chain traffic and renewal
@@ -40,6 +46,7 @@ MeshLink commits:
 - `b105d42` meshlink: fix physical seller CLI wiring
 - `d306331` meshlink: guard off-link physical sellers
 - `74eb182` meshlink: document physical seller chain via private bridge
+- `c2f5ba9` meshlink: add physical chain PR plan and evidence
 
 Do not include the unrelated E750/bench commits from the full fork `main`.
 
@@ -122,23 +129,23 @@ PRTA PR body: harness/docs/physical runbook; linked broker PR.
 
 ### PR branches
 
-- [ ] Verify pushed broker branch and diff against upstream `main`.
-- [ ] Verify pushed gateway branch and diff against upstream `main`.
-- [ ] Create clean PRTA branch `meshlink-interop-pr` from upstream `main`.
-- [ ] Cherry-pick only the six MeshLink commits onto the clean branch.
-- [ ] Push `meshlink-interop-pr` to the fork.
+- [x] Verify pushed broker branch and diff against upstream `main`.
+- [x] Verify pushed gateway branch and diff against upstream `main`.
+- [x] Create clean PRTA branch `meshlink-interop-pr` from upstream `main`.
+- [x] Cherry-pick only the MeshLink commits plus plan onto the clean branch.
+- [x] Push `meshlink-interop-pr` to the fork.
 
 ### Draft PRs
 
-- [ ] Open draft PR: broker.
-- [ ] Open draft PR: gateway.
-- [ ] Open draft PR: PRTA.
-- [ ] Add fresh physical evidence to the broker PR body.
-- [ ] Cross-link all three draft PRs.
+- [x] Open draft PR: broker.
+- [x] Open draft PR: gateway.
+- [x] Open draft PR: PRTA.
+- [x] Add fresh physical evidence to the broker PR body.
+- [x] Cross-link all three draft PRs.
 
 ### Final verification
 
-- [ ] All three PRs are draft.
-- [ ] PR file counts/diff sizes match this plan.
-- [ ] Lab restored and all temporary routes/rules removed.
-- [ ] Report PR URLs and final diff sizes.
+- [x] All three PRs are draft.
+- [x] PR file counts/diff sizes match this plan.
+- [x] Lab restored and all temporary routes/rules removed.
+- [x] Report PR URLs and final diff sizes.
