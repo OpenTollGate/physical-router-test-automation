@@ -1,3 +1,45 @@
+# PROGRESS — supervised execution machinery
+
+Branch `pr/fleet-supervised-exec`, worktree `~/worktrees/prta-supervised-exec`,
+base `ce14c790479710d901e96ce5e2948b69109f2503` (PR #334 head).
+
+- Read `~/reports/reviews/prta-334-runner-safety.md`, then checked the promoted
+  manager finding in `tests/conftest.py:346-415` myself: the router fixture already
+  does coordinator-owned place acquisition (`plan_venue` + `venue_mutex`, held for the
+  session, `pytest.exit(rc=4)` if the place is taken). Confirmed — so the runner must
+  **not** acquire. Supervision covers host budget only.
+- RED first: `tests/unit/test_supervised_run.py` → **16 failed, 2 passed**. The two
+  passes are the characterisation pair proving today's defect: the real `tee_run` ran a
+  0.5 s child under a 0.2 s lease with **0 renew calls**, expiry unchanged, and the lane
+  then quarantined `lease_expired` — the audit's finding as an executable test.
+- Built `lib/supervised_run.py`: heartbeat renewal, fatal-on-renewal-failure
+  (SIGTERM→SIGKILL group, exit 76), fencing/authority-loss kill (exit 77), and
+  `CONFIRMED`/`UNCONFIRMED` teardown evidence probed with `killpg(pgid, 0)`.
+- Fixed two wedges found while writing the tests: unbounded drain on a grandchild-held
+  pipe, and reap-before-probe ordering (a zombie group answers `killpg(pgid, 0)`).
+- Fixed two flaky tests that raced the child's startup instead of the behaviour under
+  test (wait for the child's pid file before fencing / failing renewal).
+- GREEN **29 passed**, stable 5× and under random ordering. Focused regression suite
+  **252 passed**. Coverage **97%** (statement+branch) on the new module.
+  `git diff --check`, `ruff check`, `ruff format --check` all clean.
+- Requirement probe run and saved: `evidence/prta-supervised-exec/` — 17 renewals across
+  a 0.3 s TTL, `RenewalFailed exit=76`, `AuthorityLost exit=77`, unconfirmed teardown
+  reported as such.
+- Gate untouched: `scripts/run-profile.py` byte-identical to base; fleet execution still
+  refuses with exit 75 / `fleet_lifecycle_unavailable`.
+- Remaining before the gate may relax: (1) manifest-resource → profile endpoint/env
+  binding, (2) re-scoped fixture handoff (runner passes host reservation + run identity;
+  fixture stays sole place owner), (5) coordinator-release evidence so `clean` is
+  justified. See REPORT.md for the per-requirement table.
+- Not done, by instruction: no hardware/QEMU/coordinator acquisition, no place taken, no
+  PR334 push, no force-push, no upstream PR, no merge, no card transition.
+
+---
+
+# Runner lifecycle gate — bounded milestone
+
+---
+
 # Runner lifecycle gate — bounded milestone
 
 - Worktree `~/worktrees/prta-runner-lifecycle`, branch `pr/fleet-runner-lifecycle`,

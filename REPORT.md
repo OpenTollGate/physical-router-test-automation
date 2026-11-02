@@ -1,3 +1,146 @@
+# Supervised execution — machinery built and tested, gate still closed
+
+Base: `ce14c790479710d901e96ce5e2948b69109f2503` (PR #334 head).
+Branch: `pr/fleet-supervised-exec`, worktree `~/worktrees/prta-supervised-exec`.
+Read first: `~/reports/reviews/prta-334-runner-safety.md`.
+
+## Outcome
+
+`lib/supervised_run.py` is a drop-in replacement for `scripts/run-profile.py::tee_run`
+— same signature (`command, cwd, env, log_path, dry_run → int`), still streams to
+stdout, still writes `output.log`, still returns the child's exit status — that
+additionally keeps the authority lease honest while the child runs.
+
+**The production gate is untouched.** `scripts/run-profile.py` has zero changes on
+this branch (`git diff --stat` lists only the new module, its test and this evidence
+dir). Fleet execution still refuses with `exit 75` / `fleet_lifecycle_unavailable`.
+Machinery is built and tested; it is **not wired**.
+
+## What the module does
+
+| Requirement | Behaviour |
+|---|---|
+| (a) heartbeat | `FleetAuthority.renew` every `heartbeat_s` (default `ttl_s/3`) while the child runs |
+| (b) renewal failure = FATAL | SIGTERM → grace → SIGKILL the process group, then raise `RenewalFailed` (exit **76**). Never suppresses and waits for TTL |
+| (c) fencing | `renew` refusal (`Fenced`/`NotGranted`/`UnknownRun`) → terminate group, raise `AuthorityLost` (exit **77**). Pre-spawn `assert_authority_valid` also catches superseded fence, closed allocation and already-expired lease |
+| (d) honest cleanup | after reaping, `killpg(pgid, 0)` must say the group is gone. `Outcome.cleanup` is `CONFIRMED`/`UNCONFIRMED`; `clean` is only `True` when confirmed, so the caller records `CLEANUP_PENDING` instead of claiming clean |
+
+Child is spawned with `start_new_session=True`, so `pgid == pid` and there is a group
+to kill. Teardown reaps **before** the final liveness probe, because an unreaped
+zombie still answers `killpg(pgid, 0)` — the mirror-image dishonesty of claiming
+clean without proof.
+
+Two bounds that prevent a wedged lane:
+
+- output draining stops `drain_after_exit_s` (default 1 s) after the child exits, so a
+  surviving grandchild holding the pipe cannot hold the runner open;
+- a group left alive by a exited child is killed and *re-probed*; unproven ⇒
+  `UNCONFIRMED`.
+
+## Scope: supervision is host budget only — no place acquisition
+
+This module does **not** reserve, activate, release or touch a labgrid place. Place
+ownership stays exactly where it is: `tests/conftest.py` (router fixture) already calls
+`plan_venue` + `venue_mutex`, holds the place and hardware lock for the session, and
+`pytest.exit(rc=4)` when the place is held by someone else. A runner-side acquisition
+would be a **second owner for one DUT** — the double-ownership bug, not a fix for it.
+
+Enforced structurally, not by prose: `test_supervision_does_not_import_labgrid_or_acquire_anything`
+parses the module's AST and asserts it imports nothing named `labgrid*` and calls none
+of `try_reserve/acquire/activate/release/complete/abort/fence`. The only authority
+calls it makes are `renew` and `allocation` (both asserted, and a `__getattr__`
+watcher fails the test on any other attribute).
+
+## RED → GREEN
+
+RED first, `tests/unit/test_supervised_run.py` before the module existed:
+**16 failed, 2 passed**. The two passes are the characterisation pair:
+`test_plain_tee_run_renews_nothing_and_lets_the_lease_expire` runs the *real*
+`tee_run` for 0.5 s against a 0.2 s lease and asserts `renew` was called **0**
+times, the expiry timestamp unchanged, then `expire()` quarantines the lane with
+`lease_expired` while the child's output log says it finished — the audit's finding
+reproduced in a test. That test must keep passing: it is the record of the defect,
+and it would flip the moment anyone wires supervision into `tee_run` without the
+heartbeat.
+
+GREEN: **29 passed in 10.58s** (file alone, `-p no:randomly`), stable over 5
+consecutive runs and also green under random ordering.
+
+Focused regression suite (runner + fleet authority + admission + scheduler):
+**252 passed in 31.77s**.
+
+```
+python3 -m pytest tests/unit/test_supervised_run.py tests/unit/test_runner_lifecycle_gate.py \
+  tests/unit/test_run_admission.py tests/unit/test_run_admission_review_fixes.py \
+  tests/unit/test_runner_manifest_authorization.py tests/unit/test_runner_authorization_integration.py \
+  tests/unit/test_fleet_authority.py tests/unit/test_fleet_authority_aggregate.py \
+  tests/unit/test_fleet_scheduler.py tests/unit/test_fleet_capacity.py -q
+```
+
+## Coverage
+
+`coverage 7.17.0`, installed to an external scratch target (no project dependency
+change; prepend that target to `PYTHONPATH` to reproduce):
+
+```
+python3 -m coverage run --branch --source=lib.supervised_run -m pytest \
+  tests/unit/test_supervised_run.py -q -p no:randomly
+python3 -m coverage report -m
+
+Name                    Stmts   Miss Branch BrPart  Cover   Missing
+-------------------------------------------------------------------
+lib/supervised_run.py     221      2     52      5    97%   233->238, 246->251, 428->437, 444->413, 452-453
+TOTAL                     221      2     52      5    97%
+```
+
+**97% (statement + branch) on the new module**, above the 80% bar. The residual
+misses are `__all__` bookkeeping and defensive branches reachable only through a
+`Popen` that refuses to start.
+
+`git diff --check` clean; `ruff check` and `ruff format --check` clean on both new
+files.
+
+## The five enabling requirements — status at this SHA
+
+The five come from `REPORT.md` "Remaining work to enable fleet execution"
+(items 1–5; item 6 is their tests). Status is stated against *the shipped runner
+path*, not against the new library:
+
+| # | Requirement | Status | Evidence |
+|---|---|---|---|
+| 1 | Manifest resource → profile endpoint/env **binding**; refuse unsupported profiles | **NOT MET** | Nothing derives `(coordinator, place)` from the selected manifest resource, and nothing asserts the profile's `TOLLGATE_SSH_HOST`/endpoint targets that place. Untouched by this milestone. |
+| 2 | **Fixture ownership handoff** so the fixture reuses the runner's owner instead of acquiring again | **NOT MET (and deliberately not attempted)** | The fixture still acquires the place itself (`tests/conftest.py:381-400`). The promoted finding stands: the fixture is the *correct* owner of the place, so the runner must not acquire. That makes requirement 2 as originally worded **obsolete** — it should be re-scoped to "runner passes host-budget reservation + run identity to the fixture; fixture remains sole place owner". No handoff mechanism exists yet, so the requirement is open either way. |
+| 3 | **Supervision**: tee + renew on heartbeat, terminate on fence/expiry, prove it is gone | **MET (machinery, tested)** — not wired | Requirements probe: child 1.0 s under a 0.3 s TTL → **17 renewals**, lane still `active`, `expire()` returns 0. Fence mid-run → `AuthorityLost`, store `fenced`, child killed. Teardown proven by `killpg(pgid, 0)`. |
+| 4 | **Renewal failure is fatal**: terminate and raise, not suppressed until TTL | **MET (machinery, tested)** | Probe: `RenewalFailed exit=76 cleanup=confirmed terminated=True` at the first bad beat, well before the TTL. |
+| 5 | **Release evidence**: `clean` from verified teardown; unconfirmed ⇒ `CLEANUP_PENDING` | **PARTIALLY MET** | Child-teardown half is done and returns `CONFIRMED`/`UNCONFIRMED` (`clean` only true when confirmed). The **coordinator-release half is absent**: nothing re-reads `owner()`/a bench claim, so a clean release still cannot be justified from coordinator evidence. `run-profile.py`'s `release(clean=True)` call site remains unproven and unchanged. |
+
+Reproduce the requirement probe: `PROBE_DIR=$(mktemp -d) python3
+evidence/prta-supervised-exec/requirements-probe.py`; saved output in
+`evidence/prta-supervised-exec/requirements-probe.log`.
+
+### Net effect on the gate
+
+**Zero of the five are fully met on the production path**, so
+`require_supported_fleet_lifecycle` stays exactly as it is. What changed is that
+requirement 3 and requirement 4's supervision defects no longer need designing —
+they have an implementation with tests. Requirements 1, the re-scoped 2, and 5's
+coordinator half are the remaining work before the refusal may relax.
+
+## Files
+
+- `lib/supervised_run.py` (new, 221 statements)
+- `tests/unit/test_supervised_run.py` (new, 29 tests)
+- `evidence/prta-supervised-exec/requirements-probe.py`, `.../requirements-probe.log`
+- `REPORT.md`, `PROGRESS.md` (updated)
+
+## Not done, by instruction
+
+No hardware, QEMU, real coordinator acquisition, labgrid place taken, or fleet
+benchmark. No PR #334 branch change, no forced push, no upstream PR, no merge, no
+card transition. `scripts/run-profile.py` byte-identical to base.
+
+---
+
 # Runner lifecycle safety — bounded fail-closed milestone
 
 Base: `d5e5fc30a8f0bd27ea3b5f26adcd3b38438eb7b2` (branch `pr/fleet-runner-lifecycle`,
