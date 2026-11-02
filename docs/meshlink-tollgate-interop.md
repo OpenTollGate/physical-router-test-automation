@@ -192,6 +192,43 @@ Known lab constraints:
 - 9p sharing uses mount tag `hostrepos`; if it is not mounted automatically,
   rerun `make meshlink-lab-provision` (it mounts idempotently).
 
+### Physical labgrid seller (`gl-mt3000`)
+
+The labgrid coordinator is local on the FIPS mesh, not `192.168.13.208`:
+
+```bash
+labgrid-client -x x280.fips:20408 places
+# archy-vm  comfast  gl-mt3000  tollgate-d8ba
+```
+
+`gl-mt3000` is a live TollGate seller at `192.168.50.205:2121`
+(`price_per_step cashu 1 sat`, milliseconds metric). It is on the home LAN
+behind `192.168.2.1`, so it is **off-link** from MeshLink's `tg-upstream-br`
+bridge. A physical seller in that topology cannot be MeshLink's default
+gateway: `ip route ... default via 192.168.50.205 dev enx...` fails, and an
+`onlink` neighbor would still be sent to the home router. `chain --seller-place`
+now exits with that explanation before modifying routes.
+
+Physical payment and renewal still validate the seller contract:
+
+```bash
+labgrid-client -x x280.fips:20408 -p gl-mt3000 acquire
+# expose the lab FakeWallet mint to the seller and make it the first mint
+# (temporary seller config; restore afterwards)
+# register + authenticate the broker's source MAC (host LAN interface) in NDS:
+curl -s http://192.168.50.205:2051/splash.html >/dev/null
+labgrid-client -x x280.fips:20408 -p gl-mt3000 ssh \
+  'ndsctl clients; ndsctl auth <token>'
+# point broker upstream at the seller with routeThrough=false, then restart
+labgrid-client -x x280.fips:20408 -p gl-mt3000 release
+```
+
+Observed 2026-11-02: first purchase `granted` (`allotment: 240000`, cost 1 sat),
+seller `/usage` `23000/180000`; automatic millisecond renewal produced
+`purchases: 2`, `allotment: 300000`, `/usage` `34000/300000`. Guest traffic
+through the physical seller remains blocked by the off-link topology, not by
+payment or renewal.
+
 ## Buyer configuration
 
 ```json
@@ -246,3 +283,8 @@ Status: `GET /api/meshlink/upstream` on the broker (`:3000`).
   traffic to the paid `.3` session, restores the paid MAC on `tg-poc-br`,
   downloads 250 MB through the chain, and reaches `purchases: 3` after
   automatic `/usage`-driven renewals. Client HTTPS and Beta usage both pass.
+- 2026-11-02: physical labgrid seller reached at `x280.fips:20408` place
+  `gl-mt3000` (`192.168.50.205:2121`). MeshLink paid 1 sat from the lab
+  FakeWallet after NDS splash/auth; automatic renewal reached `purchases: 2`.
+  Full guest routing is blocked because the seller is off-link behind
+  `192.168.2.1`; `chain --seller-place` now fails with a clear explanation.
