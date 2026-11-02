@@ -86,7 +86,8 @@ renew before expiry, and prove Beta usage moved.
 - [x] Update `docs/virtual-lab.md` with the Beta chain lane.
 - [x] Add story/TIP markers to interop tests.
 - [x] Add physical labgrid place mode (`chain --seller-place` with `MESHLINK_SELLER_URL`).
-  Off-link sellers now fail before route changes; on-link sellers can chain.
+  Full `gl-mt3000` chain passes via its on-link private bridge
+  `192.168.2.1:2121`; off-link seller URLs fail before route changes.
 - [x] Rerun the full interop suite.
 - [x] Commit and push gateway, broker, and PRTA branches.
 
