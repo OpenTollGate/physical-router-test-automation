@@ -1,6 +1,6 @@
 # MeshLink ↔ TollGate Interoperability Plan
 
-Status: seller lane passing; full host → Beta → MeshLink → client chain passes, including traffic and automatic renewal.
+Status: seller lane passing; full virtual and physical host → seller → MeshLink → client chains pass, including traffic and automatic renewal.
 
 Remaining-work plan and checklist: `docs/meshlink-tollgate-interop-plan.md`.
 Owner: PRTA / TollGate lab
@@ -201,33 +201,35 @@ labgrid-client -x x280.fips:20408 places
 # archy-vm  comfast  gl-mt3000  tollgate-d8ba
 ```
 
-`gl-mt3000` is a live TollGate seller at `192.168.50.205:2121`
-(`price_per_step cashu 1 sat`, milliseconds metric). It is on the home LAN
-behind `192.168.2.1`, so it is **off-link** from MeshLink's `tg-upstream-br`
-bridge. A physical seller in that topology cannot be MeshLink's default
-gateway: `ip route ... default via 192.168.50.205 dev enx...` fails, and an
-`onlink` neighbor would still be sent to the home router. `chain --seller-place`
-now exits with that explanation before modifying routes.
+`gl-mt3000` is a live TollGate seller (`price_per_step cashu 1 sat`,
+milliseconds metric) with two relevant interfaces:
 
-Physical payment and renewal still validate the seller contract:
+- WAN `eth0` `192.168.50.205` — off-link from the host; accessible through the
+  home router but unusable as MeshLink's default gateway.
+- Private bridge `br-private` `192.168.2.1/24` (`eth1`) — on-link with the
+  host `enx6c6e0750c33b` (`192.168.2.201`) and already the host’s default
+  gateway. Use `http://192.168.2.1:2121` for the chain.
+
+`chain --seller-place` exits with a clear error if the seller URL points at
+the off-link WAN address. For the on-link private bridge:
 
 ```bash
 labgrid-client -x x280.fips:20408 -p gl-mt3000 acquire
-# expose the lab FakeWallet mint to the seller and make it the first mint
-# (temporary seller config; restore afterwards)
-# register + authenticate the broker's source MAC (host LAN interface) in NDS:
-curl -s http://192.168.50.205:2051/splash.html >/dev/null
+# temporary seller config: expose the lab FakeWallet mint (192.168.2.201:8383)
+# first in accepted_mints, then restart tollgate-wrt.
+# register + authenticate the broker's source MAC in NDS:
+curl -s http://192.168.2.1:2051/splash.html >/dev/null
 labgrid-client -x x280.fips:20408 -p gl-mt3000 ssh \
   'ndsctl clients; ndsctl auth <token>'
-# point broker upstream at the seller with routeThrough=false, then restart
+MESHLINK_SELLER_URL=http://192.168.2.1:2121 \
+  MESHLINK_SELLER_PLACE=gl-mt3000 make meshlink-lab-chain-physical
 labgrid-client -x x280.fips:20408 -p gl-mt3000 release
 ```
 
-Observed 2026-11-02: first purchase `granted` (`allotment: 240000`, cost 1 sat),
-seller `/usage` `23000/180000`; automatic millisecond renewal produced
-`purchases: 2`, `allotment: 300000`, `/usage` `34000/300000`. Guest traffic
-through the physical seller remains blocked by the off-link topology, not by
-payment or renewal.
+Observed 2026-11-02: MeshLink paid the seller 1 sat (`granted`, 60 s
+allotment), downloaded 5×50 MB through the client, seller `/usage` advanced
+`11000/60000` → `39000/180000`, and automatic renewal reached `purchases: 3`
+with `route: installed` and client HTTPS `internet: ok`.
 
 ## Buyer configuration
 
@@ -283,8 +285,9 @@ Status: `GET /api/meshlink/upstream` on the broker (`:3000`).
   traffic to the paid `.3` session, restores the paid MAC on `tg-poc-br`,
   downloads 250 MB through the chain, and reaches `purchases: 3` after
   automatic `/usage`-driven renewals. Client HTTPS and Beta usage both pass.
-- 2026-11-02: physical labgrid seller reached at `x280.fips:20408` place
-  `gl-mt3000` (`192.168.50.205:2121`). MeshLink paid 1 sat from the lab
-  FakeWallet after NDS splash/auth; automatic renewal reached `purchases: 2`.
-  Full guest routing is blocked because the seller is off-link behind
-  `192.168.2.1`; `chain --seller-place` now fails with a clear explanation.
+- 2026-11-02: full physical chain passes through labgrid place `gl-mt3000`
+  using its on-link private bridge `192.168.2.1:2121` (WAN `.205` is
+  off-link). MeshLink paid 1 sat after NDS splash/auth, client traffic
+  downloaded 250 MB, seller `/usage` advanced, and automatic renewal reached
+  `purchases: 3`. `chain --seller-place` now rejects an off-link seller URL
+  before changing routes.
