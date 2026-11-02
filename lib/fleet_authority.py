@@ -863,6 +863,8 @@ class FleetAuthority:
         owner_pid: int | None = None,
         owner_start_ticks: int | None = None,
         note: str = "",
+        expected_fleet_id: str | None = None,
+        expected_resource_id: str | None = None,
     ) -> Decision:
         """The one atomic admission decision.
 
@@ -903,6 +905,21 @@ class FleetAuthority:
             except NotGranted as exc:
                 conn.execute("ROLLBACK")
                 return Decision(False, reason=exc.reason, detail=exc.detail, lane_id=lane_id)
+
+            # Bind authorization to the registered identity in the reservation
+            # transaction, before either a new grant or an idempotent replay.
+            if (
+                expected_fleet_id is not None and lane["fleet_id"] != expected_fleet_id
+            ) or (
+                expected_resource_id is not None and lane["resource_id"] != expected_resource_id
+            ):
+                conn.execute("ROLLBACK")
+                return Decision(
+                    False,
+                    reason="lane_identity_mismatch",
+                    detail="registered lane does not match the authorized fleet/resource",
+                    lane_id=lane_id,
+                )
 
             # Idempotency key: a caller that lost the grant's reply must be able
             # to retry the SAME run id and get the SAME claim back. Only an

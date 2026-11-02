@@ -88,42 +88,37 @@ def test_non_integer_demand_is_refused():
 # --------------------------------------------------------------------------- #
 # target resolution — never guess which DUT a run gets
 # --------------------------------------------------------------------------- #
-class _Place:
-    def __init__(self, resource_id: str):
-        self.resource_id = resource_id
-
-
-class _FleetEntry:
-    def __init__(self, places):
-        self.places = places
-
-
-class _Manifest:
-    def __init__(self, fleets):
-        self.fleets = fleets
+def _manifest(fleets):
+    # Real schema: FleetEntry has allowed_places, never a `places` attribute.
+    from lib.fleet_capacity import parse_manifest
+    return parse_manifest({"schema_version": 1, "fleets": [
+        {"id": fleet, "coordinator": {"address": "localhost:20408",
+         "credential_ref": {"source": "env", "name": "TEST_COORDINATOR"}},
+         "host_controller": {"endpoint": "localhost:8099",
+         "credential_ref": {"source": "env", "name": "TEST_HOST"}},
+         "allowed_places": places, "permitted_actions": ["observe", "acquire", "release"],
+         "capacity_limits": {"max_concurrent_runs": 1}}
+        for fleet, places in fleets.items()
+    ]})
 
 
 def test_single_lane_can_be_inferred_from_the_manifest():
-    manifest = _Manifest({"fleet-a": _FleetEntry([_Place("router-a")])})
+    manifest = _manifest({"fleet-a": ["router-a"]})
     target = resolve_target(fleet_id=None, lane_id=None, resource_id=None, manifest=manifest)
     assert (target.fleet_id, target.lane_id, target.resource_id) == (
-        "fleet-a",
-        "router-a",
-        "router-a",
+        "fleet-a", "router-a", "router-a",
     )
 
 
 def test_multiple_fleets_are_ambiguous_and_refused():
-    manifest = _Manifest(
-        {"fleet-a": _FleetEntry([_Place("router-a")]), "fleet-b": _FleetEntry([_Place("b1")])}
-    )
+    manifest = _manifest({"fleet-a": ["router-a"], "fleet-b": ["b1"]})
     with pytest.raises(AdmissionRefused) as exc:
         resolve_target(fleet_id=None, lane_id=None, resource_id=None, manifest=manifest)
     assert exc.value.reason == "fleet_ambiguous"
 
 
 def test_multiple_places_are_ambiguous_and_refused():
-    manifest = _Manifest({"fleet-a": _FleetEntry([_Place("r1"), _Place("r2")])})
+    manifest = _manifest({"fleet-a": ["r1", "r2"]})
     with pytest.raises(AdmissionRefused) as exc:
         resolve_target(fleet_id=None, lane_id=None, resource_id=None, manifest=manifest)
     assert exc.value.reason == "lane_ambiguous"

@@ -1,3 +1,15 @@
+# Runner authorization bounded milestone
+
+- Isolated worktree created at exact PR334 base f345f1b828a956a3d686f7f83b849872b8885be3.
+- Read safety audit and executable probe; reproduced authorization failures with
+  real loaded FleetManifest fixtures before implementation (11 failed / 1 passed).
+- Implemented membership, permission, domain union and transactional lane identity check.
+- Verified 212 focused tests pass; changed executable line coverage 100%.
+- Lifecycle/coordinator/cleanup repairs deliberately deferred: see REPORT.md.
+- Feature branch prepared for parent integration, not a competing upstream PR.
+
+---
+
 # PROGRESS — t_a4aa351d (Consolidate bench locking into ONE machine-global lease)
 
 Worktree: /home/c03rad0r/worktrees/prta-revive  branch pr/prta-revive-hw-dispatch

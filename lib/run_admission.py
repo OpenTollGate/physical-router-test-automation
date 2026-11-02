@@ -134,24 +134,35 @@ def resolve_target(
     Ambiguity is refused. If the manifest declares a single lane we may infer
     it; if it declares several we will not guess which DUT a test run gets.
     """
-    if manifest is not None and fleet_id is None:
-        fleets = getattr(manifest, "fleets", {}) or {}
-        if len(fleets) != 1:
+    if manifest is not None:
+        if fleet_id is None:
+            if len(manifest.fleets) != 1:
+                raise AdmissionRefused(
+                    "fleet_ambiguous",
+                    f"manifest declares {len(manifest.fleets)} fleets; pass --fleet explicitly",
+                )
+            fleet_id = next(iter(manifest.fleets))
+        entry = manifest.fleets.get(fleet_id)
+        if entry is None:
+            raise AdmissionRefused("fleet_not_authorized", f"undeclared fleet {fleet_id!r}")
+        if not all(entry.permits(action) for action in ("acquire", "release")):
             raise AdmissionRefused(
-                "fleet_ambiguous",
-                f"manifest declares {len(fleets)} fleets; pass --fleet explicitly",
+                "action_not_permitted", "runner requires acquire and release permissions"
             )
-        fleet_id = next(iter(fleets))
-
-    if lane_id is None and manifest is not None and fleet_id is not None:
-        entry = (getattr(manifest, "fleets", {}) or {}).get(fleet_id)
-        places = tuple(getattr(entry, "places", ()) or ())
-        if len(places) != 1:
+        if lane_id is None:
+            if len(entry.allowed_places) != 1:
+                raise AdmissionRefused(
+                    "lane_ambiguous",
+                    f"fleet {fleet_id!r} declares {len(entry.allowed_places)} places; pass --lane explicitly",
+                )
+            lane_id = entry.allowed_places[0]
+        resource = manifest.resource(resource_id or lane_id)
+        if resource is None or resource.fleet_id != fleet_id:
             raise AdmissionRefused(
-                "lane_ambiguous",
-                f"fleet {fleet_id!r} declares {len(places)} places; pass --lane explicitly",
+                "resource_not_authorized", f"resource {resource_id or lane_id!r} is not owned by {fleet_id!r}"
             )
-        lane_id = getattr(places[0], "resource_id", None) or places[0]
+        resource_id = resource.resource_id
+        domains = tuple(sorted(set(domains) | set(entry.shared_conflict_ids)))
 
     if not fleet_id or not lane_id:
         raise AdmissionRefused(
@@ -187,6 +198,8 @@ class Admission:
             run_id=self.request.run_id,
             domains=self.request.target.domains,
             ttl_s=self.request.ttl_s,
+            expected_fleet_id=self.request.target.fleet_id,
+            expected_resource_id=self.request.target.resource_id,
         )
         if not decision.granted:
             raise AdmissionRefused(

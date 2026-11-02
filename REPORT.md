@@ -1,3 +1,46 @@
+# Runner manifest authorization milestone
+
+Base: `f345f1b828a956a3d686f7f83b849872b8885be3` (PR334).
+Branch: `pr/fleet-runner-authorization`. Prior report preserved below.
+
+## Change
+- Real FleetManifest membership and acquire/release permissions are checked even
+  for explicit CLI targets. Observe-only manifests are refused.
+- Resource aliases resolve to canonical manifest identity; declared shared
+  conflicts are unioned with CLI domains, never replaced by them.
+- Admission passes expected fleet/resource to authority; comparison is inside
+  the reservation transaction before grant or replay, avoiding check/reserve races.
+- Existing inference tests now use parse_manifest, not fictitious `.places` doubles.
+- Nonfleet profiles remain supported: omission of --fleet-manifest still opts out.
+  This is NOT mandatory global fleet enforcement or profile endpoint validation.
+
+## Verification (no hardware, QEMU, or real coordinator acquisition)
+RED before production edits: new real-schema tests **11 failed, 1 passed in 1.94s**;
+failures were missing refusals and missing shared conflict domain.
+GREEN same tests: **12 passed in 1.75s**.
+Focused suite: **212 passed in 31.29s** using:
+`python3 -m coverage run --branch --source=lib.run_admission,lib.fleet_authority -m pytest tests/unit/test_run_admission.py tests/unit/test_run_admission_review_fixes.py tests/unit/test_runner_manifest_authorization.py tests/unit/test_fleet_authority.py tests/unit/test_fleet_authority_aggregate.py tests/unit/test_fleet_capacity.py tests/unit/test_fleet_scheduler.py -q`
+Coverage: run_admission **97%**, fleet_authority **86%**, total **87%**
+(statement+branch). Added executable lines versus base: **20/20 covered (100%)**,
+computed by intersecting git diff -U0 added line numbers with coverage JSON
+executed/missing lines (17 admission, 3 authority).
+Coverage installed in external scratch target because environment lacked it;
+prepend that target to PYTHONPATH to reproduce. No project dependency change.
+`git diff --check` passed. Full suite / hardware / QEMU: NOT RUN.
+
+## Remaining three blockers — merge/benchmark recommendation remains withdrawn
+1. Runner does not perform coordinator-owned acquisition or bind the selected
+   manifest resource to the profile endpoint/environment.
+2. Running subprocesses lack lease renewal, authority checks, and fencing/termination
+   on ownership loss; plain tee_run is not scheduler supervision.
+3. Runner asserts clean release without proven child teardown/coordinator release.
+
+These lifecycle paths are deliberately unchanged. Next milestone must integrate
+scheduler supervision; this change alone does not make production fleet runs safe.
+No upstream PR, PR334 branch update, or card transition is part of this milestone.
+
+---
+
 PRTA-REVIVE / t_a4aa351d — REPORT
 Consolidate bench locking into ONE machine-global lease
 ================================================================
