@@ -34,8 +34,8 @@ Focused PR diffs against current upstream `main`:
 |---|---:|---:|
 | Broker | 14 | +1520 / −21 |
 | Gateway | 2 | +218 / −48 |
-| PRTA | 8 | +1952 / −0 |
-| Combined | 24 | +3690 / −69 |
+| PRTA | 8 | +1958 / −0 |
+| Combined | 24 | +3696 / −69 |
 
 The PRTA branch should be cut from upstream `main` and contain only the six
 MeshLink interop commits plus the PR plan commit:
