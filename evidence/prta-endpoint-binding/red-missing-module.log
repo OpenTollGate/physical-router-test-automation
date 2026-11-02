@@ -1,0 +1,18 @@
+============================= test session starts ==============================
+collected 0 items / 1 error
+
+==================================== ERRORS ====================================
+______________ ERROR collecting tests/unit/test_fleet_binding.py _______________
+ImportError while importing test module '/home/c08r4d0r/worktrees/prta-endpoint-binding/tests/unit/test_fleet_binding.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/unit/test_fleet_binding.py:24: in <module>
+    from lib.fleet_binding import (
+E   ModuleNotFoundError: No module named 'lib.fleet_binding'
+=========================== short test summary info ============================
+ERROR tests/unit/test_fleet_binding.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+=============================== 1 error in 0.30s ===============================

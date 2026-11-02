@@ -1,3 +1,50 @@
+# PROGRESS — endpoint binding (requirement 1 + non-overlap half of 2)
+
+Branch `pr/fleet-endpoint-binding`, worktree `~/worktrees/prta-endpoint-binding`,
+base `237c12d39f22bcd8b8ebc2d8ebf7e1badf87ea3b` (PR #334 head).
+
+- Re-read the seam myself before writing anything: `tests/conftest.py:346-415` is the
+  place owner (`plan_venue` → `venue_mutex`, session-scoped, `pytest.exit(rc=4)` when
+  the place is held), and `scripts/run-profile.py:229-245` refuses every fleet run.
+  Both confirmed byte-identical to base at the end (`git diff --exit-code 237c12d --
+  scripts/run-profile.py tests/conftest.py` clean). So the new layer only *predicts*
+  the venue resolution; it never acquires.
+- Proved the gap on the base code before designing: `evidence/.../binding-gap-probe.py`
+  drives the real `plan_venue` with coordinator A / lane coordinator B / lane place
+  X / venue place Y and prints `DEFECT CONFIRMED: 2 disagreement(s) — coordinator,
+  place`. Saved log beside it.
+- RED first: with the module absent the test file dies at collection
+  (`ModuleNotFoundError: lib.fleet_binding`, log saved); then each rule was added
+  branch by branch against its asserting test.
+- Built `lib/fleet_binding.py`: `check_binding` refuses (a) coordinator disagreement
+  (normalised `host:port`, refuses empty/unset either side), (b) place disagreement
+  **including a `TOLLGATE_LABGRID_PLACE` override that retargets the lane**
+  (`place_override_conflict`, refused not accepted), (c) modes that acquire no place
+  plus the unit-only/parity auto-skip a manifest cannot tolerate, (d) protected
+  dossiers, (e) fleet/lane/place ambiguity — 20 stable codes, `CODES` pinned by a test.
+- Non-overlap: `module_io_audit()` AST-audits the module's own imports/symbols/calls
+  (and is itself proved non-vacuous against rogue files); `LabgridBench.acquire/release`,
+  `venue_mutex`, `bench_for_router` patched to explode and a full `check_binding` still
+  returns; a second resolution for one place is refused `place_already_claimed` before
+  any acquisition, while a same-owner retry is not.
+- Mirror test: `venue_intent()` is pinned against the real `plan_venue` (I/O seams
+  patched, as `test_venue_plan.py` does) across 6 env/scope cases plus the `ap-lan2`
+  fallback, so the prediction cannot drift from the fixture it predicts.
+- GREEN **91 passed**; coverage on the new module **100% statement and 100% branch**
+  (276 stmts / 126 branches, 0 miss, 0 partial); neighbour suites **267 passed**.
+  `git diff --check` clean. Full `tests/unit` has 2 failures + 9 errors that reproduce
+  on untouched base (`test_cudy_flash`, `test_read_only_guard`, `test_hardware_lock`
+  bench-lease fixture), plus `test_story_evidence` needing `PIL` — an environment gap.
+- Requirement status: **1 MET as tested logic (not wired)**, **2 partially MET —
+  non-overlap half only (handoff itself still absent)**, 3 & 4 already met as
+  machinery, **5 still outstanding**. Five remain outstanding; the fail-closed gate
+  stays closed, unchanged.
+- Not done, by instruction: no wiring into `run-profile.py`, no `tests/conftest.py`
+  change, no hardware/QEMU/coordinator/place, no inventory file read, no PR334 push,
+  no merge, no force-push, no card transition.
+
+---
+
 # PROGRESS — supervised execution machinery
 
 Branch `pr/fleet-supervised-exec`, worktree `~/worktrees/prta-supervised-exec`,

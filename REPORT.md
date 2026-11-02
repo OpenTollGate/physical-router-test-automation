@@ -1,3 +1,207 @@
+# Requirement 1 + the non-overlap half of 2 — endpoint binding, as tested pure logic
+
+Base: `237c12d39f22bcd8b8ebc2d8ebf7e1badf87ea3b` (PR #334 head).
+Branch `pr/fleet-endpoint-binding`, worktree `~/worktrees/prta-endpoint-binding`.
+Read first: `REPORT.md` → "Remaining work to enable fleet execution" (items 1–6).
+
+## Outcome
+
+`lib/fleet_binding.py` (new, 276 statements) answers the question nothing in the
+repo answers today: **is the manifest lane the runner is about to reserve host
+budget for the same physical DUT the pytest fixture is about to own?**
+
+It is pure logic over injected inputs — a manifest object, an inventory object, and
+an env mapping. No coordinator contact, no `labgrid-client`, no inventory file, no
+env read, and **no acquisition**. The place owner is, and stays,
+`tests/conftest.py:346-415` (`plan_venue` → `venue_mutex`); the runner must not
+acquire, so this layer only *predicts* what that resolution will target and refuses
+when agreement cannot be shown.
+
+**Nothing is wired.** `scripts/run-profile.py` and `tests/conftest.py` are
+byte-identical to base (`git diff --exit-code 237c12d -- scripts/run-profile.py
+tests/conftest.py` is clean). Fleet execution still refuses with
+`exit 75` / `fleet_lifecycle_unavailable`. That refusal is unchanged, deliberately.
+
+## The defect this closes, on the code as it is
+
+`evidence/prta-endpoint-binding/binding-gap-probe.py` (log beside it) drives the
+real `plan_venue` with an inventory whose coordinator is `coord-a` and a manifest
+lane whose coordinator is `coord-b` on place `x1860-2`, while the profile/env
+resolves place `x1860-1`:
+
+```
+manifest fleet coordinator : coord-b.example:20408
+inventory coordinator      : coord-a.example:20408
+manifest lane place        : x1860-2
+venue would acquire place  : x1860-1
+acquisition-capable venue  : True
+
+DEFECT CONFIRMED: 2 disagreement(s) — coordinator, place
+```
+
+Nothing on the current path compares those two statements, so that run would
+reserve host budget for one DUT and drive another. `check_binding` refuses both
+(`coordinator_address_mismatch`, `place_override_conflict`).
+
+## Refusals, each with a stable code
+
+Codes are an API: `CODES` is pinned by a test, `BindingRefused.code` is also
+`.reason` (same shape as `lib.run_admission.AdmissionRefused`) so a call site can
+forward it straight into an admission refusal.
+
+| Rule | Code | What it catches |
+|---|---|---|
+| (a) manifest fleet `coordinator.address` ≠ inventory `coordinator.address` | `coordinator_address_mismatch` | the lane's budget is on fleet B's coordinator while the fixture acquires from A |
+| (a) either side empty/unset | `coordinator_address_missing` | an unknown coordinator is never assumed to be the right one |
+| (b) manifest place ≠ the place the venue resolution would target | `place_mismatch` | the two statements name different DUTs |
+| (b) `TOLLGATE_LABGRID_PLACE` names a different place than the lane | `place_override_conflict` | **an env override may never retarget a reserved lane** — this is the refusal the requirement demands, not a warning |
+| (c) mode acquires no place (`direct` / `legacy` / xdist worker / auto with unmet preconditions) | `venue_takes_no_place` | with a manifest, no place owner means the host-budget reservation is meaningless |
+| (c) unit-only / parity-only session would auto-skip the venue | `fixture_would_skip_place` | conftest would own no place while the runner reserved a DUT |
+| (d) `protected: true` dossier | `resource_protected` | refused before the place comparison, so the operator is told the real reason |
+| (e) several fleets / several places / one place claimed by two dossiers | `fleet_ambiguous`, `lane_ambiguous`, `place_ambiguous` | a lane must name exactly one DUT |
+| — | `manifest_missing`, `owner_missing`, `fleet_unknown`, `resource_not_authorized`, `resource_kind_unsupported`, `venue_place_unresolvable`, `venue_address_missing`, `profile_endpoint_mismatch`, `profile_endpoint_unknown`, `place_already_claimed` | the rest of the identity chain |
+
+Precedence is fixed and tested: manifest identity → coordinator → venue resolution
+→ place (including the override) → profile endpoint → claims. The first violated
+rule wins, so a log line is deterministic when several things are wrong at once.
+
+Coordinator comparison normalises `host:port` (case, trailing dot, IPv6 brackets,
+missing port → labgrid's `20408`, zero-padded port) but refuses an empty,
+host-less or non-TCP-port address. A different *port* is a different coordinator.
+
+## Non-overlap, proved rather than asserted
+
+| Test | What it proves |
+|---|---|
+| `test_layering_audit_finds_no_io_or_acquisition` | `module_io_audit()` parses this module's own AST; the module-allowlist, project-symbol allowlist and forbidden-call list are all empty |
+| `test_the_only_project_import_is_the_pure_mode_resolver` | the sole `lib.*` import is `resolve_venue_mode`; `venue_mutex` / `bench_for_router` / `LabgridBench` / `load_inventory` / `hardware_lock` appear nowhere in executable code |
+| `test_check_binding_never_calls_the_place_lifecycle` | `LabgridBench.acquire`, `.release`, `venue_mutex`, `bench_for_router` are patched to `AssertionError`; a full `check_binding` still returns a `Binding` |
+| `test_a_second_resolution_for_the_same_place_from_another_run_overlaps` | run-1 binds, then run-2 for the same place is refused `place_already_claimed` **before** anything is acquired |
+| `test_two_runs_on_different_places_do_not_overlap` | two lanes on two places coexist |
+| `test_a_retry_of_the_same_run_is_not_an_overlap` | the same owner restating its claim is not contention |
+| `test_the_audit_detects_a_violation` / `..._flags_an_unlisted_*_import` | the audit is not vacuous: a rogue file importing `subprocess`, calling `venue_mutex`, `open` or `subprocess.run` is reported |
+
+Overlap is made observable without acquiring anything: `Binding.claim` is a
+`PlaceClaim(place, owner)` a caller records, and `already_claimed=` / `find_overlaps`
+turn "does a second resolution collide with the first" into a pure predicate.
+Owner-less claims never overlap (that would refuse every retry) — and
+`check_binding` never emits one, because `owner_missing` refuses first.
+
+## The mirror (this is what keeps the prediction honest)
+
+`venue_intent()` re-implements the *decision rules* of `plan_venue` + conftest
+(xdist → legacy; auto + unit/parity → auto-skip; direct/legacy → legacy; auto with
+unmet preconditions → legacy; explicit place; address match; `ap-lan2` fallback).
+A pure prediction is only safe if it cannot drift, so
+`TestVenueIntentMirrorsPlanVenue` runs the **real** `plan_venue` — patched only at
+its I/O seams (`inventory_exists`, `_default_client_bin`, `load_inventory`),
+exactly as `tests/unit/test_venue_plan.py` does — across six env/scope combinations
+and asserts the two agree on `owns_place`, place **and** dossier, or that both
+refuse. `test_default_place_fallback_matches_the_planner` pins the `ap-lan2`
+fallback.
+
+## How a later change calls it at the conftest/runner seam
+
+Not done here. When the gate is relaxed, the seam is **one call in
+`scripts/run-profile.py::require_supported_fleet_lifecycle`**, before
+`FleetAuthority.__init__` mints the store and before any reservation:
+
+```python
+# scripts/run-profile.py — inside require_supported_fleet_lifecycle, replacing
+# the unconditional raise for the profiles this binds successfully.
+from lib.fleet_binding import BindingRefused, check_binding
+from lib.fleet_capacity import load_manifest
+from lib.lab_inventory import load_inventory
+
+manifest = load_manifest(args.fleet_manifest)          # I/O: runner side, not binding
+try:
+    binding = check_binding(
+        manifest=manifest,
+        inventory=load_inventory(),                    # the very inventory plan_venue loads
+        environ=env,                                   # the merged profile env this run exports
+        fleet_id=args.fleet,
+        resource_id=args.resource,
+        lane_id=args.lane,
+        owner=run_id,
+        profile_endpoint=env.get("TOLLGATE_SSH_HOST", ""),
+        session_scope=_scope_from_testpaths(profile),   # "unit" / "parity" / "full"
+        xdist_worker=bool(env.get("PYTEST_XDIST_WORKER")),
+        operator_host=env.get("TOLLGATE_SSH_HOST") or None,
+    )
+except BindingRefused as exc:
+    raise AdmissionRefused(exc.code, exc.detail) from None
+child_env.update(binding.as_env())   # TOLLGATE_VENUE=labgrid + TOLLGATE_LABGRID_PLACE=place
+```
+
+`binding.as_env()` is the reason conftest needs **no change**: exporting
+`TOLLGATE_VENUE=labgrid` + `TOLLGATE_LABGRID_PLACE=<place>` makes the venue decision
+*forced and explicit*, so the fixture cannot fall back to the legacy direct path
+underneath a reservation, and cannot auto-skip on a unit-only session. `tests/conftest.py`
+stays the sole place owner; the runner still acquires nothing.
+
+## Test / coverage evidence
+
+Commands run from `~/worktrees/prta-endpoint-binding`. The project venv
+(`~/repos/physical-router-test-automation/.venv`) has pytest 9.1.1 but no
+`pytest-cov`, so coverage ran in a cov-capable venv (`~/worktrees/t_8009b9c8/.venv`,
+identical CPython 3.12.3) with the project site-packages on `PYTHONPATH`. Plain
+runs used the project venv.
+
+- `tests/unit/test_fleet_binding.py` — **91 passed** (project venv and cov venv).
+- Coverage on the new module, statements **and** branches:
+  `lib/fleet_binding.py 276 stmts, 0 miss, 126 branch, 0 partial → 100%`
+  (`evidence/prta-endpoint-binding/coverage.log`).
+- Neighbour suites (venue plan/mutex, fleet capacity/authority/safety, supervised
+  run, labgrid venue/ownership) — **267 passed**.
+- RED first: with the module removed the test file fails at collection with
+  `ModuleNotFoundError: No module named 'lib.fleet_binding'`
+  (`evidence/prta-endpoint-binding/red-missing-module.log`). Each rule was also
+  written as an asserting test before its branch existed.
+- Full `tests/unit` at this branch: **1738 passed, 7 skipped, 3 xfailed, 2 failed,
+  9 errors**. The failures/errors are **pre-existing at base** and reproduce in the
+  untouched `~/worktrees/fleet-consolidated` (base check): `test_cudy_flash.py::
+  test_no_credential_literal_leaks_into_the_new_sources`,
+  `test_read_only_guard.py::test_reads_still_work_in_read_only_mode`, and the
+  `test_hardware_lock.py` fixture errors (machine-global bench lease state). Also
+  `tests/unit/test_story_evidence.py` needs `PIL`, absent from both venvs — an
+  environment gap, not a code change.
+- `git diff --check` clean. `ruff check` on the three new files: one `UP042`
+  (`Refusal(str, enum.Enum)`), matching the pre-existing `Reason`/`State`/
+  `ResourceKind` in `lib/fleet_capacity.py`; CI does not lint `lib/` for `UP`.
+
+## Requirement status after this milestone
+
+Stated against the shipped runner path (nothing is wired), as the base REPORT does:
+
+| # | Requirement | Status | Evidence |
+|---|---|---|---|
+| 1 | Manifest resource → profile endpoint/env **binding**; refuse unsupported profiles | **MET as tested logic — not wired** | `lib/fleet_binding.check_binding` refuses all of (a)–(e) plus profile-endpoint disagreement and resource-kind/fleet/lane ambiguity; `Binding.as_env()` derives the endpoint/env. The runner does not call it yet. |
+| 2 | Fixture ownership handoff (re-scoped: runner passes host-budget reservation + run identity; fixture stays sole place owner) | **PARTIALLY MET (non-overlap half only) — not wired** | Proved: the binding layer acquires nothing, the fixture remains sole owner, and a second resolution for one place is detectable pre-acquisition (`PlaceClaim`/`find_overlaps`/`place_already_claimed`). **Absent:** the handoff itself — passing `binding.claim`/run identity into the pytest run and having the fixture verify it reuses that owner. |
+| 3 | Supervision | **MET (machinery, tested)** — not wired | unchanged from base |
+| 4 | Renewal failure is fatal | **MET (machinery, tested)** — not wired | unchanged from base |
+| 5 | Release evidence: coordinator-release half | **OUTSTANDING** | nothing here; still no `owner()`/bench re-read justifies `clean` |
+
+**Five outstanding items remain five:** 1 and the re-scoped 2 now have their tested
+logic, 3 and 4 were already met as machinery, and **5 is untouched**. The gate stays
+closed because 1 and 2 are not wired and 5 has no implementation at all.
+
+## Files
+
+- `lib/fleet_binding.py` (new, 276 statements)
+- `tests/unit/test_fleet_binding.py` (new, 91 tests)
+- `evidence/prta-endpoint-binding/binding-gap-probe.py` + `.log` (defect proved on base code)
+- `evidence/prta-endpoint-binding/red-missing-module.log`, `coverage.log`
+- `REPORT.md`, `PROGRESS.md`
+
+## Not done, by instruction
+
+No wiring into `scripts/run-profile.py`; `tests/conftest.py` behaviour untouched (both
+byte-identical to base); `run-profile.py`'s fail-closed gate intact. No hardware, QEMU,
+real coordinator acquisition, labgrid place taken, or inventory file read in any test.
+No PR #334 branch change, no merge, no force-push, no card transition.
+
+---
+
 # Supervised execution — machinery built and tested, gate still closed
 
 Base: `ce14c790479710d901e96ce5e2948b69109f2503` (PR #334 head).
