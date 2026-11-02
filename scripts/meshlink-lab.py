@@ -1047,7 +1047,7 @@ def chain(args: argparse.Namespace) -> int:
         print("--seller-place requires MESHLINK_SELLER_URL for the physical seller", file=sys.stderr)
         return 1
     seller_ip = urlparse(seller_url).hostname or BETA_SELLER_IP
-    physical_seller = seller_ip != BETA_SELLER_IP
+    physical_seller = bool(args.seller_place) or seller_ip != BETA_SELLER_IP
     if not physical_seller:
         if not wait_for(["curl", "-fsS", "-m", "2", f"http://{BETA_SELLER_IP}:2121/"], 10):
             start_beta(workdir, args)

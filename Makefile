@@ -1531,6 +1531,6 @@ meshlink-lab-chain: ## Pay Beta, steer guest traffic through it, verify renewal
 	python3 $(MESHLINK_LAB) chain
 
 meshlink-lab-chain-physical: ## Chain through a physical TollGate seller (set MESHLINK_SELLER_URL)
-	python3 $(MESHLINK_LAB) chain --seller-place "$${MESHLINK_SELLER_PLACE:-physical-seller}"
+	python3 $(MESHLINK_LAB) --seller-place "$${MESHLINK_SELLER_PLACE:-physical-seller}" chain
 
 meshlink-interop: meshlink-lab-smoke meshlink-lab-buy meshlink-lab-replay ## Seller acceptance: advert + agent purchase + replay + internet
