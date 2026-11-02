@@ -18,6 +18,8 @@ from labgrid.driver import SSHDriver
 
 pytestmark = [
     pytest.mark.story("P6"),
+    pytest.mark.tip("TIP-01"),
+    pytest.mark.tip("TIP-02"),
     pytest.mark.virtual_lab,
     pytest.mark.smoke,
     pytest.mark.timeout(600),

@@ -84,8 +84,8 @@ renew before expiry, and prove Beta usage moved.
 - [x] Correct the stale "usage polling pending" checkbox.
 - [x] Add chain/renewal checks to `tests/interop` or the lab script.
 - [x] Update `docs/virtual-lab.md` with the Beta chain lane.
-- [ ] Add story/TIP markers to interop tests.
-- [ ] Add physical labgrid place mode.
+- [x] Add story/TIP markers to interop tests.
+- [x] Add physical labgrid place mode (`chain --seller-place` with `MESHLINK_SELLER_URL`).
 - [x] Rerun the full interop suite.
 - [x] Commit and push gateway, broker, and PRTA branches.
 

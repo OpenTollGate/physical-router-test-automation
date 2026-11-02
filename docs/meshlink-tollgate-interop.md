@@ -134,10 +134,10 @@ Acceptance:
 ## Phase 4 — chain, labgrid, docs
 
 - [x] Chain test: host → Beta → MeshLink → client.
-- [ ] Physical labgrid place mode (`--seller-place`).
-- [ ] `tests/interop/` suite with story/TIP markers.
+- [x] Physical labgrid place mode (`chain --seller-place`, seller URL via `MESHLINK_SELLER_URL`).
+- [x] `tests/interop/` suite with story/TIP markers (P6, TIP-01, TIP-02).
 - [x] `docs/meshlink-tollgate-interop.md` kept current.
-- [ ] Update `docs/virtual-lab.md`.
+- [x] Update `docs/virtual-lab.md`.
 
 ## Test matrix
 

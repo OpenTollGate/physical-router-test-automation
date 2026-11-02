@@ -30,6 +30,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 DEFAULT_WORKDIR = "~/meshlink-lab"
 DEFAULT_REPOS = "~/repos"
@@ -502,7 +503,15 @@ def beta_client_unsnat() -> None:
           "-o", BETA_BRIDGE, "-j", "RETURN"], check=False)
 
 
-def host_upstream_route() -> None:
+def host_route_to(address: str) -> tuple[str | None, str]:
+    output = run(["ip", "-4", "route", "get", address], check=True).stdout.split()
+    via = output[output.index("via") + 1] if "via" in output else None
+    dev = output[output.index("dev") + 1]
+    return via, dev
+
+
+def host_upstream_route(seller_ip: str = BETA_SELLER_IP) -> None:
+    via, dev = host_route_to(seller_ip)
     run(["sudo", "ip", "rule", "del", "from", GATEWAY_WAN_IP, "lookup", "2121"], check=False)
     run(["sudo", "ip", "rule", "del", "fwmark", "0x2121", "lookup", "2121"], check=False)
     run(["sudo", "ip", "rule", "add", "fwmark", "0x2121", "lookup", "2121", "pref", "900"])
@@ -511,12 +520,16 @@ def host_upstream_route() -> None:
     if run(["sudo", "iptables", *rule], check=False).returncode != 0:
         run(["sudo", "iptables", "-t", "mangle", "-I", "PREROUTING", "1", "-i", UP_BRIDGE,
              "-s", GATEWAY_WAN_IP, "-j", "MARK", "--set-xmark", "0x2121/0xffffffff"])
-    run(["sudo", "ip", "route", "replace", "table", "2121", "10.99.99.0/24", "dev", BETA_BRIDGE])
-    run(["sudo", "ip", "route", "replace", "table", "2121", "default", "via", BETA_SELLER_IP, "dev", BETA_BRIDGE])
-    masq = ["-t", "nat", "-C", "POSTROUTING", "-s", "10.99.99.0/24", "!", "-o", BETA_BRIDGE, "-j", "MASQUERADE"]
-    if run(["sudo", "iptables", *masq], check=False).returncode != 0:
-        run(["sudo", "iptables", "-t", "nat", "-I", "POSTROUTING", "1", "-s", "10.99.99.0/24",
-             "!", "-o", BETA_BRIDGE, "-j", "MASQUERADE"])
+    if via:
+        run(["sudo", "ip", "route", "replace", "table", "2121", f"{seller_ip}/32", "via", via, "dev", dev])
+    else:
+        run(["sudo", "ip", "route", "replace", "table", "2121", f"{seller_ip}/32", "dev", dev])
+    run(["sudo", "ip", "route", "replace", "table", "2121", "default", "via", seller_ip, "dev", dev])
+    if dev == BETA_BRIDGE:
+        masq = ["-t", "nat", "-C", "POSTROUTING", "-s", "10.99.99.0/24", "!", "-o", BETA_BRIDGE, "-j", "MASQUERADE"]
+        if run(["sudo", "iptables", *masq], check=False).returncode != 0:
+            run(["sudo", "iptables", "-t", "nat", "-I", "POSTROUTING", "1", "-s", "10.99.99.0/24",
+                 "!", "-o", BETA_BRIDGE, "-j", "MASQUERADE"])
 
 
 def host_upstream_route_remove() -> None:
@@ -976,16 +989,21 @@ def beta_client_pay(repos: Path) -> None:
     print("beta-client: paid")
 
 
-def configure_gateway_upstream() -> None:
+def configure_gateway_upstream(url: str = f"http://{BETA_SELLER_IP}:2121", route_nexthop: str = "10.99.98.1") -> None:
+    seller_ip = urlparse(url).hostname or BETA_SELLER_IP
+    route_line = (
+        f"ip route replace {seller_ip}/32 via {route_nexthop} dev wan0"
+        if seller_ip != BETA_SELLER_IP else f"ip route replace 10.99.99.0/24 via {route_nexthop} dev wan0"
+    )
     script = f"""set -eu
-ip route replace 10.99.99.0/24 via 10.99.98.1 dev wan0
+{route_line}
 python3 - <<'PYCFG'
 import json
 path = "/opt/meshlink/broker/server/config/meshlink-config.json"
 data = json.load(open(path))
 data["upstream"] = {{
     "enabled": True,
-    "url": "http://{BETA_SELLER_IP}:2121",
+    "url": "{url}",
     "unit": "sat",
     "steps": 1,
     "maxPricePerStep": 10,
@@ -996,7 +1014,7 @@ data["upstream"] = {{
     "pollIntervalMs": 10,
     "routeThrough": True,
     "routeTable": 2121,
-    "routeNexthop": "10.99.98.1",
+    "routeNexthop": "{route_nexthop}",
     "guestInterface": "br-guest",
 }}
 json.dump(data, open(path, "w"), indent=2)
@@ -1024,23 +1042,30 @@ def chain(args: argparse.Namespace) -> int:
     if not wait_ssh(GATEWAY_MGMT_IP, 60) or not wait_ssh(CLIENT_MGMT_IP, 60):
         print("MeshLink VMs are not reachable", file=sys.stderr)
         return 1
-    if not wait_for(["curl", "-fsS", "-m", "2", f"http://{BETA_SELLER_IP}:2121/"], 10):
-        start_beta(workdir, args)
-    beta_client_reset()
-    beta_client_unsnat()
-    beta_client_pay(repos)
-    stop_beta_client()
-    beta_client_snat()
-    host_claim_paid_mac()
-    beta_allow_chain_source()
-    beta_upstream_setup()
-    host_upstream_route()
-    configure_gateway_upstream()
+    seller_url = args.seller_url or os.environ.get("MESHLINK_SELLER_URL") or f"http://{BETA_SELLER_IP}:2121"
+    if args.seller_place and not (args.seller_url or os.environ.get("MESHLINK_SELLER_URL")):
+        print("--seller-place requires MESHLINK_SELLER_URL for the physical seller", file=sys.stderr)
+        return 1
+    seller_ip = urlparse(seller_url).hostname or BETA_SELLER_IP
+    physical_seller = seller_ip != BETA_SELLER_IP
+    if not physical_seller:
+        if not wait_for(["curl", "-fsS", "-m", "2", f"http://{BETA_SELLER_IP}:2121/"], 10):
+            start_beta(workdir, args)
+        beta_client_reset()
+        beta_client_unsnat()
+        beta_client_pay(repos)
+        stop_beta_client()
+        beta_client_snat()
+        host_claim_paid_mac()
+        beta_allow_chain_source()
+        beta_upstream_setup()
+    host_upstream_route(seller_ip)
+    configure_gateway_upstream(seller_url)
     if buy(args) != 0:
         print("client could not buy a MeshLink session after enabling upstream", file=sys.stderr)
         return 1
 
-    print("beta usage before:", run(["curl", "-fsS", "-m", "3", f"http://{BETA_SELLER_IP}:2121/usage"], check=False).stdout.strip())
+    print("seller usage before:", run(["curl", "-fsS", "-m", "3", f"{seller_url.rstrip('/')}/usage"], check=False).stdout.strip())
     traffic = ssh(CLIENT_MGMT_IP, """set -eu
 getent hosts example.com >/dev/null
 for i in 1 2 3 4 5; do
@@ -1054,7 +1079,7 @@ done
         print("chain traffic failed", file=sys.stderr)
         return traffic.returncode
 
-    print("beta usage after:", run(["curl", "-fsS", "-m", "3", f"http://{BETA_SELLER_IP}:2121/usage"], check=False).stdout.strip())
+    print("seller usage after:", run(["curl", "-fsS", "-m", "3", f"{seller_url.rstrip('/')}/usage"], check=False).stdout.strip())
     deadline = time.monotonic() + 300
     last = ""
     while time.monotonic() < deadline:
@@ -1113,6 +1138,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--beta-workdir", default=str(Path.home() / "tollgate-virtual-lab-clean"))
     parser.add_argument("--beta-mint-dir", default=str(Path.home() / "cdk-mint"))
     parser.add_argument("--with-beta", action="store_true", help="start the Beta OpenWrt seller with the lab")
+    parser.add_argument("--seller-url", default="", help="physical TollGate seller URL for chain mode")
+    parser.add_argument("--seller-place", default="", help="labgrid place name for the physical seller (with MESHLINK_SELLER_URL)")
     parser.add_argument("--gateway-memory", type=int, default=2048)
     parser.add_argument("--client-memory", type=int, default=1024)
     parser.add_argument("--timeout", type=int, default=1800)

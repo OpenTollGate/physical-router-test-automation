@@ -1492,7 +1492,7 @@ film-publish: ## Publish film artifacts to Blossom: make film-publish RUN=result
 
 MESHLINK_LAB := scripts/meshlink-lab.py
 
-.PHONY: meshlink-lab-prepare meshlink-lab-up meshlink-lab-up-with-beta meshlink-lab-down meshlink-lab-status meshlink-lab-provision meshlink-lab-smoke meshlink-lab-buy meshlink-lab-replay meshlink-lab-buyer meshlink-lab-beta meshlink-lab-chain meshlink-interop
+.PHONY: meshlink-lab-prepare meshlink-lab-up meshlink-lab-up-with-beta meshlink-lab-down meshlink-lab-status meshlink-lab-provision meshlink-lab-smoke meshlink-lab-buy meshlink-lab-replay meshlink-lab-buyer meshlink-lab-beta meshlink-lab-chain meshlink-lab-chain-physical meshlink-interop
 
 meshlink-lab-prepare: ## Prepare MeshLink gateway/client QEMU overlays and seeds
 	python3 $(MESHLINK_LAB) prepare
@@ -1529,5 +1529,8 @@ meshlink-lab-beta: ## Start/status the Beta seller and mint
 
 meshlink-lab-chain: ## Pay Beta, steer guest traffic through it, verify renewal
 	python3 $(MESHLINK_LAB) chain
+
+meshlink-lab-chain-physical: ## Chain through a physical TollGate seller (set MESHLINK_SELLER_URL)
+	python3 $(MESHLINK_LAB) chain --seller-place "$${MESHLINK_SELLER_PLACE:-physical-seller}"
 
 meshlink-interop: meshlink-lab-smoke meshlink-lab-buy meshlink-lab-replay ## Seller acceptance: advert + agent purchase + replay + internet
