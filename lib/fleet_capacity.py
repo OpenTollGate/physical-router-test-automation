@@ -1411,6 +1411,25 @@ class FleetSummary:
     excluded: tuple[Verdict | SpawnVerdict, ...] = ()
 
     @property
+    def reachable_unclaimed(self) -> int:
+        """Exported lanes nobody currently holds — a schedulability claim only.
+
+        Deliberately NOT ``idle_routers``. Proving a router idle requires
+        ``vantage_ok is True``, i.e. the observer's MAC appearing in the portal's
+        client list as a live customer (the 2026-10-21 retraction). On an empty
+        portal that never happens, so a strict reading makes "idle" unreportable
+        and parallelisation impossible.
+
+        This field answers the scheduling question without touching that rule:
+        the lane is exported, the coordinator is reachable, and no lease is held.
+        It never feeds ``capacity``, never counts as idle, and never appears in a
+        qualification decision.
+        """
+        if not self.coordinator_reachable:
+            return 0
+        return sum(1 for v in self.excluded if getattr(v, "state", None) is State.EXPORTED_AVAILABLE)
+
+    @property
     def lanes_ready(self) -> int:
         """Observed ready predeclared lanes. Deliberately excludes
         ``new_vm_slots``: new slots are host-admission output and must not be

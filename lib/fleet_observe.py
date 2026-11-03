@@ -1842,6 +1842,9 @@ def build_report(
                 ],
                 "configured_places": summary.configured_places,
                 "exported_available": summary.exported_available,
+                # Exported + reachable + unclaimed. A schedulability fact only:
+                # never counted as idle, never part of qualification.
+                "reachable_unclaimed": summary.reachable_unclaimed,
                 "idle_physical_routers": summary.idle_routers,
                 "idle_existing_guests": summary.idle_guests,
                 "new_vm_slots_raw": summary.new_vm_slots,
@@ -1940,6 +1943,9 @@ def build_report(
             "idle_physical_routers": sum(f["idle_physical_routers"] for f in fleets),
             "idle_existing_guests": sum(f["idle_existing_guests"] for f in fleets),
             "exported_available": sum(f["exported_available"] for f in fleets),
+            # Lanes a scheduler could take right now. Deliberately separate from
+            # idle_physical_routers, which requires proven customer vantage.
+            "reachable_unclaimed": sum(f["reachable_unclaimed"] for f in fleets),
             # Never a promise: see admission.status.
             "new_vm_slots_raw": sum(f["new_vm_slots_raw"] for f in fleets),
         },
