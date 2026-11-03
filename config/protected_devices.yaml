@@ -6,8 +6,12 @@
 protected:
   - id: mt6000-gateway
     reason: production gateway; hermes must stay online
+    # The board reports its model as `GL.iNet GL-MT6000` (with the vendor
+    # prefix) and its board_name as `glinet,gl-mt6000`. Both spellings are
+    # listed because an exact-match miss on this entry is a fail-OPEN on the one
+    # device this file exists to protect.
     board_names: ["glinet,gl-mt6000"]
-    models: ["GL-MT6000", "gl-mt6000", "OpenMPTCProuter"]
+    models: ["GL-MT6000", "GL.iNet GL-MT6000", "gl-mt6000", "OpenMPTCProuter"]
     macs: ["94:83:c4:d1:57:56"]
     hostnames: ["OpenMPTCProuter", "MT6000"]
     addresses: ["192.168.50.1"]

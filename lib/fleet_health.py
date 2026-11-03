@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Mapping
 
 from lib.fleet_capacity import RouterHealthObservation, router_observation
+from lib.protected_devices import is_protected
 
 __all__ = [
     "CLIENT_STATE_AUTHENTICATED",
@@ -325,7 +326,27 @@ def read_router_health(
     this is testable without a router. The command *set* is fixed
     (``HEALTH_COMMANDS``) — this adapter cannot be steered into issuing
     something else by a manifest value.
+
+    A PROTECTED identity is refused before any command runs. The probe is
+    read-only, but the protected list exists because "read-only" is not the
+    property that matters: the production gateway is what keeps the fleet
+    online, and a tool pointed at its console should say no itself rather than
+    rely on the operator having read the runbook.
     """
+    if is_protected(model=expected_identity):
+        return RouterProbe(
+            fleet_id=fleet_id,
+            resource_id=resource_id,
+            expected_identity=expected_identity,
+            observer_mac=observer_mac,
+            protected=True,
+            read_errors={
+                "protected": (
+                    f"{expected_identity!r} is a protected device — refusing to probe it"
+                )
+            },
+        )
+
     texts: dict[str, str] = {}
     errors: dict[str, str] = {}
     for name, command in HEALTH_COMMANDS:
@@ -394,10 +415,20 @@ def router_health_from_probe(
 
     clients = parse_ndsctl_clients(probe.clients_text, portal_banner=probe.portal_text)
 
+    # Defence in depth: the adapter refuses a protected EXPECTED identity before
+    # reading, but the identity can also be discovered by the read itself (the
+    # real model only arrives with the board's answer). Check what was read too,
+    # so a probe pointed at the gateway without a declared expectation is still
+    # never reported as a healthy, idle, countable router.
+    protected = probe.protected or is_protected(model=identity) or is_protected(board_name=identity)
+
     # Health = the box answered AND it is the box we think it is. A box that
     # answered with an unparseable uptime did not prove liveness.
     health_ok: bool | None
-    if not telemetry_read_ok and "system" in failed_reads:
+    if protected:
+        # A protected device is never healthy-for-testing, whatever it answered.
+        health_ok = False
+    elif not telemetry_read_ok and "system" in failed_reads:
         health_ok = None
     elif uptime_s is None:
         health_ok = False
@@ -437,5 +468,5 @@ def router_health_from_probe(
         session_active=session_active,
         vantage_ok=vantage_ok,
         telemetry_read_ok=telemetry_read_ok,
-        protected=probe.protected,
+        protected=protected,
     )
