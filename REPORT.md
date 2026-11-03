@@ -631,3 +631,133 @@ CAVEATS / NOT DONE
     markdown-table scan arms file-wide on a pre-existing "password" table row
     and then flags unrelated prose about the lease. A fresh clone on another
     machine will hit the same false positives when those docs change.
+
+
+# The blanket refusal is replaced by the real supervised lifecycle
+
+Base: `ed687b229006accd96b141a6dc434c750454c271` (PR #334 head).
+Branch `pr/fleet-runner-integration`, worktree `~/worktrees/prta-runner-integration`.
+Read first: `~/reports/reviews/prta-334-runner-safety.md` (the audit whose four
+findings this closes).
+
+## Outcome
+
+`scripts/run-profile.py` no longer refuses every fleet run with
+`exit 75 / fleet_lifecycle_unavailable`. A run that is **fully authorized, bound
+to the venue the fixture will own, admitted against real host budget, and
+supervised** now executes — and a run that is missing any of those still refuses
+with exit 75 and touches nothing.
+
+The refusal did not disappear; it moved to where the evidence is. Every refusal
+below happens **before** a store is minted, a results directory is created, or a
+child exists:
+
+| gate | refusal code | exit |
+|---|---|---|
+| manifest does not grant `acquire` **and** `release` | `action_not_permitted` | 75 |
+| fleet/resource not declared in the manifest | `fleet_not_authorized` | 75 |
+| binding disagrees on coordinator or place | `binding_*` | 75 |
+| venue mode that acquires no place | `venue_takes_no_place` | 75 |
+| claim/environment handoff disagreement | `claim_*` | 75 |
+| budget/lane admission refused | `admission_*` | 75 |
+| lease renewal failed mid-run | `renewal_failed` | **76** |
+| authority lost mid-run | `authority_lost` | **77** |
+
+76 and 77 are supervision's own codes and are deliberately distinct from a test
+verdict: `main()` returns them before collect/render/summary, so a supervision
+failure can never be read as "tests passed" or "tests failed".
+
+## The four audited defects
+
+The audit's probe (`~/reports/reviews/prta-334-safety-probe.py`) is a
+straight-line script. Against a fixed tree it stops at its first measurement —
+`admission_from_args(...)` now raises `AdmissionRefused` — so it can no longer
+report defects 2-4 at all. `evidence/prta-runner-integration/per-defect-probe.py`
+measures the same four facts, each reached independently, so the result is
+readable instead of short-circuited. Verbatim result: `REMAINING DEFECTS: 0 / 6`.
+
+| audit finding | now |
+|---|---|
+| observe-only manifest accepted, undeclared fleet ACTIVE | refused at the admission seam (`fleet_not_authorized`), and by `main()` with nothing spawned |
+| unauthorized target ACTIVATED | refused: coordinator/place disagreement and non-acquiring venues are `BindingRefused` |
+| child past TTL with `RENEW CALLS 0` | child runs past TTL, **7 renewals**, lane accounted, released |
+| failed run `FINAL STATE released` | `cleanup_pending`, `clean=False`, `release_raised` |
+
+## What each requirement became
+
+1. **Authorization and binding both precede every side effect.**
+   `authorize_fleet_target()` is pure — it reads the manifest and resolves the
+   target without opening a store. `bind_fleet_run()` then calls `check_binding`
+   with the inventory/venue inputs and `verify_claim_handoff()` checks the
+   child's claim against the binding. Only after all three succeed does
+   `build_admission()` create the store.
+
+2. **The runner exports the claim, it does not acquire the place.** The child
+   environment gets `binding.as_env()` **plus**
+   `TOLLGATE_FLEET_CLAIM_PLACE/OWNER/RUN_ID`, so `conftest`'s guard verifies the
+   same place the runner reserved. `ClientIdentity.current` took a new optional
+   environment mapping (`lib/labgrid_venue.py`) so the runner and the fixture
+   derive the *same* owner string; without it the claim owner and the fixture
+   owner would silently differ. The runner never calls acquire/release on a
+   bench — `test_re_read_ownership_reads_the_coordinator_without_acquiring`
+   fails if it ever does.
+
+3. **Execution is supervised.** `supervised_tee_run(...)` is passed
+   `authority/run_id/fence/ttl_s`, so the lease is renewed while the child runs
+   and the child's process group is killed on renewal failure or authority loss.
+   Log capture and exit-status propagation are unchanged; the non-fleet path
+   still uses plain `tee_run`.
+
+4. **Release is derived, never asserted.** `release_verdict(...)` decides from
+   four facts — did the release raise, what did the read-only ownership re-read
+   say, did the bench leave a `cleanup_pending` flag, was the place ever
+   acquired — and its `clean` is passed to `admission.release(clean=...)`. There
+   is no literal `clean=True` on this path. An unconfirmed release prints
+   `RELEASE UNCONFIRMED` / `capacity remains consumed` and leaves the lane
+   occupied. `release.json` records the verdict either way; if it cannot be
+   written, that warns rather than masking the run.
+
+## Tests
+
+`tests/unit/test_runner_fleet_lifecycle.py` — 23 tests, RED first: **22 of 23
+fail at base `ed687b2`** (`AttributeError: no attribute 're_read_ownership'` and
+the refusal/marker assertions). The one that passes at base is the non-fleet
+`tee_run` path, which must not change.
+
+Real SQLite stores, real subprocesses, `re_read_ownership` and `LabgridBench`
+stubbed at the boundary; no acquisition is ever performed, no coordinator or
+hardware contacted.
+
+Focused set: **349 passed**. Full `tests/unit`: 1831 passed, with 2 failures and
+9 errors that are **identical at base** (`test_cudy_flash`, `test_read_only_guard`,
+`test_hardware_lock` — environment/hardware gaps, not this change), plus
+`test_story_evidence.py` which cannot even import (`No module named 'PIL'`).
+`tests/unit/test_runner_lifecycle_gate.py` and the "gate still fails closed" test
+in `test_supervised_run.py` were rewritten, deliberately and only where they
+pinned the *blanket* refusal that this change replaces. Neither lost strength:
+the gate file now asserts that each real gate refuses with exit 75 and spawns
+nothing, and the `test_supervised_run.py` test asserts the non-fleet `tee_run`
+path is untouched and that a fleet run no longer takes that path. No refusal
+assertion was deleted or loosened.
+
+Changed-code coverage **95.6%** (129/135 statements added or modified across
+`scripts/run-profile.py` and `lib/labgrid_venue.py`); the 6 uncovered lines are
+fallback returns and the `__main__` guard.
+
+## What is still unwired or unproven
+
+- **No real coordinator run has happened.** `LabgridBench.owner()`,
+  `labgrid-client`, a live coordinator, and real DUTs are all stubbed here. The
+  supervision loop, the claim handoff, and the release verdict are proven
+  against real SQLite and real subprocesses, not against labgrid.
+- **`re_read_ownership` has never parsed real `labgrid-client` output.** Its
+  failure mode is safe (unreadable -> `None` -> `ownership_unreadable` ->
+  `cleanup_pending`), but the success path is untested against the real CLI.
+- **The fixture side is unchanged.** `tests/conftest.py` is byte-identical to
+  base; the runner now exports the env it expects, but the two have never run
+  together on hardware.
+- **Concurrency was not exercised.** One lane, one run at a time; lane contention
+  and fencing under parallel runs are untested.
+- `pytest_cov` is absent from the repo venv, so coverage was measured with the
+  `coverage` module directly; `tests/unit/test_story_evidence.py` cannot run
+  here for lack of PIL.

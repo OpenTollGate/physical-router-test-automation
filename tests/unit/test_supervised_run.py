@@ -628,15 +628,23 @@ def test_child_runs_in_its_own_session_so_the_group_can_be_killed(tmp_path):
     assert pgid == sid
 
 
-def test_runner_tee_run_is_unchanged_and_gate_still_fails_closed():
-    """This milestone builds machinery; it must not relax the production gate."""
-    runner = _runner()
-    assert runner.FLEET_LIFECYCLE_UNAVAILABLE == "fleet_lifecycle_unavailable"
-    assert not hasattr(runner, "supervised_tee_run")
+def test_the_runner_now_executes_through_supervision():
+    """This module is wired: the fleet path must not fall back to plain tee.
+
+    It used to be machinery only. It is now the production execution path, so
+    the invariant flips: the runner must call ``supervised_tee_run`` for a
+    fleet run and must not keep the blanket refusal around it. The refusals
+    themselves are covered by ``test_runner_lifecycle_gate.py``.
+    """
     import inspect
 
-    source = inspect.getsource(runner.require_supported_fleet_lifecycle)
-    assert "FLEET_LIFECYCLE_UNAVAILABLE" in source
+    runner = _runner()
+    assert runner.supervised_tee_run is _module().supervised_tee_run
+    assert not hasattr(runner, "require_supported_fleet_lifecycle")
+    source = inspect.getsource(runner.main)
+    assert "supervised_tee_run(" in source
+    # The non-fleet path keeps plain tee_run: unchanged for every existing run.
+    assert "tee_run(" in source
 
 
 # --------------------------------------------------------------------------- #

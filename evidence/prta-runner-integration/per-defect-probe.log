@@ -1,0 +1,54 @@
+==> ADMISSION REFUSED: fleet_not_authorized: undeclared fleet 'NOT-AUTHORIZED'
+==> No test was executed, no lane was reserved, no store was created.
+==> ADMISSION REFUSED: venue_place_unresolvable: no inventory dossier maps to 'place-a1'
+==> No test was executed, no lane was reserved, no store was created.
+==> ADMISSION REFUSED: venue_takes_no_place: venue mode 'direct' (mode-direct) acquires no place — with a fleet manifest there must be a place owner, or the host-budget reservation is meaningless
+==> No test was executed, no lane was reserved, no store was created.
+==> Profile:    probe
+==> Runner:     pytest
+==> Run ID:     20261103T000401Z-probe-probe
+==> Results:    /home/c08r4d0r/.tmp/prta-4defect-sfs85c53/run3
+==> Git SHA:    probe
+==> Bound:     lane place-a1 -> place place-a1 @ coord.example:20408 (owner host/runner, origin explicit-place)
+==> Reserved:  lane-a fence=1 state=reserved
+==> Command: /home/c08r4d0r/.hermes/hermes-agent/venv/bin/python3 -c 'import time; time.sleep(2.5); print('"'"'CHILD FINISHED AFTER TTL'"'"')'
+==> CWD:     /home/c08r4d0r/.tmp/prta-4defect-sfs85c53
+==> Log:     /home/c08r4d0r/.tmp/prta-4defect-sfs85c53/run3/raw/e2e/output.log
+CHILD FINISHED AFTER TTL
+==> SUPERVISION FAILED: renewal_failed: simulated subprocess/teardown failure
+==> The child's process group was terminated; this is not a test verdict.
+==> WARNING: lane not released cleanly (release_raised: release raised RenewalFailed: renewal_failed: simulated subprocess/teardown failure); capacity remains consumed.
+==> Supervision exit: 76
+
+=====================================================================
+  PROFILE RUN SUMMARY
+=====================================================================
+  Profile:    probe
+  Runner:     pytest
+  Run ID:     20261103T000401Z-probe-probe
+  Results:    /home/c08r4d0r/.tmp/prta-4defect-sfs85c53/run3
+  Test exit:  0
+=====================================================================
+==> Profile:    probe
+==> Runner:     pytest
+==> Run ID:     20261103T000403Z-probe-probe
+==> Results:    /home/c08r4d0r/.tmp/prta-4defect-sfs85c53/run4
+==> Git SHA:    probe
+==> Bound:     lane place-a1 -> place place-a1 @ coord.example:20408 (owner host/runner, origin explicit-place)
+==> Reserved:  lane-a fence=2 state=reserved
+
+==============================================================================
+FIXED    1a observe-only/undeclared at the ADMISSION SEAM (the audit's probe)
+          refused:fleet_not_authorized
+FIXED    1b observe-only/undeclared through main()
+          RC 75 SPAWNED False STATES []
+FIXED    2a coordinator/place disagreement
+          RC 75 SPAWNED False STATES []
+FIXED    2b venue that acquires no place
+          RC 75 SPAWNED False STATES []
+FIXED    3 child outliving its TTL
+          CHILD RC 0 RENEW CALLS 7 elapsed=2.57s states=['released']
+FIXED    4 teardown failure frees the lane
+          RC 76 RUN-4 STATE cleanup_pending clean=False reason=release_raised
+==============================================================================
+REMAINING DEFECTS: 0 / 6

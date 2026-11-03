@@ -112,13 +112,21 @@ class ClientIdentity:
         return {"LG_HOSTNAME": self.host, "LG_USERNAME": self.user}
 
     @classmethod
-    def current(cls) -> ClientIdentity:
-        """This host and this OS user — the legacy shared-identity behaviour."""
+    def current(cls, environ: Mapping[str, str] | None = None) -> ClientIdentity:
+        """This host and this OS user — the legacy shared-identity behaviour.
+
+        ``environ`` defaults to ``os.environ``. A caller that is about to hand a
+        child a *different* environment (the runner exports a claim the child's
+        fixture must match) passes that mapping, so the identity it attributes
+        the claim to is computed from the same variables the child will see
+        instead of from the parent's process env.
+        """
         import getpass
         import socket
 
-        host = os.environ.get("LG_HOSTNAME", "").strip() or socket.gethostname()
-        user = os.environ.get("LG_USERNAME", "").strip()
+        env = os.environ if environ is None else environ
+        host = env.get("LG_HOSTNAME", "").strip() or socket.gethostname()
+        user = env.get("LG_USERNAME", "").strip()
         if not user:
             try:
                 user = getpass.getuser()

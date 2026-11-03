@@ -147,3 +147,61 @@ Head: 6ceb9fe (PUSHED to fork, ls-remote verified)
 1. Trigger the dispatch workflow and capture a run URL (needs runner/token; bench
    not reachable from this host — 192.168.1.1 not pingable).
 2. Nothing else outstanding for this card's acceptance criteria.
+
+
+# PROGRESS — fleet runner integration (the five requirements)
+
+Branch `pr/fleet-runner-integration`, worktree `~/worktrees/prta-runner-integration`,
+base `ed687b229006accd96b141a6dc434c750454c271` (PR #334 head).
+
+- Read the audit and its probe before writing anything:
+  `~/reports/reviews/prta-334-runner-safety.md` names four blocking defects, and
+  `prta-334-safety-probe.py` is the acceptance test. Ran the probe at base first
+  and kept the output.
+- Ran the probe at its own head (`f345f1b`, a detached worktree) to confirm all
+  four defects reproduce verbatim, so the probe is measuring the real thing and
+  not a stale tree: `REAL OBSERVE-ONLY MANIFEST ACCEPTED ... active`,
+  `UNAUTHORIZED TARGET ACTIVATED active`, `CHILD RC 0 RENEW CALLS 0`,
+  `FAILED RUN FINAL STATE released`.
+- Reused the tested layers instead of reimplementing: `check_binding` /
+  `Binding.as_env()`, `read_claim` / `evaluate_handoff`, `release_verdict` /
+  `record_release`, `run_supervised` / `supervised_tee_run`, `Admission` /
+  `resolve_target`.
+- Split `admission_from_args` in two so authorization is *pure*: it previously
+  minted the store, which made "refuse before any side effect" impossible.
+  `authorize_fleet_target()` is now side-effect-free; only `build_admission()`
+  opens a store, after every gate has passed.
+- Made `ClientIdentity.current` accept an optional environment mapping
+  (`lib/labgrid_venue.py`). Needed because the claim owner the runner exports and
+  the owner the fixture derives must be the same string; the old no-argument
+  version read the process env, which is right for pytest and wrong for the
+  runner's child.
+- Wrote `tests/unit/test_runner_fleet_lifecycle.py` RED first and checked it
+  actually fails at base: **22 of 23 fail** on the base tree (kept a detached
+  base worktree at `/tmp/prta-red` for exactly this). The 23rd is the non-fleet
+  path, which must not change.
+- Wrote `evidence/prta-runner-integration/per-defect-probe.py`, because the
+  audit's probe is straight-line: at a fixed tree it raises on its first
+  measurement and never reaches defects 2-4. Mine reaches each independently.
+- Fixed two things the new tests exposed as *my own* errors rather than code
+  bugs: `ReleaseState.CLEAN_RELEASED` (not `RELEASED`), and the fact that a
+  refused `complete()` leaves the lane `active` — which is the desired outcome,
+  so the assertion now checks `release.json` says `cleanup_pending` instead of
+  demanding a state transition the store correctly refused.
+- Added four tests beyond the audit's four defects, to cover the safety paths
+  that a defect-mirroring suite leaves dark: the ownership re-read really is a
+  read (fails if it ever acquires), an unreadable coordinator is `None` not `""`,
+  a `release()` the store refuses keeps the lane occupied, and an unwritable
+  `release.json` warns instead of masking the run. Changed-code coverage went
+  from 88.1% to **95.6%**.
+- `git diff --check` clean. 349 focused tests pass. Full unit suite: 1831 pass,
+  2 failures + 9 errors that are byte-identical at base, and one module that
+  cannot import (`No module named 'PIL'`).
+
+## Not done
+
+- No coordinator, no labgrid, no hardware: every coordinator interaction in the
+  tests is stubbed at the `re_read_ownership` / `LabgridBench` boundary. A real
+  fleet run is still outstanding.
+- Lane contention and parallel runs untested.
+- `pytest_cov` missing from the repo venv; coverage measured with `coverage`.
