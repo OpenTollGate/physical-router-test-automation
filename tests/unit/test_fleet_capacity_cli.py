@@ -585,10 +585,19 @@ def test_render_text_marks_a_partial_ledger_even_with_sized_rows():
 
 def test_admission_detail_names_the_real_hazard_not_read_only_ness():
     """The review's MEDIUM: "the store is read-only, so headroom is not
-    consulted" was a non-sequitur — reservations ARE read from that store."""
+    consulted" was a non-sequitur — reservations ARE read from that store.
+
+    Updated when ``read_authority_pool`` removed the *other* obstacle: the pool
+    is now read over a ``mode=ro`` connection, so "FleetAuthority creates the
+    store" is no longer a true reason and must not be stated as one. What
+    remains true — and is the reason ``NOT_QUALIFIED`` stays — is that
+    ``cpu_committed`` cannot be measured from ``/proc``.
+    """
     from lib.fleet_observe import ADMISSION_DETAIL
 
-    assert "creates the authority store" in ADMISSION_DETAIL
-    assert "writer" in ADMISSION_DETAIL
-    # The old, misleading clause is gone.
+    assert "cpu_committed" in ADMISSION_DETAIL
+    assert "unmeasured" in ADMISSION_DETAIL
+    # The obstacle that no longer exists must not be claimed as the reason.
+    assert "creates the authority store" not in ADMISSION_DETAIL
+    # And the old, misleading clause stays gone.
     assert "opens the authority store read-only" not in ADMISSION_DETAIL

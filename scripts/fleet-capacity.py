@@ -229,6 +229,26 @@ def _render_text(report: dict) -> str:
             f"({', '.join(reservations['unsized'])}); host headroom is unknown, not free"
         )
 
+    pool = report.get("host_pool") or {}
+    out.append("")
+    if pool.get("available"):
+        free, used, total = pool["free"], pool["used"], pool["total"]
+        out.append(f"host pool ({pool['source']}) — the authority's accounting, not a measurement:")
+        out.append(
+            f"  free  {free['vcpus']} vCPU · {free['ram_mib']} MiB RAM · "
+            f"{free['disk_mib']} MiB disk · {free['inodes']} inodes"
+        )
+        out.append(
+            f"  total {total['vcpus']} vCPU · {total['ram_mib']} MiB RAM · "
+            f"{total['disk_mib']} MiB disk · reserve {pool['ram_reserve_mib']} MiB"
+        )
+        out.append(f"  committed by {len(pool['occupying_runs'])} allocation(s)")
+        if free["vcpus"] <= 0 or free["ram_mib"] <= 0:
+            out.append("  => the pool is EXHAUSTED; a new lane would be refused")
+    else:
+        out.append(f"host pool: unreadable — {pool.get('detail') or 'no authority store'}")
+        out.append("  => headroom UNKNOWN, which is not the same as free")
+
     if report["refusals"]:
         out.append("")
         out.append(f"refusals ({len(report['refusals'])}):")

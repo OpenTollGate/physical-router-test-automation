@@ -111,6 +111,8 @@ __all__ = [
     "read_local_guest",
     "read_authority_reservations",
     "read_authority_epoch",
+    "read_authority_pool",
+    "AuthorityPoolRead",
     "host_observation_from_metrics",
     "collect",
     "decide",
@@ -136,11 +138,13 @@ ADMISSION_STATUS = "NOT_QUALIFIED"
 ADMISSION_DETAIL = (
     "read-only observation only: this report measures the host and the "
     "coordinators, it does not admit. Slot arithmetic is withheld because "
-    "cpu_committed is unmeasured from /proc and because the only handle that "
-    "can read the host pool (FleetAuthority) creates the authority store in its "
-    "constructor, so using it here would make an observation command a writer. "
-    "Admission (with an owned, fenced lease) happens in the runner via "
-    "lib/run_admission.py; nothing here starts a VM or enables parallel execution."
+    "cpu_committed is unmeasured from /proc — how many vCPUs running guests "
+    "have already claimed cannot be derived from the machine, so any slot count "
+    "would be a guess in the dangerous direction. The host pool below is the "
+    "AUTHORITY's own accounting of what it has admitted, read without opening it "
+    "for write; it is not a measurement of spare machine capacity. Admission "
+    "(with an owned, fenced lease) happens in the runner via lib/run_admission.py; "
+    "nothing here starts a VM or enables parallel execution."
 )
 
 EVIDENCE_SCHEMA_VERSION = 2
@@ -834,6 +838,122 @@ def _read_only_uri(path: Path) -> str:
     return Path(path).expanduser().resolve().as_uri() + "?mode=ro"
 
 
+@dataclass(frozen=True)
+class AuthorityPoolRead:
+    """The host pool as the authority accounts for it — never as a machine measurement.
+
+    ``available=False`` means the pool could not be read and says why. It is
+    never "zero free": an unreadable pool is not evidence of spare capacity.
+    """
+
+    source: str = ""
+    available: bool = False
+    detail: str = ""
+    total: Mapping[str, int] = field(default_factory=dict)
+    baseline: Mapping[str, int] = field(default_factory=dict)
+    used: Mapping[str, int] = field(default_factory=dict)
+    free: Mapping[str, int] = field(default_factory=dict)
+    ram_reserve_mib: int = 0
+    occupying_runs: tuple[str, ...] = ()
+
+
+def read_authority_pool(path: Path | str | None) -> "AuthorityPoolRead":
+    """Read the registered host budget and what is committed, read-only.
+
+    ``FleetAuthority.host_headroom()`` computes exactly this, but the only way
+    to reach it is ``FleetAuthority.__init__``, which runs ``_init_store()`` and
+    therefore CREATES the store. An observation command must not be a writer on
+    a live bench, so the arithmetic is mirrored here over a ``mode=ro``
+    connection instead of importing the writer.
+
+    This reports the *authority's own accounting*: what the pool declares, what
+    outstanding allocations have committed against it, and the remainder. It is
+    NOT a measurement of the machine — ``cpu_committed`` in particular cannot be
+    derived from ``/proc``, which is why callers must keep reporting
+    ``NOT_QUALIFIED`` and must not turn this into a slot count.
+    """
+    if path is None or not str(path).strip():
+        return AuthorityPoolRead(
+            source="",
+            available=False,
+            detail="no host authority store configured (pass --authority or set TOLLGATE_FLEET_AUTHORITY)",
+        )
+    src = Path(path).expanduser()
+    if not src.is_file():
+        return AuthorityPoolRead(source=str(src), available=False, detail="host authority store not found")
+    try:
+        conn = sqlite3.connect(_read_only_uri(src), uri=True, timeout=5.0)
+    except sqlite3.Error as exc:
+        return AuthorityPoolRead(source=str(src), available=False, detail=redact(f"cannot open store: {exc}"))
+    try:
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT spec FROM host_pool WHERE singleton = 1").fetchone()
+            if row is None:
+                return AuthorityPoolRead(
+                    source=str(src),
+                    available=False,
+                    detail="host budget not registered in this store — admission would refuse it as host_unknown",
+                )
+            try:
+                spec = json.loads(row["spec"])
+            except (ValueError, TypeError):
+                return AuthorityPoolRead(
+                    source=str(src), available=False, detail="host_pool.spec is not valid JSON"
+                )
+            placeholders = ",".join("?" * len(_AUTHORITY_OCCUPYING_STATES))
+            rows = conn.execute(
+                f"SELECT run_id, demand FROM allocations WHERE state IN ({placeholders})",
+                _AUTHORITY_OCCUPYING_STATES,
+            ).fetchall()
+        except sqlite3.DatabaseError as exc:
+            return AuthorityPoolRead(
+                source=str(src), available=False, detail=redact(f"store is not an authority store: {exc}")
+            )
+    finally:
+        conn.close()
+
+    dims = ("vcpus", "ram_mib", "disk_mib", "inodes")
+    used = dict.fromkeys(dims, 0)
+    unsized: list[str] = []
+    for alloc in rows:
+        try:
+            demand = json.loads(alloc["demand"])
+            for dim in dims:
+                used[dim] += int(demand[dim])
+        except (ValueError, KeyError, TypeError):
+            # An occupying allocation we cannot price is NOT zero. Record it and
+            # refuse the whole read rather than under-report committed capacity.
+            unsized.append(str(alloc["run_id"]))
+    if unsized:
+        return AuthorityPoolRead(
+            source=str(src),
+            available=False,
+            detail=f"{len(unsized)} occupying allocation(s) could not be priced (unreadable demand)",
+        )
+
+    try:
+        total = {dim: int(spec[f"{dim}_total"]) for dim in dims}
+        baseline = {dim: int(spec.get(f"baseline_{dim}", 0)) for dim in dims}
+        reserve = int(spec.get("ram_mib_reserve", 0))
+    except (ValueError, KeyError, TypeError):
+        return AuthorityPoolRead(source=str(src), available=False, detail="host_pool.spec is incomplete")
+
+    free = {dim: total[dim] - baseline[dim] - used[dim] for dim in dims}
+    free["ram_mib"] -= reserve
+    return AuthorityPoolRead(
+        source=str(src),
+        available=True,
+        detail="",
+        total=total,
+        baseline=baseline,
+        used=used,
+        free=free,
+        ram_reserve_mib=reserve,
+        occupying_runs=tuple(str(a["run_id"]) for a in rows),
+    )
+
+
 def read_authority_reservations(
     path: Path | str | None, *, now: float
 ) -> ReservationRead:
@@ -950,6 +1070,17 @@ class Evidence:
     #: Occupying allocations that exist (per the store) but cannot be sized, so
     #: the reservation vector above is a *lower bound*, not the whole claim set.
     reservations_unsized: tuple[str, ...] = ()
+    #: The authority's own host-pool accounting, read without becoming a writer.
+    #: Empty/false means "unreadable", which callers must not read as "free".
+    host_pool_available: bool = False
+    host_pool_detail: str = ""
+    host_pool_source: str = ""
+    host_pool_total: Mapping[str, int] = field(default_factory=dict)
+    host_pool_baseline: Mapping[str, int] = field(default_factory=dict)
+    host_pool_used: Mapping[str, int] = field(default_factory=dict)
+    host_pool_free: Mapping[str, int] = field(default_factory=dict)
+    host_pool_ram_reserve_mib: int = 0
+    host_pool_occupying_runs: tuple[str, ...] = ()
     coordinators_read: Mapping[str, CoordinatorRead] = field(default_factory=dict)
     refusals: tuple[Refusal, ...] = ()
     schema_version: int = EVIDENCE_SCHEMA_VERSION
@@ -1394,6 +1525,17 @@ def collect(
         )
 
     reservation_read = read_authority_reservations(authority_path, now=now)
+    pool_read = read_authority_pool(authority_path)
+    if not pool_read.available:
+        # Same rule as an unsized reservation: an unreadable pool is UNKNOWN,
+        # never zero-free. Refuse loudly instead of letting a reader assume.
+        refusals.append(
+            Refusal(
+                subject="host authority pool",
+                reason="host_pool_unreadable",
+                detail=pool_read.detail,
+            )
+        )
     if reservation_read.unsized:
         # Not a silent omission: an occupier we cannot price is a refusal with a
         # reason code, exactly like a dead exporter.
@@ -1417,6 +1559,15 @@ def collect(
         reservation_source=reservation_read.source,
         reservation_detail=reservation_read.detail,
         reservations_unsized=reservation_read.unsized,
+        host_pool_available=pool_read.available,
+        host_pool_detail=pool_read.detail,
+        host_pool_source=pool_read.source,
+        host_pool_total=pool_read.total,
+        host_pool_baseline=pool_read.baseline,
+        host_pool_used=pool_read.used,
+        host_pool_free=pool_read.free,
+        host_pool_ram_reserve_mib=pool_read.ram_reserve_mib,
+        host_pool_occupying_runs=pool_read.occupying_runs,
         coordinators_read=reads,
         refusals=tuple(refusals),
     )
@@ -1657,6 +1808,17 @@ def build_report(
             "ram_mib": demand.ram_mib,
             "disk_mib": demand.disk_mib,
             "disk_inodes": demand.disk_inodes,
+        },
+        "host_pool": {
+            "available": evidence.host_pool_available,
+            "detail": evidence.host_pool_detail,
+            "source": evidence.host_pool_source,
+            "total": dict(evidence.host_pool_total),
+            "baseline": dict(evidence.host_pool_baseline),
+            "used": dict(evidence.host_pool_used),
+            "free": dict(evidence.host_pool_free),
+            "ram_reserve_mib": evidence.host_pool_ram_reserve_mib,
+            "occupying_runs": list(evidence.host_pool_occupying_runs),
         },
         "reservations": {
             "source": evidence.reservation_source,
