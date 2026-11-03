@@ -26,7 +26,7 @@ from lib.protected_devices import (
 
 # Measured on x280, 2026-11-03.
 GATEWAY_ADAPTER = "BG02QAPG"       # production GL-MT6000
-BENCH_ADAPTERS = ["BG046H14", "BG046H5F", "BH00D6DL", "BH00DL3M"]
+BENCH_ADAPTERS = ["BG046H14", "BG046H5F", "BH00D6DL"]  # BH00DL3M is the E750 (production)
 GATEWAY_BY_ID = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BG02QAPG-if00-port0"
 BENCH_BY_ID = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BG046H5F-if00-port0"
 
@@ -36,6 +36,13 @@ class TestAdapterIdentityIsInTheProtectedList:
         assert is_protected(serial_adapters=[GATEWAY_ADAPTER])
 
     def test_bench_adapters_are_not_protected(self):
+        """Only the cables confirmed NOT to be production.
+
+        BH00DL3M was in this list until 2026-11-03, when it was confirmed to be
+        the E750's — a production router. Test fixtures that name bench hardware
+        go stale the moment someone learns what a cable is actually wired to, so
+        this list is the confirmed-bench set, nothing more.
+        """
         for adapter in BENCH_ADAPTERS:
             assert not is_protected(serial_adapters=[adapter]), adapter
 

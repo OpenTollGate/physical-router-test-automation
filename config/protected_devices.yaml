@@ -21,6 +21,17 @@ protected:
     # typed down it. Measured on x280, 2026-11-03.
     serial_adapters: ["BG02QAPG"]
 
+  - id: e750-production
+    reason: production router (GL-E750 Mudi); not a test target
+    # Reported at the console as the model below; listed with the vendor prefix
+    # and board_name spelling because an exact-match miss here is a fail-OPEN.
+    board_names: ["glinet,gl-e750"]
+    models: ["GL-E750", "GL.iNet GL-E750", "gl-e750"]
+    hostnames: ["e750-lab", "GL-E750"]
+    # The USB serial adapter wired to this unit's console, by FTDI serial (never
+    # /dev/ttyUSB* — that renumbers on replug). Measured on x280, 2026-11-03.
+    serial_adapters: ["BH00DL3M"]
+
   - id: x280
     reason: serial/controller host
     hostnames: ["x280"]
