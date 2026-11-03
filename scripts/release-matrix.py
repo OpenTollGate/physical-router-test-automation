@@ -63,6 +63,30 @@ DEFAULT_ARCH = "aarch64_cortex-a53"  # same convention as TOLLGATE_ROUTER_ARCH e
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+
+def arch_family(arch: str) -> str:
+    """Reduce an arch string to its family for comparison.
+
+    OpenWrt package arches carry a CPU suffix (`aarch64_cortex-a53`,
+    `mipsel_24kc`, `x86_64`) while a live router reports what `uname -m`
+    says (`aarch64`, `mips`, `x86_64`). Comparing those two directly
+    produces a false mismatch on a perfectly correct board — observed on a
+    GL-MT3000 reporting `aarch64` against the expected
+    `aarch64_cortex-a53`.
+    """
+    a = (arch or "").strip().lower().replace("-", "_")
+    if a.startswith("aarch64"):
+        return "aarch64"
+    if a.startswith("mipsel") or a.startswith("mips"):
+        # uname says "mips"; the package arch distinguishes endianness and CPU.
+        return "mips"
+    if a.startswith("x86_64") or a.startswith("amd64"):
+        return "x86_64"
+    if a.startswith("arm_"):
+        return "arm"
+    return a
+
+
 def resolve_default_arch() -> str:
     """Resolve the router architecture the way the rest of the repo does:
     TOLLGATE_ROUTER_ARCH env > config/routers.json entry for
@@ -392,9 +416,11 @@ def phase_precheck(router: Router, ev: Evidence, args: argparse.Namespace) -> Ph
     r.steps.append(Step("package-manager", cmd=f"pkgmgr={pkgmgr} arch={arch} openwrt={owrt}",
                         stdout=f"{pkgmgr}/{arch}/{owrt}",
                         verdict="pass" if pkgmgr != "none" else "fail"))
+    same_family = arch_family(arch) == arch_family(args.arch)
     r.steps.append(Step("arch-match", note=f"router arch={arch}",
-                        verdict="pass" if arch == args.arch else "fail",
-                        stdout=f"router={arch} expected={args.arch}"))
+                        verdict="pass" if same_family else "fail",
+                        stdout=f"router={arch} expected={args.arch}"
+                               f"{'' if same_family else ' (different families)'}"))
     snap = snapshot(router, "precheck")
     (ev.dir / "precheck-state.json").write_text(json.dumps(snap, indent=2) + "\n")
     ok, detail = service_ok(router)
