@@ -88,6 +88,7 @@ from lib.fleet_capacity import (
     run_probes,
     summarize,
 )
+from lib.qemu_claims import GuestClaims, measure_guest_claims
 
 __all__ = [
     "ADMISSION_STATUS",
@@ -645,14 +646,43 @@ def host_observation_from_metrics(
     resource_id: str,
     ttl_s: float,
     authority_epoch: int,
+    guest_claims: "GuestClaims | None" = None,
 ) -> HostObservation:
     """Turn raw metrics into admission evidence that cannot over-report.
 
-    ``cpu_committed`` is deliberately left at 0 with the dimension marked
-    unknown, so ``new_vm_slots`` refuses to produce a slot count from it. RAM
-    committed is real (total minus available) — that number is measured, not
-    inferred from a laptop.
+    ``cpu_committed`` comes from the running guests' own command lines
+    (``lib.qemu_claims``): each QEMU process states the vCPUs and RAM it
+    reserved, and ``/proc/<pid>/cmdline`` is readable. That retires the old
+    "unmeasured from /proc" premise, which was the only reason VM headroom
+    answered NOT_QUALIFIED.
+
+    It stays fail-closed: with no claims passed, ``cpu_committed`` is 0 with the
+    dimension marked unknown, and one unpriced guest makes the whole figure
+    unknown rather than pricing it at zero. RAM committed stays total-minus-
+    available — a measured number, not a sum of declarations.
     """
+    if guest_claims is None or not guest_claims.complete:
+        # No claims, or at least one guest whose reservation could not be read:
+        # a slot count derived from a partial set is a guess in the dangerous
+        # direction, so the dimension stays unknown.
+        return host_observation(
+            fleet_id=fleet_id,
+            resource_id=resource_id,
+            now=metrics.observed_at,
+            ttl_s=ttl_s,
+            authority_epoch=authority_epoch,
+            cpu_total=float(metrics.cpu_total),
+            cpu_committed=0.0,
+            ram_total_mib=metrics.ram_total_mib,
+            ram_committed_mib=metrics.ram_committed_mib,
+            ram_reserve_mib=metrics.ram_reserve_mib,
+            disk_free_mib=metrics.disk_free_mib,
+            inode_free=metrics.inode_free,
+            kvm_usable=metrics.kvm_usable,
+            architecture=metrics.architecture,
+            unknown_dimensions=UNMEASURED_HOST_DIMENSIONS,
+        )
+
     return host_observation(
         fleet_id=fleet_id,
         resource_id=resource_id,
@@ -660,7 +690,7 @@ def host_observation_from_metrics(
         ttl_s=ttl_s,
         authority_epoch=authority_epoch,
         cpu_total=float(metrics.cpu_total),
-        cpu_committed=0.0,
+        cpu_committed=float(guest_claims.vcpus),
         ram_total_mib=metrics.ram_total_mib,
         ram_committed_mib=metrics.ram_committed_mib,
         ram_reserve_mib=metrics.ram_reserve_mib,
@@ -668,7 +698,7 @@ def host_observation_from_metrics(
         inode_free=metrics.inode_free,
         kvm_usable=metrics.kvm_usable,
         architecture=metrics.architecture,
-        unknown_dimensions=UNMEASURED_HOST_DIMENSIONS,
+        unknown_dimensions=frozenset(),
     )
 
 
@@ -1429,6 +1459,14 @@ def collect(
     refusals: list[Refusal] = []
     probed_epoch = int(authority_epoch)
 
+    # Guest claims are measured once per collection: the same running guests
+    # consume the same host, and re-scanning /proc per fleet could mix two
+    # different moments into one report.
+    measured_claims = measure_guest_claims(proc_root=proc_root)
+
+    def read_claims() -> GuestClaims:
+        return measured_claims
+
     def probe(target: ProbeTarget) -> Any:
         entry = manifest.fleet(target.fleet_id)
         try:
@@ -1470,6 +1508,7 @@ def collect(
                     resource_id=f"host:{target.fleet_id}",
                     ttl_s=limits.ttl_s,
                     authority_epoch=probed_epoch,
+                    guest_claims=read_claims(),
                 )
                 return metrics
         except ObservationRefused as exc:

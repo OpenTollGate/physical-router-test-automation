@@ -898,7 +898,18 @@ def _collect_runner(*, fleet_a_up: bool = True, exporter_up: bool = True, acquir
 def _local_host_kwargs(tmp_path: Path) -> dict:
     meminfo = tmp_path / "meminfo"
     meminfo.write_text("MemTotal: 16384000 kB\nMemAvailable: 8192000 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n")
-    return dict(disk_path=tmp_path, meminfo_path=meminfo, hostname="this-host", host_root=tmp_path)
+    # Host admission now MEASURES running guests from the process table, so the
+    # test must pin that table too — otherwise the assertions silently depend on
+    # whatever QEMU happens to be running on the machine executing the suite.
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir(exist_ok=True)
+    return dict(
+        disk_path=tmp_path,
+        meminfo_path=meminfo,
+        hostname="this-host",
+        host_root=tmp_path,
+        proc_root=proc_root,
+    )
 
 
 def test_collect_observes_authorized_fleets_and_never_mutates(manifest, tmp_path):
@@ -1035,7 +1046,6 @@ def test_collect_records_an_allowlisted_guest_lane(manifest, tmp_path):
         now=NOW,
         client=_client(runner),
         guests=(GuestSpec(resource_id="lane-a1", pidfile=pidfile),),
-        proc_root=proc_root,
         **_local_host_kwargs(tmp_path),
     )
     assert evidence.guests["lane-a1"].pid == 5252
@@ -1071,7 +1081,11 @@ def test_report_separates_the_four_numbers_and_marks_admission(manifest, tmp_pat
     assert fleet_a["admission"] == ADMISSION_STATUS
     assert fleet_a["host"]["ram_total_mib"] == 16000
     assert fleet_a["host_admission"], "host admission verdict must be reported separately from idle lanes"
-    assert fleet_a["host_admission"][0]["state"] == State.UNKNOWN.value
+    # CPU commitment is now MEASURED from running guests' command lines, so the
+    # dimension is no longer "unknown". In this fixture the fake host root has no
+    # /dev/kvm, which is itself a refusal — the point here is that the verdict is
+    # no longer a bare UNKNOWN due to an unmeasured dimension.
+    assert fleet_a["host_admission"][0]["state"] == State.REFUSED.value
     assert fleet_a["host_admission"][0]["slots"] == 0
     # The report is JSON-serializable end to end.
     json.dumps(report)
