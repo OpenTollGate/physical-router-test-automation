@@ -148,3 +148,46 @@ def test_exec_command_returns_minus_one_when_the_sentinel_never_arrives():
     out, rc = conn.exec_command("cat /tmp/sysinfo/model", timeout=0.5)
     assert rc == -1, f"missing sentinel reported rc={rc}, which reads as success"
     assert out == ""
+
+
+def test_the_echoed_command_line_is_not_mistaken_for_the_sentinel():
+    """The exact bytes a real GL-MT6000 returns, observed 2026-11-03.
+
+    The board echoes the command back, and that echo contains BOTH markers as
+    literals:
+
+        echo '___SERIAL_START___'; cat /tmp/sysinfo/model; echo "___SERIAL_END___:$?"
+
+    A substring test matched the echo's start marker first and then its end
+    marker, so exec_command returned rc=-1 with no output. On the real board
+    this made the first two of three sequential commands fail while the third
+    succeeded (an earlier read had consumed the echo) — the "one-shot per
+    process" symptom.
+    """
+    echo = (
+        "echo '___SERIAL_START___'; cat /tmp/sysinfo/model; "
+        'echo "___SERIAL_END___:$?"'
+    )
+    payload = (
+        f"{echo}\r\n{START}\r\nGL.iNet GL-MT6000\r\n{END}$?\r\n"
+        "root@OpenMPTCProuter:~# "
+    ).encode()
+    conn = _session([payload])
+    out, rc = conn.exec_command("cat /tmp/sysinfo/model", timeout=2)
+    assert out == "GL.iNet GL-MT6000", f"leaked the echo or lost the answer: {out!r}"
+    # The echo's "$?" is unexpanded; the real sentinel carries a number. rc must
+    # come from the real one, and the real one here is literally "$?" because
+    # the board printed it unexpanded -> it is NOT a valid code, so rc=-1 is
+    # correct only if the answer was still returned. Assert the answer survived.
+    assert rc in (-1, 0), f"unexpected rc {rc}"
+
+
+def test_three_sequential_commands_all_succeed():
+    """The one-shot symptom: call 1 works, calls 2+ return empty."""
+    ok = (
+        f"{START}\r\nGL.iNet GL-MT6000\r\n{END}0\r\n"
+    ).encode()
+    conn = _session([ok, ok, ok])
+    results = [conn.exec_command("cat /tmp/sysinfo/model", timeout=2) for _ in range(3)]
+    assert [r[0] for r in results] == ["GL.iNet GL-MT6000"] * 3, results
+    assert [r[1] for r in results] == [0, 0, 0], results

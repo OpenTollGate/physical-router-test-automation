@@ -23,6 +23,12 @@ import serial
 START_MARKER = "___SERIAL_START___"
 END_MARKER_PREFIX = "___SERIAL_END___:"
 LOGIN_PROMPT_RE = re.compile(r"login:", re.IGNORECASE)
+#: The real sentinel: the whole line is the marker plus the exit status. The
+#: board emits "___SERIAL_END___:0". Anchored, because the echoed command line
+#: contains the marker text as a literal and must never be mistaken for it.
+_END_PATTERN = re.compile(re.escape(END_MARKER_PREFIX) + r"(\d+)$")
+#: The echoed command line, whose sentinel text still holds an unexpanded "$?".
+_END_ECHO_PATTERN = re.compile(re.escape(END_MARKER_PREFIX) + r".*\$")
 SHELL_PROMPT_RE = re.compile(r"[#\$]\s*$")
 BUSYBOX_PROMPT_RE = re.compile(r"\S+@[^\s#]+:[^\s#]*#\s*$")
 DEFAULT_BAUD = 115200
@@ -115,16 +121,24 @@ class SerialConnection:
             while "\n" in pending:
                 line, pending = pending.split("\n", 1)
                 stripped = line.strip()
-                if START_MARKER in stripped:
+                # ANCHORED matches only. The board echoes our command line back,
+                # and that echo CONTAINS both markers as literals
+                # ("echo '___SERIAL_START___'; ... echo \"___SERIAL_END___:$?\"").
+                # A substring test therefore matched the echo and treated it as
+                # the sentinel, returning rc=-1 with no output — measured on a
+                # real board, where the first two of three sequential commands
+                # failed and the third only worked because an earlier read had
+                # already consumed the echo.
+                if stripped == START_MARKER:
                     found_start = True
                     continue
-                if END_MARKER_PREFIX in stripped:
-                    match = re.search(
-                        re.escape(END_MARKER_PREFIX) + r"(\d+)", stripped
-                    )
-                    if match:
-                        exit_code = int(match.group(1))
+                end_match = _END_PATTERN.match(stripped)
+                if end_match:
+                    exit_code = int(end_match.group(1))
                     return "\n".join(output_lines), exit_code
+                if end_match is None and _END_ECHO_PATTERN.match(stripped):
+                    # A wrapped echo of the sentinel's own text: still not output.
+                    continue
                 if found_start:
                     if stripped and not BUSYBOX_PROMPT_RE.match(stripped):
                         output_lines.append(stripped)
