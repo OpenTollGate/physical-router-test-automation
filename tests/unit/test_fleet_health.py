@@ -519,3 +519,38 @@ class TestReadRouterHealth:
         obs = _decide(read_router_health(FLEET, PLACE, run=runner))
         assert obs.telemetry_read_ok is False
         assert obs.health_ok is None
+
+
+# --------------------------------------------------------------------------- #
+# Captured from real hardware
+# --------------------------------------------------------------------------- #
+#: Exact bytes from a GL-MT6000 over /dev/ttyUSB0, 2026-11-03. With zero
+#: clients ``ndsctl clients`` prints nothing; the shell wrapper printed a bare
+#: "0" (its own exit status). Only ``ndsctl status`` proves the portal is up.
+_MT6000_NDSCTL_STATUS = """==================
+NoDogSplash Status
+====
+Version: 5.0.2
+Uptime: 42m 47s
+Gateway Name: TollGate-MT6000"""
+
+
+def test_real_mt6000_silent_client_list_is_zero_clients_not_unreadable():
+    """Captured on hardware: silence + a running-portal banner means 0 clients."""
+    result = parse_ndsctl_clients("0", portal_banner=_MT6000_NDSCTL_STATUS)
+    assert result.read_ok is True
+    assert result.paid_sessions == ()
+    assert "0 client" in result.detail
+
+
+def test_real_mt6000_silence_without_the_banner_stays_ambiguous():
+    """The dangerous direction: a silent read is not evidence of zero clients."""
+    result = parse_ndsctl_clients("0")
+    assert result.read_ok is False, "silence must not be reported as 'no paying customers'"
+
+
+def test_real_mt6000_status_banner_is_recognised_as_a_running_portal():
+    """The banner is the positive proof; it must never be treated as a client."""
+    result = parse_ndsctl_clients("", portal_banner=_MT6000_NDSCTL_STATUS)
+    assert result.read_ok is True
+    assert result.clients == ()
