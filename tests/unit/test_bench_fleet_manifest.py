@@ -29,8 +29,15 @@ ROOT = Path(__file__).resolve().parents[2]
 BENCH_MANIFEST = ROOT / "config" / "fleets.x280-bench.yaml"
 
 BENCH_PLACES = {
-    "bench-comfast-wr632ax",
+    "gl-mt3000",
+    "comfast",
+    "tollgate-af92",
+}
+#: Names this file once invented. They exist on no coordinator; if one reappears
+#: in the manifest the fleet will silently assess nothing (regression guard).
+INVENTED_PLACES = {
     "bench-mt3000-tollgate",
+    "bench-comfast-wr632ax",
     "bench-covr-x1860-tollgate",
 }
 #: Cables measured on this host 2026-11-03, with what they serve.
@@ -48,10 +55,25 @@ def test_the_bench_manifest_exists_and_parses():
 
 def test_it_declares_exactly_the_three_bench_units():
     manifest = load_manifest(BENCH_MANIFEST)
-    declared = set(manifest.resources)
+    # Compare canonical place ids, not the flattened resource set: aliases
+    # expand into additional resource entries by design.
+    declared = set(manifest.fleet("x280-bench").allowed_places)
     assert declared == BENCH_PLACES, (
         f"bench manifest declares {sorted(declared)}; expected the three "
-        "owner-confirmed bench units"
+        "owner-confirmed bench units as named on the coordinator"
+    )
+
+
+def test_it_does_not_use_invented_place_names():
+    """A name no coordinator answers to makes a fleet look enrolled but empty.
+
+    This is the defect that shipped once: the manifest named
+    `bench-mt3000-tollgate` while the coordinator answers `gl-mt3000`, so every
+    lane resolved to a miss and the fleet reported zero capacity forever.
+    """
+    manifest = load_manifest(BENCH_MANIFEST)
+    assert not (set(manifest.resources) & INVENTED_PLACES), (
+        "manifest uses a place name that exists on no coordinator"
     )
 
 

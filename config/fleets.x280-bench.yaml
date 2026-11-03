@@ -1,30 +1,46 @@
 # PRTA fleet manifest — x280 bench (REAL, committed infrastructure)
 #
-# This is the operator's own bench, enrolled as labgrid infrastructure rather
-# than as a placeholder. It replaces nothing: it is the first real manifest in
-# the tree (config/fleets.example.yaml is a template, not a fleet).
+# The operator's own bench, enrolled as labgrid infrastructure rather than as a
+# placeholder. config/fleets.example.yaml is a template, not a fleet; this is the
+# first real manifest in the tree.
 #
 # THE THREE UNITS ARE BENCH INFRASTRUCTURE, NOT PRODUCTION.
-# Owner-confirmed 2026-11-03. They are enrolled so tests have something to run
-# on. The two production routers on the same bench host are NOT here and must
-# never be added:
+# Owner-confirmed 2026-11-03: the MT3000, COMFAST and COVR are part of the test
+# setup. The two production routers cabled to the same host are NOT here and
+# must never be added:
 #
 #   GL-MT6000 gateway     -- production gateway  (protected: mt6000-gateway)
 #   GL-E750 Mudi          -- production router   (protected: e750-production)
 #
 # Both are refused by cable serial in config/protected_devices.yaml before any
-# port is opened, and tests/unit/test_protected_contract_consistency.py
-# cross-checks this manifest against that list, so adding one here fails CI.
+# port is opened, and tests/unit/test_bench_fleet_manifest.py cross-checks this
+# manifest against that list, so adding one here fails CI.
+#
+# ---------------------------------------------------------------------------
+# PLACE NAMES ARE THE COORDINATOR'S NAMES, NOT INVENTED ONES.
+# Measured 2026-11-03 against the running coordinator at x280.fips:20408:
+#
+#   $ labgrid-client -x x280.fips:20408 places
+#   archy-vm
+#   comfast
+#   gl-mt3000
+#   tollgate-d8ba
+#
+# An earlier revision of this file invented `bench-mt3000-tollgate` and
+# `bench-covr-x1860-tollgate`. Neither exists on that coordinator, so every lane
+# would have missed and the fleet would have looked permanently empty while
+# claiming to be enrolled. The names below are the ones the coordinator actually
+# answers to; the doc names (docs/FLEET-TEST-ROUTERS.md: `tollgate-9bd4`,
+# `comfast-b3ba`, `tollgate-af92`) are DUT hostnames, recorded per unit for
+# cross-reference only.
 #
 # Console identity is the FTDI serial, never /dev/ttyUSB* — the index drifts on
-# replug (docs/bench-environments.md). The serial-fleet contract that records
-# exactly which cable serves which board is
-# configs/labgrid/x280-serial-fleet.json, and it is the authority this file
-# must agree with.
+# replug. configs/labgrid/x280-serial-fleet.json records which cable serves which
+# board and is the authority this file must agree with.
 #
 # There is NO power control on this bench: the USB hubs switch adapters, not
-# routers. A power cycle is a manual action, so capacity_limits below must
-# never be read as "we can cold-boot our way out of a wedged unit".
+# routers. A power cycle is a manual action, so capacity_limits below must never
+# be read as "we can cold-boot our way out of a wedged unit".
 
 schema_version: 1
 
@@ -32,50 +48,53 @@ fleets:
   - id: x280-bench
     owner: felix
     coordinator:
-      # One coordinator for the bench. The address is the coordinator that owns
-      # these places; it is NOT the DUT management address.
-      address: "x280:20408"
+      # The coordinator that actually owns these places. NOT 127.0.0.1:20408 —
+      # that one is a scratch instance on this laptop holding unrelated test
+      # places, and pointing here would assess the wrong fleet.
+      address: "x280.fips:20408"
       credential_ref:
         source: file
         name: bench/labgrid-coordinator
     host_controller:
-      # Host admission belongs to the bench host itself, because the lanes are
-      # QEMU guests and USB consoles on this machine (see #248).
-      endpoint: "x280:8099"
+      endpoint: "x280.fips:8099"
       credential_ref:
         source: file
         name: bench/host-controller
 
-    # Only these three places may ever be assessed or driven by PRTA.
-    # `kind: router` is the string-entry default; spelled explicitly here so an
-    # added unit is a visible diff rather than an implicit fourth entry.
+    # Only these places may ever be assessed or driven by PRTA.
+    #   gl-mt3000      GL.iNet GL-MT3000     (tollgate-9bd4, serial BG046H5F)
+    #   comfast        COMFAST CF-WR632AX    (comfast-b3ba, serial BG046H14)
+    #   tollgate-af92  D-Link COVR-X1860 A1  (serial BH00D6DL)
+    #
+    # tollgate-af92 has no exporter entry yet, so it must report as
+    # not-exported/unknown rather than as capacity. Deliberate: the unit is
+    # owner-confirmed bench hardware, and an absent exporter is "unknown", never
+    # "free".
     allowed_places:
-      - id: bench-comfast-wr632ax
+      - id: gl-mt3000
         kind: router
-      - id: bench-mt3000-tollgate
+        aliases: ["tollgate-9bd4"]
+      - id: comfast
         kind: router
-      - id: bench-covr-x1860-tollgate
+        aliases: ["comfast-b3ba"]
+      - id: tollgate-af92
         kind: router
 
-    # acquire/release are required for a lane to be driven by the runner
-    # (lib/run_admission refuses a fleet without them). This claims only that
-    # the runner MAY reserve these lanes -- it does not assert that a lane is
-    # currently free. That is decided per-run from measurements.
+    # acquire/release are required for the runner to drive a lane (lib/
+    # run_admission refuses a fleet without them). This claims only that the
+    # runner MAY reserve these lanes; it does not assert any is free now.
     permitted_actions: [observe, acquire, release]
 
     capacity_limits:
-      # Three physical units, but no power control and one shared bench host.
-      # One concurrent run per unit is the real limit; the host-level budget is
-      # enforced separately by the authority store, not by this number.
+      # Three physical units, no power control, one shared bench host.
       max_concurrent_runs: 3
-      max_idle_guests: 0        # no QEMU lanes are declared for this fleet yet
+      max_idle_guests: 0        # the QEMU lanes belong to another fleet
       max_new_vm_slots: 0       # do not pretend host headroom is allocatable
 
-    # All three units share one bench host and one USB hub. A run that pulls
-    # power or wedges a hub affects the whole bench, so they share a domain.
-    # RF is deliberately NOT declared here: the units are Ethernet-managed and
-    # their radios are not part of this contract. Add an RF domain only if a
-    # test actually depends on wireless, or every run serializes needlessly.
+    # All three units sit behind one USB hub on one host. A run that wedges the
+    # hub affects every unit, so they exclude each other there. RF is
+    # deliberately NOT declared: these units are Ethernet-managed and declaring a
+    # radio domain would serialize every run for no reason.
     shared_conflict_ids:
       - x280-bench-host
       - x280-bench-usb-hub
