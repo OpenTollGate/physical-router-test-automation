@@ -248,3 +248,125 @@ a saved snapshot re-decides offline, then decays to `stale` past its TTL and to
 It proves nothing about physical DUTs: no router and no QEMU guest is involved.
 Physical fleets stay opt-in and unqualified until their owners authorize a live
 identity/idle/vantage/lease test.
+
+## Multi-contributor fleets: one coordinator per contributor, one directory each
+
+The goal this slice serves is *each contributor has their own labgrid fleet*.
+Two things make that work, and one of them is a trap that silently breaks it.
+
+### The trap: the coordinator's state is its working directory
+
+`labgrid-coordinator` persists to **`places.yaml` / `resources.yaml` in the
+directory it was started from** (`labgrid/remote/coordinator.py`: `save()` and
+`load()` use relative names). There is no `--state-dir`.
+
+The failure mode is narrower than "they share places", and stating it loosely
+would have been wrong. Measured against two real coordinators:
+
+- **Live processes are isolated.** Each keeps its own in-memory place map; a
+  place created on one is not visible on the other while both run.
+- **Both write the same file.** `_poll_step_save` runs every 15 s and each
+  `save()` writes that coordinator's *entire* snapshot with `atomic_replace`.
+  Two writers, one filename — last writer wins, so the persisted set alternates
+  and only ever reflects one fleet.
+- **A restart adopts the other fleet's places.** `load()` reads that file at
+  startup, so a coordinator restarted in a shared directory can come up owning
+  another contributor's places.
+
+That last one is the real hazard: not a live merge, but a survivor
+inheriting the dead coordinator's hardware. A contributor debugging "why does
+my fleet list someone else's router" after a restart would have no obvious
+cause.
+
+Give each fleet its own directory:
+
+```bash
+mkdir -p ~/fleets/alice ~/fleets/bob
+( cd ~/fleets/alice && labgrid-coordinator -l 0.0.0.0:20408 ) &
+( cd ~/fleets/bob   && labgrid-coordinator -l 0.0.0.0:20409 ) &
+```
+
+Verify isolation rather than assuming it — create a place on each and confirm
+each coordinator lists only its own:
+
+```bash
+LG_PLACE=router-a1 labgrid-client -x 127.0.0.1:20408 create
+LG_PLACE=router-b1 labgrid-client -x 127.0.0.1:20409 create
+labgrid-client -x 127.0.0.1:20408 places   # router-a1, and NOT router-b1
+labgrid-client -x 127.0.0.1:20409 places   # router-b1, and NOT router-a1
+```
+
+### Declaring the fleets
+
+Each fleet is one entry in an explicit manifest. Nothing is discovered by
+scanning: a fleet exists for PRTA only because an operator named it.
+
+```yaml
+schema_version: 1
+fleets:
+  - id: fleet-a
+    owner: alice
+    coordinator: {address: "10.0.0.11:20408"}
+    allowed_places:
+      - {id: router-a1, kind: router}
+    permitted_actions: [observe, acquire, release]
+    shared_conflict_ids: [rf-2g4]
+  - id: fleet-b
+    owner: bob
+    coordinator: {address: "10.0.0.12:20409"}
+    allowed_places:
+      - {id: router-b1, kind: router}
+    permitted_actions: [observe, acquire, release]
+    shared_conflict_ids: [rf-2g4]
+```
+
+`shared_conflict_ids` is what makes parallelism *safe* rather than merely
+concurrent. Two routers on different contributors' fleets are independent
+unless they share something physical — an RF band, a power controller, a switch.
+Naming that sharing in both fleets is how the scheduler learns it must not run
+them together.
+
+### What parallel execution actually looks like
+
+Measured against two real, isolated coordinators and a real authority store:
+
+| request | result |
+|---|---|
+| `fleet-a` / `router-a1` (domain `rf-2g4`) | **granted** |
+| `fleet-b` / `router-b1` (same domain) | **refused — `domain_conflict`** |
+
+Different contributors, different coordinators, different routers — refused,
+because the shared RF domain is already held. Drop the shared domain and the
+second request is granted: that is the parallelism the fleet topology buys.
+
+### Reading the report
+
+```
+fleet                 coord   exporters  routers  guests  vm-slots(raw)
+fleet-a               up              0        0       0              0
+fleet-b               up              0        0       0              0
+totals: 2/2 fleets reachable, 0 idle physical router(s)
+```
+
+A reachable coordinator is a control plane, not hardware. In the run above both
+fleets were `up` while each router reported `exporter_disconnected` — the
+coordinator answered, so the fleet is *configured and running*, but nothing
+there is counted as idle capacity. `unknown` is never promoted to `free`.
+
+### One host, many fleets
+
+Fleets on different contributors' machines do not compete; fleets on one host
+do, and the host pool is what stops them oversubscribing. That budget is
+per-host and shared across every lane on it, which is why the report prints the
+pool separately from the per-fleet counts:
+
+```
+host pool (…) — the authority's accounting, not a measurement:
+  free  6 vCPU · 5632 MiB RAM · 61440 MiB disk
+  total 8 vCPU · 8192 MiB RAM · 65536 MiB disk · reserve 512 MiB
+  committed by 1 allocation(s)
+```
+
+It stays `NOT_QUALIFIED` and prints no allocatable slot count because
+`cpu_committed` cannot be measured from `/proc`. A number an operator could
+schedule against would be a guess in the dangerous direction.
