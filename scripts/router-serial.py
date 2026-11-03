@@ -97,56 +97,57 @@ class SerialConnection:
         )
         self.ser.reset_input_buffer()
         self._send_line(marker_cmd)
-        buf = ""
+        # Consume COMPLETE lines from a pending buffer. Re-splitting the whole
+        # accumulated buffer on every read reprocessed every earlier line and
+        # treated a half-received line as output — which truncated a real
+        # answer mid-token on the MT3000.
+        pending = ""
         deadline = time.monotonic() + timeout
         found_start = False
-        found_end = False
         exit_code = -1
         output_lines = []
         while time.monotonic() < deadline:
             data = self.ser.read(READ_SIZE)
-            if data:
-                buf += data.decode("utf-8", errors="replace")
-                lines = buf.split("\n")
-                for line in lines:
-                    stripped = line.strip()
-                    if START_MARKER in stripped:
-                        found_start = True
-                        continue
-                    if END_MARKER_PREFIX in stripped:
-                        match = re.search(
-                            re.escape(END_MARKER_PREFIX) + r"(\d+)", stripped
-                        )
-                        if match:
-                            exit_code = int(match.group(1))
-                        found_end = True
-                        continue
-                    if found_start and not found_end:
-                        clean = stripped
-                        if clean and not BUSYBOX_PROMPT_RE.match(clean):
-                            output_lines.append(clean)
-                if found_end:
-                    return "\n".join(output_lines), exit_code
-            else:
+            if not data:
                 time.sleep(POLL_INTERVAL)
+                continue
+            pending += data.decode("utf-8", errors="replace")
+            while "\n" in pending:
+                line, pending = pending.split("\n", 1)
+                stripped = line.strip()
+                if START_MARKER in stripped:
+                    found_start = True
+                    continue
+                if END_MARKER_PREFIX in stripped:
+                    match = re.search(
+                        re.escape(END_MARKER_PREFIX) + r"(\d+)", stripped
+                    )
+                    if match:
+                        exit_code = int(match.group(1))
+                    return "\n".join(output_lines), exit_code
+                if found_start:
+                    if stripped and not BUSYBOX_PROMPT_RE.match(stripped):
+                        output_lines.append(stripped)
         return "\n".join(output_lines), -1
 
     def wait_pattern(self, pattern, timeout=120):
         regex = re.compile(pattern)
         deadline = time.monotonic() + timeout
-        buf = ""
+        # Same rule as exec_command: only a COMPLETE line can match. Matching a
+        # half-received line lets the caller act on a truncated token.
+        pending = ""
         while time.monotonic() < deadline:
             data = self.ser.read(READ_SIZE)
-            if data:
-                text = data.decode("utf-8", errors="replace")
-                buf += text
-                for line in buf.split("\n"):
-                    if regex.search(line):
-                        return line.strip(), time.monotonic() - (deadline - timeout)
-                if len(buf) > 65536:
-                    buf = buf[-32768:]
-            else:
+            if not data:
                 time.sleep(POLL_INTERVAL)
+                continue
+            pending += data.decode("utf-8", errors="replace")
+            while "\n" in pending:
+                line, pending = pending.split("\n", 1)
+                if regex.search(line):
+                    return line.strip(), time.monotonic() - (deadline - timeout)
+            if len(pending) > 65536:
+                pending = pending[-32768:]
         return None, timeout
 
     def capture_bootlog(self, timeout=180, end_pattern="login:"):
