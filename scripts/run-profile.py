@@ -819,8 +819,9 @@ def main() -> int:
     parser.add_argument("--domain", action="append", default=None, help="Exclusive conflict domain (repeatable)")
     parser.add_argument(
         "--authority-store",
-        default=str(REPO_DIR / ".fleet-authority.sqlite3"),
-        help="Fleet authority SQLite store used for admission",
+        default=os.environ.get("TOLLGATE_FLEET_AUTHORITY", "").strip()
+        or str(REPO_DIR / ".fleet-authority.sqlite3"),
+        help="Fleet authority SQLite store (default: TOLLGATE_FLEET_AUTHORITY, then repository-local store)",
     )
     parser.add_argument("--lease-ttl", type=float, default=900.0, help="Reservation TTL in seconds")
     parser.add_argument("--demand-vcpus", type=int, default=None, help="Lane demand: vCPUs")

@@ -1152,6 +1152,13 @@ def read_authority_reservations(
                 + " — headroom is unknown, not free"
             ),
         )
+    if any(not reservation.lane_id.strip() for reservation in out):
+        return ReservationRead(
+            source=str(src),
+            available=False,
+            reservations=tuple(out),
+            detail="occupying allocation has no lane identity — lease availability is unknown",
+        )
     return ReservationRead(source=str(src), available=True, reservations=tuple(out))
 
 
@@ -1682,6 +1689,31 @@ def collect(
     # store, however complete, could ever resolve a lease.
     reservation_read = read_authority_reservations(authority_path, now=now)
     held_lanes = {r.lane_id for r in reservation_read.reservations if r.lane_id}
+    lane_bindings: dict[tuple[str, str], list[str]] = {}
+    if authority_path is not None:
+        try:
+            conn = sqlite3.connect(_read_only_uri(Path(authority_path).expanduser()), uri=True)
+            try:
+                # Bindings, occupancy and quarantine must describe one instant.
+                # This is a read transaction on a mode=ro connection, not a grant.
+                conn.execute("BEGIN")
+                placeholders = ",".join("?" * len(_AUTHORITY_OCCUPYING_STATES))
+                snapshot_held = {row[0] for row in conn.execute(
+                    f"SELECT lane_id FROM allocations WHERE state IN ({placeholders})",
+                    _AUTHORITY_OCCUPYING_STATES,
+                )}
+                if any(not lane or not str(lane).strip() for lane in snapshot_held):
+                    raise sqlite3.DatabaseError("unattributed occupying allocation")
+                held_lanes = snapshot_held
+                for lane_id, fleet_id, resource_id in conn.execute(
+                    "SELECT lane_id, fleet_id, resource_id FROM lanes"
+                ):
+                    lane_bindings.setdefault((fleet_id, resource_id), []).append(lane_id)
+                held_lanes.update(row[0] for row in conn.execute("SELECT lane_id FROM quarantine"))
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            lane_bindings.clear()
 
     for spec in guests:
         owner = manifest.resource(spec.resource_id)
@@ -1721,19 +1753,21 @@ def collect(
                 probe_guest_readiness,
             )
 
+            registered_lanes = lane_bindings.get((owner.fleet_id, spec.resource_id), [])
             readiness = probe_guest_readiness(
                 address=spec.address,
                 tap=spec.tap,
                 bridge=spec.bridge,
-                # An explicit flag wins; otherwise the store answers, and only a
-                # COMPLETE read may say "free". An unavailable store leaves it
-                # None — never a default-true.
+                # A caller may veto availability, never assert it over the
+                # authority. Missing or incomplete evidence stays unknown.
                 lease_free=(
-                    spec.lease_free
-                    if spec.lease_free is not None
+                    False
+                    if spec.lease_free is False
                     else (
-                        (spec.resource_id not in held_lanes)
+                        (registered_lanes[0] not in held_lanes)
                         if reservation_read.available
+                        and len(registered_lanes) == 1
+                        and registered_lanes[0]
                         else None
                     )
                 ),

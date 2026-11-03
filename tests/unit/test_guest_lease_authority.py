@@ -65,6 +65,7 @@ class TestLaneAttribution:
         read = read_authority_reservations(path, now=time.time())
         assert read.reservations[0].lane_id == ""
         assert read.reservations[0].lane_id != "archy-vm"
+        assert read.available is False, "unattributed occupancy must not prove other lanes free"
 
 
 class TestLeaseFreeDerivation:
@@ -78,3 +79,116 @@ class TestLeaseFreeDerivation:
         """An unreadable store must leave the lease UNKNOWN, never "free"."""
         read = read_authority_reservations(tmp_path / "absent.sqlite3", now=time.time())
         assert read.available is False
+
+
+@pytest.mark.parametrize("held, expected, registered, quarantined", [
+    (True, False, True, False), (False, None, False, False),
+    (False, True, True, False), (False, False, True, True),
+    (False, None, "wrong-fleet", False),
+    (False, None, "duplicate", False),
+    (False, None, "missing-store", False),
+])
+def test_collect_explicit_free_cannot_override_authority(tmp_path, monkeypatch, held, expected, registered, quarantined):
+    from test_guest_telemetry_real import _manifest, PLACE, NOW, EPOCH
+    from test_fleet_observe import _client, FakeRunner, _local_host_kwargs
+    from lib.fleet_observe import collect, GuestSpec
+    from lib.guest_readiness import GuestProbe, ProbeResult
+
+    def readiness(**kwargs):
+        return GuestProbe(
+            health=ProbeResult(True, "fixture"),
+            topology=ProbeResult(True, "fixture"),
+            client_reachable=ProbeResult(True, "fixture"),
+            lease_free=ProbeResult(kwargs["lease_free"], "authority"),
+        )
+
+    monkeypatch.setattr("lib.guest_readiness.probe_guest_readiness", readiness)
+    rows = []
+    if held:
+        rows.append((
+            "run-held", "authority-lane-7", OCCUPYING,
+            '{"vcpus":2,"ram_mib":512,"disk_mib":64,"inodes":1}', NOW + 600,
+        ))
+    path = _store(tmp_path, rows)
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE lanes (lane_id TEXT, fleet_id TEXT, resource_id TEXT)")
+        conn.execute("CREATE TABLE quarantine (lane_id TEXT)")
+        if quarantined:
+            conn.execute("INSERT INTO quarantine VALUES ('authority-lane-7')")
+        if registered:
+            conn.execute("INSERT INTO lanes VALUES (?, ?, ?)",
+                         ("authority-lane-7", "other-fleet" if registered == "wrong-fleet" else "x280-bench", PLACE))
+        if registered == "duplicate":
+            conn.execute("INSERT INTO lanes VALUES (?, ?, ?)",
+                         ("second-lane", "x280-bench", PLACE))
+    if registered == "missing-store":
+        path = tmp_path / "absent.sqlite3"
+    statements = []
+    real_connect = sqlite3.connect
+
+    def traced_connect(*args, **kwargs):
+        connection = real_connect(*args, **kwargs)
+        connection.set_trace_callback(statements.append)
+        return connection
+
+    monkeypatch.setattr("lib.fleet_observe.sqlite3.connect", traced_connect)
+    evidence = collect(
+        _manifest(), now=NOW, authority_epoch=EPOCH,
+        authority_path=path, client=_client(FakeRunner()),
+        guests=[GuestSpec(resource_id=PLACE, pidfile=tmp_path / "missing.pid",
+                          address="fixture.invalid", lease_free=True)],
+        **_local_host_kwargs(tmp_path),
+    )
+    assert evidence.guests[PLACE].lease_free is expected
+    if registered == "missing-store":
+        assert not path.exists(), "observer must not create an authority store"
+    else:
+        assert "BEGIN" in statements, "lease evidence must use an explicit read snapshot"
+
+
+def test_concurrent_quarantine_is_seen_only_by_next_snapshot(tmp_path, monkeypatch):
+    from test_guest_telemetry_real import _manifest, PLACE, NOW, EPOCH
+    from test_fleet_observe import _client, FakeRunner, _local_host_kwargs
+    from lib.fleet_observe import collect, GuestSpec
+    from lib.guest_readiness import GuestProbe, ProbeResult
+
+    path = _store(tmp_path, [])
+    real_connect = sqlite3.connect
+    with real_connect(path) as db:
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("CREATE TABLE lanes (lane_id TEXT, fleet_id TEXT, resource_id TEXT)")
+        db.execute("CREATE TABLE quarantine (lane_id TEXT)")
+        db.execute("INSERT INTO lanes VALUES (?, ?, ?)", ("lane-7", "x280-bench", PLACE))
+    writes = []
+
+    def interleave(statement):
+        if statement == "SELECT lane_id, fleet_id, resource_id FROM lanes" and not writes:
+            with real_connect(path) as writer:
+                writer.execute("INSERT INTO quarantine VALUES ('lane-7')")
+            writes.append("committed")
+
+    def traced_connect(*args, **kwargs):
+        connection = real_connect(*args, **kwargs)
+        connection.set_trace_callback(interleave)
+        return connection
+
+    def readiness(**kwargs):
+        yes = ProbeResult(True, "fixture")
+        return GuestProbe(health=yes, topology=yes, client_reachable=yes,
+                          lease_free=ProbeResult(kwargs["lease_free"], "snapshot"))
+
+    monkeypatch.setattr("lib.fleet_observe.sqlite3.connect", traced_connect)
+    monkeypatch.setattr("lib.guest_readiness.probe_guest_readiness", readiness)
+    kwargs = _local_host_kwargs(tmp_path)
+
+    def observe():
+        return collect(
+            _manifest(), now=NOW, authority_epoch=EPOCH, authority_path=path,
+            client=_client(FakeRunner()),
+            guests=[GuestSpec(resource_id=PLACE, pidfile=tmp_path / "missing.pid",
+                              address="fixture.invalid")], **kwargs,
+        ).guests[PLACE].lease_free
+
+    assert observe() is True
+    assert writes == ["committed"], "a separate connection must commit during the read"
+    assert observe() is False
