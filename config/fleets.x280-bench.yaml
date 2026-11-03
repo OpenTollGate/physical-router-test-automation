@@ -82,6 +82,21 @@ fleets:
       # A real QEMU lane on this coordinator (exporter: NetworkService at
       # 10.99.99.1). Declared as `guest` so it is measured separately from the
       # physical routers: an idle guest is a reusable lane, not a spare router.
+      #
+      # MEASURED 2026-11-03, and it is NOT usable as a lane yet:
+      #   + alive: 10.99.99.1 answers ping; MAC 52:54:00:12:34:56 on tg-poc-br
+      #     matches the running qemu-system process
+      #   + reservable: labgrid acquire -> 'acquired: x280/c08r4d0r',
+      #     release -> 'acquired: None' (clean round trip)
+      #   - SSH answers but rejects every key on this host:
+      #     'Permission denied (publickey,password)' for id_bench, id_fleet,
+      #     id_ed25519, id_dq05, id_hermes_vps
+      #   - the resource declares proxy_required: True, but labgrid 26 ships NO
+      #     proxy component (no labgrid-proxy binary, no proxy module), so that
+      #     requirement can never be satisfied by the pinned version
+      #
+      # So: reservable but not drivable. It must never be counted as idle or
+      # schedulable on the strength of a clean acquire alone.
       - id: archy-vm
         kind: guest
 
