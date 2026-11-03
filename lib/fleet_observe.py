@@ -460,24 +460,98 @@ def endpoint_host(endpoint: str) -> str:
     return text
 
 
+def _local_interface_addresses() -> set[str]:
+    """Addresses actually assigned to this machine's interfaces, both families.
+
+    Read from the kernel rather than inferred: ``gethostname()`` commonly
+    resolves to a single loopback entry (``127.0.1.1`` on Debian), so comparing a
+    candidate's addresses against the hostname's would reject every real alias of
+    this machine — the exact bug this replaces.
+
+    Deliberately NOT implemented by trying to bind the candidate address: on
+    hosts with ``ip_nonlocal_bind`` set, binding a foreign address succeeds, which
+    would make a remote host look local. Reading the assigned set cannot fail in
+    that direction.
+    """
+    found: set[str] = set()
+    import socket
+
+    # IPv6: /proc/net/if_inet6 lists <32 hex chars> per assigned address.
+    try:
+        with open("/proc/net/if_inet6", encoding="ascii") as fh:
+            for line in fh:
+                fields = line.split()
+                if not fields:
+                    continue
+                try:
+                    found.add(socket.inet_ntop(socket.AF_INET6, bytes.fromhex(fields[0])))
+                except (ValueError, OSError):
+                    continue
+    except OSError:  # pragma: no cover - no IPv6 on this kernel
+        pass
+
+    # IPv4: SIOCGIFADDR per interface.
+    try:
+        import fcntl
+        import struct
+
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            for _index, name in socket.if_nameindex():
+                try:
+                    packed = fcntl.ioctl(
+                        probe.fileno(), 0x8915, struct.pack("256s", name.encode()[:15])
+                    )
+                except OSError:
+                    continue
+                found.add(socket.inet_ntoa(packed[20:24]))
+    except (ImportError, OSError):  # pragma: no cover - non-Linux
+        pass
+
+    return found
+
+
 def is_local_endpoint(endpoint: str, *, hostname: str | None = None) -> bool:
     """True only when the endpoint names THIS host.
 
     A host controller on another machine cannot be measured from here — reading
     ``/proc`` would silently answer for the wrong box. That is a refusal
     (``host_controller_not_local``), not a fallback.
+
+    Name comparison alone is not enough. This host answers to several names —
+    ``x280``, ``x280.fips``, ``x280.lan`` — and the aliases are not guaranteed to
+    share a spelling with ``gethostname()``. Measured here: ``x280.fips`` is this
+    machine but resolves **IPv6-only**, while ``gethostname()`` resolves to
+    ``127.0.1.1``; both a string comparison and an IPv4-only ``gethostbyname``
+    comparison refused the local host.
+
+    So locality is confirmed by address: the candidate's resolved addresses are
+    intersected with the addresses actually assigned to this machine's
+    interfaces, across both families. Resolution is only ever an *additional* way
+    to confirm locality — an unresolvable name, or one that resolves elsewhere,
+    stays refused.
     """
     host = endpoint_host(endpoint).strip().lower()
     if not host:
         return False
     if host in _LOCAL_HOST_NAMES or host.startswith("127."):
         return True
+    import socket
     names = {(hostname or "").strip().lower(), _hostname().lower()}
     try:
         names.add(_fqdn().lower())
     except OSError:  # pragma: no cover - resolution failure is not a bug here
         pass
-    return bool(host) and host in {n for n in names if n}
+    if host in {n for n in names if n}:
+        return True
+
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    resolved = {str(info[4][0]) for info in infos}
+    if not resolved:
+        return False
+    return bool(resolved & _local_interface_addresses())
 
 
 def _hostname() -> str:
