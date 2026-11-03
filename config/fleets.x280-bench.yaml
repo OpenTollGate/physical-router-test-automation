@@ -79,6 +79,11 @@ fleets:
         aliases: ["comfast-b3ba"]
       - id: tollgate-af92
         kind: router
+      # A real QEMU lane on this coordinator (exporter: NetworkService at
+      # 10.99.99.1). Declared as `guest` so it is measured separately from the
+      # physical routers: an idle guest is a reusable lane, not a spare router.
+      - id: archy-vm
+        kind: guest
 
     # acquire/release are required for the runner to drive a lane (lib/
     # run_admission refuses a fleet without them). This claims only that the
@@ -88,7 +93,7 @@ fleets:
     capacity_limits:
       # Three physical units, no power control, one shared bench host.
       max_concurrent_runs: 3
-      max_idle_guests: 0        # the QEMU lanes belong to another fleet
+      max_idle_guests: 1        # archy-vm, measured free 2026-11-03
       max_new_vm_slots: 0       # do not pretend host headroom is allocatable
 
     # All three units sit behind one USB hub on one host. A run that wedges the

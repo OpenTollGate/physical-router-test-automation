@@ -33,6 +33,9 @@ BENCH_PLACES = {
     "comfast",
     "tollgate-af92",
 }
+#: Reusable QEMU lanes on the same coordinator. Tracked separately because an
+#: idle guest is a lane, not a spare router.
+BENCH_GUESTS = {"archy-vm"}
 #: Names this file once invented. They exist on no coordinator; if one reappears
 #: in the manifest the fleet will silently assess nothing (regression guard).
 INVENTED_PLACES = {
@@ -57,10 +60,15 @@ def test_it_declares_exactly_the_three_bench_units():
     manifest = load_manifest(BENCH_MANIFEST)
     # Compare canonical place ids, not the flattened resource set: aliases
     # expand into additional resource entries by design.
-    declared = set(manifest.fleet("x280-bench").allowed_places)
-    assert declared == BENCH_PLACES, (
-        f"bench manifest declares {sorted(declared)}; expected the three "
+    fleet = manifest.fleet("x280-bench")
+    declared = set(fleet.allowed_places)
+    routers = declared - BENCH_GUESTS
+    assert routers == BENCH_PLACES, (
+        f"bench manifest declares routers {sorted(routers)}; expected the three "
         "owner-confirmed bench units as named on the coordinator"
+    )
+    assert declared - routers == BENCH_GUESTS, (
+        "the declared guest lanes changed; archy-vm is the measured QEMU lane"
     )
 
 
