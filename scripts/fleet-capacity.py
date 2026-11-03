@@ -313,7 +313,86 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--demand-ram-mib", type=int, default=1024, help="declared lane RAM MiB (default 1024)")
     parser.add_argument("--demand-disk-mib", type=int, default=4096, help="declared lane disk MiB (default 4096)")
     parser.add_argument("--demand-inodes", type=int, default=1, help="declared lane inode demand (default 1)")
+    parser.add_argument(
+        "--health-console",
+        action="append",
+        default=None,
+        metavar="PLACE=SERIALPORT",
+        help=(
+            "collect router health telemetry over a serial console for an allowlisted place "
+            "(repeatable). Without this flag no health telemetry is collected and every router "
+            "stays 'exported_available, capacity=0' — which is the honest answer: exported is not idle."
+        ),
+    )
+    parser.add_argument(
+        "--observer-mac",
+        default=os.environ.get("TOLLGATE_OBSERVER_MAC", ""),
+        help=(
+            "the TESTER's MAC as the captive portal sees it (env TOLLGATE_OBSERVER_MAC). "
+            "Vantage is judged from this MAC's portal state: authenticated/trusted means the "
+            "tester is bypassed, so its readings are not customer evidence."
+        ),
+    )
+    parser.add_argument(
+        "--router-identity",
+        action="append",
+        default=None,
+        metavar="PLACE=BOARD",
+        help="expected board_name for a place (repeatable); a mismatch is not healthy",
+    )
     return parser
+
+
+def _parse_pair(raw: str, what: str) -> tuple[str, str]:
+    if "=" not in raw:
+        raise ValueError(f"{what} must be PLACE=VALUE (got {raw!r})")
+    left, right = raw.split("=", 1)
+    left, right = left.strip(), right.strip()
+    if not left or not right:
+        raise ValueError(f"{what} must be PLACE=VALUE with both sides set (got {raw!r})")
+    return left, right
+
+
+def _health_probes(manifest, args) -> dict:
+    """Build one RouterProbe per place the operator named, over its serial console.
+
+    Every place must already be allowlisted in the manifest: naming a console for
+    a resource the manifest does not authorize is a refusal, not a discovery.
+    """
+    from lib.fleet_health import RouterCommand, read_router_health
+    from lib.serial_console import SerialConsole
+
+    identities = dict(_parse_pair(r, "--router-identity") for r in (args.router_identity or []))
+    probes = {}
+    for raw in args.health_console or []:
+        place, port = _parse_pair(raw, "--health-console")
+        entry = manifest.resource(place)
+        if entry is None:
+            raise ObservationRefused(
+                f"--health-console {place!r} is not an allowlisted place in this manifest — "
+                "capacity is never discovered"
+            )
+        console = SerialConsole(port, 115200)
+
+        def runner(req: RouterCommand, _console=console) -> RouterCommand:
+            try:
+                out = _console.exec_command(req.command, timeout=args.timeout * 3)
+                return RouterCommand(
+                    name=req.name, command=req.command, stdout=out, returncode=0
+                )
+            except Exception as exc:  # noqa: BLE001 — a failed read is evidence, not a crash
+                return RouterCommand(
+                    name=req.name, command=req.command, timed_out=True, stderr=str(exc)[:200]
+                )
+
+        probes[entry.resource_id] = read_router_health(
+            entry.fleet_id,
+            entry.resource_id,
+            run=runner,
+            expected_identity=identities.get(entry.resource_id, ""),
+            observer_mac=getattr(args, "observer_mac", "") or "",
+        )
+    return probes
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -357,6 +436,7 @@ def main(argv: list[str] | None = None) -> int:
                 disk_path=args.disk_path,
                 ram_reserve_mib=args.ram_reserve_mib,
                 guests=args.guest or (),
+                health_probes=_health_probes(manifest, args) if args.health_console else None,
                 authority_path=authority_path,
             )
     except ObservationRefused as exc:

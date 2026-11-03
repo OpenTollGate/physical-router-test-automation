@@ -1401,6 +1401,7 @@ def collect(
     disk_path: Path | str = "/",
     ram_reserve_mib: int = 0,
     guests: Iterable[GuestSpec] = (),
+    health_probes: Mapping[str, Any] | None = None,
     authority_path: Path | str | None = None,
     hostname: str | None = None,
     meminfo_path: Path = Path("/proc/meminfo"),
@@ -1494,6 +1495,57 @@ def collect(
     except CapacityError as exc:
         refusals.append(Refusal(subject="observation plan", reason="refused", detail=str(exc)))
 
+    health_obs: dict[str, Any] = {}
+    if health_probes:
+        from lib.fleet_health import RouterProbe, router_health_from_probe
+
+        for resource_id, probe in health_probes.items():
+            owner_entry = manifest.resource(resource_id)
+            if owner_entry is None:
+                refusals.append(
+                    Refusal(
+                        subject=f"health:{resource_id}",
+                        reason="not_configured",
+                        detail="health probe target is not an allowlisted place in this manifest",
+                    )
+                )
+                continue
+            if owner_entry.kind != "router":
+                refusals.append(
+                    Refusal(
+                        subject=f"health:{resource_id}",
+                        reason="kind_mismatch",
+                        detail=f"configured as kind {owner_entry.kind!r}, probed as a router",
+                    )
+                )
+                continue
+            if not isinstance(probe, RouterProbe):
+                refusals.append(
+                    Refusal(
+                        subject=f"health:{resource_id}",
+                        reason="telemetry_unreadable",
+                        detail=f"probe is {type(probe).__name__}, not a RouterProbe",
+                    )
+                )
+                continue
+            # The probe carries its own fleet/resource ids; a probe answered for
+            # one place must never be filed under another.
+            if probe.resource_id != resource_id or probe.fleet_id != owner_entry.fleet_id:
+                refusals.append(
+                    Refusal(
+                        subject=f"health:{resource_id}",
+                        reason="wrong_fleet",
+                        detail=(
+                            f"probe claims {probe.fleet_id}/{probe.resource_id}, "
+                            f"manifest says {owner_entry.fleet_id}/{resource_id}"
+                        ),
+                    )
+                )
+                continue
+            health_obs[resource_id] = router_health_from_probe(
+                probe, now=now, ttl_s=limits.ttl_s, authority_epoch=probed_epoch
+            )
+
     guest_obs: dict[str, GuestObservation] = {}
     for spec in guests:
         owner = manifest.resource(spec.resource_id)
@@ -1552,6 +1604,7 @@ def collect(
         ttl_s=limits.ttl_s,
         coordinators=coordinators,
         exporters=exporters,
+        health=health_obs,
         guests=guest_obs,
         hosts=hosts,
         host_metrics=host_metrics,
