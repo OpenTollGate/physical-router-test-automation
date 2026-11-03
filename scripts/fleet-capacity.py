@@ -360,6 +360,7 @@ def _health_probes(manifest, args) -> dict:
     a resource the manifest does not authorize is a refusal, not a discovery.
     """
     from lib.fleet_health import RouterCommand, read_router_health
+    from lib.protected_devices import assert_console_not_protected
     from lib.serial_console import SerialConsole
 
     identities = dict(_parse_pair(r, "--router-identity") for r in (args.router_identity or []))
@@ -372,6 +373,16 @@ def _health_probes(manifest, args) -> dict:
                 f"--health-console {place!r} is not an allowlisted place in this manifest — "
                 "capacity is never discovered"
             )
+        # Refuse the CABLE before opening it. A place name in a manifest says what
+        # the operator believes is plugged in; the adapter serial says what
+        # actually is. Measured 2026-11-03: the production gateway's console
+        # (/dev/ttyUSB0, adapter BG02QAPG) was probed by a harness that had no idea
+        # what was on the other end — this guard is the fix, and it fails closed
+        # when the cable cannot be identified at all.
+        try:
+            assert_console_not_protected(port)
+        except Exception as exc:  # noqa: BLE001 — refusal is the point
+            raise ObservationRefused(str(exc)) from None
         console = SerialConsole(port, 115200)
 
         def runner(req: RouterCommand, _console=console) -> RouterCommand:
