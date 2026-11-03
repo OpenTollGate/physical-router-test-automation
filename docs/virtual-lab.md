@@ -161,3 +161,23 @@ sshpass -p <password> ssh root@10.99.99.1 \
 Cross-version reinstalls need those force flags (opkg treats a changed
 version prefix as a downgrade). Clear `/etc/tollgate/wallet.db` when
 switching mints.
+
+## MeshLink ↔ TollGate chain lane
+
+The MeshLink interop lane reuses the Beta seller above as the upstream
+TollGate and adds a Debian MeshLink gateway/client pair on `tg-upstream-br`,
+`tg-mesh-br`, and `ml-mgmt-br`:
+
+```bash
+make meshlink-lab-prepare
+make meshlink-lab-up-with-beta
+make meshlink-lab-provision
+make meshlink-lab-chain      # pay Beta, route guest traffic, verify renewal
+```
+
+`meshlink-lab-chain` creates a paid NoDogSplash client in a netns, removes
+the netns, gives the host Beta bridge the paid MAC, and SNATs MeshLink WAN
+traffic to the paid address. Beta NAT and host conntrack carry the return
+path. The script downloads 250 MB through the chain and waits for the buyer
+to poll Beta `/usage` and renew automatically. Full design and acceptance
+details: `docs/meshlink-tollgate-interop.md`.

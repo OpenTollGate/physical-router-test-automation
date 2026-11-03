@@ -1,0 +1,33 @@
+# MeshLink <-> TollGate QEMU lane.
+#
+# Bring the lane up first:
+#   make meshlink-lab-prepare
+#   make meshlink-lab-up
+#   make meshlink-lab-provision
+#
+# Usage:
+#   pytest --lg-env=configs/labgrid/meshlink-lab.yaml tests/interop/
+#
+# The guest-side (10.99.100.0/24) client is reachable through the management
+# bridge so labgrid never depends on the captive-portal state.
+
+targets:
+  meshlink-gateway:
+    resources:
+      NetworkService:
+        address: "10.99.97.15"
+        username: "root"
+    drivers:
+      SSHDriver:
+        keyfile: "~/.ssh/id_ed25519"
+        stderr_merge: true
+
+  meshlink-client:
+    resources:
+      NetworkService:
+        address: "10.99.97.16"
+        username: "root"
+    drivers:
+      SSHDriver:
+        keyfile: "~/.ssh/id_ed25519"
+        stderr_merge: true
