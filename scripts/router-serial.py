@@ -26,6 +26,7 @@ from lib.protected_devices import (  # noqa: E402  (path set above)
     ProtectedDeviceError,
     assert_not_protected,
     is_protected,
+    resolve_serial_adapter,
 )
 
 START_MARKER = "___SERIAL_START___"
@@ -335,6 +336,13 @@ def main():
     args = parser.parse_args()
 
     if args.identity_only:
+        # The cable identity is checked FIRST and without opening anything: a
+        # protected board must be refused even when its shell is too garbled to
+        # answer (measured on the E750, whose serial output is unusable).
+        adapter = resolve_serial_adapter(args.port)
+        cable_protected = bool(adapter) and is_protected(serial_adapters=[adapter])
+        print(f"adapter:    {adapter or 'unidentified'}")
+        print(f"cable:      {'PROTECTED' if cable_protected else ('bench?' if adapter else 'cannot certify')}")
         try:
             with SerialConnection(args.port, args.baud) as conn:
                 model, _ = conn.exec_command("cat /tmp/sysinfo/model", timeout=10)
@@ -342,11 +350,12 @@ def main():
             ident = {"model": (model or "").strip(), "board_name": (board or "").strip()}
             print(f"model:      {ident['model'] or '?'}")
             print(f"board_name: {ident['board_name'] or '?'}")
-            print(f"protected:  {is_protected(**{k: v for k, v in ident.items() if v})}")
-            sys.exit(0)
+            board_protected = is_protected(**{k: v for k, v in ident.items() if v})
         except Exception as e:  # noqa: BLE001
-            print(f"identity unreadable: {type(e).__name__}: {e}", file=sys.stderr)
-            sys.exit(78)
+            print(f"board identity unreadable: {type(e).__name__}: {e}", file=sys.stderr)
+            board_protected = False
+        print(f"protected:  {bool(cable_protected or board_protected)}")
+        sys.exit(0)
 
     if not args.command:
         parser.print_help()
@@ -367,6 +376,16 @@ def main():
     # the transport entry, not in each verb. --identity-only exists so a caller
     # can ask what a port is without being allowed to drive it.
     if not getattr(args, "identity_only", False):
+        # CABLE FIRST. A protected board must be refused before the port is
+        # opened, because the E750's shell garbles every answer — an
+        # after-the-fact identity check never fires on it. Measured 2026-11-03.
+        adapter = resolve_serial_adapter(args.port)
+        if adapter and is_protected(serial_adapters=[adapter]):
+            try:
+                assert_not_protected(serial_adapters=[adapter])
+            except ProtectedDeviceError as e:
+                print(f"REFUSED: {e}", file=sys.stderr)
+                sys.exit(78)
         try:
             with SerialConnection(args.port, args.baud) as conn:
                 conn.assert_not_protected_target()

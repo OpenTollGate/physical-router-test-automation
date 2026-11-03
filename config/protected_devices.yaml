@@ -26,7 +26,7 @@ protected:
     # Reported at the console as the model below; listed with the vendor prefix
     # and board_name spelling because an exact-match miss here is a fail-OPEN.
     board_names: ["glinet,gl-e750"]
-    models: ["GL-E750", "GL.iNet GL-E750", "gl-e750"]
+    models: ["GL-E750", "GL.iNet GL-E750", "gl-e750", "GL.iNet GL-E750 (V1)"]
     hostnames: ["e750-lab", "GL-E750"]
     # The USB serial adapter wired to this unit's console, by FTDI serial (never
     # /dev/ttyUSB* — that renumbers on replug). Measured on x280, 2026-11-03.
