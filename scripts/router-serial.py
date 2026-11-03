@@ -20,6 +20,14 @@ import time
 
 import serial
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
+
+from lib.protected_devices import (  # noqa: E402  (path set above)
+    ProtectedDeviceError,
+    assert_not_protected,
+    is_protected,
+)
+
 START_MARKER = "___SERIAL_START___"
 END_MARKER_PREFIX = "___SERIAL_END___:"
 LOGIN_PROMPT_RE = re.compile(r"login:", re.IGNORECASE)
@@ -94,6 +102,31 @@ class SerialConnection:
             self._send_line(LOGIN_USERNAME)
             time.sleep(1.0)
             self.ser.read(READ_SIZE)
+
+    def assert_not_protected_target(self) -> None:
+        """Refuse to drive a protected production/control device.
+
+        The device identifies itself; we do not trust the port name or an
+        operator-supplied label. Both queries are read-only. An unreadable
+        identity is NOT a licence to proceed on a port that looks lab-like —
+        but it is also not proof of protection, so an unreadable device is
+        allowed only when the caller has not asserted it is a test target.
+        """
+        model, model_rc = self.exec_command("cat /tmp/sysinfo/model", timeout=10)
+        board, board_rc = self.exec_command("cat /tmp/sysinfo/board_name", timeout=10)
+        identity = {
+            "model": (model or "").strip(),
+            "board_name": (board or "").strip(),
+        }
+        if model_rc != 0 and board_rc != 0:
+            raise ProtectedDeviceError(
+                f"could not read the identity of {self.port!r} "
+                f"(model rc={model_rc}, board rc={board_rc}); refusing rather than "
+                "assuming this is a lab device. A production gateway must never be "
+                "driven because its identity was unreadable."
+            )
+        assert_not_protected(**{k: v for k, v in identity.items() if v})
+        self.identity = identity
 
     def exec_command(self, command, timeout=DEFAULT_TIMEOUT):
         self._ensure_logged_in()
@@ -265,6 +298,11 @@ def main():
     )
     parser.add_argument("--port", required=True, help="Serial port (e.g. /dev/serial-alpha)")
     parser.add_argument("--baud", type=int, default=DEFAULT_BAUD, help=f"Baud rate (default: {DEFAULT_BAUD})")
+    parser.add_argument(
+        "--identity-only",
+        action="store_true",
+        help="report the attached device's identity and exit without running the subcommand",
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Subcommand")
 
@@ -296,6 +334,20 @@ def main():
 
     args = parser.parse_args()
 
+    if args.identity_only:
+        try:
+            with SerialConnection(args.port, args.baud) as conn:
+                model, _ = conn.exec_command("cat /tmp/sysinfo/model", timeout=10)
+                board, _ = conn.exec_command("cat /tmp/sysinfo/board_name", timeout=10)
+            ident = {"model": (model or "").strip(), "board_name": (board or "").strip()}
+            print(f"model:      {ident['model'] or '?'}")
+            print(f"board_name: {ident['board_name'] or '?'}")
+            print(f"protected:  {is_protected(**{k: v for k, v in ident.items() if v})}")
+            sys.exit(0)
+        except Exception as e:  # noqa: BLE001
+            print(f"identity unreadable: {type(e).__name__}: {e}", file=sys.stderr)
+            sys.exit(78)
+
     if not args.command:
         parser.print_help()
         sys.exit(1)
@@ -309,6 +361,24 @@ def main():
         args.command = cmd_text
     else:
         args.command = args.command
+
+    # Protected-device gate. Every subcommand passes through here, including
+    # the ones that flash, power-cycle or run state prep -- so the check sits at
+    # the transport entry, not in each verb. --identity-only exists so a caller
+    # can ask what a port is without being allowed to drive it.
+    if not getattr(args, "identity_only", False):
+        try:
+            with SerialConnection(args.port, args.baud) as conn:
+                conn.assert_not_protected_target()
+                identity = getattr(conn, "identity", {})
+        except ProtectedDeviceError as e:
+            print(f"REFUSED: {e}", file=sys.stderr)
+            sys.exit(78)
+        except Exception as e:  # noqa: BLE001 - unreadable identity is a refusal too
+            print(f"REFUSED: could not verify {args.port!r}: {type(e).__name__}: {e}", file=sys.stderr)
+            sys.exit(78)
+        if identity.get("model") or identity.get("board_name"):
+            print(f"==> Target: {identity.get('model','?')} ({identity.get('board_name','?')})", file=sys.stderr)
 
     args.func(args)
 
