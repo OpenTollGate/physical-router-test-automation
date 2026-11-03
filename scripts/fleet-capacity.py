@@ -82,16 +82,43 @@ from lib.fleet_observe import (  # noqa: E402
 
 
 def _parse_guest(spec: str) -> GuestSpec:
-    """``NAME=PIDFILE[:START_TICKS]`` — the operator names each guest explicitly."""
+    """``NAME=PIDFILE[:START_TICKS]`` — the operator names each guest explicitly.
+
+    Three optional ``@KEY=VALUE`` suffixes declare where the lane lives, which is
+    what lets its readiness be PROVEN rather than assumed:
+
+        archy-vm=/path/tollgate.pid:7845007@address=10.99.99.1@tap=tg-poc-tap@bridge=tg-poc-br
+
+    Without ``address`` every readiness dimension stays unknown (health, topology,
+    client reach), because there is nothing to probe. That is deliberate: a
+    pidfile alone identifies a process, not a usable lane.
+    """
     if "=" not in spec:
         raise argparse.ArgumentTypeError(
-            f"guest {spec!r} must be NAME=PIDFILE (optionally NAME=PIDFILE:START_TICKS)"
+            f"guest {spec!r} must be NAME=PIDFILE (optionally "
+            "NAME=PIDFILE:START_TICKS@address=IP@tap=IF@bridge=BR)"
         )
     name, _, rest = spec.partition("=")
     name = name.strip()
     rest = rest.strip()
     if not name or not rest:
         raise argparse.ArgumentTypeError(f"guest {spec!r} needs both a place id and a pidfile path")
+
+    # Split off @KEY=VALUE suffixes FIRST: a Windows-style or colon-bearing path
+    # must not be misread as a tick suffix.
+    location: dict[str, str] = {}
+    if "@" in rest:
+        parts = rest.split("@")
+        rest = parts[0]
+        for part in parts[1:]:
+            key, _, value = part.partition("=")
+            if key.strip().lower() not in {"address", "tap", "bridge"} or not value.strip():
+                raise argparse.ArgumentTypeError(
+                    f"guest {spec!r}: unknown or empty location suffix {part!r} "
+                    "(known: address, tap, bridge)"
+                )
+            location[key.strip().lower()] = value.strip()
+
     start_ticks: int | None = None
     path = rest
     if ":" in rest:
@@ -105,6 +132,9 @@ def _parse_guest(spec: str) -> GuestSpec:
         resource_id=name,
         pidfile=Path(path).expanduser(),
         expected_pid_start_ticks=start_ticks,
+        address=location.get("address", ""),
+        tap=location.get("tap", ""),
+        bridge=location.get("bridge", ""),
     )
 
 

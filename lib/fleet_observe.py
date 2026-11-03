@@ -717,6 +717,14 @@ class GuestSpec:
     resource_id: str
     pidfile: Path
     expected_pid_start_ticks: int | None = None
+    #: Where the lane's management plane lives, and how to prove its topology.
+    #: Optional: with no address the observation keeps every readiness dimension
+    #: unknown, which is the honest answer when the caller has not said where the
+    #: guest is reachable. `lease_free` comes from the authority, never a guess.
+    address: str = ""
+    tap: str = ""
+    bridge: str = ""
+    lease_free: bool | None = None
 
 
 def _pid_start_ticks(pid: int, *, proc_root: Path = Path("/proc")) -> int | None:
@@ -1606,7 +1614,7 @@ def collect(
                 )
             )
             continue
-        guest_obs[owner.resource_id] = read_local_guest(
+        identified = read_local_guest(
             spec,
             fleet_id=owner.fleet_id,
             now=now,
@@ -1614,6 +1622,34 @@ def collect(
             authority_epoch=probed_epoch,
             proc_root=proc_root,
         )
+        # Identity came from the pidfile//proc. Readiness is a DIFFERENT question
+        # and is only answered when the caller declared where the lane lives; with
+        # no address there is nothing to prove and the observation stays as-is
+        # (all dimensions unknown), which slice 1 refuses to count.
+        if spec.address:
+            from lib.guest_readiness import (
+                guest_observation_from_probe,
+                probe_guest_readiness,
+            )
+
+            readiness = probe_guest_readiness(
+                address=spec.address,
+                tap=spec.tap,
+                bridge=spec.bridge,
+                lease_free=spec.lease_free,
+            )
+            identified = guest_observation_from_probe(
+                readiness,
+                fleet_id=owner.fleet_id,
+                resource_id=owner.resource_id,
+                now=now,
+                ttl_s=limits.ttl_s,
+                authority_epoch=probed_epoch,
+                pid=identified.pid,
+                pid_start_ticks=identified.pid_start_ticks,
+                expected_pid_start_ticks=identified.expected_pid_start_ticks,
+            )
+        guest_obs[owner.resource_id] = identified
 
     reservation_read = read_authority_reservations(authority_path, now=now)
     pool_read = read_authority_pool(authority_path)
