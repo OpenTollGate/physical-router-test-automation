@@ -91,9 +91,10 @@ fleets:
       #   - SSH answers but rejects every key on this host:
       #     'Permission denied (publickey,password)' for id_bench, id_fleet,
       #     id_ed25519, id_dq05, id_hermes_vps
-      #   - the resource declares proxy_required: True, but labgrid 26 ships NO
-      #     proxy component (no labgrid-proxy binary, no proxy module), so that
-      #     requirement can never be satisfied by the pinned version
+      #   - proxy_required: True uses installed labgrid 26.0.1 SSH forwarding
+      #     (labgrid.util.proxy -> sshmanager.request_forward), not a separate
+      #     labgrid-proxy daemon. Exporter SSH authentication, routing and
+      #     forwarding connectivity remain unverified; no impossibility proven.
       #
       # So: reservable but not drivable. It must never be counted as idle or
       # schedulable on the strength of a clean acquire alone.

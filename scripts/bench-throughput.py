@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Measure serial vs parallel lane execution against a LIVE coordinator.
+"""Diagnostic-only place-holding timing against a LIVE coordinator.
+
+Not Gate E or production scheduler qualification: no assertion-bearing workload,
+fleet authority admission, TTL/fence supervision, or verified cleanup.
 
 Not a test, not a mock: a measurement. It acquires real places on the given
 coordinator, holds each for a fixed quantum, releases, and reports wall clock for
@@ -56,6 +59,7 @@ def main() -> int:
         print("need at least 2 places to compare serial against parallel", file=sys.stderr)
         return 2
 
+    print("DIAGNOSTIC ONLY: not Gate E or production scheduler qualification")
     print(f"coordinator: {args.coordinator}")
     print(f"lanes:       {', '.join(args.place)}")
     print(f"quantum:     {args.quantum}s per lane\n")

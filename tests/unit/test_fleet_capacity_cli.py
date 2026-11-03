@@ -162,6 +162,8 @@ def test_text_report_prints_the_four_numbers_and_not_qualified(manifest_path, fa
     assert rc == 0
     assert f"admission: {ADMISSION_STATUS}" in out
     assert "fleets reachable" in out
+    assert "1 exported/unclaimed; eligibility unproven" in out
+    assert "unclaimed (schedulable)" not in out
     assert "idle physical router(s)" in out
     assert "idle existing guest(s)" in out
     assert "new VM slots: 0 raw / NOT_QUALIFIED" in out

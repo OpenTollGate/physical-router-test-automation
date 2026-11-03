@@ -1415,18 +1415,13 @@ class FleetSummary:
 
     @property
     def reachable_unclaimed(self) -> int:
-        """Exported lanes nobody currently holds — a schedulability claim only.
+        """Exported lanes observed unacquired at the reachable coordinator.
 
-        Deliberately NOT ``idle_routers``. Proving a router idle requires
-        ``vantage_ok is True``, i.e. the observer's MAC appearing in the portal's
-        client list as a live customer (the 2026-10-21 retraction). On an empty
-        portal that never happens, so a strict reading makes "idle" unreportable
-        and parallelisation impossible.
-
-        This field answers the scheduling question without touching that rule:
-        the lane is exported, the coordinator is reachable, and no lease is held.
+        This is coordinator acquisition state only, not fleet-authority lease
+        state or proof of eligibility, health, conflict freedom or admission.
+        Missing authorized health telemetry can yield EXPORTED_AVAILABLE.
         It never feeds ``capacity``, never counts as idle, and never appears in a
-        qualification decision.
+        qualification decision. The strict idle/admission gates stay separate.
         """
         if not self.coordinator_reachable:
             return 0

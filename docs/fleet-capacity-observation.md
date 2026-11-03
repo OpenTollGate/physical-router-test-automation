@@ -20,6 +20,36 @@ tree. This is that adapter, and it exists so an operator can answer "what could
 this authorized fleet do right now, and if nothing, why not" without the answer
 being a guess.
 
+## Qualification boundaries (resume audit correction)
+
+`reachable_unclaimed` means **exported/unclaimed; eligibility unproven**:
+coordinator acquisition state only, not fleet-authority lease state. Missing
+authorized health telemetry can produce this count before health, identity,
+client-vantage and active-session checks. It proves neither safe eligibility nor
+conflict freedom, fixture binding or admission. Idle and admission gates remain
+unchanged; do not promote this count to capacity.
+
+The installed labgrid 26.0.1 implements `proxy_required` with SSH forwarding
+(`labgrid.util.proxy` → `sshmanager.request_forward`), not a separate
+`labgrid-proxy` daemon. The earlier no-proxy-component diagnosis was false.
+Exporter SSH authentication, routing and forwarding connectivity remain
+**unverified**, not impossible. No connectivity check is authorized by this note.
+
+Both `scripts/bench-throughput.py` (acquire/sleep/release) and
+`scripts/bench-real-workload.py` (direct serial commands) are **diagnostic-only,
+not Gate E or production scheduler qualification**. The latter now exits nonzero
+and withholds its comparison if any subprocess returns failure; successful
+return codes still do not establish workload correctness. Historical timing,
+including a claimed 3.04x, is not independently revalidated or qualification.
+
+Later qualification requires separate authorization: equal assertion-bearing
+workloads serially and concurrently through `run-profile.py --fleet-manifest`,
+bound fixture claims, shared authority admission, TTL/fence supervision, captured
+outputs/test counts and clean release evidence. Count successful completed work,
+not merely elapsed time. Neither diagnostic exercises that contract; the
+place-holding diagnostic also does not verify release success. All hardware,
+including protected production devices, remains hands-off for these corrections.
+
 ## What it reports, and why the numbers are separate
 
 Four counts, never added together:

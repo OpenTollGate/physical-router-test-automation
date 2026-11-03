@@ -1,3 +1,73 @@
+# Resume audit reporting corrections (2026-11-03)
+
+Base `6ccb3df6e7d8dfc8b554ea25473b2ec8d1f9299d`, fetched from
+`fork/pr/fleet-consolidated`; isolated branch `pr/prta-reporting-corrections`.
+
+- CLI now says `exported/unclaimed; eligibility unproven`; documentation limits
+  that observation to coordinator acquisition, not authority leases/admission.
+- Manifest/docs correct the missing-proxy diagnosis: installed labgrid uses SSH
+  forwarding; authentication/routing/forwarding remain unverified.
+- Both benchmarks label output diagnostic-only, not Gate E or production
+  scheduler qualification. Real-workload returns exit 1 and withholds comparison
+  on any failed subprocess. No admission/idle implementation changed.
+
+## Local verification (doubles only)
+
+RED before implementation: **9 failed, 1 warning in 0.24s**. All six possible
+failed job positions (three serial, three parallel) reproduced the erroneous
+zero exit; missing diagnostic banners and CLI label also failed. Warning was
+an unregistered existing `story` mark with hardware conftest bypassed; GREEN
+explicitly registers it.
+
+Focused command, using Hermes venv Python and coverage 7.17.1 in manager scratch:
+
+```sh
+python -m coverage run --source=scripts,lib -m pytest \
+  --confcutdir=tests/unit -o addopts='' \
+  -o 'markers=story: story traceability' \
+  tests/unit/test_benchmark_reporting.py tests/unit/test_fleet_capacity_cli.py \
+  tests/unit/test_fleet_capacity.py tests/unit/test_reachable_unclaimed.py \
+  tests/unit/test_reservable_is_not_drivable.py \
+  tests/unit/test_bench_fleet_manifest.py -q
+```
+
+Actual output:
+
+```text
+144 passed in 3.00s
+Name                             Stmts   Miss  Cover
+----------------------------------------------------
+lib/fleet_capacity.py              684     36    95%
+scripts/bench-real-workload.py      31      0   100%
+scripts/bench-throughput.py         52      4    92%
+scripts/fleet-capacity.py          222     48    78%
+----------------------------------------------------
+TOTAL                              989     88    91%
+```
+
+Changed executable statements: **7/7 = 100%**, checked against coverage JSON:
+real-workload lines 17,18,23,35–37 and throughput line 62. CLI line 189 is part of
+a covered multiline rendering expression (not a distinct coverage statement);
+the new rendered string is asserted. Library changes are docstring-only.
+Whole CLI file coverage is 78%, not an 80% whole-file claim.
+`git diff --check`: exit 0, no output.
+
+Coverage was missing and installed with pip --target into manager scratch, not
+the shared venv. Unfiltered JSON reporting hit an unrelated pre-existing
+Python-3.11-incompatible f-string in `lib/cloud_lab/worker/conwrt_deploy.py`;
+reporting only the four touched production files succeeded.
+
+No hardware scripts ran against devices: tests replaced every subprocess with
+doubles. No coordinator/device probes, acquisition, credential changes or VM
+launches; all hardware remained hands-off. The live integration expectation was
+updated but **NOT RUN**. No scheduler qualification, tunnel success or throughput
+gain is claimed. Existing diagnostic limitations (discarded workload output,
+direct serial bypass, unchecked place-hold release) remain documented.
+Shared checkout/untracked evidence untouched; push only this feature branch,
+no new upstream PR or merge. Historical reports below are retained as history.
+
+---
+
 # Requirement 1 + the non-overlap half of 2 — endpoint binding, as tested pure logic
 
 Base: `237c12d39f22bcd8b8ebc2d8ebf7e1badf87ea3b` (PR #334 head).

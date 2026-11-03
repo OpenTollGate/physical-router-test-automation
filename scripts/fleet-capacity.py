@@ -186,7 +186,7 @@ def _render_text(report: dict) -> str:
         f"totals: {totals['reachable_fleets']}/{totals['configured_fleets']} fleets reachable, "
         f"{totals['idle_physical_routers']} idle physical router(s), "
         f"{totals['idle_existing_guests']} idle existing guest(s), "
-        f"{totals.get('reachable_unclaimed', 0)} unclaimed (schedulable), "
+        f"{totals.get('reachable_unclaimed', 0)} exported/unclaimed; eligibility unproven, "
         f"{totals['exported_available']} exported-but-not-proven-idle"
     )
     out.append(

@@ -9,17 +9,12 @@ That rule exists because of a real incident (2026-10-21): a tester that was
 bypassed by design reported "no paying customers", and the reading was retracted.
 It must not be relaxed.
 
-But it has a consequence that blocks parallelisation entirely: **an idle router
-can never be proven idle**, because proving vantage requires a client on the very
-portal we are trying to prove is empty. Applying it literally means the fleet
-always reports zero and there is nothing to schedule on.
+When idle evidence is missing, report a separate, clearly weaker observation
+without weakening the idle rule or implying that the lane can be scheduled:
 
-The resolution is not to weaken the evidence rule but to report a second,
-clearly-weaker fact alongside it:
-
-  ``reachable_unclaimed`` -- exported, coordinator-reachable, and no lease held
-  by anyone. This is an operational claim about *reservability*, not a claim
-  about a paying customer. It never sets ``capacity``, never counts as
+  ``reachable_unclaimed`` -- exported and observed unacquired at a reachable
+  coordinator. It says nothing about fleet-authority leases or eligibility,
+  health or paying customers. It never sets ``capacity``, never counts as
   ``idle_routers``, and never appears in a qualification decision.
 
 These tests pin the separation so the two can never be conflated.
@@ -60,8 +55,8 @@ def _verdict(state: State, resource_id: str = "r", capacity: int = 0) -> Verdict
 # ---------------------------------------------------------------------------
 
 
-def test_reachable_unclaimed_counts_exported_lanes_with_no_lease():
-    """The scheduling input: exported + reachable + unclaimed."""
+def test_reachable_unclaimed_counts_exported_unacquired_lanes():
+    """Coordinator observation only: exported + reachable + unacquired."""
     summary = _summary(
         excluded=(
             _verdict(State.EXPORTED_AVAILABLE, resource_id="a"),
@@ -92,6 +87,8 @@ def test_reachable_unclaimed_never_becomes_idle_capacity():
     )
     assert summary.reachable_unclaimed == 1
     assert summary.idle_routers == 0, "an unclaimed lane is not a proven-idle router"
+    assert summary.lanes_ready == 0
+    assert summary.admissible_lanes == 0
 
 
 def test_a_vantage_refusal_is_not_counted_as_unclaimed():

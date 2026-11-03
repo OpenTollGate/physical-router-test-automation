@@ -121,7 +121,7 @@ def test_totals_separate_fleets_accounted_for_from_capacity(report):
 def test_an_unreachable_contributor_contributes_no_unclaimed_lanes(report):
     """The bench's three lanes are the only ones counted."""
     totals = next(ln for ln in report.splitlines() if ln.startswith("totals:"))
-    assert "3 unclaimed (schedulable)" in totals, totals
+    assert "3 exported/unclaimed; eligibility unproven" in totals, totals
 
 
 def test_multi_fleet_detection_does_not_become_multi_fleet_admission(report):
