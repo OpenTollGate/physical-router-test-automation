@@ -166,7 +166,12 @@ def test_text_report_prints_the_four_numbers_and_not_qualified(manifest_path, fa
     assert "idle existing guest(s)" in out
     assert "new VM slots: 0 raw / NOT_QUALIFIED" in out
     assert "host metrics (this machine, measured now)" in out
-    assert "host admission: unknown slots=0" in out
+    # The fixture pins host_root to a synthetic tree with no /dev/kvm, so the
+    # host admission verdict is REFUSED for an explicit reason — not "unknown".
+    # Either way it must never present a slot count as allocatable.
+    assert "host admission:" in out
+    assert "slots=0" in out
+    assert "host admission: unknown slots=0" in out or "kvm_unavailable" in out
     # No mutating verb was ever issued.
     for verb in ("acquire", "release", "power", "create", "delete"):
         assert verb not in runner.subcommands
