@@ -1212,6 +1212,9 @@ class Reservation:
     demand: HostDemand
     expires_at: float
     started: bool = False
+    #: The lane this claim occupies. Empty when the store did not record one —
+    #: which must never be read as "any lane", only as "unattributed".
+    lane_id: str = ""
 
 
 @dataclass(frozen=True)

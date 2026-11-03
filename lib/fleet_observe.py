@@ -1097,7 +1097,7 @@ def read_authority_reservations(
         try:
             placeholders = ",".join("?" * len(_AUTHORITY_OCCUPYING_STATES))
             rows = conn.execute(
-                f"SELECT run_id, state, demand, expires_at FROM allocations WHERE state IN ({placeholders})",
+                f"SELECT run_id, lane_id, state, demand, expires_at FROM allocations WHERE state IN ({placeholders})",
                 _AUTHORITY_OCCUPYING_STATES,
             ).fetchall()
         except sqlite3.DatabaseError as exc:
@@ -1134,6 +1134,10 @@ def read_authority_reservations(
                 # Anything past RESERVED is already inside the host's committed
                 # counters; treating it as outstanding would double-count.
                 started=state != "reserved",
+                # Which lane holds it. Without this a claim could only be
+                # attributed to a run, never to the lane it occupies — so no
+                # caller could ever answer "is MY lane leased".
+                lane_id=str(row["lane_id"] or ""),
             )
         )
     if unsized:
@@ -1671,6 +1675,14 @@ def collect(
             )
 
     guest_obs: dict[str, GuestObservation] = {}
+
+    # Read the authority BEFORE the guest loop: `lease_free` is a fact the store
+    # owns, so it must be available when each guest is built. Reading it after
+    # the loop (as this did) made the dimension structurally unknowable — no
+    # store, however complete, could ever resolve a lease.
+    reservation_read = read_authority_reservations(authority_path, now=now)
+    held_lanes = {r.lane_id for r in reservation_read.reservations if r.lane_id}
+
     for spec in guests:
         owner = manifest.resource(spec.resource_id)
         if owner is None:
@@ -1713,7 +1725,18 @@ def collect(
                 address=spec.address,
                 tap=spec.tap,
                 bridge=spec.bridge,
-                lease_free=spec.lease_free,
+                # An explicit flag wins; otherwise the store answers, and only a
+                # COMPLETE read may say "free". An unavailable store leaves it
+                # None — never a default-true.
+                lease_free=(
+                    spec.lease_free
+                    if spec.lease_free is not None
+                    else (
+                        (spec.resource_id not in held_lanes)
+                        if reservation_read.available
+                        else None
+                    )
+                ),
             )
             identified = guest_observation_from_probe(
                 readiness,
@@ -1728,7 +1751,6 @@ def collect(
             )
         guest_obs[owner.resource_id] = identified
 
-    reservation_read = read_authority_reservations(authority_path, now=now)
     pool_read = read_authority_pool(authority_path)
     if not pool_read.available:
         # Same rule as an unsized reservation: an unreadable pool is UNKNOWN,
