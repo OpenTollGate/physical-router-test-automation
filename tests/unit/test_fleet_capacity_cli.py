@@ -592,17 +592,27 @@ def test_admission_detail_names_the_real_hazard_not_read_only_ness():
     """The review's MEDIUM: "the store is read-only, so headroom is not
     consulted" was a non-sequitur — reservations ARE read from that store.
 
-    Updated when ``read_authority_pool`` removed the *other* obstacle: the pool
-    is now read over a ``mode=ro`` connection, so "FleetAuthority creates the
-    store" is no longer a true reason and must not be stated as one. What
-    remains true — and is the reason ``NOT_QUALIFIED`` stays — is that
-    ``cpu_committed`` cannot be measured from ``/proc``.
+    Updated TWICE, both times because a stated obstacle stopped being true:
+
+    1. ``read_authority_pool`` removed "FleetAuthority creates the store" as a
+       reason (it now reads over a ``mode=ro`` connection).
+    2. ``lib/qemu_claims`` removed "cpu_committed is unmeasurable from /proc" as
+       a reason — every QEMU process states its own -smp/-m on its command line,
+       measured live. The message must not keep blaming a limitation that no
+       longer exists; a stale justification is how NOT_QUALIFIED would rot into
+       "we never bothered".
+
+    What remains true, and is now the ONLY reason ``NOT_QUALIFIED`` stays: a
+    measurement of free vCPUs is not an admission decision.
     """
     from lib.fleet_observe import ADMISSION_DETAIL
 
-    assert "cpu_committed" in ADMISSION_DETAIL
-    assert "unmeasured" in ADMISSION_DETAIL
-    # The obstacle that no longer exists must not be claimed as the reason.
+    # The real, current reason.
+    assert "fenced lease" in ADMISSION_DETAIL
+    # cpu_committed is measured, and the message must say so rather than
+    # claiming it cannot be derived from the machine.
+    assert "cpu_committed IS measured" in ADMISSION_DETAIL
+    assert "unmeasured from /proc" not in ADMISSION_DETAIL
+    # Obstacles that no longer exist must not be claimed as reasons.
     assert "creates the authority store" not in ADMISSION_DETAIL
-    # And the old, misleading clause stays gone.
     assert "opens the authority store read-only" not in ADMISSION_DETAIL

@@ -139,13 +139,16 @@ ADMISSION_STATUS = "NOT_QUALIFIED"
 ADMISSION_DETAIL = (
     "read-only observation only: this report measures the host and the "
     "coordinators, it does not admit. Slot arithmetic is withheld because "
-    "cpu_committed is unmeasured from /proc — how many vCPUs running guests "
-    "have already claimed cannot be derived from the machine, so any slot count "
-    "would be a guess in the dangerous direction. The host pool below is the "
-    "AUTHORITY's own accounting of what it has admitted, read without opening it "
-    "for write; it is not a measurement of spare machine capacity. Admission "
-    "(with an owned, fenced lease) happens in the runner via lib/run_admission.py; "
-    "nothing here starts a VM or enables parallel execution."
+    "qualification requires an owned, fenced lease — a measurement of free "
+    "vCPUs is not an admission decision, and printing a slot number here would "
+    "be read as permission to start VMs. cpu_committed IS measured (each QEMU "
+    "process states its own -smp/-m on its command line) and is reported in the "
+    "host line; what it cannot tell you is whether the host's admission policy "
+    "would grant another guest. The host pool below is the AUTHORITY's own "
+    "accounting of what it has admitted, read without opening it for write; it "
+    "is not a measurement of spare machine capacity. Admission (with an owned, "
+    "fenced lease) happens in the runner via lib/run_admission.py; nothing here "
+    "starts a VM or enables parallel execution."
 )
 
 EVIDENCE_SCHEMA_VERSION = 2

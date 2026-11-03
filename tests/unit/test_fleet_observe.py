@@ -514,15 +514,26 @@ def test_ram_committed_is_measured_not_assumed():
 def test_admission_status_constant_is_not_qualified():
     """The status must stay NOT_QUALIFIED, and for reasons that are still TRUE.
 
-    On this branch the host-pool accounting EXISTS (slice 2 host aggregate), so a
-    detail string that justified the refusal with "there is no host-wide
-    reservation accounting yet" would be a stale claim in the operator's face.
-    The two real reasons are pinned here instead: an unmeasured dimension, and a
-    read-only authority handle that therefore cannot consult the host pool.
+    Three stale justifications have been removed from this string as the
+    obstacles behind them were fixed, and every removal was pinned so the text
+    cannot drift back:
+
+    * "there is no host-wide reservation accounting yet" — the host aggregate
+      exists (slice 2);
+    * "FleetAuthority creates the store" — ``read_authority_pool`` reads over a
+      ``mode=ro`` connection;
+    * "cpu_committed is unmeasured from /proc" — every QEMU process states its
+      own -smp/-m, measured live and wired via ``lib/qemu_claims``.
+
+    What is true now, and is the only remaining reason: a free-vCPU measurement
+    is not an admission decision.
     """
     assert ADMISSION_STATUS == "NOT_QUALIFIED"
-    assert "cpu_committed" in ADMISSION_DETAIL
-    assert "unmeasured" in ADMISSION_DETAIL
+    assert "fenced lease" in ADMISSION_DETAIL
+    # The removed claims must not creep back.
+    assert "unmeasured from /proc" not in ADMISSION_DETAIL
+    assert "no host-wide reservation accounting" not in ADMISSION_DETAIL
+    assert "creates the authority store" not in ADMISSION_DETAIL
     assert "read-only" in ADMISSION_DETAIL
     assert "run_admission" in ADMISSION_DETAIL
     # The accounting exists on this branch; the detail must not pretend otherwise.
