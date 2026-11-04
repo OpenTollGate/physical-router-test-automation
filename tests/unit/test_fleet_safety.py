@@ -29,10 +29,26 @@ def test_mt6000_and_control_hosts_are_protected():
     assert is_protected(hostname="dq05")
     assert is_protected(hostname="T14Gen5")
 
-    assert not is_protected(board_name="glinet,gl-e750", model="GL-E750")
+    assert not is_protected(board_name="comfast,cf-wr632ax", model="COMFAST CF-WR632AX")
     with pytest.raises(ProtectedDeviceError):
         assert_not_protected(board_name="glinet,gl-mt6000")
-    assert_not_protected(board_name="glinet,gl-e750", model="GL-E750")
+    assert_not_protected(board_name="comfast,cf-wr632ax", model="COMFAST CF-WR632AX")
+
+
+def test_e750_is_protected_too():
+    """The E750 is also production (2026-11-03).
+
+    It was previously enrolled as `bench-e750-lab` in the serial-fleet contract,
+    and the test above asserted the opposite of this. Both are corrected: a
+    device that keeps the fleet online is not a bench DUT, whatever the contract
+    happened to say.
+    """
+    assert is_protected(board_name="glinet,gl-e750")
+    assert is_protected(model="GL-E750")
+    assert is_protected(model="GL.iNet GL-E750")
+    assert is_protected(serial_adapters=["BH00DL3M"])
+    with pytest.raises(ProtectedDeviceError):
+        assert_not_protected(board_name="glinet,gl-e750")
 
 
 def _load_quiesce_module():

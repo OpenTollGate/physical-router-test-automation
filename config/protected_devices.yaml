@@ -6,11 +6,31 @@
 protected:
   - id: mt6000-gateway
     reason: production gateway; hermes must stay online
+    # The board reports its model as `GL.iNet GL-MT6000` (with the vendor
+    # prefix) and its board_name as `glinet,gl-mt6000`. Both spellings are
+    # listed because an exact-match miss on this entry is a fail-OPEN on the one
+    # device this file exists to protect.
     board_names: ["glinet,gl-mt6000"]
-    models: ["GL-MT6000", "gl-mt6000", "OpenMPTCProuter"]
+    models: ["GL-MT6000", "GL.iNet GL-MT6000", "gl-mt6000", "OpenMPTCProuter"]
     macs: ["94:83:c4:d1:57:56"]
     hostnames: ["OpenMPTCProuter", "MT6000"]
     addresses: ["192.168.50.1"]
+    # The USB serial adapter wired to this board's console, identified by its
+    # FTDI serial (not /dev/ttyUSB* — that renumbers on replug). This is what
+    # lets a console guard refuse the cable by IDENTITY, before anything is
+    # typed down it. Measured on x280, 2026-11-03.
+    serial_adapters: ["BG02QAPG"]
+
+  - id: e750-production
+    reason: production router (GL-E750 Mudi); not a test target
+    # Reported at the console as the model below; listed with the vendor prefix
+    # and board_name spelling because an exact-match miss here is a fail-OPEN.
+    board_names: ["glinet,gl-e750"]
+    models: ["GL-E750", "GL.iNet GL-E750", "gl-e750", "GL.iNet GL-E750 (V1)"]
+    hostnames: ["e750-lab", "GL-E750"]
+    # The USB serial adapter wired to this unit's console, by FTDI serial (never
+    # /dev/ttyUSB* — that renumbers on replug). Measured on x280, 2026-11-03.
+    serial_adapters: ["BH00DL3M"]
 
   - id: x280
     reason: serial/controller host

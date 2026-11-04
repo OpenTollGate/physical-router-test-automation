@@ -51,7 +51,7 @@ map never restates the commands.
 
 ## Workstream board
 
-Updated 2026-10-13. Statuses are facts about trackers, not aspirations.
+Updated 2026-10-30. Statuses are facts about trackers, not aspirations.
 
 | # | Workstream | Tracker | Venue | Status |
 |---|---|---|---|---|
@@ -73,6 +73,7 @@ Updated 2026-10-13. Statuses are facts about trackers, not aspirations.
 | 16 | Installer-contract lane wired per-rc into release-check + runbook | module [#925](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/925) | module | **open — sign-off** |
 | 17 | Fail-closed outcomes for required tests (skip ≠ PASS, venue rule) | PRTA [#227](https://github.com/OpenTollGate/physical-router-test-automation/pull/227) | PRTA | **merged**; required-set curation is incremental |
 | 18 | Alpha-rig quick-test entry point (one-command cycle: feed artifact → setup → e2e suite, timed) + pytest rail | PRTA [#274](https://github.com/OpenTollGate/physical-router-test-automation/pull/274) + [#275](https://github.com/OpenTollGate/physical-router-test-automation/pull/275) | PRTA | **merged**; A/B cycles PASS (≈130 s full / 64 s steady), review-hardened, payment E2E over flat L2 proven |
+| 19 | Multi-contributor fleet capacity (detection → reservation → measured speedup) | PRTA [#334](https://github.com/OpenTollGate/physical-router-test-automation/pull/334) — consolidates #331, #332, `fleet-cap-3-benchmark` and slice 4 into one history | PRTA | **open — consolidated**: capacity model, per-run identity + owned release, atomic per-lane **and** host-pool reservation, read-only observation CLI (`scripts/fleet-capacity.py`), runner admission in `run-profile.py`. New-VM slots are reported **raw / `NOT_QUALIFIED`**; real QEMU serial-vs-parallel throughput is **not measured** (no host with safe headroom yet); no physical qualification |
 
 ## Milestones ahead (smallest effective first)
 

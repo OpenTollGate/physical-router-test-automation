@@ -1,0 +1,12 @@
+manifest fleet coordinator : coord-b.example:20408
+inventory coordinator      : coord-a.example:20408
+manifest lane place        : x1860-2
+venue would acquire place  : x1860-1
+
+acquisition-capable venue  : True
+
+DEFECT CONFIRMED: 2 disagreement(s) — coordinator, place
+Nothing on the current path compares the manifest lane with the
+venue resolution, so this run would reserve host budget for one
+DUT and drive another. `lib.fleet_binding.check_binding` refuses
+both: coordinator_address_mismatch / place_override_conflict.

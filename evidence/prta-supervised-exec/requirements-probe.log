@@ -1,0 +1,17 @@
+==> Command: /home/c08r4d0r/.hermes/hermes-agent/venv/bin/python3 -c 'import time; time.sleep(1.0)'
+==> CWD:     .
+==> Log:     /tmp/probe-req/o.log
+R3 HEARTBEAT: child 1.0s, ttl 0.3s -> renewals=17 fence_checks=17 elapsed=1.09s state=active expired=0
+==> Command: /home/c08r4d0r/.hermes/hermes-agent/venv/bin/python3 -c 'import time; time.sleep(10)'
+==> CWD:     .
+==> Log:     /tmp/probe-req/o2.log
+R4 RENEWAL FATAL: RenewalFailed exit=76 cleanup=confirmed terminated=True
+==> Command: /home/c08r4d0r/.hermes/hermes-agent/venv/bin/python3 -c 'import time; time.sleep(10)'
+==> CWD:     .
+==> Log:     /tmp/probe-req/o3.log
+R3 FENCE: AuthorityLost exit=77 cleanup=confirmed store_state=fenced
+==> Command: /home/c08r4d0r/.hermes/hermes-agent/venv/bin/python3 -c 'print('"'"'x'"'"')'
+==> CWD:     .
+==> Log:     /tmp/probe-req/o4.log
+x
+R5 CLEANUP REPORTING: cleanup=unconfirmed confirmed=False detail='child exited but left group 686473 alive; SIGTERM to group 686473; SIGKILL to group; group 686

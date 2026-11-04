@@ -145,6 +145,72 @@ def _is_publish_mode(config):
     return config.getoption("--publish", default=False)
 
 
+#: Requirement 2 handoff wire format (see ``lib/claim_handoff.py``). The names
+#: are duplicated here ONLY as the cheap fast-path predicate, so the no-claim
+#: path imports nothing new and behaves exactly as before;
+#: ``tests/unit/test_claim_handoff.py`` pins this tuple against
+#: ``lib.claim_handoff.CLAIM_ENV`` so the two cannot drift.
+_CLAIM_ENV_NAMES = (
+    "TOLLGATE_FLEET_CLAIM_PLACE",
+    "TOLLGATE_FLEET_CLAIM_OWNER",
+    "TOLLGATE_FLEET_RUN_ID",
+)
+
+
+def _claim_handoff_guard(
+    *,
+    environ=None,
+    resolved_place: str = "",
+    owns_place: bool = True,
+    skip_reason: str = "",
+    identity_owner: str = "",
+):
+    """Honour the run claim the runner exported, or exit rc=4 — never fall back.
+
+    The runner (``scripts/run-profile.py``) reserves host budget for a lane and
+    exports ``TOLLGATE_FLEET_CLAIM_{PLACE,OWNER}`` + ``TOLLGATE_FLEET_RUN_ID``.
+    This fixture is, and stays, the only place owner: the claim is a *statement
+    about* the place, never an acquisition. So the seam checks it BEFORE
+    ``venue_mutex`` takes anything:
+
+    * **no claim env** (the state of every run today) → return ``None`` without
+      importing the module, logging, calling ``pytest.exit`` or touching the
+      venue decision. Byte-identical behaviour to before this hook existed;
+    * claim present and not honoured (different place, a venue decision that
+      owns no place, another run id, a foreign holder, a partial claim) →
+      ``pytest.exit(rc=4)`` with the place still untouched. Never the legacy
+      path: falling back underneath a reservation is the silent retarget this
+      prevents.
+    """
+    env = os.environ if environ is None else environ
+    if not any((env.get(name) or "").strip() for name in _CLAIM_ENV_NAMES):
+        return None
+
+    from lib.claim_handoff import evaluate_handoff
+
+    if not identity_owner:
+        # What the LabgridBench in this session will actually claim as. The
+        # coordinator stores one owner string per place, so a claim attributed
+        # to a different run is not this run's reservation.
+        with contextlib.suppress(Exception):
+            from lib.labgrid_venue import ClientIdentity
+
+            identity_owner = ClientIdentity.current().owner
+
+    decision = evaluate_handoff(
+        environ=env,
+        resolved_place=resolved_place,
+        owns_place=owns_place,
+        skip_reason=skip_reason,
+        identity_owner=identity_owner,
+    )
+    if decision.refused:
+        pytest.exit(f"fleet claim handoff refused: {decision.message}", returncode=4)
+    log.info("fleet claim handoff honoured: %s", decision.detail)
+    return decision
+
+
+
 def _is_container_client(config):
     return config.getoption("--client", default="adb") == "container"
 
@@ -367,6 +433,16 @@ def router(request, backend):
             or _session_args_only(request.config, "parity")
         )
     )
+    # Requirement 2 handoff seam, stage 1 of 2: the two conftest short-circuits
+    # below decide the venue WITHOUT plan_venue, so a claim that arrives here
+    # would be honoured by nobody — refuse (rc=4) before anything is acquired.
+    # With no claim env this is one tuple check and returns None: every path
+    # below is byte-identical to before this hook existed.
+    if _xdist_worker or _auto_skip:
+        _claim_handoff_guard(
+            owns_place=False,
+            skip_reason="xdist-worker" if _xdist_worker else "auto-skip",
+        )
     if _xdist_worker:
         log.warning("router venue: xdist worker — legacy env path (venue places are per-session; acquire them in the controller-owned run, not per worker)")
     elif _auto_skip:
@@ -378,7 +454,23 @@ def router(request, backend):
             )
         except (InventoryError, LabgridBenchError) as e:
             pytest.exit(f"labgrid venue unavailable: {e}", returncode=4)
-        if venue_plan.action == "venue":
+        _is_venue = venue_plan.action == "venue"
+        # Requirement 2 handoff seam, stage 2 of 2. One call covers both
+        # outcomes: a claim must name THIS place and be ours before
+        # venue_mutex takes the file lock or the place, and a claim with a
+        # legacy/direct outcome is refused outright — the fixture would acquire
+        # nothing while the runner reserved a DUT, and falling back underneath
+        # a reservation is exactly the silent retarget this prevents.
+        # With no claim env this is one tuple check and returns None; the two
+        # branches below are unchanged. See lib/claim_handoff.py.
+        _claim_handoff_guard(
+            resolved_place=venue_plan.binding.entry.place if _is_venue else "",
+            owns_place=_is_venue,
+            skip_reason=(
+                venue_plan.origin if _is_venue else (venue_plan.detail or venue_plan.action)
+            ),
+        )
+        if _is_venue:
             # Transition invariant (#232): hold the repo file lock AND the place,
             # so venue sessions exclude legacy Make/pymake sessions on the DUT —
             # unless this session already holds the file lock via --lock-phase /
