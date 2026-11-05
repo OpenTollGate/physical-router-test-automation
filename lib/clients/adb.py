@@ -28,6 +28,27 @@ class ADBDevice:
         )
         return r.stdout.strip()
 
+    def shell_checked(self, cmd: str, timeout: int = 30) -> str:
+        """Observe device state without conflating transport failure with absence.
+
+        Unlike legacy shell(), nonzero ADB exits are infrastructure errors.
+        Do not include command/output in errors: Wi-Fi observations can contain
+        private SSIDs, device identifiers and credentials. This does not reserve
+        a device or prove RF association; callers still own those gates.
+        """
+        try:
+            result = subprocess.run(
+                self._base + ["shell", cmd], capture_output=True,
+                text=True, timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("ADB observation timed out") from None
+        except OSError:
+            raise RuntimeError("ADB observation could not start") from None
+        if result.returncode:
+            raise RuntimeError(f"ADB observation failed: exit {result.returncode}")
+        return result.stdout.strip()
+
     def screenshot(self, path: str) -> bool:
         try:
             subprocess.run(
