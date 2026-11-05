@@ -74,6 +74,14 @@ Updated 2026-10-13. Statuses are facts about trackers, not aspirations.
 | 17 | Fail-closed outcomes for required tests (skip ≠ PASS, venue rule) | PRTA [#227](https://github.com/OpenTollGate/physical-router-test-automation/pull/227) | PRTA | **merged**; required-set curation is incremental |
 | 18 | Alpha-rig quick-test entry point (one-command cycle: feed artifact → setup → e2e suite, timed) + pytest rail | PRTA [#274](https://github.com/OpenTollGate/physical-router-test-automation/pull/274) + [#275](https://github.com/OpenTollGate/physical-router-test-automation/pull/275) | PRTA | **merged**; A/B cycles PASS (≈130 s full / 64 s steady), review-hardened, payment E2E over flat L2 proven |
 
+### Guest Wi-Fi QR observation prerequisite
+
+[Restaurant QR acceptance](guest-wifi-qr-acceptance.md) records the separate
+recognition, OS consent, association, DHCP and captive gates. The additive
+`ADBDevice.shell_checked` seam has host-only transport controls; no physical
+QR acceptance result is claimed. Venue authorization, artifact identity and
+phone execution remain prerequisites (portal #102 / module #1204).
+
 ## Milestones ahead (smallest effective first)
 
 1. **Enforce behavior at publication** — implemented as module
