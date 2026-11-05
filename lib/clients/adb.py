@@ -43,6 +43,8 @@ class ADBDevice:
             )
         except subprocess.TimeoutExpired:
             raise RuntimeError("ADB observation timed out") from None
+        except OSError:
+            raise RuntimeError("ADB observation could not start") from None
         if result.returncode:
             raise RuntimeError(f"ADB observation failed: exit {result.returncode}")
         return result.stdout.strip()

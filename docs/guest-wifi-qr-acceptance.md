@@ -69,7 +69,7 @@ not native Wi-Fi QR scanning. It is not a substitute recognition test.
 
 `ADBDevice.shell_checked()` is the additive observation seam for the future QR
 scenario. It preserves empty successful output, but raises a sanitized
-infrastructure error on nonzero exit or timeout instead of turning a failed ADB
+infrastructure error on process launch failure, nonzero exit or timeout instead of turning a failed ADB
 transport into a negative Wi-Fi observation. It does not reserve devices, validate
 association, or make arbitrary shell commands safe. Example read-only calls after
 authorized access: `shell_checked('cmd wifi status')` and
