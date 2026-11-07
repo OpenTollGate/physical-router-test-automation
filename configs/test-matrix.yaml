@@ -1,0 +1,20 @@
+# PRTA test matrix — the single parameter home for "what are we testing on".
+#
+# Layering (see conwrt docs/version-pins-ssot.md for the org-wide table):
+#   this file      → harness parameters (image, family, provider defaults)
+#   conwrt models/ → species qualification
+#   conwrt-bench   → specimen reality (what is physically flashed)
+#
+# Overrides: PRTA_OPENWRT_VERSION (full X.Y.Z) replaces the pinned
+# release everywhere (URLs, expected tokens) — bumping the family is a
+# one-line change here, never a sed across test files.
+openwrt:
+  version: "25.12.5"
+  family: "25.12"          # REQUIRED_IMAGE_TOKENS gate
+  target: "mediatek/filogic"
+  device: "glinet_gl-mt3000"
+  image_kind: "squashfs-sysupgrade"
+  sha256: "1ffa6526ea099878e0fc520dc0473e95202c1a470b3eabcd2cd40e9c8eaab8c6"
+
+provider:
+  default: "shc"           # TOLLGATE_VM_PROVIDER default (env still wins)
