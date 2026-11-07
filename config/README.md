@@ -13,3 +13,21 @@ The firmware derives SSIDs from one 4-char device code (`uci tollgate.device.cod
 - `tollgateSsidPrefix` — legacy single captive prefix; still honored when `captiveSsidPrefixes` is absent.
 
 All prefixes may be written with or without the trailing dash.
+
+## Fleet manifests (multi-contributor capacity)
+
+`fleets.example.yaml` is the schema example for `lib/fleet_capacity.py`. Each
+fleet is an independently owned scope with its own coordinator, host
+controller, allowed places, permitted actions and capacity limits; there is no
+global default coordinator or host, so an undeclared fleet id raises instead of
+inheriting one.
+
+Copy it to a local path and pass that path explicitly to
+`lib.fleet_capacity.load_manifest()` — no environment variable selects a
+manifest, so a stray process cannot be pointed at someone else's fleet by
+accident. Real manifests are never committed: they name contributor
+infrastructure. Credentials are `(source, name)` *references* (for example an
+OpenBao path), never values.
+
+`configs/labgrid/inventory.local.yaml.example` is unchanged and remains the
+single-owner physical bench adapter — it is not extended into this schema.
