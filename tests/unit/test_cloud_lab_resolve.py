@@ -18,7 +18,18 @@ def test_resolve_branch_go():
 def test_resolve_branch_rust():
     target = resolve_target(branch="main", backend="rust")
     assert target.repo == "Amperstrand/tollgate-rs-ai-research-and-experiments"
-    assert target.workflow == "Build and Package"
+    assert target.workflow == "Release"
+
+
+def test_resolve_branch_rust_basic_follows_module_migration(monkeypatch):
+    target = resolve_target(branch="main", backend="rust-basic")
+    assert target.repo == "OpenTollGate/tollgate-module-basic-rust"
+    assert target.workflow == "Cross-compile + Package"
+
+    monkeypatch.setenv("TOLLGATE_BACKEND_REPO", "Amperstrand/tollgate-module-basic-rust")
+    target = resolve_target(branch="main", backend="rust-basic")
+    assert target.repo == "Amperstrand/tollgate-module-basic-rust"
+    assert target.workflow == "Cross-compile + Package"
 
 
 def test_resolve_requires_exactly_one_ref():
