@@ -81,7 +81,50 @@ Host-only transport contracts (no router fixtures/device access):
 python -m pytest --noconftest -o addopts= tests/unit/test_adb_checked.py -q
 ```
 
-The next milestone is a required phone scenario using this seam, actual
-portal-produced QR bytes, a reserved physical client and router, and separate
-recognition/confirmation/association/DHCP/captive assertions. Do not fabricate
-that scenario's PASS while those prerequisites are unavailable.
+## Executable recognition-only scenario
+
+`tests/phone/test_qr_native.py` now drives the native Android Settings scanner
+through `lib/clients/qr_native.py` and the existing checked ADB seam. It does not
+use the stateful router fixtures. Run ONLY this scoped path with `--noconftest`:
+
+```sh
+PRTA_QR_MANIFEST=/absolute/manifest.json python -m pytest --noconftest -o addopts= tests/phone/test_qr_native.py -q -rs
+# Automation requiring a nonzero NOT_RUN exit:
+python -m lib.clients.qr_native --image /absolute/portal.png --provenance /absolute/provenance.json --serial emulator-5556 --output results/qr-native/result.json
+```
+
+Manifest fields: `image` (absolute PNG), `serial`, `emulator_pid`,
+`owned_isolated_emulator` (default false), `provenance` object. Provenance requires
+`synthetic: true`, `portal_commit` (40 hex), `qr_sha256` (actual PNG bytes).
+Record renderer/build/source linkage alongside it, not merely a claimed SHA.
+Synthetic fixture identity is deliberately fixed to `PRTA-QR-SYNTHETIC`; never
+supply private Wi-Fi credentials. Exact payload used in development:
+`WIFI:T:WPA;S:PRTA-QR-SYNTHETIC;P:synthetic-only-123;H:false;;`.
+
+The owner must provision a **dedicated** emulator with supported
+`-port 5556 -camera-back imagefile:/absolute/portal.png` (SDK emulator 37.2.13
+advertises this in `-help-camera-back`). Existing/shared AVDs are off-limits.
+After ownership is established, the CLI takes `--owned-isolated-emulator
+--emulator-pid PID`; it checks the local process owner, explicit serial/port and
+exact camera path before launching the scanner. It never boots or kills a guest.
+
+Prerequisite is exported Settings `android.settings.WIFI_DPP_QR_CODE_SCANNER`.
+An image containing Camera2 or barcode library strings is **not** proof of this
+activity or a usable scanner. Missing activity => NOT_RUN with that exact reason.
+The API34 English UI adapter requires a newly observed Settings synthetic SSID
+and enabled `Connect`; a stale pre-existing confirmation is rejected. Other OS
+layouts require a tested adapter, not looser substring matching. Ten bounded UI
+observations without confirmation fail; transport errors are INFRA_ERROR.
+
+Result JSON always separates native recognition, OS consent, association, DHCP,
+and captive statuses. Recognition PASS is not consent: no Connect tap occurs.
+Remaining stages are explicitly NOT_RUN; NAT proves no RF or physical lease.
+CLI exits: 0 recognition PASS only, 1 FAIL, 2 INFRA_ERROR, 4 NOT_RUN. Pytest skip
+is **not acceptance** even when pytest exits zero. Host tests use doubles only:
+
+```sh
+python -m pytest --noconftest -o addopts= tests/unit/test_qr_native.py tests/unit/test_adb_checked.py -q
+```
+
+Native execution and the reserved physical downstream ladder remain unverified.
+Do not run the generic phone profile for this isolated recognition-only scope.
