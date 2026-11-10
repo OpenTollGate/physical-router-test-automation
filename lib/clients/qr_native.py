@@ -2,29 +2,13 @@
 import argparse
 import hashlib
 import json
-import os
 import re
 import socket
-import time
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from lib.clients.adb import ADBDevice
 
-ACTION = 'android.settings.WIFI_DPP_QR_CODE_SCANNER'
-SSID = 'PRTA-QR-SYNTHETIC'
-
-
-def wifi_confirmation(xml):
-    """English API34 Settings adapter; unsupported UI is not a positive decode."""
-    try:
-        nodes = ET.fromstring(xml[xml.index('<hierarchy'):]).iter('node')
-        nodes = [n for n in nodes if n.get('package') == 'com.android.settings']
-        return (any(n.get('text') == SSID for n in nodes)
-                and any(n.get('text') == 'Connect' and n.get('enabled') == 'true'
-                        for n in nodes))
-    except (ValueError, ET.ParseError):
-        return False
+ACTION = 'android.settings.WIFI_DPP_ENROLLEE_QR_CODE_SCANNER'
 
 
 def recognize(device, image, provenance, *, authorized=False, emulator_pid=None):
@@ -58,39 +42,36 @@ def recognize(device, image, provenance, *, authorized=False, emulator_pid=None)
             return finish('NOT_RUN', 'Selected device is not an emulator')
         if device.shell_checked('getprop ro.build.version.sdk') != '34':
             return finish('NOT_RUN', 'Prerequisite: supported API34 Settings UI adapter')
-        if not device.shell_checked('getprop persist.sys.locale').startswith('en-'):
-            return finish('NOT_RUN', 'Prerequisite: English Settings UI adapter')
+        locale = device.shell_checked('getprop persist.sys.locale').strip()
+        if not locale:
+            config = device.shell_checked('am get-config')
+            # Only the primary locale of the current global Configuration, not
+            # resource qualifiers or secondary locales, establishes support.
+            match = re.search(r'\{[^{}\n]*\[([^\]\n]*)\]', config)
+            locale = match.group(1).split(',')[0].strip() if match else ''
+        if not re.fullmatch(r'en(?:-[A-Za-z0-9]+)*', locale.replace('_', '-')):
+            return finish('NOT_RUN', 'Prerequisite: English Settings UI adapter; locale unknown or unsupported')
         component = device.shell_checked(
-            f'cmd package resolve-activity --brief -a {ACTION}')
-        if not re.fullmatch(r'com\.android\.settings/[\w.$]+', component):
-            return finish('NOT_RUN', f'Prerequisite: exported Settings {ACTION} activity')
-        # Bind the supported imagefile input to this actual emulator process, not
-        # a caller assertion. Never boot, stop, install into or reconfigure an AVD.
-        if emulator_pid is None:
-            return finish('NOT_RUN', 'Prerequisite: owned emulator PID with -camera-back imagefile:QR')
-        proc = Path('/proc') / str(int(emulator_pid))
-        if proc.stat().st_uid != os.getuid():
-            return finish('NOT_RUN', 'Emulator process is owned by another user')
-        args = proc.joinpath('cmdline').read_bytes().decode().split('\0')
-        port = device.serial.removeprefix('emulator-')
-        pairs = list(zip(args, args[1:]))
-        if (('qemu-system' not in args[0] and 'emulator' not in args[0])
-                or ('-port', port) not in pairs
-                or ('-camera-back', 'imagefile:' + str(Path(image).resolve())) not in pairs):
-            return finish('NOT_RUN', 'Prerequisite: PID/serial/exact imagefile camera binding')
-        baseline = device.shell_checked('uiautomator dump /sdcard/prta-qr.xml >/dev/null && cat /sdcard/prta-qr.xml')
-        if wifi_confirmation(baseline):
-            return finish('NOT_RUN', 'Pre-existing synthetic confirmation: reset owned guest before recognition')
-        start = device.shell_checked(f'am start -W -a {ACTION}')
-        if 'Error:' in start or 'Status: ok' not in start:
-            return finish('INFRA_ERROR', 'Settings scanner activity did not start')
-        for _ in range(10):
-            xml = device.shell_checked('uiautomator dump /sdcard/prta-qr.xml >/dev/null && cat /sdcard/prta-qr.xml')
-            if wifi_confirmation(xml):
-                result['confirmation_prompt'] = 'Observed Settings synthetic SSID + enabled Connect; not tapped'
-                return finish('PASS', 'Native Settings recognized camera-injected synthetic QR; consent not exercised')
-            time.sleep(1)
-        return finish('FAIL', 'Scanner launched but expected Settings Wi-Fi confirmation absent after 10 observations')
+            f'cmd package resolve-activity --brief -a {ACTION}').strip()
+        if not re.fullmatch(r'[\w.]+/[\w.$]+', component):
+            classification = 'UNRESOLVED'
+            reason = f'{ACTION} unresolved; this does not establish that other scanners are unavailable'
+        elif component in {
+            'com.android.settings/.wifi.dpp.WifiDppEnrolleeActivity',
+            'com.android.settings/com.android.settings.wifi.dpp.WifiDppEnrolleeActivity',
+        }:
+            classification = 'UNSAFE_AUTO_JOIN'
+            # Android14 source and installed API34 image: standard WIFI payloads
+            # add/enable/connect without confirmation. No decode-only contract.
+            reason = 'Settings enrollee scanner can auto-join Wi-Fi without confirmation; launch refused'
+        else:
+            classification = 'UNVERIFIED'
+            reason = 'Resolved scanner has no verified decode-only safety contract; launch refused'
+        result['scanner_capability'] = {
+            'classification': classification, 'action': ACTION, 'component': component,
+        }
+        # emulator_pid remains accepted for CLI/API compatibility, never a bypass.
+        return finish('NOT_RUN', reason)
     except (RuntimeError, OSError, ValueError):
         return finish('INFRA_ERROR', 'ADB transport or local emulator/provenance inspection failed')
 

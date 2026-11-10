@@ -1,24 +1,13 @@
-"""Host-only contracts: doubles never represent native acceptance."""
+"""Host-only contracts; no emulator or ADB is exercised."""
 import hashlib
+import json
 from unittest.mock import Mock
 
-from lib.clients.qr_native import recognize, wifi_confirmation
+import pytest
+from lib.clients import qr_native
 
-
-def test_confirmation_requires_settings_ssid_and_connect():
-    xml = '<hierarchy><node package="com.android.settings" text="PRTA-QR-SYNTHETIC"/><node package="com.android.settings" text="Connect" enabled="true"/></hierarchy>'
-    assert wifi_confirmation(xml)
-    assert not wifi_confirmation(xml.replace('com.android.settings', 'com.android.chrome'))
-    assert not wifi_confirmation(xml.replace('Connect', 'Cancel'))
-    assert not wifi_confirmation(xml.replace('PRTA-QR-SYNTHETIC', 'Other'))
-    assert not wifi_confirmation('malformed')
-
-
-def test_no_authorization_never_calls_device(tmp_path):
-    device = Mock()
-    result = recognize(device, tmp_path / 'missing', {}, authorized=False)
-    assert result['native_recognition']['status'] == 'NOT_RUN'
-    device.shell_checked.assert_not_called()
+ACTION = 'android.settings.WIFI_DPP_ENROLLEE_QR_CODE_SCANNER'
+ENROLLEE = 'com.android.settings/.wifi.dpp.WifiDppEnrolleeActivity'
 
 
 def fixture(tmp_path):
@@ -28,68 +17,127 @@ def fixture(tmp_path):
                    'portal_commit': 'b' * 40, 'synthetic': True}
 
 
-def test_hash_mismatch_fails_before_device(tmp_path):
-    image, provenance = fixture(tmp_path)
-    provenance['qr_sha256'] = '0' * 64
-    device = Mock(serial='emulator-5556')
-    result = recognize(device, image, provenance, authorized=True)
-    assert result['native_recognition']['status'] == 'FAIL'
-    device.shell_checked.assert_not_called()
-
-
-def test_missing_scanner_is_explicit_not_run(tmp_path):
+def probe(tmp_path, responses, **kwargs):
     image, provenance = fixture(tmp_path)
     device = Mock(serial='emulator-5556')
-    device.shell_checked.side_effect = ['1', '34', 'en-US', 'No activity found']
-    result = recognize(device, image, provenance, authorized=True)
+    device.shell_checked.side_effect = responses
+    result = qr_native.recognize(device, image, provenance, authorized=True, **kwargs)
+    commands = [call.args[0] for call in device.shell_checked.call_args_list]
+    # Exact read-only allowlist forbids start, input, UI dumps and network changes.
+    assert set(commands) <= {
+        'getprop ro.kernel.qemu', 'getprop ro.build.version.sdk',
+        'getprop persist.sys.locale', 'am get-config',
+        f'cmd package resolve-activity --brief -a {ACTION}',
+    }
+    assert all(result[k]['status'] == 'NOT_RUN'
+               for k in ('os_consent', 'association', 'dhcp', 'captive'))
+    return result, commands
+
+
+@pytest.mark.parametrize('component,classification', [
+    (ENROLLEE, 'UNSAFE_AUTO_JOIN'),
+    ('com.android.settings/com.android.settings.wifi.dpp.WifiDppEnrolleeActivity', 'UNSAFE_AUTO_JOIN'),
+    ('com.android.settings/.Scanner', 'UNVERIFIED'),
+    ('vendor.settings/.Scanner', 'UNVERIFIED'),
+    (ENROLLEE + 'Extra', 'UNVERIFIED'),
+    ('No activity found', 'UNRESOLVED'),
+    ('', 'UNRESOLVED'),
+])
+def test_components_fail_closed(tmp_path, component, classification):
+    # Former fictitious .Scanner happy-path PASS is not evidence of safe decoding.
+    result, commands = probe(tmp_path, ['1', '34', 'en-US', component], emulator_pid=123)
     assert result['native_recognition']['status'] == 'NOT_RUN'
-    assert 'WIFI_DPP_QR_CODE_SCANNER' in result['native_recognition']['reason']
-    assert all(result[k]['status'] == 'NOT_RUN' for k in ('os_consent', 'association', 'dhcp', 'captive'))
+    assert result['scanner_capability'] == {
+        'classification': classification, 'action': ACTION, 'component': component}
+    assert commands[-1] == f'cmd package resolve-activity --brief -a {ACTION}'
+    if classification == 'UNRESOLVED':
+        assert 'other scanners' in result['native_recognition']['reason']
 
 
-def test_transport_failure_not_product_failure(tmp_path):
-    image, provenance = fixture(tmp_path)
-    device = Mock(serial='emulator-5556')
-    device.shell_checked.side_effect = RuntimeError('ADB observation failed: exit 1')
-    result = recognize(device, image, provenance, authorized=True)
-    assert result['native_recognition']['status'] == 'INFRA_ERROR'
+@pytest.mark.parametrize('locale', ['en-US', 'en_US', 'en'])
+def test_english_locale_normalized(tmp_path, locale):
+    result, commands = probe(tmp_path, ['1', '34', locale, ENROLLEE])
+    assert result['scanner_capability']['classification'] == 'UNSAFE_AUTO_JOIN'
+    assert 'am get-config' not in commands
 
 
-def test_bound_camera_recognition_never_consents(tmp_path, monkeypatch):
-    image, provenance = fixture(tmp_path)
-    device = Mock(serial='emulator-5556')
-    xml = '<hierarchy><node package="com.android.settings" text="PRTA-QR-SYNTHETIC"/><node package="com.android.settings" text="Connect" enabled="true"/></hierarchy>'
-    device.shell_checked.side_effect = ['1', '34', 'en-US', 'com.android.settings/.Scanner', '<hierarchy/>', 'Status: ok', xml]
-    from pathlib import Path
-    original = Path.read_bytes
-    monkeypatch.setattr(Path, 'read_bytes', lambda p: (
-        ('\0'.join(['/sdk/qemu-system-x86_64', '-port', '5556', '-camera-back', 'imagefile:' + str(image), ''])).encode()
-        if str(p) == '/proc/123/cmdline' else original(p)))
-    original_stat = Path.stat
-    import os
-    monkeypatch.setattr(Path, 'stat', lambda p, **kw: Mock(st_uid=os.getuid()) if str(p) == '/proc/123' else original_stat(p, **kw))
-    result = recognize(device, image, provenance, authorized=True, emulator_pid=123)
-    assert result['native_recognition']['status'] == 'PASS'
-    assert result['os_consent']['status'] == 'NOT_RUN'
-    assert not any('input tap' in str(c) or 'connect-network' in str(c) for c in device.shell_checked.call_args_list)
+@pytest.mark.parametrize('config,supported', [
+    ('config: en-rUS-ldltr\n{1.0 310mcc260mnc [en_US] ldltr sw411dp}', True),
+    ('config: en-rUS-ldltr\n{1.0 [en-US,de_DE] ldltr}', True),
+    ('config: de-rDE-ldltr\n{1.0 [de_DE,en_US] ldltr}', False),
+    ('config: en-rUS-ldltr', False),
+    ('{1.0 [] ldltr}', False),
+    ('', False),
+    ('{1.0 [unknown] ldltr}', False),
+])
+def test_empty_locale_uses_current_global_primary_only(tmp_path, config, supported):
+    result, commands = probe(tmp_path, ['1', '34', '', config, ENROLLEE])
+    assert 'am get-config' in commands
+    assert result['native_recognition']['status'] == 'NOT_RUN'
+    if supported:
+        assert result['scanner_capability']['classification'] == 'UNSAFE_AUTO_JOIN'
+    else:
+        assert 'English' in result['native_recognition']['reason']
+        assert not commands[-1].startswith('cmd package')
 
 
-def test_invalid_provenance_is_structured(tmp_path):
-    image, _ = fixture(tmp_path)
-    for provenance in (None, {'synthetic': True, 'portal_commit': 123}):
-        result = recognize(Mock(serial='emulator-5556'), image, provenance, authorized=True)
-        assert result['native_recognition']['status'] == 'FAIL'
+@pytest.mark.parametrize('locale', ['de-DE', 'unknown', 'english', 'enough'])
+def test_unsupported_locale_does_not_guess(tmp_path, locale):
+    result, commands = probe(tmp_path, ['1', '34', locale])
+    assert result['native_recognition']['status'] == 'NOT_RUN'
+    assert 'English' in result['native_recognition']['reason']
+    assert 'am get-config' not in commands
 
 
-def test_unsupported_sdk_is_not_run(tmp_path):
-    image, provenance = fixture(tmp_path)
-    device = Mock(serial='emulator-5556')
-    device.shell_checked.side_effect = ['1', '35']
-    assert recognize(device, image, provenance, authorized=True)['native_recognition']['status'] == 'NOT_RUN'
+@pytest.mark.parametrize('responses,status', [
+    (['0'], 'NOT_RUN'), (['1', '35'], 'NOT_RUN'),
+    ([RuntimeError('transport failed')], 'INFRA_ERROR'),
+    (['1', '34', '', RuntimeError('config failed')], 'INFRA_ERROR'),
+    (['1', '34', 'en-US', RuntimeError('resolve failed')], 'INFRA_ERROR'),
+])
+def test_read_only_probe_errors(tmp_path, responses, status):
+    result, _ = probe(tmp_path, responses)
+    assert result['native_recognition']['status'] == status
 
 
-def test_physical_device_refused(tmp_path):
-    image, provenance = fixture(tmp_path)
-    device = Mock(serial='physical')
-    assert recognize(device, image, provenance, authorized=True)['native_recognition']['status'] == 'NOT_RUN'
+@pytest.mark.parametrize('authorized,serial', [(False, 'emulator-5556'), (True, 'physical')])
+def test_authorization_and_device_guards(tmp_path, authorized, serial):
+    device = Mock(serial=serial)
+    result = qr_native.recognize(device, tmp_path / 'missing', {}, authorized=authorized)
+    assert result['native_recognition']['status'] == 'NOT_RUN'
     device.shell_checked.assert_not_called()
+
+
+@pytest.mark.parametrize('bad', [None, {}, {'synthetic': True, 'portal_commit': 123},
+    {'synthetic': True, 'portal_commit': 'not-a-commit'},
+    {'synthetic': True, 'portal_commit': 'b' * 40, 'qr_sha256': '0' * 64}])
+def test_invalid_provenance(tmp_path, bad):
+    image, _ = fixture(tmp_path)
+    device = Mock(serial='emulator-5556')
+    assert qr_native.recognize(device, image, bad, authorized=True)['native_recognition']['status'] == 'FAIL'
+    device.shell_checked.assert_not_called()
+
+
+def test_missing_image_is_infra_error(tmp_path):
+    image, provenance = fixture(tmp_path)
+    image.unlink()
+    device = Mock(serial='emulator-5556')
+    assert qr_native.recognize(device, image, provenance, authorized=True)['native_recognition']['status'] == 'INFRA_ERROR'
+    device.shell_checked.assert_not_called()
+
+
+@pytest.mark.parametrize('valid', [True, False])
+def test_cli_compatibility_never_launches(tmp_path, monkeypatch, valid):
+    image, provenance = fixture(tmp_path)
+    source = tmp_path / 'provenance.json'
+    source.write_text(json.dumps(provenance) if valid else '{broken')
+    output = tmp_path / 'out/result.json'
+    device = Mock(serial='emulator-5556')
+    device.shell_checked.side_effect = ['1', '34', 'en-US', ENROLLEE]
+    monkeypatch.setattr(qr_native, 'ADBDevice', lambda serial: device)
+    monkeypatch.setattr('sys.argv', ['qr_native', '--image', str(image),
+        '--provenance', str(source), '--serial', 'emulator-5556',
+        '--emulator-pid', '123', '--owned-isolated-emulator', '--output', str(output)])
+    assert qr_native.main() == (4 if valid else 1)
+    assert json.loads(output.read_text())['native_recognition']['status'] == ('NOT_RUN' if valid else 'FAIL')
+    assert all('am start' not in call.args[0] for call in device.shell_checked.call_args_list)
