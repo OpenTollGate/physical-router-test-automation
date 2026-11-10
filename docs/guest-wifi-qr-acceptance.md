@@ -101,24 +101,35 @@ Synthetic fixture identity is deliberately fixed to `PRTA-QR-SYNTHETIC`; never
 supply private Wi-Fi credentials. Exact payload used in development:
 `WIFI:T:WPA;S:PRTA-QR-SYNTHETIC;P:synthetic-only-123;H:false;;`.
 
-The owner must provision a **dedicated** emulator with supported
-`-port 5556 -camera-back imagefile:/absolute/portal.png` (SDK emulator 37.2.13
-advertises this in `-help-camera-back`). Existing/shared AVDs are off-limits.
-After ownership is established, the CLI takes `--owned-isolated-emulator
---emulator-pid PID`; it checks the local process owner, explicit serial/port and
-exact camera path before launching the scanner. It never boots or kills a guest.
+**Do not boot an emulator for this path yet.** The API34 Google APIs revision14
+image has an exported Settings enrollee scanner, but it is not recognition-only.
+The corrected action is `android.settings.WIFI_DPP_ENROLLEE_QR_CODE_SCANNER`;
+`com.android.settings/.wifi.dpp.WifiDppEnrolleeActivity` accepts it with no required
+extras. Optional `ssid` is a display label, not a connection restriction.
 
-Prerequisite is exported Settings `android.settings.WIFI_DPP_QR_CODE_SCANNER`.
-An image containing Camera2 or barcode library strings is **not** proof of this
-activity or a usable scanner. Missing activity => NOT_RUN with that exact reason.
-The API34 English UI adapter requires a newly observed Settings synthetic SSID
-and enabled `Connect`; a stale pre-existing confirmation is rejected. Other OS
-layouts require a tested adapter, not looser substring matching. Ten bounded UI
-observations without confirmation fail; transport errors are INFRA_ERROR.
+Both [Android14 source](https://android.googlesource.com/platform/packages/apps/Settings/+/refs/tags/android-14.0.0_r1/src/com/android/settings/wifi/dpp/WifiDppQrCodeScannerFragment.java)
+and installed APK DEX show standard `WIFI:` decode calling `addNetwork`,
+`enableNetwork`, then `connect` for hidden/reachable networks without confirmation.
+Not tapping Connect is therefore insufficient. An unreachable synthetic SSID does
+not prevent the network-save side effect. The old spelling's failed resolution
+was not evidence that the standard Wi-Fi scanner was missing.
 
-Result JSON always separates native recognition, OS consent, association, DHCP,
-and captive statuses. Recognition PASS is not consent: no Connect tap occurs.
-Remaining stages are explicitly NOT_RUN; NAT proves no RF or physical lease.
+The canonical adapter now performs read-only capability discovery, never launches
+an activity, and classifies the enrollee component `UNSAFE_AUTO_JOIN`. Other
+components are `UNVERIFIED`; unresolved action is `UNRESOLVED`, not proof that all
+scanners are unavailable. All return NOT_RUN. English locale can come from
+`persist.sys.locale` or the supported single-English `am get-config` qualifier
+format; ambiguous/missing/multiple locale fallback remains unknown. It never sets
+locale. `--emulator-pid` remains accepted for compatibility but cannot enable launch.
+
+Next prerequisite: a native scanner/image with verified ordinary `WIFI:` decode
+and an explicit confirmation boundary **before any network save/enable/join**,
+plus exported/public UI entry and tested adapter. No such safe path is verified
+in this installed image. No third-party install or internal-activity bypass is
+permitted. See [offline evidence report](qr-native-discovery/REPORT.md).
+
+Result JSON separates native recognition, OS consent, association, DHCP, and
+captive statuses. All native stages remain NOT_RUN; NAT proves no RF or lease.
 CLI exits: 0 recognition PASS only, 1 FAIL, 2 INFRA_ERROR, 4 NOT_RUN. Pytest skip
 is **not acceptance** even when pytest exits zero. Host tests use doubles only:
 
