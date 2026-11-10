@@ -45,10 +45,17 @@ def recognize(device, image, provenance, *, authorized=False, emulator_pid=None)
         locale = device.shell_checked('getprop persist.sys.locale').strip()
         if not locale:
             config = device.shell_checked('am get-config')
-            # Only the primary locale of the current global Configuration, not
-            # resource qualifiers or secondary locales, establishes support.
-            match = re.search(r'\{[^{}\n]*\[([^\]\n]*)\]', config)
-            locale = match.group(1).split(',')[0].strip() if match else ''
+            # Android 14 runGetConfig emits resourceQualifierString + ABI.
+            # Locales follow optional MCC/MNC, in LocaleList order, comma joined.
+            # Accept only a single supported English locale; unknown/multi-locale
+            # output stays unknown (never search later qualifiers or task braces).
+            match = re.fullmatch(
+                r'config: (?:mcc[0-9]+-(?:mnc[0-9]+-)?)?'
+                r'(?:en(?:-r[A-Z]{2})?|b\+en(?:\+[A-Z][a-z]{3})?'
+                r'(?:\+(?:[A-Z]{2}|[0-9]{3}))?)'
+                r'-(?:(?:neuter|feminine|masculine)-)?ldltr'
+                r'(?:-[A-Za-z0-9]+)*\nabi: [A-Za-z0-9_,.-]+\n?', config)
+            locale = 'en' if match else ''
         if not re.fullmatch(r'en(?:-[A-Za-z0-9]+)*', locale.replace('_', '-')):
             return finish('NOT_RUN', 'Prerequisite: English Settings UI adapter; locale unknown or unsupported')
         component = device.shell_checked(

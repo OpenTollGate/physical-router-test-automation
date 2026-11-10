@@ -61,11 +61,26 @@ def test_english_locale_normalized(tmp_path, locale):
     assert 'am get-config' not in commands
 
 
+# Android 14 runGetConfig prints resource qualifiers, not Configuration.toString.
+# These are source-derived fixtures, not captured emulator output.
 @pytest.mark.parametrize('config,supported', [
-    ('config: en-rUS-ldltr\n{1.0 310mcc260mnc [en_US] ldltr sw411dp}', True),
-    ('config: en-rUS-ldltr\n{1.0 [en-US,de_DE] ldltr}', True),
-    ('config: de-rDE-ldltr\n{1.0 [de_DE,en_US] ldltr}', False),
+    ('config: mcc310-mnc260-en-rUS-ldltr-sw360dp-w360dp-h640dp-normal-notlong-notround-port-notnight-xhdpi-finger-keysexposed-qwerty-navexposed-dpad-720x1280-v34\nabi: x86_64', True),
+    ('config: en-ldltr-sw360dp-v34\nabi: x86_64\n', True),
+    ('config: b+en+US-ldltr-sw360dp-v34\nabi: x86_64', True),
+    ('config: b+en+Latn+US-ldltr-sw360dp-v34\nabi: x86_64', True),
+    ('config: mcc310-en-rGB-feminine-ldltr-sw360dp-v34\nabi: x86_64', True),
+    # AOSP preserves list order with commas; reject all multi-locale fallback.
+    ('config: de-rDE,en-rUS-ldltr-sw360dp-v34\nabi: x86_64', False),
+    ('config: en-rUS,de-rDE-ldltr-sw360dp-v34\nabi: x86_64', False),
+    ('config: b+de+Latn+DE,b+en+US-ldltr-v34\nabi: x86_64', False),
+    ('config: ldltr-sw360dp-v34\nabi: x86_64', False),
+    ('config: unknown-en-rUS-ldltr-v34\nabi: x86_64', False),
+    ('config: de-rDE-ldltr-v34\nabi: x86_64', False),
+    ('config: en-rUS-ldltr\nconfig: de-rDE-ldltr\nabi: x86_64', False),
     ('config: en-rUS-ldltr', False),
+    ('config: en-rUS-ldltr\n{1.0 [en_US] ldltr}', False),
+    ('CurrentConfiguration={1.0 [en_US] ldltr}', False),
+    ('{1.0 [en_US] ldltr}', False),
     ('{1.0 [] ldltr}', False),
     ('', False),
     ('{1.0 [unknown] ldltr}', False),
