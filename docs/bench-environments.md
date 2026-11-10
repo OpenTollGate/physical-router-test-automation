@@ -80,6 +80,48 @@ moves to br-private, so `192.168.1.1` routes out the WAN and is firewalled. See
 for the `ip route get` discovery recipe. From `cobrador` the MT3000 answers on
 `10.57.113.1` (portal `:2051`, board `https://…/`).
 
+## Environment 5 — serial-attached COVR-X1860 (onboarding bench)
+
+**Where:** plugged into a serial fleet host's FTDI USB-TTL adapter, 115200 8N1,
+3.3 V. On x280 the COVR console is `/dev/ttyUSB2` (FTDI serial **`BH00D6DL`**) —
+`/dev/ttyUSB0` is `tollgate-0195` and `/dev/ttyUSB1` is a COMFAST login, so
+**resolve the port by FTDI serial, never by index** (the index drifts on replug).
+
+**Devices:** D-Link **COVR-X1860 A1**, OpenWrt board name `dlink,covr-x1860-a1`,
+`mipsel_24kc` / `ramips-mt7621`. Two units are listed as `x1860` in
+Environment 1's device set, so expect siblings; pin identity before touching one.
+
+**What runs here:** onboarding and manual-verification runs — flash to vanilla
+OpenWrt 25.12.5, install `tollgate-wrt` from the FreedomTechFeed feed, and the
+manual happy path (captive portal → pay → gate opens). Not farm-scheduled: it is
+not PoE power-controlled, so a human or an agent holds it for a window.
+
+**Access:** serial console (this is the only way in while dropbear is
+publickey-only), plus SSH/HTTP over the box's **LAN** side once cabled.
+
+**Mutex — this is the important part.** The COVR is **single-owner hardware**,
+one UART, and several context windows reach it. Take the shared bench lock with a
+**device-scoped id**, or you will either collide with another window or lock the
+wrong board:
+
+```sh
+TG_BENCH_ID=tollgate-COVR-X1860 ~/.local/state/tg-bench/tollgate-COVR-X1860.lock
+```
+
+Do **not** use the default `tollgate-A04E` id here — that is the MT6000, and
+locking it while touching the COVR protects nothing while blocking a legitimate
+MT6000 run. Read-only batches take the lock too: reading is traffic, and the
+2026-10-14 "console handed away" failure looked exactly like a read-only run that
+got someone else's noise. Fail loud, never queue silently.
+
+**Known trap (measured 2026-10-22).** Dropbear on this box came up with
+`PasswordAuth 'off'` **and** `RootPasswordAuth 'off'`, carrying an
+`authorized_keys` entry that matched no key in our fleet. Serial is the only way
+in until password auth is enabled. Also: `192.168.1.1` on the lab LAN is **not**
+necessarily this router — a GL.iNet MT6000 answers there (MAC
+`94:83:c4:d1:57:58`, OUI `94:83:c4`). Pin identity by MAC before any destructive
+step; the COVR's `br-lan` MAC is on its own label.
+
 ## The confusion this doc exists to kill
 
 | If a session sees... | It is... | Verdict |
@@ -87,6 +129,7 @@ for the `ip route get` discovery recipe. From `cobrador` the MT3000 answers on
 | `TollGate-326D` / `192.168.1.1` | Env 2 (laptop bench) | Ours; test via laptop bridge |
 | `TollGate-1690` / `TollGate-D1C6` / `100.90.x` | Env 3 (external NetBird) | Out of scope |
 | WS3915i / x1860 / PoE control | Env 1 (labgrid farm) | Ours; use the coordinator |
+| `dlink,covr-x1860-a1` / `COVR-X1860` / FTDI `BH00D6DL` | Env 5 (serial COVR bench) | Ours; serial console, device-scoped bench lock |
 | `tollgate-52BE` / `tollgate-A04E`, `10.57.113.1` / `10.63.101.1`, serial on T440/x280 | Env 4 (serial fleet bench) | Ours; reach on the **management net**, not `192.168.1.1` |
 | `192.168.1.1` **from the gateway** | post-install box (Env 4) at a dead address | routes out the WAN — use `ip route get` |
 | "MT3000 (arm64)" with no other identity | AMBIGUOUS — must be pinned before use | Identity check mandatory |
