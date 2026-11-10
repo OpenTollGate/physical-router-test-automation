@@ -46,13 +46,22 @@ TDD first correction RED20 failed/16 passed; GREEN36 passed. Review caught inven
 am get-config brace fixture; corrected using authoritative source: RED8 failed/
 40 passed, GREEN48 passed. Parent reran combined adapter + adb tests:
 
-```
-COVERAGE_FILE=/home/c08r4d0r/reports/qr-native-20261110/discovery-adapter/parent.coverage python3 -m coverage run --branch --source=lib.clients.qr_native -m pytest --noconftest -o addopts= tests/unit/test_qr_native.py tests/unit/test_adb_checked.py -q
-# exit0: 58 passed
-COVERAGE_FILE=/home/c08r4d0r/reports/qr-native-20261110/discovery-adapter/parent.coverage python3 -m coverage report -m
-# exit0: 98%, only module-entry SystemExit line109 uncovered
+The historical result below was obtained with coverage 7.17.2. Portable reproduction
+from the repository root (dependency installation is a separate setup step; use
+an existing environment or a local wheelhouse when offline):
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+# Caller chooses an existing writable directory; no developer-owned path.
+export COVERAGE_FILE="${COVERAGE_FILE:-$PWD/.coverage-qr-native}"
+python -m coverage run --branch --source=lib.clients.qr_native -m pytest --noconftest -o addopts= tests/unit/test_qr_native.py tests/unit/test_adb_checked.py -q
+# historical exit0: 58 passed
+python -m coverage report -m
+# historical exit0: 98% combined statements+branches; module-entry line109 uncovered
 git diff --check
-# exit0
+# historical exit0
 ```
 
 Initial parent pytest --cov command exit4 (pytest-cov absent); used installed

@@ -81,11 +81,12 @@ Host-only transport contracts (no router fixtures/device access):
 python -m pytest --noconftest -o addopts= tests/unit/test_adb_checked.py -q
 ```
 
-## Executable recognition-only scenario
+## Read-only native capability discovery/refusal
 
-`tests/phone/test_qr_native.py` now drives the native Android Settings scanner
-through `lib/clients/qr_native.py` and the existing checked ADB seam. It does not
-use the stateful router fixtures. Run ONLY this scoped path with `--noconftest`:
+`tests/phone/test_qr_native.py` uses `lib/clients/qr_native.py` and the checked
+ADB seam to discover capability and refuse launch, not drive the scanner.
+It cannot produce native recognition acceptance. It does not use the stateful
+router fixtures. Run ONLY this scoped path with `--noconftest`:
 
 ```sh
 PRTA_QR_MANIFEST=/absolute/manifest.json python -m pytest --noconftest -o addopts= tests/phone/test_qr_native.py -q -rs

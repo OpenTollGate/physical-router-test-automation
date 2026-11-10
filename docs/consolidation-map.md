@@ -17,9 +17,13 @@ Division of labor, so nothing competes:
 
 ## QR recognition milestone
 
-PR #340 adds an executable recognition-only phone scenario and host contracts.
-Native acceptance remains NOT_RUN pending an owned isolated emulator with the
-exported Settings scanner; physical association/DHCP/captive stages remain gated.
+PR #340 adds read-only native capability discovery/refusal and host contracts.
+The known exported Settings scanner saves/enables networks and is refused under
+recognition-only authorization. A verified decode-only confirmation boundary is
+required; an owned emulator and exported activity alone are insufficient.
+Separate authorized synthetic experiments launched but did not recognize the QR.
+[Offline framing measurements](qr-framing-prerequisite.md) are not native acceptance.
+Physical association/DHCP/captive stages remain gated.
 See [guest Wi-Fi QR acceptance](guest-wifi-qr-acceptance.md).
 
 ## The shape we are consolidating toward
