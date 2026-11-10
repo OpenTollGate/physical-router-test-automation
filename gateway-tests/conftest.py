@@ -44,8 +44,38 @@ def gateway_ssh():
         args += [f"{GATEWAY_SSH_USER}@{GATEWAY_HOST}", cmd]
         r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
         return r
-
     return _ssh
+
+
+@pytest.fixture(scope="session")
+def service_state(gateway_ssh):
+    """Init-system-agnostic service probe.
+
+    Returns a callable(name) -> (state, detail) where state is one of
+    "active", "inactive", "failed", "absent". Handles both systemd hosts
+    (the VM/cloud gateways these tests were written against) and OpenWrt
+    procd (physical routers: /etc/init.d/<name> status; "running" = active).
+    "absent" lets species-specific tests SKIP instead of failing on
+    platforms that legitimately never ship the service.
+    """
+    def _probe(name):
+        r = gateway_ssh(
+            f'if command -v systemctl >/dev/null 2>&1; then '
+            f'systemctl is-active "{name}" 2>/dev/null; '
+            f'elif [ -x "/etc/init.d/{name}" ]; then '
+            f'/etc/init.d/{name} status 2>/dev/null || true; '
+            f'else echo ABSENT; fi', timeout=15)
+        out = (r.stdout or "").strip().lower()
+        if out == "absent" or (r.returncode == 127 and not out):
+            return "absent", (r.stdout or r.stderr).strip()[:120]
+        if "active" in out and "inactive" not in out and "activating" not in out:
+            return "active", out
+        if "running" in out:
+            return "active", out
+        if "inactive" in out or "stopped" in out or "dead" in out:
+            return "inactive", out
+        return "failed", (r.stdout or r.stderr).strip()[:120]
+    return _probe
 
 
 @pytest.fixture(scope="session")
