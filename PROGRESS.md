@@ -1,3 +1,21 @@
+# QR CI prerequisite progress — 2026-11-10
+
+- Verified PR #340 exact head and DRAFT state; original checkout clean; isolated
+  branch `fix/qr-ci-prereq-20261110` created from cb7d388. No concurrent process
+  owning this QR branch observed; remote will be checked again before push.
+- Read failed fork logs; fresh pristine-base/head Python full-suite comparison
+  confirms identical 11 failed/error IDs. Separate repair proposals in REPORT.
+- Supported runner selected from locked Playwright 1.59.1's platform registry,
+  not an arbitrary OS downgrade. Only lint runner changed; safety gates intact.
+- Tested milestone: 71 JavaScript tests collected; six helper imports passed;
+  YAML semantic parity except lint runner and diff whitespace check passed.
+- Next: fast-forward push existing QR PR branch; dispatch existing safe fork
+  CI and Python CI; record exact run IDs/SHA outside the commit (avoid moving
+  the tested head merely to record its own run). Keep DRAFT and report Python
+  baseline failures as blockers, never bypass them.
+
+---
+
 # PROGRESS — t_a4aa351d (Consolidate bench locking into ONE machine-global lease)
 
 Worktree: /home/c03rad0r/worktrees/prta-revive  branch pr/prta-revive-hw-dispatch

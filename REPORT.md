@@ -1,3 +1,50 @@
+# QR CI prerequisite report — 2026-11-10
+
+PR #340 remains DRAFT; no readiness or merge claim.
+
+The fork CI run 42824946673 at cb7d3883b9c2a060ae96df5bfe0d0e3d47b9f039
+failed before collection: Playwright 1.59.1 cannot install dependencies for
+ubuntu26.04-x64. `npm ci --ignore-scripts` resolves package-lock.json to 1.59.1;
+its hostPlatform.js explicitly supports Ubuntu 24.04 and its browser registry
+has ubuntu24.04-x64 entries. Therefore only the existing lint job is pinned to
+ubuntu-24.04, the newest Ubuntu release supported by that locked dependency.
+No dependency, package/feed pin, authentication, lock, test assertion or job
+condition changes. Hardware/UI jobs remain disabled; publish remains gated.
+
+Local checks: npm collection = 71 tests / 11 files; all six CI helper imports
+pass; parsed YAML comparison proves only lint.runs-on changed semantically;
+git diff --check passes. Hosted browser installation remains to be verified
+by the new exact-head CI run, not inferred from local collection.
+
+Python failure attribution uses fresh full `pytest tests/unit -q` runs with
+Python 3.12.3 and the same requirements-dev environment:
+- Pristine base ab0c4b6229343468a9221578885e497985acfed8:
+  1239 passed, 2 failed, 9 errors, 5 skipped, 3 xfailed.
+- Original QR head cb7d3883b9c2a060ae96df5bfe0d0e3d47b9f039:
+  1249 passed, 2 failed, 9 errors, 5 skipped, 3 xfailed.
+- All 11 failed/error node IDs match each other and hosted run 42824952911.
+  These failures are pre-existing, not QR-introduced. This is NOT a green suite.
+
+Separate prerequisites, intentionally not bundled into QR:
+1. test_cudy_flash expects a removed password fallback literal. Replace stale
+   extraction with env-only credential-contract/leak checks and planted-violation
+   controls; never restore a credential or drop leak coverage.
+2. test_read_only_guard supplies empty curl output, activating the legitimate
+   wget fallback. Give the success-path mock a numeric status and add an explicit
+   fallback-path assertion; retain all mutator refusals.
+3. Nine hardware_lock fixture errors assume fallback-only `_held_lock` even
+   when tollgate-lab is installed. Existing PR #322 owns this exact repair;
+   review/reuse it rather than duplicating it or bypassing lock enforcement.
+
+Only the scoped runner-compatibility correction is shipped here. Full Python
+suite remains blocked on the separate prerequisites. No lab, hardware, funds,
+release, deployment, upstream setting change or approval bypass performed.
+Cold-review exception: under-ten-line non-logic configuration change; validated
+by semantic comparison and exact dependency platform support. Full-suite green
+exception: identical freshly reproduced baseline failures, explicitly retained.
+
+---
+
 PRTA-REVIVE / t_a4aa351d — REPORT
 Consolidate bench locking into ONE machine-global lease
 ================================================================

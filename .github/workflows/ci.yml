@@ -4,7 +4,7 @@
 # This workflow provides automated testing for the physical router test automation
 # project. It supports two types of tests:
 #
-# 1. Lint/Collect Tests (always runs on ubuntu-latest):
+# 1. Lint/Collect Tests (always runs on ubuntu-24.04):
 #    - Validates code quality
 #    - Verifies test collection
 #    - Checks imports
@@ -45,13 +45,14 @@ on:
 # =============================================================================
 # Job 1: Lint/Collect Tests
 # =============================================================================
-# Runs on standard GitHub-hosted ubuntu-latest runner (no hardware needed)
+# Runs on standard GitHub-hosted ubuntu-24.04 runner (no hardware needed)
 # Purpose: Validate code quality, check imports, verify test collection
 # Status: Always runs (not conditional)
 # =============================================================================
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    # Playwright 1.59.1 in package-lock.json supports Ubuntu 24.04, not 26.04.
+    runs-on: ubuntu-24.04
     steps:
       # Checkout repository code
       - uses: actions/checkout@v4
