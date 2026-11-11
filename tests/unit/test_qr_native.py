@@ -156,3 +156,32 @@ def test_cli_compatibility_never_launches(tmp_path, monkeypatch, valid):
     assert qr_native.main() == (4 if valid else 1)
     assert json.loads(output.read_text())['native_recognition']['status'] == ('NOT_RUN' if valid else 'FAIL')
     assert all('am start' not in call.args[0] for call in device.shell_checked.call_args_list)
+
+
+# Real API34 images answer `resolve-activity --brief` with a header line BEFORE
+# the component. Treating the whole output as the component name made a present
+# enrollee scanner read as UNRESOLVED ("no scanner"), which is a wrong reason even
+# though both outcomes refuse to launch. Observed on emulator-5592, build
+# UE1A.230829.050:
+#   priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true
+#   com.android.settings/.wifi.dpp.WifiDppEnrolleeActivity
+HEADER = ('priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 '
+          'isDefault=true')
+
+
+@pytest.mark.parametrize('raw,expected', [
+    (f'{HEADER}\n{ENROLLEE}', 'UNSAFE_AUTO_JOIN'),
+    (f'{HEADER}\r\n{ENROLLEE}\r\n', 'UNSAFE_AUTO_JOIN'),
+    (f'{HEADER}\ncom.android.settings/.Scanner', 'UNVERIFIED'),
+    (f'{HEADER}\nvendor.settings/.Scanner', 'UNVERIFIED'),
+    (ENROLLEE, 'UNSAFE_AUTO_JOIN'),
+    (f'No activity found\n{HEADER}', 'UNRESOLVED'),
+    ('No activity found', 'UNRESOLVED'),
+    ('', 'UNRESOLVED'),
+])
+def test_ansi_header_line_does_not_hide_the_component(tmp_path, raw, expected):
+    result, commands = probe(tmp_path, ['1', '34', 'en-US', raw], emulator_pid=123)
+    assert result['scanner_capability']['classification'] == expected
+    # The safety verdict is unchanged either way: never launch.
+    assert result['native_recognition']['status'] == 'NOT_RUN'
+    assert all('am start' not in c for c in commands)

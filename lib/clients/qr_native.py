@@ -58,8 +58,22 @@ def recognize(device, image, provenance, *, authorized=False, emulator_pid=None)
             locale = 'en' if match else ''
         if not re.fullmatch(r'en(?:-[A-Za-z0-9]+)*', locale.replace('_', '-')):
             return finish('NOT_RUN', 'Prerequisite: English Settings UI adapter; locale unknown or unsupported')
-        component = device.shell_checked(
-            f'cmd package resolve-activity --brief -a {ACTION}').strip()
+        raw_component = device.shell_checked(
+            f'cmd package resolve-activity --brief -a {ACTION}')
+        # Real images (API34, build UE1A.230829.050) print a resolver header
+        # before the component:
+        #   priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true
+        #   com.android.settings/.wifi.dpp.WifiDppEnrolleeActivity
+        # Classifying the WHOLE output reported a present enrollee scanner as
+        # UNRESOLVED ("no scanner"). Take the last line that is a component name;
+        # genuinely unmatched output still fails closed as UNRESOLVED.
+        lines = [line.strip() for line in raw_component.splitlines() if line.strip()]
+        matched = next(
+            (line for line in reversed(lines)
+             if re.fullmatch(r'[\w.]+/[\w.$]+', line)), '')
+        # Keep the raw reply in the report when nothing matched, so an operator
+        # sees what the device actually said instead of an empty string.
+        component = matched or raw_component.strip()
         if not re.fullmatch(r'[\w.]+/[\w.$]+', component):
             classification = 'UNRESOLVED'
             reason = f'{ACTION} unresolved; this does not establish that other scanners are unavailable'
