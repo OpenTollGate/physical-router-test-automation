@@ -5,26 +5,36 @@ ONE machine-global bench lease instead of writing /tmp/tollgate_hardware.lock.
 These tests exercise the fallback path against a temp lease file.
 """
 
+import importlib.util
 import os
+from pathlib import Path
+import sys
 
 import pytest
 
 from lib.bench_lock import bench_state
 
-# Import the fallback implementation directly: the tollgate_lab path (when
-# installed) is that package's own contract, not this repo's.
-import lib.hardware_lock as hl
+# Populated per test by isolated_bench_lock. Simulate *absence* of
+# tollgate_lab to load the fallback module explicitly, even on CI hosts where
+# requirements.txt installed that package and its own lock implementation.
+hl = None
 
 
 @pytest.fixture(autouse=True)
 def isolated_bench_lock(tmp_path, monkeypatch):
     path = tmp_path / "bench-lease.lock"
     monkeypatch.setenv("TOLLGATE_BENCH_LOCK", str(path))
-    # reset any lock held by a previous test in this process
-    if hl._held_lock is not None:  # noqa: SLF001 - test-only introspection
-        hl._held_lock.release()
-        hl._held_lock = None
+    # ``None`` in sys.modules raises ImportError deterministically: exercise
+    # our BenchLock fallback without redefining the real package's contract.
+    monkeypatch.setitem(sys.modules, "tollgate_lab.hardware.lock", None)
+    module_path = Path(__file__).resolve().parents[2] / "lib" / "hardware_lock.py"
+    spec = importlib.util.spec_from_file_location("_prta_hardware_lock_fallback_test", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    global hl
+    hl = module
     yield path
+    hl.release_hardware_lock()
 
 
 class TestReadLock:
