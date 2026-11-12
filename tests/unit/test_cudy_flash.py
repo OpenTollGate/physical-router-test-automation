@@ -574,8 +574,8 @@ def test_password_convention_is_runtime_env_only():
     assert "const password = process.env.TOLLGATE_LUCI_PASSWORD;" in source
     assert "process.env.TOLLGATE_LUCI_PASSWORD ||" not in source
     assert "if (!password)" in source
-    for relative in ("lib/cudy_flash.py", "scripts/cudy-flash.py"):
-        assert "there is deliberately no literal" in (PROJECT_ROOT / relative).read_text(encoding="utf-8"), relative
+    # vendor_password() itself is tested below with env cleared and both
+    # documented env names; do not make this contract depend on help prose.
 
 
 def test_vendor_password_comes_from_env_only(monkeypatch):

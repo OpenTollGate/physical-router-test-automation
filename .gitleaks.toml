@@ -40,3 +40,12 @@ regexes = [
   '''0279110f[a-f0-9]*''',
   '''aB3xK9mQ2pR7vN5tW1cY''',
 ]
+
+[[allowlists]]
+description = "No-value public test fixtures only: two reproducible keys documented in lib/tollgate_rs.py as taken from tollgate-rs's public free-mint topologies, and a deliberately invalid opaque unit token in test_portal_failure_copy.py. These exact unchanged public fixture values are not operator credentials; allowlisting them does not cover router passwords or changed/new values."
+regexTarget = "match"
+regexes = [
+  '''78d684aa33cd91c862ca9dd42e969b97e511bf36d4848e6a90d967bc174199c1''',
+  '''e320cb6477ed200fa997b77fdbbeb76f26f9b4672ac390cccde71292097b2b4b''',
+  '''cashuAeyJwcm9vZiI6MTIzfQ''',
+]
