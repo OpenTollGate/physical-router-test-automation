@@ -93,7 +93,8 @@ state/opencode/plugins/hermes-tool-budget/layout.test.ts
 
 - [x] Push `pr/fleet-consolidation-20261112` and open automation PR https://github.com/OpenTollGate/physical-router-test-automation/pull/345.
 - [x] Verify the diff contains only the intended handoff/plan changes and no credentials or unrelated files.
-- [ ] Require hardware-free CI at the exact PR head: organization Actions is disabled, so run the equivalent pytest/lint/mypy/secret checks in isolated GitHub-hosted CI.
+- [x] Hardware-free CI on isolated GitHub-hosted runner: https://github.com/c03rad0r/hermes-orchestration/actions/runs/43317664973 — **SUCCESS** at `05c507d`: pytest collection, **1250 passed, 5 skipped, 3 xfailed**, Ruff, mypy, story coverage, and gitleaks (no leaks).
+- [ ] Validate the exact final documentation-only head, then merge.
 - [ ] Merge with the repository's normal merge method; never force-push `main`.
 - [ ] Verify the resulting `origin/main` contains the documentation and plan.
 
@@ -124,3 +125,21 @@ Stop before a merge when a fast-forward relationship is lost, an unrelated modif
 The disposable validator PR is https://github.com/c03rad0r/hermes-orchestration/pull/3.
 It is test infrastructure, not a gateway source change, and is to be closed
 without merging after recording the final external automation run.
+
+## Fixture repairs required by the first automation unit run
+
+The first full offline unit run also uncovered three pre-existing test issues,
+not new router behavior. The PR includes their narrowly scoped corrections:
+
+- the credential test now asserts env-only injection rather than reading a
+  committed password that was deliberately removed;
+- the read-only mock returns a curl HTTP status so it does not accidentally
+  require the newer wget fallback;
+- the lock tests explicitly simulate absence of `tollgate_lab` instead of
+  testing that installed package's different lock implementation.
+
+Gitleaks also identified three pre-existing public no-value fixtures elsewhere
+in the repository. The allowlist covers exactly those unchanged public values,
+with the safety rationale in `.gitleaks.toml`; no new credential allowlisting or
+production behavior change is included. The full offline suite then passed with
+no failures or errors, and gitleaks reported no leaks.
