@@ -65,6 +65,10 @@ def test_reads_still_work_in_read_only_mode(monkeypatch):
     router, ssh_calls = make_router()
     router.enable_read_only()
     router.ssh("uci -q get dhcp.lan.ra")
+    # A successful curl response must short-circuit the later wget fallback.
+    router.ssh = lambda cmd, timeout=None: ssh_calls.append(cmd) or (
+        "200" if cmd.startswith("curl") else ""
+    )
     router.api_status("/")  # read path: SSH-backed curl to the backend
     assert len(ssh_calls) == 2
 

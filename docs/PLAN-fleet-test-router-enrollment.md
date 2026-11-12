@@ -99,11 +99,15 @@ path. COMFAST was verified to go 0 -> 2 APs during a leased run and back to 0.
   Contains the router inventory template, fleet keys, mutex/bench wrapper,
   quiesce/arm logic, x280 deployment, and the reproducible COMFAST post-flash
   config (`scripts/bench/comfast_apply.sh`, `make comfast-apply`).
-- Gateway: bare `master` (and `feat/mt6000-mptcp-gateway`) at `27a8303b4`.
-  Contains the MT6000 OMR IaC and the COMFAST `.219` DHCP reservation.
-- conwrt: PR https://github.com/Amperstrand/conwrt/pull/567, branch
-  `feat/comfast-cf-wr632ax-tested` at `e950d95`; model validation and all CI
-  checks pass. The PR is open and mergeable, awaiting maintainer merge.
+- Gateway: `github/master` and the lab `upstream/master` mirror are both
+  `869eeea31a227062c7eb60f47fd2d598e6b587c9` (promoted by fast-forward on
+  2026-11-12). This contains the MT6000 OMR IaC and the COMFAST `.219` DHCP
+  reservation.
+- conwrt: PR https://github.com/Amperstrand/conwrt/pull/567, source branch
+  `feat/comfast-cf-wr632ax-tested` at `e950d95`; **merged upstream on
+  2026-10-28 as `ab442ffc`**. The tested CF-WR632AX model is on master.
+- Latest reconciliation and test evidence:
+  `docs/PLAN-2026-11-12-consolidation.md`.
 - x280 tracks `origin/main` and runs
   `deploy/x280/install-bench.sh`; the live `config/routers.json` is the
   gitignored instance of `config/routers.fleet.example.json`.
@@ -123,6 +127,17 @@ make -C /home/c08rad0r/worktrees/mt6000-mptcp-gateway mt6000-canary-gate
 
 ## Verification evidence
 
+### Current reachability caveat (2026-11-12)
+
+The checks below are the last completed live evidence, from 2026-10-26. On
+2026-11-12, x280 was unreachable from T14 (`192.168.50.10`, `x280.lan`) and via
+cobradorwave (`192.168.2.6`, `192.168.2.201`, `192.168.2.5`). Fleet
+verification was **not** rerun. COMFAST still has its `.219` reservation and
+responds to ICMP from the MT6000, but x280-only management cannot be verified
+while x280 is down.
+
+The historical results were:
+
 ```text
 MT6000 OMR verify          VERIFY: ok
 MT6000 canary              7/3 READY
@@ -134,9 +149,9 @@ Protected check            MT6000 REFUSED; no MT6000 in inventory
 
 ## Follow-ups (not blockers)
 
-- **conwrt PR #567** is open and mergeable with all required checks green
-  (`changes`, `rust`, `firmware-esp32s3`, `test` 3.10-3.13). It is an upstream
-  PR; a conwrt maintainer still needs to merge it.
+- **conwrt PR #567** was merged upstream on 2026-10-28 as `ab442ffc` after
+  all required checks passed (`changes`, `rust`, `firmware-esp32s3`, `test`
+  3.10-3.13). No further enrollment PR remains open.
 - **COMFAST LAN L2**: the 1G LAN port links at 1 Gbps, but it is not wired to
   an x280 adapter. Management is the 2.5G WAN with an x280-only firewall. For
   full L2 isolation, wire LAN to `enx9c69d3c70689`, give x280

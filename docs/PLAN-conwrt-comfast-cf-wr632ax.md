@@ -1,13 +1,14 @@
 # conwrt PR: COMFAST CF-WR632AX tested-hardware enrollment
 
-Status: **PR green, awaiting maintainer merge** (2026-10-26):
+Status: **MERGED upstream** (2026-10-28):
 https://github.com/Amperstrand/conwrt/pull/567
 
-Head: `e950d95` on `feat/comfast-cf-wr632ax-tested`.
+Merged commit: `ab442ffc` on `Amperstrand/conwrt:master`.
+Source head: `e950d95` on `feat/comfast-cf-wr632ax-tested`.
 Validation: `make validate-models` OK; 89 targeted model/transition tests pass.
 GitHub CI: `changes`, `rust`, `firmware-esp32s3`, and `test` (3.10, 3.11, 3.12,
-3.13) all pass; merge state is CLEAN. Only the upstream maintainer merge
-remains.
+3.13) all passed before merge. The CF-WR632AX model is now present on upstream
+`master`; no further enrollment PR remains open.
 
 ## Goal
 
@@ -91,4 +92,4 @@ Only `models/comfast-cf-wr632ax.json`:
 - [x] `validate_models` passes; no false claim that U-Boot recovery was tested.
 - [x] `git diff --check`; no secrets/specimen MAC/serial/IP.
 - [x] PR opens and CI starts.
-- [ ] PR merged by a conwrt maintainer (all checks green).
+- [x] PR merged by a conwrt maintainer as `ab442ffc` (2026-10-28).

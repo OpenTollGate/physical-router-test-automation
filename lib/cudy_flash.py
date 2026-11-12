@@ -215,8 +215,8 @@ OEM_LOGIN_USERNAME = "admin"
 
 URL_ENV = "CUDY_URL"
 #: the vendor password is supplied ONLY via env; there is deliberately no literal
-#: default here.  The repo's lab convention lives in ``tests/browser/admin_spa.spec.mjs``
-#: (see :data:`PASSWORD_CONVENTION_REF`) — read it there, never copy it into code.
+#: default here. The admin SPA spec demonstrates runtime env injection at
+#: ``tests/browser/admin_spa.spec.mjs``; never reintroduce a stored fallback.
 PASSWORD_ENVS = ("CUDY_PASSWORD", "TOLLGATE_LUCI_PASSWORD")
 PASSWORD_CONVENTION_REF = "tests/browser/admin_spa.spec.mjs"
 #: the laptop feed for the vendored blob (Drive file id), for the docs/CLI help

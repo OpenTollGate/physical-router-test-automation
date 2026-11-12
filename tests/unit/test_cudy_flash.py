@@ -562,19 +562,20 @@ def test_the_lock_policy_is_explicit_and_does_not_silently_take_the_bench_flock(
 # ---------------------------------------------------------------------------
 
 
-def test_no_credential_literal_leaks_into_the_new_sources():
-    """The lab default lives in tests/browser/admin_spa.spec.mjs — and ONLY there.
+def test_password_convention_is_runtime_env_only():
+    """The admin SPA and vendor helpers must never require a stored default.
 
-    The literal is *derived from that file at runtime* rather than written here,
-    so this test cannot itself become the leak it guards against.
+    Do not derive a real lab password here: even a regression test may not turn
+    a credential into a committed literal.
     """
     convention = PROJECT_ROOT / cf.PASSWORD_CONVENTION_REF
     assert convention.is_file(), cf.PASSWORD_CONVENTION_REF
-    match = re.search(r"TOLLGATE_LUCI_PASSWORD\s*\|\|\s*'([^']+)'", convention.read_text(encoding="utf-8"))
-    assert match, "the repo's password convention moved — update PASSWORD_CONVENTION_REF"
-    literal = match.group(1)
-    for relative in ("lib/cudy_flash.py", "scripts/cudy-flash.py", "tests/unit/test_cudy_flash.py"):
-        assert literal not in (PROJECT_ROOT / relative).read_text(encoding="utf-8"), relative
+    source = convention.read_text(encoding="utf-8")
+    assert "const password = process.env.TOLLGATE_LUCI_PASSWORD;" in source
+    assert "process.env.TOLLGATE_LUCI_PASSWORD ||" not in source
+    assert "if (!password)" in source
+    # vendor_password() itself is tested below with env cleared and both
+    # documented env names; do not make this contract depend on help prose.
 
 
 def test_vendor_password_comes_from_env_only(monkeypatch):
