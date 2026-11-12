@@ -100,7 +100,7 @@ state/opencode/plugins/hermes-tool-budget/layout.test.ts
 
 ### 6. Final reconciliation
 
-- [ ] Synchronize relevant local default worktrees to their merged tips.
+- [x] Synchronize relevant local default worktrees to their merged tips: automation `main` and gateway `master` match their merged remotes.
 - [x] Verify no gateway candidate commits remain unpushed or unmerged: canonical and lab `master` both equal `869eeea31`.
 - [ ] Once x280 is available, update its automation checkout and verify bench services/lease, without claiming that was done if the host remains down.
 - [x] Record remaining operational item separately from code consolidation: restore x280 availability; this is not a failed or missing code merge.
@@ -123,9 +123,9 @@ Stop before a merge when a fast-forward relationship is lost, an unrelated modif
 | Local default checkout | `mt6000-default` fast-forwarded to `869eeea31` |
 
 The disposable validator PR is https://github.com/c03rad0r/hermes-orchestration/pull/3.
-It is test infrastructure, not a gateway source change, and is to be closed
-without merging after recording the final external automation run. No validator
-commit is included in either production default branch.
+It was test infrastructure, not a gateway source change. PR #3 was closed
+**unmerged**, its remote validation branch deleted, and its worktree removed.
+No validator commit is included in either production default branch.
 
 ## Fixture repairs required by the first automation unit run
 
