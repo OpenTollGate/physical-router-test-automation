@@ -1,7 +1,7 @@
 # Consolidation plan — fleet handoff and gateway mirror
 
-Status: **gateway promoted; automation PR awaiting CI/merge** (2026-11-12)
-Automation branch: `pr/fleet-consolidation-20261112`
+Status: **gateway and automation consolidated; x280 availability remains an operational follow-up** (2026-11-12)
+Automation merge: PR #345, merge commit `cb97881f1a5453fa4e4262a55441fc7fa2153a39`
 Gateway validation branch: `pr/gateway-mirror-validation-20261112`
 
 ## Scope and invariants
@@ -44,7 +44,7 @@ The gateway candidate includes the nine commits already pushed to GitHub plus th
 - [x] Record conwrt PR #567 as merged upstream in both handoff documents.
 - [x] Record the final promoted gateway SHA in the fleet handoff (`869eeea31a227062c7eb60f47fd2d598e6b587c9`).
 - [x] Record only proven x280 reachability: do not claim the fleet was verified while x280 is unreachable.
-- [ ] Update this checklist with test evidence and merge SHAs.
+- [x] Update this checklist with test evidence and merge SHAs.
 
 ### 3. Gateway test gate
 
@@ -94,16 +94,16 @@ state/opencode/plugins/hermes-tool-budget/layout.test.ts
 - [x] Push `pr/fleet-consolidation-20261112` and open automation PR https://github.com/OpenTollGate/physical-router-test-automation/pull/345.
 - [x] Verify the diff contains only the intended handoff/plan changes and no credentials or unrelated files.
 - [x] Hardware-free CI on isolated GitHub-hosted runner: https://github.com/c03rad0r/hermes-orchestration/actions/runs/43317664973 — **SUCCESS** at `05c507d`: pytest collection, **1250 passed, 5 skipped, 3 xfailed**, Ruff, mypy, story coverage, and gitleaks (no leaks).
-- [ ] Validate the exact final documentation-only head, then merge.
-- [ ] Merge with the repository's normal merge method; never force-push `main`.
-- [ ] Verify the resulting `origin/main` contains the documentation and plan.
+- [x] Validate the exact final documentation-only head, then merge: run `43319222998` at `e170300e520df8eb02ac8e7176fadd89381dd804`.
+- [x] Merge with the repository's normal merge method; never force-push `main`: PR #345 merged as `cb97881f1a5453fa4e4262a55441fc7fa2153a39`.
+- [x] Verify the resulting `origin/main` contains the documentation and plan: merge commit `cb97881`.
 
 ### 6. Final reconciliation
 
 - [ ] Synchronize relevant local default worktrees to their merged tips.
-- [ ] Verify no candidate commits remain unpushed or unmerged.
+- [x] Verify no gateway candidate commits remain unpushed or unmerged: canonical and lab `master` both equal `869eeea31`.
 - [ ] Once x280 is available, update its automation checkout and verify bench services/lease, without claiming that was done if the host remains down.
-- [ ] Record any remaining operational item separately from code consolidation.
+- [x] Record remaining operational item separately from code consolidation: restore x280 availability; this is not a failed or missing code merge.
 
 ## Stop conditions
 
@@ -124,7 +124,8 @@ Stop before a merge when a fast-forward relationship is lost, an unrelated modif
 
 The disposable validator PR is https://github.com/c03rad0r/hermes-orchestration/pull/3.
 It is test infrastructure, not a gateway source change, and is to be closed
-without merging after recording the final external automation run.
+without merging after recording the final external automation run. No validator
+commit is included in either production default branch.
 
 ## Fixture repairs required by the first automation unit run
 
@@ -143,3 +144,21 @@ in the repository. The allowlist covers exactly those unchanged public values,
 with the safety rationale in `.gitleaks.toml`; no new credential allowlisting or
 production behavior change is included. The full offline suite then passed with
 no failures or errors, and gitleaks reported no leaks.
+
+## Completion evidence — automation and remaining operation
+
+```text
+Automation PR              #345 MERGED
+Merge commit               cb97881f1a5453fa4e4262a55441fc7fa2153a39
+Final source validation    run 43319222998, SUCCESS
+Python unit tests          1250 passed, 5 skipped, 3 xfailed
+Lint/type checks           Ruff PASS, mypy PASS
+Secret scan                gitleaks: no leaks found
+Gateway hub + lab mirror   869eeea31a227062c7eb60f47fd2d598e6b587c9
+Conwrt                     PR #567 merged ab442ffc (2026-10-28)
+```
+
+Still **NOT DONE** outside the source consolidation: x280 is unreachable from
+T14 and via cobradorwave. Its automation checkout and bench services were not
+updated or verified. A later operator action must restore that host before any
+claim of current fleet liveness. No such claim is made here.
