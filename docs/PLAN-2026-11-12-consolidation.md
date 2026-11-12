@@ -1,7 +1,7 @@
 # Consolidation plan — fleet handoff and gateway mirror
 
-Status: **in progress** (started 2026-11-12)  
-Automation branch: `pr/fleet-consolidation-20261112`  
+Status: **gateway promoted; automation PR awaiting CI/merge** (2026-11-12)
+Automation branch: `pr/fleet-consolidation-20261112`
 Gateway validation branch: `pr/gateway-mirror-validation-20261112`
 
 ## Scope and invariants
@@ -37,23 +37,24 @@ The gateway candidate includes the nine commits already pushed to GitHub plus th
 - [x] Create the isolated automation integration branch.
 - [x] Fetch gateway remotes and verify `upstream/master` is an ancestor of `github/master`.
 - [x] Create an isolated gateway worktree at the exact GitHub candidate.
-- [ ] Re-check both topology predicates immediately before each merge.
+- [x] Re-check both topology predicates immediately before each merge.
 
 ### 2. Documentation
 
 - [x] Record conwrt PR #567 as merged upstream in both handoff documents.
-- [ ] Record the final promoted gateway SHA in the fleet handoff.
+- [x] Record the final promoted gateway SHA in the fleet handoff (`869eeea31a227062c7eb60f47fd2d598e6b587c9`).
 - [x] Record only proven x280 reachability: do not claim the fleet was verified while x280 is unreachable.
 - [ ] Update this checklist with test evidence and merge SHAs.
 
 ### 3. Gateway test gate
 
-- [ ] Restore x280, or establish an isolated, hardware-free CI lane for the exact candidate SHA.
-- [ ] Run the affected Python gateway suites, including tool-budget tests added to the canonical GitHub default.
-- [ ] Run the declared tool-budget Node tests.
-- [ ] Run the broader hardware-safe project test target if it does not require live credentials or production changes.
-- [ ] Check `git diff --check upstream/master...candidate` and secret hygiene.
-- [ ] Record exact-head CI/test evidence. Do not merge if tests cannot run or fail.
+- [x] Restore x280, or establish an isolated, hardware-free CI lane for the exact candidate SHA.
+  Used GitHub-hosted CI, run `43304370700`; x280 remains unavailable.
+- [x] Run the affected Python gateway suites, including tool-budget tests added to the canonical GitHub default: **209 passed, 1 skipped**.
+- [x] Run the declared tool-budget Node tests: `node-tool-budget` **SUCCESS** in run `43304370700`.
+- [x] Classify broader project lane: **NOT RUN** — `make test-all` includes live `localhost:7779`/`:9099` service prerequisites and provider-backed tools; not a hardware-free docs gate.
+- [x] Check candidate diff and private-key additions. Eight pre-existing formatting exceptions (Markdown metadata hard breaks and test EOF blank lines) were emitted and allowlisted individually; no new private-key additions.
+- [x] Record exact-head CI evidence: https://github.com/c03rad0r/hermes-orchestration/actions/runs/43304370700 (**SUCCESS** at source SHA `869eeea31a227062c7eb60f47fd2d598e6b587c9`).
 
 Targeted Python files:
 
@@ -82,17 +83,17 @@ state/opencode/plugins/hermes-tool-budget/layout.test.ts
 
 ### 4. Gateway promotion
 
-- [ ] Confirm the candidate equals `github/master` and fast-forwards the still-current lab bare.
-- [ ] Push the tested commit to the lab bare `master`, never forced.
-- [ ] Verify the lab bare equals that exact tested commit.
-- [ ] Verify `27a8303b4` (COMFAST reservation) remains an ancestor.
-- [ ] Synchronize the local gateway default checkout without touching unrelated worktrees.
+- [x] Confirm the candidate equals `github/master` and fast-forwards the still-current lab bare.
+- [x] Push the tested commit to the lab bare `master`: `da5930db..869eeea31`, no force.
+- [x] Read back lab bare `rev-parse master`: `869eeea31a227062c7eb60f47fd2d598e6b587c9`.
+- [x] Verify `27a8303b4` (COMFAST reservation) remains an ancestor.
+- [x] Synchronize `worktrees/mt6000-default` to `869eeea31` by fast-forward; unrelated `gateway-iac` untouched.
 
 ### 5. Automation PR
 
-- [ ] Push `pr/fleet-consolidation-20261112` and open a PR against current `main`.
-- [ ] Verify the diff contains only the intended handoff/plan changes and no credentials or unrelated files.
-- [ ] Require existing hardware-free GitHub CI to pass at the PR head.
+- [x] Push `pr/fleet-consolidation-20261112` and open automation PR https://github.com/OpenTollGate/physical-router-test-automation/pull/345.
+- [x] Verify the diff contains only the intended handoff/plan changes and no credentials or unrelated files.
+- [ ] Require hardware-free CI at the exact PR head: organization Actions is disabled, so run the equivalent pytest/lint/mypy/secret checks in isolated GitHub-hosted CI.
 - [ ] Merge with the repository's normal merge method; never force-push `main`.
 - [ ] Verify the resulting `origin/main` contains the documentation and plan.
 
@@ -106,3 +107,20 @@ state/opencode/plugins/hermes-tool-budget/layout.test.ts
 ## Stop conditions
 
 Stop before a merge when a fast-forward relationship is lost, an unrelated modification appears, a test fails or cannot run on an approved host, the lab bare advances before promotion, or secrets/unrelated files enter the diff.
+
+## Execution evidence — gateway
+
+| Gate | Result |
+|---|---|
+| Exact source | `869eeea31a227062c7eb60f47fd2d598e6b587c9` |
+| CI | https://github.com/c03rad0r/hermes-orchestration/actions/runs/43304370700 |
+| Python | 209 passed, 1 skipped |
+| Node tool-budget | SUCCESS |
+| Broader live-service lane | NOT RUN — see explanation above |
+| Lab mirror before/after | `da5930db..869eeea31` |
+| Mirror read-back | `869eeea31a227062c7eb60f47fd2d598e6b587c9` |
+| Local default checkout | `mt6000-default` fast-forwarded to `869eeea31` |
+
+The disposable validator PR is https://github.com/c03rad0r/hermes-orchestration/pull/3.
+It is test infrastructure, not a gateway source change, and is to be closed
+without merging after recording the final external automation run.
