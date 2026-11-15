@@ -29,6 +29,12 @@ Rule schema (matches matrix.yaml fault.proxy entries):
     match_method: optional HTTP method filter (e.g. "POST")
     action:       drop | delay | status | reset | pass | notify
     status_code:  for action=status (e.g. 429, 500)
+    body:         for action=status — a JSON object sent verbatim instead of
+                  the generic {"fault": ...} marker. This is how a lane
+                  fabricates a mint-SHAPED response: a NUT-19-style 4xx with
+                  code/detail, or a 200 quote-state document with fields the
+                  real mint did not produce (goes with the twin issues
+                  tollgate-module-basic-go#503 / tollgate-module-basic-rust#15)
     delay_ms:     for action=delay
     notify_url:   for action=notify (webhook POSTed before the request is
                   forwarded — blocking, so a lane can act on the trigger,
@@ -73,6 +79,19 @@ class Rule:
             raise ValueError(f"rule {self.id}: unknown action {action!r}")
         self.action = action
         self.status_code = int(spec.get("status_code", 503))
+        body = spec.get("body")
+        if isinstance(body, str):
+            # Folded YAML scalars arrive as strings; decode to an object so
+            # matrix.yaml can carry readable multi-line JSON bodies.
+            try:
+                body = json.loads(body)
+            except ValueError as exc:
+                raise ValueError(
+                    f"rule {self.id}: body must be a JSON object"
+                ) from exc
+        if body is not None and not isinstance(body, dict):
+            raise ValueError(f"rule {self.id}: body must be a JSON object")
+        self.body = body
         self.delay_ms = int(spec.get("delay_ms", 0))
         self.notify_url = spec.get("notify_url", "")
         notify_on = spec.get("notify_on", "request")
@@ -105,6 +124,7 @@ class Rule:
             "match_method": self.match_method,
             "action": self.action,
             "status_code": self.status_code,
+            "body": self.body,
             "delay_ms": self.delay_ms,
             "notify_url": self.notify_url,
             "notify_on": self.notify_on,
@@ -359,7 +379,12 @@ def make_handler(upstream: str):
                         pass
                     return
                 if rule.action == "status":
-                    self._send_json(rule.status_code, {"fault": rule.id, "injected": True})
+                    self._send_json(
+                        rule.status_code,
+                        rule.body
+                        if rule.body is not None
+                        else {"fault": rule.id, "injected": True},
+                    )
                     return
                 if rule.action == "notify" and rule.notify_on == "request":
                     # Blocking by design: lanes use notify to act (e.g. kill the

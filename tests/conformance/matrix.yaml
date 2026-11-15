@@ -487,3 +487,234 @@ scenarios:
       - Mint a token whose embedded URL is lowercase; POST it; settle.
       - Assert one wallet/balance copy (no second DB for the same mint).
     asserts: [no-fund-loss, restart-converges]
+
+  # ---- adversarial additions, 2026-11 (tollgate-module-basic-go#503,
+  # tollgate-module-basic-rust#15) -------------------------------------------
+  # Derived from the CDK saga model (crates/cdk/src/wallet/melt/saga/), the
+  # error_codes.md renumbering (10002 -> 11003/11008), the conduition NUT-13
+  # keyset-collision disclosure (2026-01), and TollGate #1222/#1224. The
+  # `body` field on action=status (faultproxy.py) is what makes the
+  # mint-SHAPED responses below drivable; generic fault markers cannot
+  # exercise classification or recovery logic that parses mint bodies.
+
+  - id: issuer-400-keyset-unknown
+    class: http-fault
+    subset: fast
+    description: >-
+      A definitive issuer refusal wearing a mint's clothes: the proxy
+      answers the backend's POST /v1/swap with 400 and a NUT-style body
+      ({"code": 0, "detail": "keyset <id> unknown"}) while the mint itself
+      stays up (other paths pass through untouched). The #1222 shape: a
+      definitive 4xx from the mint is NOT an outage and NOT an ambiguity —
+      the intent must resolve abandoned/resubmittable, and after the fault
+      clears the SAME token must still be receivable (observed failure:
+      permanently refused against an UNSPENT token).
+    fault:
+      proxy:
+        - match_path: /v1/swap
+          match_method: POST
+          action: status
+          status_code: 400
+          body: {code: 0, detail: "keyset 007311aa2fa58cc8 unknown"}
+          remaining: 3
+    driver:
+      - POST one valid token while the 400 rule is armed; capture the
+        notice/classification the backend reports (issuer fault, not
+        mint-unreachable).
+      - Replay the same token while the fault is still armed (must be
+        refused, never half-applied).
+      - Disarm the rule; replay the SAME token once more.
+      - Assert NUT-07 on the token still answers UNSPENT until the backend
+        redeems it, and the final replay succeeds or refunds.
+    asserts: [no-fund-loss, no-output-reuse, service-or-refund, retry-safe]
+    notes: >-
+      Regression class of tollgate-module-basic-go#1222 (LEG F finding):
+      the misclassification routed a definitive refusal into the
+      outage/ambiguous handling and stranded value at the mint. Needs
+      faultproxy's status action with a body — added 2026-11.
+
+  - id: melt-quote-failed-with-payment-proof
+    class: fault-proxy
+    subset: full
+    description: >-
+      The mint says the melt FAILED but hands over a payment_proof anyway.
+      CDK's hardest-won guard (melt saga: "compensating would let the
+      wallet re-spend proofs the mint has already used"): a FAILED/UNPAID
+      quote that carries a payment_preimage is an irreversible settlement
+      artifact — the wallet must keep the proofs reserved (stay pending)
+      and eventually finalize as paid, never release and re-spend them.
+    fault:
+      proxy:
+        - match_path: /v1/melt
+          match_method: POST
+          action: drop_response
+          remaining: 1
+        - match_path: /v1/melt/quote
+          match_method: GET
+          action: status
+          status_code: 200
+          body: >-
+            {"state": "FAILED", "payment_proof": {"preimage":
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}}
+          remaining: 5
+    driver:
+      - Trigger an outgoing melt; the proxy swallows the melt response
+        (ambiguous outcome).
+      - The backend's quote-state reconciliation reads the shaped FAILED
+        + payment_proof body.
+      - Observe that inputs must NOT be released for re-spend; the
+        operation must not be compensated to failed.
+      - Settle; assert final value state reconciles (paid or explicitly
+        operator-visible pending with the artifact recorded).
+    asserts: [no-fund-loss, no-output-reuse, operator-spendable]
+    notes: >-
+      "Most implementations miss it" (CDK resume.rs guards the onchain
+      reorg/replacement case; Nutshell's wallet would unreserve). Lanes
+      without a melt path may record skip-venue.
+
+  - id: swap-replay-rejected-ladder
+    class: fault-proxy
+    subset: fast
+    description: >-
+      A NUT-19-blind mint: the wallet replays the ORIGINAL swap request
+      after a dropped response (the correct first move), but the mint
+      rejects the replay with 11008 "duplicate outputs" (legacy 10002).
+      The wallet must fall through the ladder — NUT-07 checkstate on the
+      inputs, then NUT-09 restore of the SAME outputs — and must NEVER
+      derive a fresh output range for the same operation.
+    fault:
+      proxy:
+        - match_path: /v1/swap
+          match_method: POST
+          action: drop_response
+          remaining: 1
+        - match_path: /v1/swap
+          match_method: POST
+          action: status
+          status_code: 400
+          body: {code: 11008, detail: "Outputs already signed"}
+          remaining: 2
+    driver:
+      - POST one valid token; the first swap response is dropped.
+      - The backend's reconciliation replays the original swap; the proxy
+        answers 11008.
+      - Observe the recovery ladder — checkstate on inputs, restore of the
+        same outputs, or a compensated retry with a provably fresh range.
+      - Assert via proxy observations that the original B_ set may legitimately be
+        sighted twice (drop + replay); a THIRD, previously-unseen B_ set
+        for the same operation is re-derivation only if the inputs were
+        proven spent — the lane must distinguish, not blanket-assert.
+    asserts: [no-fund-loss, no-output-reuse, service-or-refund]
+    notes: >-
+      TollGate's documented rule ("on 10002 regenerate from a freshly
+      incremented counter") is STRONGER than CDK's replay-first ladder
+      (error_codes.md prescribes no client behavior at all — this is
+      implementation-defined). This scenario pins that the regeneration
+      path is only taken after the original range is provably burned.
+
+  - id: melt-fee-exceeds-reserve
+    class: fault-proxy
+    subset: full
+    description: >-
+      The authenticated fee lookup implies a fee GREATER than the quoted
+      fee_reserve (recovered change is implausibly small). CDK treats
+      recovered-change-implying-fee>reserve as InvalidMintResponse and
+      refuses to finalize; TollGate's paymentjournal (#1231) deliberately
+      records the authenticated cost in full and judges later admission
+      against it. Both are defensible — corrupt-mint rejection vs
+      record-reality — but the wallet must do ONE of them loudly, never
+      finalize a budget that ignores the cost.
+    fault:
+      proxy:
+        - match_path: /v1/melt
+          match_method: POST
+          action: drop_response
+          remaining: 1
+        - match_path: /v1/melt/quote
+          match_method: GET
+          action: status
+          status_code: 200
+          body: >-
+            {"state": "PAID", "change": 1, "payment_proof": {"preimage":
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}}
+          remaining: 5
+    driver:
+      - Prepare an outgoing melt with fee_reserve R; the melt response is
+        dropped; the shaped PAID quote implies fee >> R.
+      - Observe the outcome — either a refused finalization naming the
+        excessive fee (CDK behavior) or a recorded full cost that consumes
+        the remaining budget headroom (TollGate #1231 behavior).
+      - Trigger a subsequent outgoing admission; assert it is judged
+        against the recorded full cost — the excessive fee must not
+        manufacture budget headroom anywhere.
+    asserts: [no-fund-loss, operator-spendable]
+    notes: >-
+      Differential-report material: go vs rust may legitimately diverge
+      here; the invariant is that neither silently finalizes a
+      cost-blind budget. Consumer wiring for #1231 is
+      tollgate-module-basic-go#1231.
+
+  - id: keyset-id-collision-quarantine
+    class: adversarial-mint
+    subset: full
+    description: >-
+      The NUT-13 deterministic-secret collision attack (conduition
+      disclosure, published 2026-01): a malicious mint announces a keyset
+      whose ID collides (under the wallet's derivation) with an honest
+      keyset the wallet already uses, then airdrops tokens on the
+      colliding keyset. A wallet keyed by the legacy reduced-resume scheme
+      re-derives secrets already spent at the honest mint; the attacker
+      redeems them there via NUT-09 probing. The wallet must detect the
+      collision and quarantine, and the honest-mint proofs must remain
+      unstealable.
+    fault:
+      mint_control:
+        action: adversarial-keyset
+        collision: legacy-residue
+    driver:
+      - Register honest mint M1; receive tokens on keyset K1.
+      - Introduce mint M2 announcing keyset K2 crafted to collide with K1
+        under the wallet's derivation keying; airdrop a token on K2.
+      - Observe that the wallet quarantines or refuses K2, never merging
+        it into the K1 counter space.
+      - From the attacker vantage, probe M1's NUT-09 restore for the
+        re-derived range — nothing new may become redeemable.
+    asserts: [no-fund-loss]
+    notes: >-
+      Requires a mint fixture that can compute colliding keyset IDs
+      (mint_control: adversarial-keyset — a new capability, lanes record
+      pending-venue until a fixture provides it). Keyset-ID v2
+      (HMAC-SHA256 over the full ID) is the spec'd mitigation; lanes
+      running v2-only wallets still drive it to prove the quarantine
+      layer exists. gonuts keyset-characterization context:
+      tollgate-module-basic-go#952.
+
+  - id: melt-quote-expiry-mid-recovery
+    class: fault-proxy
+    subset: full
+    description: >-
+      The melt quote expires while the wallet is still reconciling the
+      dropped response: the wallet's quote-state lookup happens after the
+      quote's TTL. The mint answers UNPAID (truthfully — the payment
+      never happened). The wallet must compensate cleanly: release the
+      proofs, record the operation failed, and remain retryable — an
+      expired quote must not wedge the saga or leak the reservation.
+    fault:
+      proxy:
+        - match_path: /v1/melt
+          match_method: POST
+          action: drop_response
+          remaining: 1
+        - match_path: /v1/melt/quote
+          match_method: GET
+          action: delay
+          delay_ms: 45000
+          remaining: 2
+    driver:
+      - Trigger an outgoing melt with a short-TTL quote; the response is
+        dropped; the wallet's quote-state lookups are delayed past the
+        TTL.
+      - Let the mint report UNPAID after expiry.
+      - Assert the proofs are released within bounded time and a retry
+        with a fresh quote succeeds.
+    asserts: [no-fund-loss, operator-spendable, retry-safe]
