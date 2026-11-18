@@ -681,9 +681,11 @@ scenarios:
         re-derived range — nothing new may become redeemable.
     asserts: [no-fund-loss]
     notes: >-
-      Requires a mint fixture that can compute colliding keyset IDs
-      (mint_control: adversarial-keyset — a new capability, lanes record
-      pending-venue until a fixture provides it). Keyset-ID v2
+      The fixture exists: adversarial-mint.py (duplicate mode needs no
+      grinding — announce the honest mint's keys verbatim; residue mode
+      consumes a pair ground offline by grind-keyset-collision.py). Lanes
+      remain pending-consumer until a twin wires mint_control:
+      adversarial-keyset to bring the fixture up and drive registration. Keyset-ID v2
       (HMAC-SHA256 over the full ID) is the spec'd mitigation; lanes
       running v2-only wallets still drive it to prove the quarantine
       layer exists. gonuts keyset-characterization context:
