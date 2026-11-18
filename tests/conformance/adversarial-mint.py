@@ -106,7 +106,17 @@ def main() -> int:
             return 2
         with open(args.collision_file) as f:
             pair = json.load(f)
-        keys_doc = pair["adversarial_keys"]
+        raw_keys = pair["adversarial_keys"]
+        if isinstance(raw_keys, str):
+            raw_keys = json.loads(raw_keys)
+        keys_map = raw_keys.get("keys", raw_keys)
+        if isinstance(keys_map, str):
+            keys_map = json.loads(keys_map)
+        # Wrap the ground keys into the /v1/keys document shape, with the
+        # DERIVED id asserted by the grinder's verification (the wallet
+        # re-derives it from the keys — a lying id would fail verification).
+        keys_doc = {"keysets": [{"id": pair["adversarial_id"], "unit": "sat",
+                                 "keys": keys_map}]}
         honest_id = pair["honest_id"]
 
     Handler.keys_doc = keys_doc
