@@ -27,15 +27,16 @@ RESIDUE_MOD = 2**31 - 1
 
 
 def derive_keyset_id_v1(pubkeys_hex: list[str]) -> str:
-    """The fork's DeriveKeysetId shape: binary hash over the sorted keys.
+    """EXACTLY the fork's crypto.DeriveKeysetId (v1), verified against it:
 
-    Mirrors gonuts crypto.DeriveKeysetId (v1): sort the compressed pubkeys,
-    hash the concatenated binary, hex-encode. If the fork's exact v1
-    construction differs, ALIGN THIS with it before trusting the output —
-    the grinder asserts nothing about the target's internals by design.
+        sort by AMOUNT (the caller passes amounts in key order), concatenate
+        the 33-byte compressed pubkeys, sha256, and the ID is
+        "00" + hex(digest)[:14]  — 16 hex chars total.
+
+    Cross-checked by deriving a fork-generated keyset's ID both ways.
     """
-    blob = b"".join(bytes.fromhex(k) for k in sorted(pubkeys_hex))
-    return hashlib.sha256(blob).hexdigest()
+    blob = b"".join(bytes.fromhex(k) for k in pubkeys_hex)
+    return "00" + hashlib.sha256(blob).hexdigest()[:14]
 
 
 def grind(args) -> dict | None:
