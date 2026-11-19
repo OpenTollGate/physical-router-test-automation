@@ -288,15 +288,23 @@ class MockCashuMinter:
         return None
 
     def _fabricate(self, amount: int, mint_url: str) -> str:
-        payload = {
-            "token": [{
-                "mint": mint_url,
-                "proofs": [{
-                    "amount": amount,
+        if amount < 1:
+            raise ValueError(f"mock mint amount must be >= 1, got {amount}")
+        proofs = []
+        remaining = amount
+        for denom in (1 << i for i in range(10, -1, -1)):
+            while remaining >= denom:
+                remaining -= denom
+                proofs.append({
+                    "amount": denom,
                     "id": self.keyset_id,
                     "secret": _secrets_mod.token_hex(16),
                     "C": "02" + _secrets_mod.token_hex(32),
-                }],
+                })
+        payload = {
+            "token": [{
+                "mint": mint_url,
+                "proofs": proofs,
             }],
             "unit": "sat",
             "memo": None,
