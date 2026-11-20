@@ -763,7 +763,9 @@ def adb(request, router):
 def cashu():
     if IS_MOCK_MODE:
         from lib.cashu import MockCashuMinter
-        return MockCashuMinter()
+        return MockCashuMinter(
+            os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
+        )
     mint_url = os.environ.get("TOLLGATE_TEST_MINT_URL", "https://testnut.cashu.exchange")
     minter = create_minter(mint_url)
     for attempt in range(5):

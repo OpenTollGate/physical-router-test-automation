@@ -64,17 +64,28 @@ if [ "${BRINGUP:-1}" = "1" ] && [ "$VENUE" = "virtual" ]; then
       'pgrep -f "dnsmasq.*omarchy-tb" >/dev/null' 2>/dev/null \
       && echo "   note: orphaned omarchy dnsmasq present (no VM) — proceeding"
   RUNNING=$(ssh -o BatchMode=yes ai-legion 'pgrep -c qemu-system' 2>/dev/null || echo 0)
-  if [ "${RUNNING:-0}" -lt 2 ]; then
-    # FRESH_DUT=1 purges the DUT overlay before boot (issue #26: stop/start
-    # reuses the overlay, so a corrupted DUT survives a restart); the default
-    # keeps the reuse behavior for lanes that rely on a provisioned DUT.
-    FRESH_FLAG=""
-    [ "${FRESH_DUT:-0}" = "1" ] && FRESH_FLAG="--fresh"
-    echo "== lab down (${RUNNING} qemu), starting (start-poc ${FRESH_FLAG:-reuse})…"
+  # FRESH_DUT=1 purges the DUT overlay before boot (issue #26: stop/start
+  # reuses the overlay, so a corrupted DUT survives a restart); the default
+  # keeps the reuse behavior for lanes that rely on a provisioned DUT.
+  FRESH_FLAG=""
+  [ "${FRESH_DUT:-0}" = "1" ] && FRESH_FLAG="--fresh"
+  bring_up_lab() {
+    echo "== starting lab (start-poc ${FRESH_FLAG:-reuse})…"
     ssh -o BatchMode=yes ai-legion \
       "sudo bash -c \"cd /root/src/physical-router-test-automation && HOME=/root python3 scripts/virtual-lab.py start-poc --host localhost ${FRESH_FLAG}\"" \
       2>&1 | tee "$OUT/bringup.log" | tail -3 \
       || fail "lab bring-up failed — see $OUT/bringup.log (issue #21 tracks known instability)"
+  }
+  if [ "${RUNNING:-0}" -lt 2 ]; then
+    echo "== lab down (${RUNNING} qemu)"
+    bring_up_lab
+  elif [ -n "$FRESH_FLAG" ]; then
+    echo "== FRESH_DUT=1 with the lab up (${RUNNING} qemu) — stopping for a fresh overlay…"
+    ssh -o BatchMode=yes ai-legion \
+      "sudo bash -c \"cd /root/src/physical-router-test-automation && HOME=/root python3 scripts/virtual-lab.py stop-poc\"" \
+      2>&1 | tee "$OUT/bringup.log" | tail -3 \
+      || fail "lab stop failed — see $OUT/bringup.log"
+    bring_up_lab
   fi
 
 wait_for_vm() {

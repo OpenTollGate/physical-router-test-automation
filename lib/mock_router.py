@@ -386,9 +386,33 @@ def _mock_public_identity() -> dict:
     return {"npub": ident["npub"], "ipv4": ident["ipv4"], "macs": ident["macs"]}
 
 
+_BIP39_ENGLISH: list[str] | None = None
+
+
+def _bip39_english() -> list[str]:
+    global _BIP39_ENGLISH
+    if _BIP39_ENGLISH is None:
+        path = os.path.join(os.path.dirname(__file__), "bip39_english.txt")
+        with open(path, encoding="utf-8") as fh:
+            _BIP39_ENGLISH = [w.strip() for w in fh if w.strip()]
+    return _BIP39_ENGLISH
+
+
 def _is_valid_mock_mnemonic(body: str) -> bool:
+    import hashlib
+
     words = body.strip().split()
-    return len(words) == 12 and all(w.isalpha() and w.islower() for w in words)
+    if len(words) != 12 or not all(w.isalpha() and w.islower() for w in words):
+        return False
+    index = {w: i for i, w in enumerate(_bip39_english())}
+    bits = 0
+    for w in words:
+        if w not in index:
+            return False
+        bits = (bits << 11) | index[w]
+    entropy = (bits >> 4).to_bytes(16, "big")
+    checksum = bits & 0xF
+    return checksum == hashlib.sha256(entropy).digest()[0] >> 4
 
 
 class MockBackendHandler(BaseHTTPRequestHandler):
