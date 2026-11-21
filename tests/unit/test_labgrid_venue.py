@@ -48,17 +48,41 @@ def _router(**overrides) -> RouterEntry:
 
 
 class FakeRunner:
-    def __init__(self, failures: dict[str, str] | None = None):
+    """Minimal place simulator: acquire/release/show/who with real ownership.
+
+    ``show`` must answer, because the wrapper verifies ownership before and
+    after a conditional release — success on ``release-from`` alone proves
+    nothing (the coordinator returns 0 even for a non-matching owner).
+    """
+
+    def __init__(self, failures: dict[str, str] | None = None, owner: str = ""):
         self.calls: list[list[str]] = []
         self.failures = failures or {}
+        self.owner = owner
 
     def __call__(self, cmd, **kwargs):
         self.calls.append(cmd)
         verb = cmd[5] if len(cmd) > 5 else ""
+        env = kwargs.get("env") or {}
+        me = f"{env.get('LG_HOSTNAME', 'fake-host')}/{env.get('LG_USERNAME', 'fake-user')}"
         if verb in self.failures:
             return subprocess.CompletedProcess(
                 cmd, returncode=1, stdout="", stderr=self.failures[verb]
             )
+        if verb == "acquire":
+            self.owner = self.owner or me
+            return subprocess.CompletedProcess(cmd, 0, stdout="acquired place\n", stderr="")
+        if verb == "release-from":
+            target = cmd[6] if len(cmd) > 6 else ""
+            if self.owner == target:
+                self.owner = ""
+            return subprocess.CompletedProcess(cmd, 0, stdout="released\n", stderr="")
+        if verb == "release":
+            self.owner = ""
+            return subprocess.CompletedProcess(cmd, 0, stdout="released\n", stderr="")
+        if verb == "show":
+            held = self.owner if self.owner else "None"
+            return subprocess.CompletedProcess(cmd, 0, stdout=f"  acquired: {held}\n", stderr="")
         return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
 
 
@@ -128,13 +152,15 @@ def test_release_without_acquire_is_noop():
     assert runner.calls == []
 
 
-def test_release_after_acquire_sends_release_once():
+def test_release_after_acquire_verifies_with_show_and_releases_once():
     runner = FakeRunner()
     bench = _bench(runner)
     bench.acquire()
     bench.release()
     bench.release()
-    assert [c[-1] for c in runner.calls] == ["acquire", "release"]
+    verbs = [c[5] if len(c) > 5 else "" for c in runner.calls]
+    # acquire → confirm owner → conditional release → confirm it took effect
+    assert verbs == ["acquire", "show", "release-from", "show"]
 
 
 def test_power_states_map_to_on_off():
@@ -151,15 +177,20 @@ def test_client_failure_surfaces_stderr():
         _bench(runner).acquire()
 
 
-def test_release_clears_acquired_even_on_failure():
-    runner = FakeRunner(failures={"release": "coordinator gone"})
+def test_release_keeps_local_state_and_flags_cleanup_when_remote_fails():
+    """A failed remote release must NOT look like a clean handback.
+
+    The pre-fix wrapper cleared ``_acquired`` in a ``finally``, so a place that
+    stayed held looked released to everyone downstream.
+    """
+    runner = FakeRunner(failures={"release-from": "coordinator gone"})
     bench = _bench(runner)
     bench.acquire()
     with pytest.raises(LabgridBenchError):
         bench.release()
-    # A second release must not hit the (broken) coordinator again.
-    bench.release()
-    assert len(runner.calls) == 2
+    assert bench.acquired is True
+    assert bench.cleanup_pending is True
+    assert runner.owner  # the place is still held: we keep owning the mess
 
 
 # --------------------------------------------------------------------------- #
