@@ -65,7 +65,8 @@
     },
     {
       "name": "bench-e750-lab",
-      "enrolled": true,
+      "enrolled": false,
+      "protected": true,
       "console_enrolled": false,
       "ftdi_serial": "BH00DL3M",
       "baud": 115200,
@@ -83,8 +84,8 @@
         "hostname": "e750-lab"
       },
       "tollgate_installed": false,
-      "console_notes": "Electrically silent at every baud (9600-1500000: floating-RX noise only, no printable bytes) \u2014 the adapter is not on a live UART. Network access is the enrolled lane; console is unverified until the cable/port is physically checked.",
-      "notes": "E750 Mudi (ath79/nand, mips_24kc), stock 25.12.5 (LuCI on 80/443, no TollGate board). The previously 'DARK' FTDI BH00DL3M is this unit's adapter; the console remains dark while SSH works."
+      "console_notes": "NOT TO BE PROBED: this is a PROTECTED PRODUCTION ROUTER (see config/protected_devices.yaml, id e750-production). It was previously described here as 'electrically silent ... unverified until the cable is physically checked', which invited exactly the wrong next step. Do not test the cable, the console or the lane.",
+      "notes": "PROTECTED (production, 2026-11-03). Was enrolled as a bench DUT by mistake; enrolment withdrawn. Its adapter BH00DL3M is in the protected list, so a console guard refuses it before opening the cable. Retained in this file as a RECORD so the adapter is not silently re-enrolled as generic bench kit."
     }
   ]
 }

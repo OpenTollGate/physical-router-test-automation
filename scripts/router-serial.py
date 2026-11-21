@@ -20,9 +20,24 @@ import time
 
 import serial
 
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
+
+from lib.protected_devices import (  # noqa: E402  (path set above)
+    ProtectedDeviceError,
+    assert_not_protected,
+    is_protected,
+    resolve_serial_adapter,
+)
+
 START_MARKER = "___SERIAL_START___"
 END_MARKER_PREFIX = "___SERIAL_END___:"
 LOGIN_PROMPT_RE = re.compile(r"login:", re.IGNORECASE)
+#: The real sentinel: the whole line is the marker plus the exit status. The
+#: board emits "___SERIAL_END___:0". Anchored, because the echoed command line
+#: contains the marker text as a literal and must never be mistaken for it.
+_END_PATTERN = re.compile(re.escape(END_MARKER_PREFIX) + r"(\d+)$")
+#: The echoed command line, whose sentinel text still holds an unexpanded "$?".
+_END_ECHO_PATTERN = re.compile(re.escape(END_MARKER_PREFIX) + r".*\$")
 SHELL_PROMPT_RE = re.compile(r"[#\$]\s*$")
 BUSYBOX_PROMPT_RE = re.compile(r"\S+@[^\s#]+:[^\s#]*#\s*$")
 DEFAULT_BAUD = 115200
@@ -89,6 +104,31 @@ class SerialConnection:
             time.sleep(1.0)
             self.ser.read(READ_SIZE)
 
+    def assert_not_protected_target(self) -> None:
+        """Refuse to drive a protected production/control device.
+
+        The device identifies itself; we do not trust the port name or an
+        operator-supplied label. Both queries are read-only. An unreadable
+        identity is NOT a licence to proceed on a port that looks lab-like —
+        but it is also not proof of protection, so an unreadable device is
+        allowed only when the caller has not asserted it is a test target.
+        """
+        model, model_rc = self.exec_command("cat /tmp/sysinfo/model", timeout=10)
+        board, board_rc = self.exec_command("cat /tmp/sysinfo/board_name", timeout=10)
+        identity = {
+            "model": (model or "").strip(),
+            "board_name": (board or "").strip(),
+        }
+        if model_rc != 0 and board_rc != 0:
+            raise ProtectedDeviceError(
+                f"could not read the identity of {self.port!r} "
+                f"(model rc={model_rc}, board rc={board_rc}); refusing rather than "
+                "assuming this is a lab device. A production gateway must never be "
+                "driven because its identity was unreadable."
+            )
+        assert_not_protected(**{k: v for k, v in identity.items() if v})
+        self.identity = identity
+
     def exec_command(self, command, timeout=DEFAULT_TIMEOUT):
         self._ensure_logged_in()
         marker_cmd = (
@@ -97,56 +137,65 @@ class SerialConnection:
         )
         self.ser.reset_input_buffer()
         self._send_line(marker_cmd)
-        buf = ""
+        # Consume COMPLETE lines from a pending buffer. Re-splitting the whole
+        # accumulated buffer on every read reprocessed every earlier line and
+        # treated a half-received line as output — which truncated a real
+        # answer mid-token on the MT3000.
+        pending = ""
         deadline = time.monotonic() + timeout
         found_start = False
-        found_end = False
         exit_code = -1
         output_lines = []
         while time.monotonic() < deadline:
             data = self.ser.read(READ_SIZE)
-            if data:
-                buf += data.decode("utf-8", errors="replace")
-                lines = buf.split("\n")
-                for line in lines:
-                    stripped = line.strip()
-                    if START_MARKER in stripped:
-                        found_start = True
-                        continue
-                    if END_MARKER_PREFIX in stripped:
-                        match = re.search(
-                            re.escape(END_MARKER_PREFIX) + r"(\d+)", stripped
-                        )
-                        if match:
-                            exit_code = int(match.group(1))
-                        found_end = True
-                        continue
-                    if found_start and not found_end:
-                        clean = stripped
-                        if clean and not BUSYBOX_PROMPT_RE.match(clean):
-                            output_lines.append(clean)
-                if found_end:
-                    return "\n".join(output_lines), exit_code
-            else:
+            if not data:
                 time.sleep(POLL_INTERVAL)
+                continue
+            pending += data.decode("utf-8", errors="replace")
+            while "\n" in pending:
+                line, pending = pending.split("\n", 1)
+                stripped = line.strip()
+                # ANCHORED matches only. The board echoes our command line back,
+                # and that echo CONTAINS both markers as literals
+                # ("echo '___SERIAL_START___'; ... echo \"___SERIAL_END___:$?\"").
+                # A substring test therefore matched the echo and treated it as
+                # the sentinel, returning rc=-1 with no output — measured on a
+                # real board, where the first two of three sequential commands
+                # failed and the third only worked because an earlier read had
+                # already consumed the echo.
+                if stripped == START_MARKER:
+                    found_start = True
+                    continue
+                end_match = _END_PATTERN.match(stripped)
+                if end_match:
+                    exit_code = int(end_match.group(1))
+                    return "\n".join(output_lines), exit_code
+                if end_match is None and _END_ECHO_PATTERN.match(stripped):
+                    # A wrapped echo of the sentinel's own text: still not output.
+                    continue
+                if found_start:
+                    if stripped and not BUSYBOX_PROMPT_RE.match(stripped):
+                        output_lines.append(stripped)
         return "\n".join(output_lines), -1
 
     def wait_pattern(self, pattern, timeout=120):
         regex = re.compile(pattern)
         deadline = time.monotonic() + timeout
-        buf = ""
+        # Same rule as exec_command: only a COMPLETE line can match. Matching a
+        # half-received line lets the caller act on a truncated token.
+        pending = ""
         while time.monotonic() < deadline:
             data = self.ser.read(READ_SIZE)
-            if data:
-                text = data.decode("utf-8", errors="replace")
-                buf += text
-                for line in buf.split("\n"):
-                    if regex.search(line):
-                        return line.strip(), time.monotonic() - (deadline - timeout)
-                if len(buf) > 65536:
-                    buf = buf[-32768:]
-            else:
+            if not data:
                 time.sleep(POLL_INTERVAL)
+                continue
+            pending += data.decode("utf-8", errors="replace")
+            while "\n" in pending:
+                line, pending = pending.split("\n", 1)
+                if regex.search(line):
+                    return line.strip(), time.monotonic() - (deadline - timeout)
+            if len(pending) > 65536:
+                pending = pending[-32768:]
         return None, timeout
 
     def capture_bootlog(self, timeout=180, end_pattern="login:"):
@@ -250,6 +299,11 @@ def main():
     )
     parser.add_argument("--port", required=True, help="Serial port (e.g. /dev/serial-alpha)")
     parser.add_argument("--baud", type=int, default=DEFAULT_BAUD, help=f"Baud rate (default: {DEFAULT_BAUD})")
+    parser.add_argument(
+        "--identity-only",
+        action="store_true",
+        help="report the attached device's identity and exit without running the subcommand",
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Subcommand")
 
@@ -281,6 +335,28 @@ def main():
 
     args = parser.parse_args()
 
+    if args.identity_only:
+        # The cable identity is checked FIRST and without opening anything: a
+        # protected board must be refused even when its shell is too garbled to
+        # answer (measured on the E750, whose serial output is unusable).
+        adapter = resolve_serial_adapter(args.port)
+        cable_protected = bool(adapter) and is_protected(serial_adapters=[adapter])
+        print(f"adapter:    {adapter or 'unidentified'}")
+        print(f"cable:      {'PROTECTED' if cable_protected else ('bench?' if adapter else 'cannot certify')}")
+        try:
+            with SerialConnection(args.port, args.baud) as conn:
+                model, _ = conn.exec_command("cat /tmp/sysinfo/model", timeout=10)
+                board, _ = conn.exec_command("cat /tmp/sysinfo/board_name", timeout=10)
+            ident = {"model": (model or "").strip(), "board_name": (board or "").strip()}
+            print(f"model:      {ident['model'] or '?'}")
+            print(f"board_name: {ident['board_name'] or '?'}")
+            board_protected = is_protected(**{k: v for k, v in ident.items() if v})
+        except Exception as e:  # noqa: BLE001
+            print(f"board identity unreadable: {type(e).__name__}: {e}", file=sys.stderr)
+            board_protected = False
+        print(f"protected:  {bool(cable_protected or board_protected)}")
+        sys.exit(0)
+
     if not args.command:
         parser.print_help()
         sys.exit(1)
@@ -294,6 +370,34 @@ def main():
         args.command = cmd_text
     else:
         args.command = args.command
+
+    # Protected-device gate. Every subcommand passes through here, including
+    # the ones that flash, power-cycle or run state prep -- so the check sits at
+    # the transport entry, not in each verb. --identity-only exists so a caller
+    # can ask what a port is without being allowed to drive it.
+    if not getattr(args, "identity_only", False):
+        # CABLE FIRST. A protected board must be refused before the port is
+        # opened, because the E750's shell garbles every answer — an
+        # after-the-fact identity check never fires on it. Measured 2026-11-03.
+        adapter = resolve_serial_adapter(args.port)
+        if adapter and is_protected(serial_adapters=[adapter]):
+            try:
+                assert_not_protected(serial_adapters=[adapter])
+            except ProtectedDeviceError as e:
+                print(f"REFUSED: {e}", file=sys.stderr)
+                sys.exit(78)
+        try:
+            with SerialConnection(args.port, args.baud) as conn:
+                conn.assert_not_protected_target()
+                identity = getattr(conn, "identity", {})
+        except ProtectedDeviceError as e:
+            print(f"REFUSED: {e}", file=sys.stderr)
+            sys.exit(78)
+        except Exception as e:  # noqa: BLE001 - unreadable identity is a refusal too
+            print(f"REFUSED: could not verify {args.port!r}: {type(e).__name__}: {e}", file=sys.stderr)
+            sys.exit(78)
+        if identity.get("model") or identity.get("board_name"):
+            print(f"==> Target: {identity.get('model','?')} ({identity.get('board_name','?')})", file=sys.stderr)
 
     args.func(args)
 

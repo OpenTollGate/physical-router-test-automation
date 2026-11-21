@@ -106,11 +106,22 @@ def _run_make_delegate(entry: MigrationEntry) -> int:
 
 
 def _run_serial_ops(target: str, args: argparse.Namespace) -> int:
+    from lib.protected_devices import ProtectedDeviceError, assert_console_not_protected
     from lib.serial_console import SerialConsole
 
     port = os.environ.get("TOLLGATE_SERIAL_PORT", "")
     if not port:
         raise SystemExit("TOLLGATE_SERIAL_PORT not set")
+
+    # Refuse the CABLE before opening it. This target runs an arbitrary
+    # `--cmd` as root, and `serial-shell` hands over an interactive root shell —
+    # the highest-consequence console path in the repo, reached for precisely
+    # when a device is misbehaving. The port comes from the environment and was
+    # never validated against what is actually on the other end.
+    try:
+        assert_console_not_protected(port)
+    except ProtectedDeviceError as exc:
+        raise SystemExit(f"REFUSED: {exc}") from None
 
     console = SerialConsole(port)
     if target == "serial-shell":

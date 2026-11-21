@@ -1,0 +1,51 @@
+# The x280 bench exporter configuration, as RUNNING on 2026-11-03.
+#
+# Installed at /etc/labgrid/exporter.yaml and started with:
+#   labgrid-exporter -c x280.fips:20408 -n x280 --hostname x280.fips \
+#       --isolated /etc/labgrid/exporter.yaml
+#
+# Committed here because the previous version lived only in /etc and was
+# therefore invisible to review: the COVR had a cable but no entry, so it
+# reported resource_missing forever and nobody could see why from the repo.
+#
+# TWO BENCH UNITS ARE PRESENT. The production MT6000 gateway and E750 are NOT
+# here and must never be added -- they are refused by cable serial in
+# config/protected_devices.yaml regardless, but an exporter entry would also put
+# them in a coordinator's resource namespace, which is a place they must never
+# appear.
+#
+# NetworkService addresses are recorded as-is and are NOT reachable from this
+# host: there is no interface on 192.168.50.0/24, so SSH to these units times
+# out. Serial is the working path. Do not "fix" an address here to make a test
+# pass -- the reachability gap is a cabling/route fact, not a config typo.
+
+gl-mt3000:
+  RawSerialPort:
+    port: /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BG046H5F-if00-port0
+    speed: 115200
+  NetworkService:
+    address: 192.168.50.205
+    port: 22
+    username: root
+comfast:
+  RawSerialPort:
+    port: /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BG046H14-if00-port0
+    speed: 115200
+  NetworkService:
+    address: 192.168.50.219
+    port: 22
+    username: root
+archy-vm:
+  NetworkService:
+    address: 10.99.99.1
+    port: 22
+    username: root
+tollgate-d8ba:
+  NetworkService:
+    address: 10.212.49.1
+    port: 22
+    username: root
+tollgate-af92:
+  RawSerialPort:
+    port: /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BH00D6DL-if00-port0
+    speed: 115200

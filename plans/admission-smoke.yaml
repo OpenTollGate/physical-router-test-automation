@@ -1,0 +1,12 @@
+name: admission-smoke
+description: "Admission smoke profile — a no-op pytest run used to prove reservation seam"
+matrix:
+  lab: virtual-lab
+  tier: api
+  scope: smoke
+runner: pytest
+pytest:
+  markers: "admission_smoke_never_matches"
+  testpaths: "tests/unit/test_run_admission.py"
+playwright: null
+env: {}

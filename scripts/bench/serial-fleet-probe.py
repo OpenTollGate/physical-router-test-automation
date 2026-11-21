@@ -39,6 +39,53 @@ REPO = Path(__file__).resolve().parent.parent.parent
 DEFAULT_FLEET = REPO / "configs" / "labgrid" / "x280-serial-fleet.json"
 PORT_TEMPLATE = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_{ftdi}-if00-port0"
 
+sys.path.insert(0, str(REPO))
+
+from lib.protected_devices import (  # noqa: E402  (path set above)
+    ProtectedDeviceError,
+    assert_console_not_protected,
+    match_protected,
+)
+
+
+def _refusal(unit: dict, why: str) -> dict:
+    """A protected unit is REPORTED, never silently skipped.
+
+    A bench probe that quietly drops a unit looks identical to a probe that ran
+    clean, which is how a production router stays in the fleet contract for weeks.
+    """
+    return {
+        "unit": unit.get("name", "?"),
+        "protected": True,
+        "console": None,
+        "error": why,
+    }
+
+
+def _guard_unit(unit: dict) -> str | None:
+    """Reason this unit must not be touched, or None when it is safe to probe.
+
+    Two independent checks, because the two incidents of 2026-11-03 arrived by
+    different routes: one unit's adapter was NOT in the protected list at the
+    time, and one was enrolled in this very contract. So: refuse a protected
+    adapter by identity, AND refuse a unit its own contract marks protected.
+    """
+    if unit.get("protected") is True:
+        return (
+            f"unit is marked protected in the fleet contract — refusing to probe "
+            f"{unit.get('name', '?')!r}"
+        )
+    adapter = unit.get("ftdi_serial")
+    if adapter and match_protected(serial_adapters=[adapter]):
+        return f"adapter {adapter} belongs to a protected device — refusing to probe it"
+    port = PORT_TEMPLATE.format(ftdi=adapter) if adapter else None
+    if port:
+        try:
+            assert_console_not_protected(port)
+        except ProtectedDeviceError as exc:
+            return str(exc)
+    return None
+
 SHELL_PROMPT_RE = re.compile(r"[#\$] $")
 LOGIN_RE = re.compile(r"login:", re.IGNORECASE)
 
@@ -95,6 +142,13 @@ IDENTITY_CMD = (
 def probe_console(unit: dict) -> dict:
     port = PORT_TEMPLATE.format(ftdi=unit["ftdi_serial"])
     result = {"unit": unit["name"], "port": port, "console": None, "error": None}
+    why = _guard_unit(unit)
+    if why:
+        # Refuse BEFORE the port is opened: `wake_shell` writes a newline and may
+        # send `root` at a login prompt, which is not a read-only act.
+        refusal = _refusal(unit, why)
+        refusal["port"] = port
+        return refusal
     if not Path(port).exists():
         result["error"] = "by-id port missing (adapter unplugged?)"
         return result
@@ -116,6 +170,12 @@ def probe_console(unit: dict) -> dict:
 def probe_ssh(unit: dict, key: Path, timeout: float = 12.0) -> dict:
     ssh = unit.get("ssh") or {}
     result = {"unit": unit["name"], "ssh": None, "error": None}
+    why = _guard_unit(unit)
+    if why:
+        # The SSH leg authenticates to the device with the bench key. It is not a
+        # read-only audit, so a protected unit is refused here too — the console
+        # guard alone would leave this path open.
+        return _refusal(unit, why)
     if not ssh.get("address"):
         result["error"] = "no ssh address in contract"
         return result
