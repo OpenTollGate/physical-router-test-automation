@@ -15,6 +15,17 @@ Division of labor, so nothing competes:
 - **This document**: the live map — status, queue, sequencing. No rules
   live here.
 
+## QR recognition milestone
+
+PR #340 adds read-only native capability discovery/refusal and host contracts.
+The known exported Settings scanner saves/enables networks and is refused under
+recognition-only authorization. A verified decode-only confirmation boundary is
+required; an owned emulator and exported activity alone are insufficient.
+Separate authorized synthetic experiments launched but did not recognize the QR.
+[Offline framing measurements](qr-framing-prerequisite.md) are not native acceptance.
+Physical association/DHCP/captive stages remain gated.
+See [guest Wi-Fi QR acceptance](guest-wifi-qr-acceptance.md).
+
 ## The shape we are consolidating toward
 
 ```mermaid
@@ -73,6 +84,14 @@ Updated 2026-10-13. Statuses are facts about trackers, not aspirations.
 | 16 | Installer-contract lane wired per-rc into release-check + runbook | module [#925](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/925) | module | **open — sign-off** |
 | 17 | Fail-closed outcomes for required tests (skip ≠ PASS, venue rule) | PRTA [#227](https://github.com/OpenTollGate/physical-router-test-automation/pull/227) | PRTA | **merged**; required-set curation is incremental |
 | 18 | Alpha-rig quick-test entry point (one-command cycle: feed artifact → setup → e2e suite, timed) + pytest rail | PRTA [#274](https://github.com/OpenTollGate/physical-router-test-automation/pull/274) + [#275](https://github.com/OpenTollGate/physical-router-test-automation/pull/275) | PRTA | **merged**; A/B cycles PASS (≈130 s full / 64 s steady), review-hardened, payment E2E over flat L2 proven |
+
+### Guest Wi-Fi QR observation prerequisite
+
+[Restaurant QR acceptance](guest-wifi-qr-acceptance.md) records the separate
+recognition, OS consent, association, DHCP and captive gates. The additive
+`ADBDevice.shell_checked` seam has host-only transport controls; no physical
+QR acceptance result is claimed. Venue authorization, artifact identity and
+phone execution remain prerequisites (portal #102 / module #1204).
 
 ## Milestones ahead (smallest effective first)
 
