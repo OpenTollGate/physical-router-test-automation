@@ -29,16 +29,16 @@ import os
 import re
 from dataclasses import dataclass, field
 
-#: the image the bench was flashed with (OpenWrt 25.12.5 / mediatek-filogic)
-BENCH_IMAGE_FILENAME = "openwrt-25.12.5-mediatek-filogic-glinet_gl-mt3000-squashfs-sysupgrade.bin"
-BENCH_IMAGE_SHA256 = "1ffa6526ea099878e0fc520dc0473e95202c1a470b3eabcd2cd40e9c8eaab8c6"
-BENCH_IMAGE_URL = (
-    "https://downloads.openwrt.org/releases/25.12.5/targets/mediatek/filogic/"
-    + BENCH_IMAGE_FILENAME
-)
-UPSTREAM_SUMS_URL = (
-    "https://downloads.openwrt.org/releases/25.12.5/targets/mediatek/filogic/sha256sums"
-)
+#: the image the bench was flashed with — SINGLE-SOURCED from
+#: configs/test-matrix.yaml via lib/test_matrix.py (env override:
+#: PRTA_OPENWRT_VERSION). Never re-pin these literals here.
+from lib.test_matrix import matrix as _matrix
+
+_M = _matrix()
+BENCH_IMAGE_FILENAME = _M.image_filename
+BENCH_IMAGE_SHA256 = _M.sha256
+BENCH_IMAGE_URL = _M.image_url
+UPSTREAM_SUMS_URL = _M.sha256_sums_url
 
 #: a local copy of the image used by the bench phase (if present)
 LOCAL_IMAGE_CANDIDATES = (
@@ -46,12 +46,7 @@ LOCAL_IMAGE_CANDIDATES = (
     "/tmp/" + BENCH_IMAGE_FILENAME,
 )
 
-REQUIRED_IMAGE_TOKENS = (
-    "openwrt-25.12",  # OpenWrt 25.12.x release
-    "mediatek-filogic",  # target
-    "gl-mt3000",  # device
-    "sysupgrade",
-)
+REQUIRED_IMAGE_TOKENS = _M.required_image_tokens
 
 ECASH_DIR = "/etc/tollgate/ecash"
 TOLLGATE_DIR = "/etc/tollgate"
@@ -371,8 +366,8 @@ def fresh_image_ready_violations(board_output: str, *, expect_arch: str = "aarch
     text = board_output or ""
     if "gl-mt3000" not in text.lower():
         problems.append(f"post-flash board is not glinet,gl-mt3000: {text.strip()[:120]!r}")
-    if "25.12" not in text:
-        problems.append(f"post-flash OpenWrt release is not 25.12.x: {text.strip()[:120]!r}")
+    if _M.family not in text:
+        problems.append(f"post-flash OpenWrt release is not {_M.family}.x: {text.strip()[:120]!r}")
     if expect_arch and expect_arch not in text:
         problems.append(f"post-flash arch is not {expect_arch}: {text.strip()[:120]!r}")
     return problems

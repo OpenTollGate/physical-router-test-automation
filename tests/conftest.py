@@ -326,6 +326,27 @@ def backend(request):
 
 
 @pytest.fixture(scope="session")
+def test_matrix():
+    """The single 'what are we testing on' parameter set
+    (configs/test-matrix.yaml; env override PRTA_OPENWRT_VERSION).
+    Tests parameterize on THIS, never on local version literals."""
+    from lib.test_matrix import matrix
+
+    return matrix()
+
+
+@pytest.fixture(autouse=True)
+def _record_test_matrix(request, test_matrix):
+    """Every recorded result carries its parameters: the junit row for
+    each test gets openwrt_version/target/pkg_manager/... properties,
+    so 'which version was this run on' is answered by the record
+    itself (SSOT layering: docs/version-pins-ssot.md in conwrt)."""
+    for key, value in test_matrix.as_properties().items():
+        request.node.user_properties.append((key, value))
+    yield
+
+
+@pytest.fixture(scope="session")
 def router(request, backend):
     if backend.is_rust_v2:
         # The rust-v2 lane brings up tollgated/mintd/merchantd itself
