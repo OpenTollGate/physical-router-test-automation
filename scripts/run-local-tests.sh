@@ -270,6 +270,21 @@ assert_venue_config() {
   fi
 }
 
+assert_lab_vm_canary() {
+  # prta#21: the network-restart wedge + overlay-rot canary. Runs BEFORE each
+  # suite file so a wedged/rotten venue fails loudly here instead of burning
+  # the file's timeout and tempting a hard reset (the #246 rot path).
+  # Best-effort by design when the canary script is absent (older checkouts).
+  local canary
+  canary="${REPO_DIR}/scripts/lab_vm_canary.sh"
+  [ -x "${canary}" ] || return 0
+  if ! bash "${canary}" "${OPENWRT_IP}" "${PASSWORD}"; then
+    log "LAB-VM CANARY FAILED before ${1:-file} — venue is wedged or rotten"
+    log "Follow the canary's remediation; do NOT hard-reset the QEMU"
+    return 1
+  fi
+}
+
 run_tests() {
   local targets=() flags=()
   local arg
@@ -379,6 +394,7 @@ run_tests() {
     junit_file="${junit_dir}/$(printf '%03d' "${i}")-${base}.xml"
     log "[${i}/${#targets[@]}] ${t}"
     assert_venue_config
+    assert_lab_vm_canary "${t}" || exit 1
     rc=0
     "${timeout_cmd[@]}" python3 -m pytest "${t}" "${pytest_common[@]}" \
       ${client_default} --junitxml="${junit_file}" "${flags[@]}" || rc=$?
