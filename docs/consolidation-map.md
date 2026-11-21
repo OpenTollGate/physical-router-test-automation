@@ -73,6 +73,7 @@ Updated 2026-10-13. Statuses are facts about trackers, not aspirations.
 | 16 | Installer-contract lane wired per-rc into release-check + runbook | module [#925](https://github.com/OpenTollGate/tollgate-module-basic-go/pull/925) | module | **open — sign-off** |
 | 17 | Fail-closed outcomes for required tests (skip ≠ PASS, venue rule) | PRTA [#227](https://github.com/OpenTollGate/physical-router-test-automation/pull/227) | PRTA | **merged**; required-set curation is incremental |
 | 18 | Alpha-rig quick-test entry point (one-command cycle: feed artifact → setup → e2e suite, timed) + pytest rail | PRTA [#274](https://github.com/OpenTollGate/physical-router-test-automation/pull/274) + [#275](https://github.com/OpenTollGate/physical-router-test-automation/pull/275) | PRTA | **merged**; A/B cycles PASS (≈130 s full / 64 s steady), review-hardened, payment E2E over flat L2 proven |
+| 19 | Multi-contributor fleet capacity (detection → reservation → measured speedup) | upstream [#248](https://github.com/OpenTollGate/physical-router-test-automation/issues/248) scope; slice 1 in this PR | PRTA | **slice 1 open** — detection only: authorized multi-fleet manifests + reason-coded capacity. No reservation, no execution gate, no physical qualification |
 
 ## Milestones ahead (smallest effective first)
 

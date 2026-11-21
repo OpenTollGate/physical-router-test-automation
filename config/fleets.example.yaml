@@ -1,0 +1,98 @@
+# Fleet manifest — SCHEMA EXAMPLE ONLY. Every value here is a placeholder.
+#
+# Copy this file somewhere local and fill in real values there; never commit a
+# real manifest. The loader (`lib/fleet_capacity.py:load_manifest`) refuses a
+# path implicitly: contributors select their own file explicitly, so no
+# process is ever pointed at somebody else's fleet by a stray env var.
+#
+# WHY A NEW SCHEMA (not an entry in configs/labgrid/inventory.local.yaml)
+# ----------------------------------------------------------------------
+# The existing inventory describes ONE coordinator plus one PoE switch for
+# ONE owner's bench, and `lib/lab_inventory.py` requires a switch and per-port
+# PoE. A contributor fleet may have no switch at all and its own coordinator;
+# every fleet is an INDEPENDENT authority. So the inventory loader stays an
+# adapter for the physical bench, and this file is the multi-fleet model.
+#
+# HARD RULES ENCODED HERE (the loader enforces each one)
+# -----------------------------------------------------
+# * NO GLOBAL DEFAULT. There is no top-level coordinator, host or place list.
+#   A fleet id that is not declared is an error, never a fallback.
+# * ONE CANONICAL OWNER per physical resource. A place id or alias that
+#   appears under two fleets is REFUSED at load time — including within one
+#   fleet (a place declared twice). Duplicate exports across independent
+#   authorities are unsafe until an owner reconciles them.
+# * CREDENTIALS ARE REFERENCES, never values: `credential_ref` names a
+#   (source, name) pair — e.g. an OpenBao path — and nothing else. Any other
+#   key under a credential block is refused rather than stored.
+# * PERMISSIONS ARE AN ALLOWLIST. `permitted_actions` accepts only
+#   observe/acquire/release/power, and `observe` is mandatory: a fleet that
+#   cannot be observed contributes no capacity.
+# * CAPACITY IS NEVER DISCOVERED. Only `allowed_places` may be assessed or
+#   contacted. No subnet scans, no guessed SSH aliases, no home-directory
+#   inventory sweeps, no discovery by power cycling.
+# * LIMITS ONLY TIGHTEN. `capacity_limits` caps what detection reports; it
+#   never adds capacity an observation did not prove.
+#
+# WHAT THIS SLICE DOES NOT DO
+# ---------------------------
+# No reservation, no execution gate, no acquire, no VM creation, no hardware
+# contact of any kind. Detection and pure decisions only.
+
+schema_version: 1
+
+fleets:
+  # Fleet A — an independent contributor's own lab. Own coordinator, own host
+  # controller, own credential paths. Not Felix's bench, not Felix's namespace.
+  - id: REPLACE_ME_FLEET_A
+    owner: REPLACE_ME_OWNER_A
+    coordinator:                       # labgrid coordinator for THIS fleet only
+      address: REPLACE_ME_HOST_A:20408 # must be host:port
+      credential_ref:                  # reference, never a value
+        source: REPLACE_ME_CRED_SOURCE # e.g. "openbao" / "file" / "env"
+        name: REPLACE_ME_CRED_NAME     # e.g. "secret/fleet/A/coordinator-client"
+    host_controller:                   # host-local admission authority (see #248)
+      endpoint: REPLACE_ME_HOST_A:8099 # the authority that owns this host's lanes
+      credential_ref:
+        source: REPLACE_ME_CRED_SOURCE
+        name: REPLACE_ME_CRED_NAME
+    # Only these may be assessed or contacted. A string entry means kind
+    # `router`; use the mapping form to declare a QEMU lane or to reserve
+    # alias spellings of the SAME physical place (aliases must not appear
+    # under any other fleet).
+    allowed_places:
+      - REPLACE_ME_PLACE_A1
+      - id: REPLACE_ME_LANE_A2         # an existing preprovisioned QEMU lane
+        kind: guest
+    permitted_actions: [observe]       # detection only in this slice
+    capacity_limits:
+      max_concurrent_runs: 1           # this fleet will not run more than one
+      max_idle_guests: 1               # cap on counted idle guests
+      max_new_vm_slots: 0              # do not count host-admission slots yet
+    shared_conflict_ids:               # real conflicts, not "everything"
+      - REPLACE_ME_CONFLICT_RF_A       # e.g. an RF collision domain
+
+  # Fleet B — a second contributor, wholly separate. Different coordinator,
+  # different host controller, different places. Nothing is shared implicitly;
+  # the only thing that can join two fleets is an explicitly named
+  # shared_conflict_id (e.g. one power strip both fleets can switch).
+  - id: REPLACE_ME_FLEET_B
+    owner: REPLACE_ME_OWNER_B
+    coordinator:
+      address: REPLACE_ME_HOST_B:20408
+      credential_ref:
+        source: REPLACE_ME_CRED_SOURCE
+        name: REPLACE_ME_CRED_NAME
+    host_controller:
+      endpoint: REPLACE_ME_HOST_B:8099
+      credential_ref:
+        source: REPLACE_ME_CRED_SOURCE
+        name: REPLACE_ME_CRED_NAME
+    allowed_places:
+      - REPLACE_ME_PLACE_B1
+    permitted_actions: [observe]
+    capacity_limits:
+      max_concurrent_runs: 2
+      max_idle_guests: 0
+      max_new_vm_slots: 0
+    shared_conflict_ids:
+      - REPLACE_ME_CONFLICT_POWER_SHARED  # same power domain as fleet A
