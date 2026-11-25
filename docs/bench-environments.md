@@ -29,14 +29,27 @@ laptop or a human bridge.
 on the router LAN (DHCP — historically `.2`, observed `.127` on
 2026-09-30; don't hardcode the address) + lab wifi.
 
-**Devices:** the **GL-MT3000 "TollGate-326D" @ 192.168.1.1** (OpenWrt
+**Devices:** the **GL-MT3000 "TollGate-326D"** (OpenWrt
 24.10, aarch64_cortex-a53 — MediaTek MT7981, same model family as Env 3's
 units but a DIFFERENT device), plus the Cudy WR3000 hazard documented in
 [bench-device-identity.md](bench-device-identity.md) (two boxes answering
 on `192.168.1.1` — identity pinning is mandatory before destructive steps).
+Historical note: this box was reached at `192.168.1.1` when the doc was
+written (2026-10-01); that address is a **dated observation, not an
+identity** — an address is not a box name. The current address lives in
+the box record (`scripts/bench/boxes/`), resolved via
+`device-identity.sh show`.
 
-**What runs here:** the commissioned live API/SSH tier (PRTA with
-`TOLLGATE_SSH_HOST=192.168.1.1`), portal/captive probes, and the on-device
+**What runs here:** the commissioned live API/SSH tier (PRTA against the
+`mt3000-bench` box — resolve the address from the box record, never from
+this doc:
+
+```sh
+scripts/bench/device-identity.sh verify --name mt3000-bench || exit $?   # pin BEFORE anything destructive
+TOLLGATE_SSH_HOST="$(scripts/bench/device-identity.sh show --name mt3000-bench | sed -n 's/^router_ip=//p')"
+```
+
+), portal/captive probes, and the on-device
 fakewallet-mint work. AI/SSH only unless a commission says otherwise.
 
 **Access:** ONLY through the laptop — ai-legion has no route to
@@ -51,6 +64,15 @@ access is ever wanted, propose it, don't build it.
 **What:** two GL.iNet MT3000 (arm64, OpenWrt 24.10.4) on a NetBird overlay
 (`100.90.41.166` / `100.90.216.248`, AP SSIDs `TollGate-1690` and
 `TollGate-D1C6`, aliases router-alpha/beta).
+
+**ALIAS OVERLOAD — resolve, don't reject.** The `router-alpha` /
+`router-beta` hostnames are NOT exclusive to this environment: the
+WS-AP3915i farm rigs of Environment 1 use the **same aliases**
+(`docs/rig-flash.md`, `configs/labgrid/rig-alpha-stock.yaml`,
+`scripts/rig-flash.sh`). A hostname/alias alone therefore tells you
+nothing about ownership. Never classify a target by the alias — resolve
+it through the labgrid place / rig identity contract (the farm) or the
+box record (the bench) before deciding in-scope or out-of-scope.
 
 **Status: OUT OF SCOPE.** Do not test on them, do not enroll anything of
 ours with them, do not cite them as reachable infrastructure. They appear
@@ -89,6 +111,7 @@ for the `ip route get` discovery recipe. From `cobrador` the MT3000 answers on
 | WS3915i / x1860 / PoE control | Env 1 (labgrid farm) | Ours; use the coordinator |
 | `tollgate-52BE` / `tollgate-A04E`, `10.57.113.1` / `10.63.101.1`, serial on T440/x280 | Env 4 (serial fleet bench) | Ours; reach on the **management net**, not `192.168.1.1` |
 | `192.168.1.1` **from the gateway** | post-install box (Env 4) at a dead address | routes out the WAN — use `ip route get` |
+| `router-alpha` / `router-beta` (alias or hostname alone) | AMBIGUOUS — overloaded (Env 3 NetBird pair AND Env 1 WS-AP3915i farm rigs) | resolve via labgrid place / rig contract / box record before classifying |
 | "MT3000 (arm64)" with no other identity | AMBIGUOUS — must be pinned before use | Identity check mandatory |
 
 ## Bench lane tooling — the x280 serial fleet, measured 2026-10-26
@@ -139,56 +162,3 @@ console scripts for evidence runs):
 routers. A power cycle is a manual bench action; tests must not assume one, and
 the env deliberately declares no PowerPort.
 
-## The confusion this doc exists to kill
-
-| If a session sees... | It is... | Verdict |
-|---|---|---|
-| `TollGate-326D` / `192.168.1.1` | Env 2 (laptop bench) | Ours; test via laptop bridge |
-| `TollGate-1690` / `TollGate-D1C6` / `100.90.x` | Env 3 (external NetBird) | Out of scope |
-| WS3915i / x1860 / PoE control | Env 1 (labgrid farm) | Ours; use the coordinator |
-| `tollgate-52BE` / `tollgate-A04E`, `10.57.113.1` / `10.63.101.1`, serial on T440/x280 | Env 4 (serial fleet bench) | Ours; reach on the **management net**, not `192.168.1.1` |
-| `192.168.1.1` **from the gateway** | post-install box (Env 4) at a dead address | routes out the WAN — use `ip route get` |
-| "MT3000 (arm64)" with no other identity | AMBIGUOUS — must be pinned before use | Identity check mandatory |
-
-## Bench lane tooling — the x280 serial fleet, measured 2026-10-26
-
-Complements Environment 4/5 (and PR #316): the same serial fleet, now with a
-committed enrollment contract, a probe that proves each unit is what it claims,
-and working SSH alongside the consoles.
-
-**The measured map (resolve by FTDI serial, never by index — the index drifts on
-replug):**
-
-| FTDI serial | Unit | Hostname | Identity | SSH (bench key) |
-|---|---|---|---|---|
-| `BG046H14` | COMFAST CF-WR632AX | `comfast-b3ba` | OpenWrt 25.12.5, `aarch64_cortex-a53`, mediatek/filogic | `root@192.168.50.219` |
-| `BG046H5F` | GL-MT3000 | `tollgate-9BD4` | OpenWrt 25.12.5, `aarch64_cortex-a53`, **`tollgate-wrt` installed** | `root@10.110.223.1` (br-private; the WAN-side `192.168.50.205` refuses :22) |
-| `BH00D6DL` | D-Link COVR-X1860 A1 | `tollgate-AF92` | OpenWrt 25.12.5, `mipsel_24kc`, **`tollgate-wrt` installed** | `root@192.168.50.218` |
-| `BH00DL3M` | DARK | — | garbage bytes at 115200 (wrong baud or unpowered) | — |
-
-Two state changes worth recording against older docs:
-
-- The COVR of Environment 5 is **no longer onboarding-only**: it runs
-  `tollgate-wrt` (hostname `tollgate-AF92`), so it is a real mipsel DUT now.
-- PR #316's "serial is the only way in" no longer holds for these units: the
-  bench publickey (`~/.ssh/id_bench` on the bench host, overridable via
-  `TOLLGATE_BENCH_KEY`) is enrolled in dropbear on all three live units. Serial
-  remains the recovery path.
-
-**The contract and the probe** (the committed source of truth — no ad-hoc
-console scripts for evidence runs):
-
-- `configs/labgrid/x280-serial-fleet.json` — enrollment + identity contract,
-  including the DARK port (kept visible, not silently dropped).
-- `configs/labgrid/x280-serial-fleet.yaml` — local-mode labgrid env (no
-  coordinator on this bench; the farm's coordinator is not reachable from the
-  serial fleet hosts).
-- `scripts/bench/serial-fleet-probe.py` — proves console + SSH + identity per
-  enrolled unit; non-zero exit if any enrolled unit fails. Run it before and
-  after every evidence session.
-- `tests/bench/test_serial_fleet_health.py` — the pytest gate over the same
-  contract; skips cleanly on hosts without FTDI consoles.
-
-**No power control on this bench.** The USB hubs switch the *adapters*, not the
-routers. A power cycle is a manual bench action; tests must not assume one, and
-the env deliberately declares no PowerPort.
