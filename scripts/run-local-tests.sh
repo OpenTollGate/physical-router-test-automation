@@ -273,10 +273,28 @@ assert_venue_config() {
 run_tests() {
   local targets=() flags=()
   local arg
-  for arg in "$@"; do
+  # #285: value-taking options must stay PAIRED through this wrapper. The
+  # old split ('-prefixed -> flags, bare -> targets) dropped the value of
+  # '-m EXPR' / '--story LIST' into the target list — pytest then got -m
+  # with no expression (usage error) plus bogus target paths, and the
+  # extensive-test sweep could not run any tier. The space-separated forms
+  # of every known value-taking option (both conftest addoption sets) are
+  # consumed as pairs; '='-forms are single words and pass untouched.
+  while [ $# -gt 0 ]; do
+    arg="$1"
     case "$arg" in
-      -*) flags+=("$arg") ;;
-      *) targets+=("$arg") ;;
+      -m|-k|--story|--tip|--client|--backend|--lab-type|--results|\
+--binary|--expected-pr|--tollgate-branch|--tollgate-run-id|\
+--tollgate-arch|--lock-phase|--preflight)
+        if [ $# -lt 2 ]; then
+          echo "run-local-tests: $arg needs a value" >&2
+          exit 64
+        fi
+        flags+=("$arg" "$2")
+        shift 2
+        ;;
+      -*) flags+=("$arg"); shift ;;
+      *) targets+=("$arg"); shift ;;
     esac
   done
   if [ "${#targets[@]}" -eq 0 ]; then
@@ -287,7 +305,12 @@ run_tests() {
   for t in "${targets[@]}"; do
     if [ -d "${t}" ]; then
       local dir_files
-      dir_files=$(find "${t}" -maxdepth 1 -name 'test_*.py' | sort)
+      # #285: -maxdepth 1 selected only root-level files — a 'tests/'
+      # target ran 4 root files and silently excluded tests/api,
+      # tests/conformance, tests/unit, tests/phone, tests/web…; the
+      # "extensive" sweep reported results for a tiny unrelated subset.
+      # Recurse the whole target tree (sorted, deterministic).
+      dir_files=$(find "${t}" -name 'test_*.py' | sort)
       if [ -n "${dir_files}" ]; then
         while IFS= read -r dir_files; do expanded+=("${dir_files}"); done <<< "${dir_files}"
       else
