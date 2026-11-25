@@ -1,11 +1,25 @@
 # Router 326D — private WiFi (`c08r4d0r-326D`) credentials + connectivity notes
 
 **Date:** 2026-10-05
-**Device:** MT3000 tollgate router, host suffix `326D` (same box as the
-live-commission incident of 2026-10-01; LAN `192.168.1.1`).
-**Access path used:** SSH `root@192.168.1.1` over USB-ethernet (`enp0s20f0u4`,
-NM profile `openwrt-dhcp`, host addr `192.168.1.127/24`). BatchMode key auth
-works; no password needed.
+**Device:** the Env-2 laptop-bench MT3000 tollgate router, host suffix `326D`
+(same box as the live-commission incident of 2026-10-01) — identified by its
+box record in `scripts/bench/boxes/`, NOT by an address.
+**Access path used (2026-10-05, historical):** SSH `root@192.168.1.1` over
+USB-ethernet (`enp0s20f0u4`, NM profile `openwrt-dhcp`, host addr
+`192.168.1.127/24`). BatchMode key auth works; no password needed.
+
+**Source of truth — this doc is a dated incident record, not a live
+inventory.** Every concrete address, interface name, SSID, and subnet below
+is a 2026-10-05 observation kept for the lesson; do NOT copy them as current
+values. Current addressing/inventory: the box record +
+`scripts/bench/device-identity.sh` (`verify` before anything destructive,
+`show` to resolve). Current credentials: the credentials store. Remaining
+owner actions from the 2026-10-21 audit of this doc (the credential finding):
+(a) confirm/complete the rotation of both keys recorded here (the working
+tree was redacted 2026-10-06, commit `acbc531`; rotation of live keys is the
+irreversible half and stays an owner step), and (b) the pre-redaction
+plaintext still exists in git history (the `5bb1ded` lineage) — a history
+purge is an owner-gated rewrite, not a doc edit.
 
 ## TL;DR
 
