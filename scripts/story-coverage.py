@@ -9,6 +9,9 @@ Static scan (no test run needed): walks the test tree, reads
   * per-persona story tables (story -> proving tests -> status)
   * the TIP conformance matrix (spec item -> proving tests)
   * coverage stats
+  * a "marked but not collectable" list — files carrying marks that pytest
+    would collect ZERO test items from (standalone-runner harnesses with
+    a ``main()``). Marker text alone is not coverage (#296).
 
 Marks are the single source of truth; this file is generated — do not edit
 by hand. Regenerate:  python3 scripts/story-coverage.py
@@ -16,6 +19,7 @@ by hand. Regenerate:  python3 scripts/story-coverage.py
 
 from __future__ import annotations
 
+import ast
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -37,6 +41,63 @@ STORY_RE = re.compile(r'pytest\.mark\.story\("([A-Z]+\d+)"\)')
 TIP_RE = re.compile(r'pytest\.mark\.tip\("(TIP-\d+)"\)')
 
 
+def collects_tests(text: str) -> bool:
+    """Would pytest collect at least one test item from this file?
+
+    #296: a file can carry story/tip marker text yet collect NOTHING (a
+    standalone runner with a custom TestResult class and a main()); its
+    marks then claimed stories Covered with no proving test behind them.
+    Faithful-enough static approximation of pytest's rules: module-level
+    ``def test_*`` (sync or async) or ``test_*`` methods on ``Test*``
+    classes.
+    """
+    import warnings
+
+    try:
+        with warnings.catch_warnings():
+            # scanned files may carry their own SyntaxWarnings (invalid
+            # escape sequences in comments/docstrings) — not ours to gate
+            warnings.simplefilter("ignore", SyntaxWarning)
+            tree = ast.parse(text)
+    except SyntaxError:
+        return False
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith("test"):
+                return True
+        elif isinstance(node, ast.ClassDef):
+            if not node.name.startswith("Test"):
+                continue
+            for sub in node.body:
+                if (
+                    isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and sub.name.startswith("test")
+                ):
+                    return True
+    return False
+
+
+def scan_tests() -> tuple[dict[str, dict[str, list[str]]], dict[str, dict[str, list[str]]]]:
+    """(collectable, uncollectable): file -> {"stories": [...], "tips": [...]}"""
+    found: dict[str, dict[str, list[str]]] = {}
+    dead: dict[str, dict[str, list[str]]] = {}
+    for root in TEST_ROOTS:
+        base = REPO / root
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("test_*.py")):
+            rel = path.relative_to(REPO).as_posix()
+            text = path.read_text(errors="replace")
+            stories = sorted(set(STORY_RE.findall(text)))
+            tips = sorted(set(TIP_RE.findall(text)))
+            if stories or tips:
+                if collects_tests(text):
+                    found[rel] = {"stories": stories, "tips": tips}
+                else:
+                    dead[rel] = {"stories": stories, "tips": tips}
+    return found, dead
+
+
 def load_catalog() -> dict[str, dict[str, str]]:
     catalog: dict[str, dict[str, str]] = {}
     line_re = re.compile(
@@ -49,26 +110,9 @@ def load_catalog() -> dict[str, dict[str, str]]:
     return catalog
 
 
-def scan_tests() -> dict[str, dict[str, list[str]]]:
-    """file -> {"stories": [...], "tips": [...]}"""
-    found: dict[str, dict[str, list[str]]] = {}
-    for root in TEST_ROOTS:
-        base = REPO / root
-        if not base.is_dir():
-            continue
-        for path in sorted(base.rglob("test_*.py")):
-            rel = path.relative_to(REPO).as_posix()
-            text = path.read_text(errors="replace")
-            stories = sorted(set(STORY_RE.findall(text)))
-            tips = sorted(set(TIP_RE.findall(text)))
-            if stories or tips:
-                found[rel] = {"stories": stories, "tips": tips}
-    return found
-
-
 def main() -> int:
     catalog = load_catalog()
-    marks = scan_tests()
+    marks, dead = scan_tests()
 
     story_tests: dict[str, list[str]] = defaultdict(list)
     tip_tests: dict[str, list[str]] = defaultdict(list)
@@ -124,8 +168,26 @@ def main() -> int:
         lines += [f"- `{rel}`" for rel in unmarked]
         lines.append("")
 
+    if dead:
+        lines += [
+            "## Marked files pytest cannot collect",
+            "",
+            "These carry story/tip marker text but would yield ZERO test items to",
+            "`pytest --collect-only` (standalone-runner harnesses) — marker text alone",
+            "is not coverage (#296), so they are excluded from the tables above.",
+            "Register real tests in them or drop the marks:",
+            "",
+        ]
+        for rel, info in sorted(dead.items()):
+            carried = ", ".join(info["stories"] + info["tips"]) or "?"
+            lines.append(f"- `{rel}` (carries: {carried})")
+        lines.append("")
+
     OUT.write_text("\n".join(lines) + "\n")
-    print(f"wrote {OUT.relative_to(REPO)} ({len(marks)} marked files, {len(tip_tests)} TIPs)")
+    print(
+        f"wrote {OUT.relative_to(REPO)} "
+        f"({len(marks)} marked files, {len(dead)} uncollectable, {len(tip_tests)} TIPs)"
+    )
     return 0
 
 
