@@ -3,34 +3,51 @@
 START=95
 USE_PROCD=1
 
-PROG=/usr/bin/tollgate-wrt
-PIDFILE=/var/run/tollgate-wrt.pid
-
 EXTRA_COMMANDS="status"
 EXTRA_HELP="        status          Check service status"
 
+PROG=/usr/bin/tollgate-wrt
+PIDFILE=/var/run/tollgate-wrt.pid
+
+# The money path a customer or an operator actually needs (see status_service).
+API_PORT=2121
+API_SOCKET=/var/run/tollgate.sock
+
 start_service() {
+    # Wallet storage (every boot): re-attach the ext4 loop image when the
+    # wallet dir sits on an mmap-incapable overlay (#583/#1035). The ONE
+    # declaration of the policy lives in the shared lib; this is only its
+    # boot-time consumer. Before the backend starts, so bbolt never opens
+    # a wallet.db on jffs2.
+    if [ -f /usr/lib/tollgate/wallet-storage.sh ]; then
+        . /usr/lib/tollgate/wallet-storage.sh
+        ensure_wallet_storage 2>&1 | logger -t tollgate-wrt -p daemon.warn || true
+        if [ -f /etc/tollgate/wallet-storage.failed ]; then
+            logger -s -t tollgate-wrt -p daemon.err "CRITICAL: wallet storage bring-up failed at install (see /etc/tollgate/wallet-storage.failed) — the wallet starts degraded until the storage is fixed"
+        fi
+    fi
+
     # Start cron daemon
     /etc/init.d/cron start
-
+    
     # Now start the TollGate service
     procd_open_instance
-    procd_set_param command "$PROG"
-
+    procd_set_param command /usr/bin/tollgate-wrt
+    
     # Set working directory explicitly to /
     procd_set_param directory /
-
+    
     # Ensure logs are saved
     procd_set_param stdout 1
     procd_set_param stderr 1
     procd_set_param file /tmp/tollgate-debug.log
-
+    
     # Set environment variables
     procd_set_param env TOLLGATE_DEBUG=1
-
+    
     # Add dependency on nodogsplash
     procd_set_param depends nodogsplash
-
+    
     # Add respawn parameters: tries 3 times with 5-second intervals and retries indefinitely
     procd_set_param respawn 3 5 0
 
@@ -39,19 +56,45 @@ start_service() {
 
     procd_close_instance
 
+    # Fail loudly when the guards' interfaces are missing (#757's ask): the
+    # nft guards silently dropping a renamed bridge's traffic is the exact
+    # blind spot this replaces — a WARN naming the expected interface turns
+    # a client-side mystery into one logread line.
+    _portal_if="$(uci -q get nodogsplash.@nodogsplash[0].gatewayinterface 2>/dev/null || echo br-lan)"
+    if ! ip link show "$_portal_if" >/dev/null 2>&1; then
+        logger -s -t tollgate-wrt -p user.warn "WARN: the captive-portal interface '$_portal_if' (nodogsplash gatewayinterface) does not exist on this router — the nft guards and nodogsplash itself cannot serve it; rename follow-up missing? (#757)"
+    fi
+
     # Log the start for debugging
     echo "TollGate basic started with nodogsplash" > /tmp/basic.log
+}
+
+# Operator edits to nodogsplash uci (pre-auth allowlist changes among them)
+# re-render the injected FORWARD allowlist and reload the firewall — WITHOUT
+# bouncing the daemon (#754: the allowlist must track uci, and nodogsplash's
+# own restart reloads nothing in /etc/nftables.d, which fw4 owns).
+service_triggers() {
+    procd_add_reload_trigger nodogsplash
+}
+
+reload_service() {
+    # Both nft fragments derive from config nodogsplash feeds on: the -2
+    # pre-auth allowlist (#754) and the interface defines the guards
+    # resolve (#757). One commit, one converge, no daemon bounce.
+    /usr/local/bin/tollgate-nds-preauth-render --reload
+    /usr/local/bin/tollgate-nft-interfaces-render --reload
 }
 
 # procd terminates its own instance after this hook. Anything it does NOT
 # own — a manual/setsid start, a leftover debug session — must be swept
 # here: a stray holder of :2121 outlives every service restart and keeps
 # serving stale in-memory state (rate limiter, wallet caches) while the
-# procd instance crash-loops on the busy port (Amperstrand/
-# tollgate-module-basic-rust#27 — the rust port inherited this script's
-# logging-only stop() verbatim). This hook must be stop_service(), never
-# an overridden stop() — the override replaces rc.common's procd_kill
-# teardown and broke restart/stop entirely.
+# procd instance crash-loops on the busy port. This is the supported hook
+# (rc.common's stop() calls stop_service before killing its instances);
+# the file-local stop() this replaces was DEAD CODE under USE_PROCD=1 —
+# rc.common defines stop() after sourcing the init file (same mechanics
+# the status_service note below documents for status()) — so it never
+# ran, and only misled readers into thinking stop was handled (#1208).
 stop_service() {
     local pids tries
 
@@ -71,14 +114,77 @@ stop_service() {
     echo "TollGate basic stopped and nodogsplash disabled" >> /tmp/basic.log
 }
 
-status() {
-    if pgrep -f "^${PROG}" >/dev/null; then
-        echo "TollGate basic is running"
-        nds_status=$(/etc/init.d/nodogsplash status)
-        echo "NoDogSplash: $nds_status"
-        return 0
-    else
-        echo "TollGate basic is not running"
+# ---------------------------------------------------------------------------
+# status_service(): report the money path, not the pid.
+#
+# rc.common sources this file first and only THEN defines start/stop/status
+# inside its USE_PROCD block, so a status() defined here is dead code — it is
+# overwritten before it can ever run. The supported hook is this function
+# (OpenWrt 25.12 /etc/rc.common, sha256 dd8ae95c78d1...):
+#
+#     status() {
+#         if eval "type status_service" 2>/dev/null >/dev/null; then
+#             status_service "$@"
+#         else
+#             _procd_status ...      # <- answers "is the PROCESS up?"
+#         fi
+#     }
+#
+# _procd_status answers the wrong question on a cold boot: tollgate-wrt is
+# alive for minutes while the wallet still loads, so `status` printed the
+# single word `running` while :2121 was not listening and $API_SOCKET did not
+# exist yet. `tollgate wallet balance` then failed with ENOENT and nothing
+# could be bought. What is reachable is the API listener plus the CLI control
+# socket, so both are reported here.
+#
+# BusyBox applets only — this image has no curl, ss or stat. netstat reads the
+# kernel's listener table (it cannot block on a peer that accepts and then
+# stays silent, unlike nc, and needs no HTTP request); uclient-fetch is the
+# fallback for an image built without netstat; `test -S` needs no applet.
+# ---------------------------------------------------------------------------
+
+_api_probe() {
+    # 0 = something is listening on the API port, 1 = nothing is,
+    # 2 = this image has no usable probe.
+    if command -v netstat >/dev/null 2>&1; then
+        _tg_listeners="$(netstat -tln 2>/dev/null)" || return 2
+        case "$_tg_listeners" in
+            *":$API_PORT "*) return 0 ;;
+            *)               return 1 ;;
+        esac
+    fi
+    if command -v uclient-fetch >/dev/null 2>&1; then
+        # Bounded by -T and it exercises the real HTTP path. Measured with
+        # 25.12.4's uclient-fetch: 0 = 2xx, 8 = server answered non-2xx,
+        # 4 = nothing answered (refused or timeout).
+        uclient-fetch -q -O /dev/null -T 3 "http://127.0.0.1:$API_PORT/" 2>/dev/null
+        case "$?" in
+            0|8) return 0 ;;
+            *)   return 1 ;;
+        esac
+    fi
+    return 2
+}
+
+status_service() {
+    _api_probe
+    _tg_api="$?"
+    if [ "$_tg_api" = 2 ]; then
+        echo "unknown: cannot probe :$API_PORT (no usable netstat or uclient-fetch on this image)"
         return 1
     fi
+    if [ "$_tg_api" != 0 ]; then
+        if [ -S "$API_SOCKET" ]; then
+            echo "not running: nothing listening on :$API_PORT (control socket is up, API still starting)"
+        else
+            echo "not running: nothing listening on :$API_PORT and $API_SOCKET is absent"
+        fi
+        return 1
+    fi
+    if [ ! -S "$API_SOCKET" ]; then
+        echo "not running: API :$API_PORT is listening but $API_SOCKET is absent (CLI commands will fail)"
+        return 1
+    fi
+    echo "running: API :$API_PORT listening and $API_SOCKET present"
+    return 0
 }
