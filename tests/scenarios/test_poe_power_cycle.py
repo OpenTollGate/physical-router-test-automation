@@ -43,9 +43,13 @@ from tollgate_lab.hardware.bench_lock import BenchLockHeldError, acquire_bench_l
 
 try:
     from tollgate_lab.hardware.poe import PoePowerController, PoeStatus
-except ImportError:  # collection-safe: the hardware.poe module lands with the
-    # tollgate-lab PoE PR — skip the module until the dependency catches up
-    # instead of breaking the whole CI framework check.
+except ModuleNotFoundError as e:
+    # collection-safe ONLY for the actual absence of the module itself —
+    # the tollgate-lab PoE PR landing cadence. A broken dependency or a
+    # renamed symbol inside an INSTALLED module must fail collection,
+    # not silently skip a broken install (#300).
+    if e.name != "tollgate_lab.hardware.poe":
+        raise
     pytest.skip("tollgate_lab.hardware.poe not in dependency main yet", allow_module_level=True)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent

@@ -33,6 +33,41 @@ PORTAL_INPUT_READY_RE = re.compile(
     r'|Purchase Internet Access'
     r'|Pay \d+.*to get'
 )
+
+# v0.6 tab contract (tests/browser/portal-tab-copy.spec.mjs): the Cashu
+# token input exists ONLY on the Cashu tab (.tollgate-captive-portal-tabs-
+# tab-cashu, active === data-active="true"). The Lightning tab's pay-line
+# copy ("Purchase Internet Access" / "Pay X to get Y") ALSO matches
+# PORTAL_INPUT_READY_RE while carrying no token input — so input readiness
+# must additionally require the Cashu tab to be active before the EditText
+# search (or its any-editable-field fallback) engages a surface.
+CASHU_TAB_MARKER = "tollgate-captive-portal-tabs-tab-cashu"
+
+_NODE_TAG_RE = re.compile(r"<node\b[^>]*>")
+_NODE_BOUNDS_RE = re.compile(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
+_DATA_ACTIVE_TRUE_RE = re.compile(r'data-active=["\']true["\']')
+
+
+def _cashu_tab_state(xml: str):
+    """(center_x, center_y, is_active) for the v0.6 Cashu tab, or None.
+
+    None = no Cashu-tab node in the dump (legacy data-sm portal, or a
+    Lightning-only DOM): the plain PORTAL_INPUT_READY_RE gate is the
+    input-readiness contract there. Scans whole node tags so any
+    attribute quoting style the dump uses (single, double, &quot;-escaped)
+    resolves identically.
+    """
+    for tag in _NODE_TAG_RE.findall(xml):
+        if CASHU_TAB_MARKER not in tag:
+            continue
+        bm = _NODE_BOUNDS_RE.search(tag)
+        if not bm:
+            continue
+        active = bool(_DATA_ACTIVE_TRUE_RE.search(tag.replace("&quot;", '"')))
+        x1, y1, x2, y2 = (int(g) for g in bm.groups())
+        return (x1 + x2) // 2, (y1 + y2) // 2, active
+    return None
+
 PORTAL_AUTHED_RE = re.compile(
     r'data-sm="(?:authed|countdown|usage_dashboard)"'
     r'|remaining'
@@ -438,23 +473,50 @@ class WiFi:
 
         return self._open_portal_via_browser(portal_url, state_pattern, timeout=timeout)
 
-    def _type_token_in_portal(self, token: str, timeout: int = 60) -> bool:
-        """Type a cashu token into the portal's input field and submit."""
-        # Step 1: Wait for portal to be ready
+    def _wait_portal_input_ready(self, timeout: int = 60) -> bool:
+        """Step 1 of token input: wait until the portal is ready FOR INPUT.
+
+        Legacy data-sm portals: the marker gate suffices (no tab
+        contract). v0.6 tab contract: ready means the CASHU tab is
+        data-active — a Lightning-first default shows pay-line copy that
+        matches PORTAL_INPUT_READY_RE while its DOM has no token input
+        (#302); the EditText fallback would then engage the wrong
+        surface. When the wrong tab is active, tap the Cashu tab
+        (bounded re-tap, >=10s apart) and keep waiting.
+        """
         log.info("Waiting for portal to be ready for token input...")
         start = time.time()
+        last_cashu_tap = 0.0
         while time.time() - start < timeout:
             xml = self.adb.ui_xml()
             if PORTAL_INPUT_READY_RE.search(xml):
-                sm = re.search(r'data-sm="(portal_ready|token_typing)"', xml)
-                if sm:
-                    log.info(f"Portal ready for input (state: {sm.group(1)})")
-                else:
-                    log.info("Portal ready for input (v0.6 markers)")
-                break
+                cashu = _cashu_tab_state(xml)
+                if cashu is None:
+                    # Legacy data-sm portal: no tabs, marker gate suffices.
+                    sm = re.search(r'data-sm="(portal_ready|token_typing)"', xml)
+                    if sm:
+                        log.info(f"Portal ready for input (state: {sm.group(1)})")
+                    else:
+                        log.info("Portal ready for input (v0.6 markers)")
+                    return True
+                cx, cy, active = cashu
+                if active:
+                    log.info("Portal ready for input (v0.6 Cashu tab active)")
+                    return True
+                # Tab contract present, wrong tab active: switch to the
+                # Cashu tab (bounded re-tap) and keep waiting.
+                if time.time() - last_cashu_tap > 10:
+                    log.info("v0.6 portal not on the Cashu tab — tapping it")
+                    self.adb.tap(cx, cy)
+                    last_cashu_tap = time.time()
             time.sleep(3)
-        else:
-            log.warning("Portal did not reach portal_ready state")
+        log.warning("Portal did not reach portal_ready state")
+        return False
+
+    def _type_token_in_portal(self, token: str, timeout: int = 60) -> bool:
+        """Type a cashu token into the portal's input field and submit."""
+        # Step 1: wait for input readiness (Cashu-tab-gated on v0.6, #302).
+        if not self._wait_portal_input_ready(timeout=timeout):
             return False
 
         # Step 2: Find and tap the token input field
