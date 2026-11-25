@@ -92,17 +92,24 @@ print(json.dumps(dict(name=name,rcode=h[1]&15,answers=h[3],wire=data.hex(),last_
 
 # Labelled UDP fixture, not a FIPS daemon or an external recursive resolver.
 DNS_FIXTURE = '''import socket,struct,json,sys
-s=socket.socket(socket.AF_INET6,socket.SOCK_DGRAM)
-s.bind((sys.argv[1],53)); s.settimeout(10)
+from pathlib import Path
+ip,port,source,name,answer,count_path=sys.argv[1:]
+s=socket.socket(socket.AF_INET6 if ':' in ip else socket.AF_INET,socket.SOCK_DGRAM)
+s.bind((ip,int(port))); s.settimeout(10)
+count=0
+Path(count_path).write_text('0')
 print('READY labelled UDP DNS fixture',flush=True)
-q,peer=s.recvfrom(4096)
-# dnsmasq adds an EDNS OPT record; echo only the validated question.
-question=b'\\x06public\\x07example\\0\\0\\x01\\0\\x01'
-assert q[12:12+len(question)]==question,q.hex()
-print(json.dumps(dict(fixture='UDP DNS, not FIPS',source=peer[0],query=q.hex())),flush=True)
-a=q[:2]+struct.pack('!5H',0x8180,1,1,0,0)+question+b'\\xc0\\x0c'+struct.pack('!HHIH',1,1,60,4)+socket.inet_aton('192.0.2.73')
-s.sendto(a,peer)
-assert peer[0]==sys.argv[2],peer
+while True:
+ q,peer=s.recvfrom(4096)
+ count+=1
+ Path(count_path).write_text(str(count))
+ # dnsmasq adds an EDNS OPT record; echo only the validated question.
+ question=b''.join(bytes([len(x)])+x.encode() for x in name.split('.'))+b'\\0'+struct.pack('!2H',1,1)
+ assert q[12:12+len(question)]==question,q.hex()
+ assert peer[0]==source,peer
+ print(json.dumps(dict(fixture='UDP DNS, not FIPS',source=peer[0],query=q.hex(),count=count)),flush=True)
+ a=q[:2]+struct.pack('!5H',0x8180,1,1,0,0)+question+b'\\xc0\\x0c'+struct.pack('!HHIH',1,1,60,4)+socket.inet_aton(answer)
+ s.sendto(a,peer)
 '''
 
 
@@ -113,11 +120,16 @@ def exit_probe(r, ns, config, path, dnsmasq):
     ns('dns-wan', 'ip', '-6', 'addr', 'add', exit_ip + '/128', 'dev', 'remote', 'nodad')
     ns('bootstrap', 'ip', '-6', 'route', 'add', exit_ip + '/128', 'dev', 'v3')
     ns('dns-wan', 'ip', '-6', 'route', 'add', router_ip + '/128', 'dev', 'remote')
-    fixture = r.popen_ns('dns-wan', ['python3', '-u', '-c', DNS_FIXTURE, exit_ip, router_ip])
+    loopback = next(line for line in config.splitlines() if line.startswith('server=/fips/'))
+    loop_ip, loop_port = loopback.removeprefix('server=/fips/').split('#')
+    fips_name = 'split-' + os.urandom(8).hex() + '.fips'
+    exit_count, loop_count = r.tmp / 'exit-count', r.tmp / 'loop-count'
+    fixture = r.popen_ns('dns-wan', ['python3', '-u', '-c', DNS_FIXTURE, exit_ip, '53', router_ip, 'public.example', '192.0.2.73', str(exit_count)])
+    local = r.popen_ns('bootstrap', ['python3', '-u', '-c', DNS_FIXTURE, loop_ip, loop_port, loop_ip, fips_name, '192.0.2.74', str(loop_count)])
     daemon = r.popen_ns('bootstrap', [dnsmasq, '--keep-in-foreground', '--conf-file=' + str(path), '--user=nobody', '--group=nogroup', '--pid-file='])
     for attempt in range(30):
-        assert fixture.poll() is None and daemon.poll() is None, 'DNS process exited before readiness'
-        if ':53 ' in ns('dns-wan', 'ss', '-lun').stdout and '10.73.1.1:5353' in ns('bootstrap', 'ss', '-lun').stdout:
+        assert fixture.poll() is None and local.poll() is None and daemon.poll() is None, 'DNS process exited before readiness'
+        if exit_count.exists() and loop_count.exists() and '10.73.1.1:5353' in ns('bootstrap', 'ss', '-lun').stdout:
             break
         time.sleep(0.1)
     else:
@@ -126,9 +138,18 @@ def exit_probe(r, ns, config, path, dnsmasq):
     response = json.loads(ns('dns-guest', 'python3', '-c', PROBE, 'public.example').stdout)
     print(json.dumps(response), flush=True)
     assert response['rcode'] == 0 and response['answers'] == 1 and response['last_ipv4'] == '192.0.2.73', response
-    assert fixture.wait(timeout=3) == 0, 'fixture query/source assertion failed'
+    before = int(exit_count.read_text())
+    assert before == 1, before
+    response = json.loads(ns('dns-guest', 'python3', '-c', PROBE, fips_name).stdout)
+    print(json.dumps(response), flush=True)
+    assert response['rcode'] == 0 and response['answers'] == 1 and response['last_ipv4'] == '192.0.2.74', response
+    time.sleep(0.2)  # bounded observation after the loopback response
+    after = int(exit_count.read_text())
+    assert fixture.poll() is None and local.poll() is None, 'fixture assertion failed'
+    assert int(loop_count.read_text()) == 1 and after == before, 'split query reached exit or missed loopback'
+    print(json.dumps(dict(loopback_listener=loop_ip + ':' + loop_port, loopback_queries=1, exit_queries_before=before, exit_queries_after=after)), flush=True)
     print(json.dumps(dict(expected_router_source=router_ip, exit_listener=exit_ip + ':53')), flush=True)
-    print('PASS exit DNS runtime: one guest public A query answered; fixture verified derived router source', flush=True)
+    print('PASS exit DNS runtime: public A query/source verified; one unique .fips query answered by loopback; exit count unchanged', flush=True)
 
 
 def inside(config, host_net, host_mount, dnsmasq, exit_runtime=False):
@@ -223,7 +244,7 @@ def main():
     mode = p.add_mutually_exclusive_group()
     mode.add_argument('--inside', nargs=2)
     mode.add_argument('--parse-only', action='store_true', help='test pinned RenderExitDNS output; no sudo, service or network setup')
-    p.add_argument('--exit-runtime', action='store_true', help='one public A query through unchanged exit config to labelled IPv6 UDP fixture')
+    p.add_argument('--exit-runtime', action='store_true', help='public and unique .fips A queries through unchanged exit config to labelled UDP fixtures')
     args = p.parse_args()
     if args.exit_runtime and args.parse_only:
         p.error('--exit-runtime and --parse-only are mutually exclusive')

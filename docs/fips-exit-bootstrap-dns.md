@@ -1,6 +1,6 @@
 # Bootstrap DNS: real dnsmasq, isolated namespace
 
-## Single-query exit runtime fixture
+## Exit and loopback split runtime fixtures
 
 ```sh
 python3 scripts/fips-exit-bootstrap-dns.py --exit-runtime \
@@ -15,12 +15,16 @@ port 53; the guest gets NOERROR / 192.0.2.73, and the fixture asserts the observ
 source is derived router IPv6 `fd13:2f39:a98c:31ba:addb:a652:5f5d:43f2`.
 The fixture handles dnsmasq's appended EDNS OPT without echoing it as an answer
 (an initial run rejected that OPT record, then cleaned up successfully).
-The successful run exits 0, reaps both children and verifies the private namespace
+One unique `split-<random>.fips` A query then receives 192.0.2.74 from the same
+UDP fixture bound to the generated loopback endpoint `127.0.0.1:5354`. Its query
+count is 1; the still-running exit fixture count stays 1 before/after that query
+(including a bounded 200 ms observation after the response).
+The successful run exits 0, reaps all three children and verifies the private namespace
 registry and temporary paths are empty. It reuses the existing Runner and isolated
 mount/network harness; host resolver/network and module sources are unchanged.
 
-This is IPv6 veth plus a **synthetic UDP DNS fixture, not real FIPS**. No `.fips`
-split, portal, down-state, leakage, payment, hardware or production tests run in
+This is IPv6 veth plus **synthetic UDP DNS fixtures, not real FIPS**. No
+portal, down-state, exhaustive leakage, payment, hardware or production tests run in
 this mode. It does not run the bootstrap probes or WAN counter controls below.
 
 
