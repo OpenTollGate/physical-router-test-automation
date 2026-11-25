@@ -30,7 +30,7 @@ def render(repo):
     with tempfile.TemporaryDirectory(prefix='prta-render-') as temp:
         root = Path(temp)
         (root / 'fips_exit').mkdir()
-        for name in ('address.go', 'config.go', 'render.go'):
+        for name in ('address.go', 'config.go', 'render.go', 'plan.go'):
             data = subprocess.check_output(['git', '-C', repo, 'show', f'{PIN}:src/fips_exit/{name}'])
             (root / 'fips_exit' / name).write_bytes(data)
         (root / 'go.mod').write_text('module fixture\n\ngo 1.22\n')
@@ -42,20 +42,85 @@ func main() {
  GuestInterface:"guest-test", FIPSInterface:"mesh-test", TunnelInterface:"exit-test",
  RoutingTable:200, RulePriority:10000, MTU:1240}
  fragment, err := f.RenderFW4(c, c.GuestInterface); if err != nil { panic(err) }
- _, inner := f.Derive(c.LocalPublicKey)
- json.NewEncoder(os.Stdout).Encode(map[string]string{"fragment":fragment,"inner":inner.String()})
+ outer, inner := f.Derive(c.LocalPublicKey)
+ peerOuter, peerInner := f.Derive(c.ExitPublicKey)
+ // Synthetic fixture attestations, not FIPS/NDS readiness evidence.
+ e := f.Environment{Interfaces:map[string]int{"guest-test":1500,"mesh-test":1500},
+ LocalPublicKey:c.LocalPublicKey, LocalFIPSAddress:outer,
+ Verified:true, TunnelNameUnused:true, TableUnused:true, RulePriorityUnused:true,
+ AddressesConflictFree:true, PolicyOrderSafe:true, OuterRouteVerified:true}
+ g := f.GuardReadiness{Forwarding:true,DNS:true,NativeIPv6:true,NAT:true,MSS:true,PortalAuthorization:true}
+ ops, err := f.BuildPlan(c,e,g); if err != nil { panic(err) }
+ if err := f.ValidateOperations(c,g,ops); err != nil { panic(err) }
+ json.NewEncoder(os.Stdout).Encode(map[string]interface{}{"fragment":fragment,"inner":inner.String(),
+ "outer":outer.String(),"peer_outer":peerOuter.String(),"peer_inner":peerInner.String(),"operations":ops})
 }
 ''')
         return json.loads(subprocess.check_output(['go', 'run', '.'], cwd=root))
 
 
-def inside(payload, host_net, host_mount):
+def ipip6(r, payload):
+    """Kernel-only fixture: exact consumer plan, IPv6 veth replacing FIPS."""
+    def ns(name, *argv):
+        return r.ns(name, list(argv))
+    for name, iface in (('guest', 'guest-test'), ('peer', 'mesh-test')):
+        ns('consumer', 'ip', 'link', 'add', iface, 'type', 'veth', 'peer', 'name', 'remote')
+        ns('consumer', 'ip', 'link', 'set', 'remote', 'netns', name)
+        ns('consumer', 'ip', 'link', 'set', iface, 'up')
+        ns(name, 'ip', 'link', 'set', 'remote', 'up')
+    ns('consumer', 'ip', 'addr', 'add', '10.73.1.1/24', 'dev', 'guest-test')
+    ns('guest', 'ip', 'addr', 'add', '10.73.1.2/24', 'dev', 'remote')
+    ns('guest', 'ip', 'route', 'add', 'default', 'via', '10.73.1.1')
+    for name, iface, local, remote in (
+            ('consumer', 'mesh-test', payload['outer'], payload['peer_outer']),
+            ('peer', 'remote', payload['peer_outer'], payload['outer'])):
+        ns(name, 'ip', '-6', 'addr', 'add', local + '/128', 'dev', iface, 'nodad')
+        ns(name, 'ip', '-6', 'route', 'add', remote + '/128', 'dev', iface)
+    ns('consumer', 'sysctl', '-qw', 'net.ipv4.ip_forward=1')
+    ns('consumer', 'sysctl', '-qw', 'net.ipv4.conf.all.rp_filter=0')
+    ns('consumer', 'sysctl', '-qw', 'net.ipv4.conf.default.rp_filter=0')
+    ns('consumer', 'ping', '-6', '-n', '-c', '1', '-W', '2', payload['peer_outer'])
+    rules = 'table inet fw4 {\ndefine tg_portal_if = "guest-test"\n' + payload['fragment'] + '}\n'
+    subprocess.run(['ip', 'netns', 'exec', 'consumer', 'nft', '-f', '-'],
+                   input=rules, text=True, check=True)
+    for op in payload['operations']:
+        print(json.dumps({'planner_operation': op}), flush=True)
+        # Deliberately no repair/retry/fallback: preserve planner failures.
+        r.ns('consumer', [op['Program'], *op['Args']])
+    ns('peer', 'ip', '-6', 'tunnel', 'add', 'peer-exit', 'mode', 'ipip6',
+       'local', payload['peer_outer'], 'remote', payload['outer'], 'dev', 'remote',
+       'encaplimit', 'none', 'hoplimit', '64')
+    ns('peer', 'ip', 'link', 'set', 'peer-exit', 'mtu', '1240', 'up')
+    ns('peer', 'ip', 'addr', 'add', payload['peer_inner'] + '/32', 'dev', 'peer-exit')
+    ns('peer', 'ip', 'route', 'add', payload['inner'] + '/32', 'dev', 'peer-exit')
+    observation = ('table inet observation { chain observed { type filter hook input priority 0; '
+                   'policy accept; iifname "peer-exit" ip saddr ' + payload['inner'] +
+                   ' ip daddr ' + payload['peer_inner'] + ' icmp type echo-request counter; }; }\n')
+    subprocess.run(['ip', 'netns', 'exec', 'peer', 'nft', '-f', '-'],
+                   input=observation, text=True, check=True)
+    result = ns('guest', 'ping', '-n', '-c', '1', '-W', '2', payload['peer_inner'])
+    print(result.stdout, flush=True)
+    observed = json.loads(ns('peer', 'nft', '-j', 'list', 'chain', 'inet', 'observation', 'observed').stdout)
+    count = sum(expr['counter']['packets'] for item in observed['nftables']
+                for expr in item.get('rule', {}).get('expr', []) if 'counter' in expr)
+    assert count > 0, 'peer did not observe derived inner IPv4 source'
+    print(json.dumps({'peer_observed_snat_source': payload['inner'], 'echo_requests': count}), flush=True)
+    print('PASS: kernel ipip6 guest roundtrip only; not FIPS transport, NDS, or paid service', flush=True)
+
+
+def inside(payload, host_net, host_mount, mode='veth'):
     # Refuse direct execution or a namespace connected to a host interface.
     assert os.geteuid() == 0
     assert os.readlink('/proc/self/ns/net') != host_net
     assert os.readlink('/proc/self/ns/mnt') != host_mount
     links = json.loads(subprocess.check_output(['ip', '-j', 'link']))
-    assert [link['ifname'] for link in links] == ['lo'], links
+    assert any(link['ifname'] == 'lo' for link in links), links
+    # Loading ip6_tunnel creates this inert fallback in every fresh netns.
+    assert all(link['ifname'] == 'lo' or (
+        link['ifname'] == 'ip6tnl0' and link['link_type'] == 'tunnel6'
+        and link['address'] == '::' and link['broadcast'] == '::'
+        and link['operstate'] == 'DOWN' and 'UP' not in link['flags']
+        and link.get('link') is None) for link in links), links
     subprocess.run(['mount', '-t', 'tmpfs', 'tmpfs', '/run/netns'], check=True)
     r = Lane()
     def ns(name, *args):
@@ -88,6 +153,9 @@ def inside(payload, host_net, host_mount):
         for name in NAMES:
             r.run(['ip', 'netns', 'add', name])
             ns(name, 'ip', 'link', 'set', 'lo', 'up')
+        if mode == 'ipip6':
+            ipip6(r, payload)
+            return
         for index, (name, iface) in enumerate((('guest', 'guest-test'), ('peer', 'exit-test'), ('wan', 'wan-test'), ('other', 'other-test')), 1):
             ns('consumer', 'ip', 'link', 'add', iface, 'type', 'veth', 'peer', 'name', 'remote')
             ns('consumer', 'ip', 'link', 'set', 'remote', 'netns', name)
@@ -129,10 +197,11 @@ def main():
         raise RuntimeError('Python optimization disables lane assertions; refused')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--module-repo')
+    parser.add_argument('--mode', choices=('veth', 'ipip6'), default='veth')
     parser.add_argument('--inside', nargs=2, metavar=('HOST_NET', 'HOST_MOUNT'))
     args = parser.parse_args()
     if args.inside:
-        inside(json.load(sys.stdin), *args.inside)
+        inside(json.load(sys.stdin), *args.inside, mode=args.mode)
         return
     if not args.module_repo:
         parser.error('--module-repo is required')
@@ -141,7 +210,7 @@ def main():
     # Private mount namespace prevents named-netns bind mounts escaping to the host.
     subprocess.run(['sudo', '-n', 'unshare', '--mount', '--net', '--propagation', 'private',
                     'env', 'TMPDIR=' + tempfile.gettempdir(), 'python3', str(Path(__file__).resolve()),
-                    '--inside', os.readlink('/proc/self/ns/net'), os.readlink('/proc/self/ns/mnt')],
+                    '--mode', args.mode, '--inside', os.readlink('/proc/self/ns/net'), os.readlink('/proc/self/ns/mnt')],
                    input=json.dumps(payload), text=True, check=True)
 
 
