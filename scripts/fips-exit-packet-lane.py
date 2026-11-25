@@ -14,7 +14,7 @@ import tempfile
 
 # Reuse the canonical netns command runner, not its hardware/radio lifecycle.
 Runner = runpy.run_path(str(Path(__file__).with_name('hwsim-netns-poc.py')))['Runner']
-PIN = 'b2e4f615cff9fa369eb3918406be7d559001f9ad'
+PIN = '3a0077e67be67c23c520978b42be274f3cad9b84'
 NAMES = ('consumer', 'guest', 'peer', 'wan', 'other')
 
 
@@ -25,18 +25,40 @@ class Lane(Runner):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
 
-def render(repo):
+def render(repo, recovery_json=None):
     """Compile unmodified renderer dependencies taken from pinned git objects."""
     with tempfile.TemporaryDirectory(prefix='prta-render-') as temp:
         root = Path(temp)
         (root / 'fips_exit').mkdir()
-        for name in ('address.go', 'config.go', 'render.go', 'plan.go'):
+        for name in ('address.go', 'config.go', 'render.go', 'plan.go', 'recovery.go'):
             data = subprocess.check_output(['git', '-C', repo, 'show', f'{PIN}:src/fips_exit/{name}'])
             (root / 'fips_exit' / name).write_bytes(data)
         (root / 'go.mod').write_text('module fixture\n\ngo 1.22\n')
         (root / 'main.go').write_text('''package main
-import ("encoding/json"; "os"; f "fixture/fips_exit")
+import ("encoding/json"; "fmt"; "io"; "os"; f "fixture/fips_exit")
+func refuse(err error) { fmt.Fprintln(os.Stderr, err); os.Exit(1) }
 func main() {
+ if len(os.Args) == 2 && os.Args[1] == "recovery" {
+  // Plan only: caller-owned evidence is never inferred or executed here.
+  var input struct {
+   Config *f.Config
+   RecoveryEvidence *f.RecoveryEvidence
+   GuardReadiness *f.GuardReadiness
+  }
+  decoder := json.NewDecoder(os.Stdin)
+  decoder.DisallowUnknownFields()
+  if err := decoder.Decode(&input); err != nil { refuse(err) }
+  var extra interface{}
+  if err := decoder.Decode(&extra); err != io.EOF { refuse(fmt.Errorf("expected one JSON object")) }
+  if input.Config == nil || input.RecoveryEvidence == nil || input.GuardReadiness == nil {
+   refuse(fmt.Errorf("Config, RecoveryEvidence and GuardReadiness required"))
+  }
+  ops, err := f.BuildRecoveryPlan(*input.Config, *input.RecoveryEvidence, *input.GuardReadiness)
+  if err != nil { refuse(err) }
+  if err := json.NewEncoder(os.Stdout).Encode(map[string]interface{}{"operations":ops}); err != nil { refuse(err) }
+  return
+ }
+
  c := f.Config{Enabled:true, Selection:f.GuestForwarding,
  LocalPublicKey:[32]byte{1}, ExitPublicKey:[32]byte{2},
  GuestInterface:"guest-test", FIPSInterface:"mesh-test", TunnelInterface:"exit-test",
@@ -56,7 +78,10 @@ func main() {
  "outer":outer.String(),"peer_outer":peerOuter.String(),"peer_inner":peerInner.String(),"operations":ops})
 }
 ''')
-        return json.loads(subprocess.check_output(['go', 'run', '.'], cwd=root))
+        command = ['go', 'run', '.']
+        if recovery_json is not None:
+            command.append('recovery')
+        return json.loads(subprocess.check_output(command, cwd=root, input=recovery_json))
 
 
 def ipip6(r, payload):
@@ -218,14 +243,22 @@ def main():
         raise RuntimeError('Python optimization disables lane assertions; refused')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--module-repo')
+    parser.add_argument('--recovery-json', metavar='FILE',
+                        help='plan only from JSON evidence (use - for stdin); never applies operations')
     parser.add_argument('--mode', choices=('veth', 'ipip6'), default='veth')
     parser.add_argument('--inside', nargs=2, metavar=('HOST_NET', 'HOST_MOUNT'))
     args = parser.parse_args()
+    if args.recovery_json is not None and args.inside:
+        parser.error('--recovery-json cannot be combined with --inside')
     if args.inside:
         inside(json.load(sys.stdin), *args.inside, mode=args.mode)
         return
     if not args.module_repo:
         parser.error('--module-repo is required')
+    if args.recovery_json is not None:
+        raw = sys.stdin.buffer.read() if args.recovery_json == '-' else Path(args.recovery_json).read_bytes()
+        print(json.dumps(render(args.module_repo, raw)))
+        return
     payload = render(args.module_repo)
     print(json.dumps({'module_sha': PIN, 'fragment_sha256': hashlib.sha256(payload['fragment'].encode()).hexdigest(), 'inner': payload['inner']}), flush=True)
     # Private mount namespace prevents named-netns bind mounts escaping to the host.
