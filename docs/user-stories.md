@@ -28,7 +28,7 @@ direct user) · **Maintainer** (release + upstream).
 | G3 | As a guest on a v0.6 portal generation, the same flows work — detection must not regress across portal generations. | `tests/unit/test_portal_markers.py` | Covered — landed via #17 |
 | G4 | As a guest with an expired session, I can re-purchase from the portal (0.6 session-state), and the renewal affordance is honest. | `tests/api/test_session_state*.py`, cashud-side expired-gateway rails | Partial |
 | G5 | As a guest on a phone, the portal works on a real Android browser — not just curl. | `tests/phone/test_rig_phone_payment.py` (fresh_session reset, PR #8) | Partial — rig-dependent |
-| G6 | As a guest, my balance/remaining time is visible on the portal while my session is live. | `tests/api/test_balance_page_reachable.py` | Covered |
+| G6 | As a guest, my balance/remaining time is visible on the portal while my session is live. | `tests/phone/test_data_metering.py`, `test_time_metering.py` (data/time axes); `tests/api/test_balance_page_reachable.py` targets the retired net4sats `:8090` layout and skips on the current built-in portal | Partial — no current-portal balance-render assertion (#293) |
 | G7 | As a guest, a hung backend gives me a clear failure instead of an endless spinner. | Live finding 2026-10-05: backend DOWN/HUNG on :2121 surfaced as opaque timeouts; `tests/unit/test_portal_failure_copy.py` pins the driver contract (bounded stages, propagating named failures) | Partial — lib-level failure contract landed; portal UI copy itself still pending |
 | G8 | As a guest using the CLI/bash client, I get the same answers as the portal. | `tests/api/test_bash_client.py` | Covered |
 
@@ -50,9 +50,9 @@ direct user) · **Maintainer** (release + upstream).
 | ID | Story | Proof | Status |
 |----|-------|-------|--------|
 | M1 | As a merchant, every payment is charged in the advertised currency/denomination — access-denominated pricing is enforced. | `tests/api/test_access_denominated.py` | Covered |
-| M2 | As a merchant, a double-spent token never grants a second session. | `tests/api/test_double_spend.py` | Covered |
-| M3 | As a merchant, concurrent purchases are serialized correctly — no interleaving grants. | `tests/api/test_concurrent_payments.py` | Covered |
-| M4 | As a merchant, swap fees are accounted so my payout matches what the mint actually charged. | `tests/api/test_edge_tokens.py` (token flow, fee shape) | Partial |
+| M2 | As a merchant, a double-spent token never grants a second session. | `tests/api/test_sentinel_error.py` (submits the same token twice, asserts kind=21023); `test_double_spend.py` unmarked 2026-11 — invoice-state checks, not the replay property (#295) | Covered by the replay test |
+| M3 | As a merchant, concurrent purchases are serialized correctly — no interleaving grants. | `tests/api/test_concurrent_payments.py` (distinct-token case xfail'd — parallel payments known to fail; same-token case accepts ≥1 grant), `tests/scenarios/stories/test_concurrent_payments.py` (phone+VM both succeed) | Partial — exactly-once serialization unproven (#293) |
+| M4 | As a merchant, swap fees are accounted so my payout matches what the mint actually charged. | marks removed 2026-11 from `test_edge_tokens`/`test_mint_payout`/`test_swap_regression` (#295): rejection shape, payout-command-success and counter semantics are not fee accounting; see gap register | Gap — no fee-and-payout reconciliation assertion exists |
 | M5 | As a merchant, errors returned to guests never leak internals (sanitized wire copy). | `tests/api/test_error_sanitization.py` | Covered |
 | M6 | As a reseller, my profit-share identity setup round-trips through config without corruption. | `tests/api/test_config_save_identities.py`, cloud-lab reseller configs | Partial |
 
@@ -60,7 +60,7 @@ direct user) · **Maintainer** (release + upstream).
 
 | ID | Story | Proof | Status |
 |----|-------|-------|--------|
-| P1 | As an operator, the commissioned read-only API battery runs against a live router without touching its state. | `tests/api/test_discovery_mints.py` + 3 (runbook Oct-1 rev; executed Oct 4-5) | Partial — probes parked on USB-eth flakiness |
+| P1 | As an operator, the commissioned read-only API battery runs against a live router without touching its state. | `pytest --no-deploy tests/api/test_discovery_mints.py` — the four read-path node IDs (`test_discovery_price_per_step_has_mint_urls`, `test_configured_mints_subset_in_discovery`, `test_unreachable_mint_not_in_discovery`, `test_discovery_mint_count_reasonable`); `test_bad_mint_handled_gracefully` is EXCLUDED (writes config + restarts, #293) | Partial — probes parked on USB-eth flakiness |
 | P2 | As an operator, mint advertisements are validated (kind-10021, pricing present) and unreachable mints are filtered before I test them. | `tests/api/test_discovery_mints.py` | Covered |
 | P3 | As an operator, "backend not ready" vs "backend dead" are distinguishable failures, not opaque timeouts. | `tests/unit/test_backend_readiness.py` | Covered — landed via #18 |
 | P4 | As an operator, tests cannot accidentally mutate a live DUT — read-only Router guards exist and are enforced. | `abandoned/read-only-lane` branch (mutator guards, `--read-only` wiring) | **Gap** — branch parked, needs review/landing |
@@ -77,11 +77,11 @@ direct user) · **Maintainer** (release + upstream).
 |----|-------|-------|--------|
 | P11 | As an operator, the framework's own machinery — locks, runners, collectors, redactors, fixtures — is unit-tested so the bench tooling doesn't rot under me. | `tests/unit/` framework rails | Covered |
 | R1 | As a maintainer, the Go and Rust basic modules behave identically where both exist. | `tests/api/test_go_rust_basic_parity.py` | Covered |
-| R2 | As a maintainer, the Cashu/NUT compatibility matrix is enforced, not aspirational. | `tests/api/test_cashu_compat_matrix.py`, `docs/cashu-compatibility-matrix.md` | Covered |
+| R2 | As a maintainer, the Cashu/NUT compatibility matrix is enforced, not aspirational. | `tests/api/test_cashu_compat_matrix.py` (matrix reconciled 2026-11, #294: the Go column's V4-reject/V2-fatal cells were stale — fixed in gonuts v0.8.0 + tbmg#167), `test_token_formats.py` (the V4/V2 live regressions), AGENTS.md "Cashu Token Version Compatibility" + "Keyset ID compatibility" | Covered |
 | R3 | As a maintainer, token/gateway wire formats stay stable across releases. | `tests/api/test_gateway_token_format.py`, `test_quotes_wireformat*` (rust side) | Covered |
 | R4 | As a maintainer, the FIPS exit-node path is exercised so compliance claims are backed. | `tests/api/test_fips_exit_node.py`, `fips-exit-e2e/` | Covered |
 | R5 | As a maintainer, releases have a green conformance re-run before publish (rc gate). | `conformance/`; rc1 verdict 2026-10-05 (fork-tag handoff pending) | Partial — process gate |
-| R6 | As a maintainer, cryptography is real RNG, never a stub (passwords, keys). | `tests/api/test_crypto_rand_password.py` | Covered |
+| R6 | As a maintainer, cryptography is real RNG, never a stub (passwords, keys). | `tests/api/test_crypto_rand_password.py` — format checks only (both skip without a password in the response); a deterministic stub passes every assertion today (#293) | Partial — no source/binary-level RNG-path or entropy assertion |
 | R7 | As a maintainer, the embedded-portal build stays equivalent to the served portal. | `tests/api/test_embedded_portal.py` | Covered |
 
 ---
@@ -93,3 +93,5 @@ direct user) · **Maintainer** (release + upstream).
 3. ~~**O3-regression**~~ landed — `tests/conformance/test_stray_2121_sweep.py` (stub-harness mirror of tbmg#98; flip to live-bench staging when the sweep reaches upstream).
 4. **O4** — flip the loader row when tbmg hardens bad-JSON handling: today it backs up + serves defaults (pinned in `tests/conformance/tbmg/min_steps_table.json`); the hard-fail change must update that row and `test_tbmg_parser_contract.py` together.
 5. **M4** — swap-fee reconciliation against real mint receipts (fakewallet can't see true fees).
+6. **R6** (#293) — the real-RNG property needs a source/binary-level crypto/rand-path check or an entropy spot-check across many generated passwords; format tests cannot detect a stub.
+7. **M3** (#293) — run the distinct-token concurrency case for real (backend parallel-payment fix first) and require exactly-one grant on the same-token case.

@@ -27,7 +27,11 @@ from urllib.parse import urlparse
 
 import pytest
 
-from lib.helpers import parse_json_or_fail, skip_if_no_mint_health_tracker as _skip_if_no_degraded_support
+from lib.helpers import (
+    parse_json_or_fail,
+    skip_if_no_mint_health_tracker as _skip_if_no_degraded_support,
+    sweep_mint_rejects,
+)
 
 log = logging.getLogger("tollgate.degraded_mode")
 
@@ -157,15 +161,24 @@ def _has_reject_rules(router):
 
 def _check_and_reset_after_block(router):
     if _has_reject_rules(router):
-        log.info("Found leftover iptables REJECT rules, removing them")
-        # The old single "-D OUTPUT -j REJECT" matched no installed spec
-        # (rules carry -d/-p/--dport) and silently failed — loop-delete
-        # every REJECT in OUTPUT instead.
-        router.ssh(
-            "while iptables -L OUTPUT -n 2>/dev/null | grep -q REJECT; do"
-            " R=$(iptables -L OUTPUT -n --line-numbers | awk '/REJECT/{print $1; exit}');"
-            " iptables -D OUTPUT $R; done 2>/dev/null || true"
-        )
+        # #298: the old line-number sweep deleted EVERY REJECT in OUTPUT —
+        # an operator's unrelated REJECT policy was removed after any
+        # degraded-mode test. Scope the reset to the mint specs (mint IP +
+        # the URL's real port — the _block_mints insert spec); no map =
+        # touch nothing rather than delete blind.
+        try:
+            mint_ip_map = _resolve_mint_ips(router, _get_mint_urls(router))
+        except Exception as exc:
+            log.warning("could not derive the mint map for a scoped reset: %s", exc)
+            mint_ip_map = {}
+        if mint_ip_map:
+            log.info("Leftover iptables REJECT rules — sweeping mint specs only")
+            sweep_mint_rejects(router, mint_ip_map)
+        else:
+            log.warning(
+                "Leftover REJECT rules but no mint map — NOT sweeping "
+                "(unrelated operator policy is not ours to delete)"
+            )
 
     code = router.api_status("/")
     if code != 200:

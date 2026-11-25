@@ -14,7 +14,11 @@ from urllib.parse import urlparse
 
 import pytest
 
-from lib.helpers import parse_json_or_fail, skip_if_no_mint_health_tracker as _skip_if_no_degraded_support
+from lib.helpers import (
+    parse_json_or_fail,
+    skip_if_no_mint_health_tracker as _skip_if_no_degraded_support,
+    sweep_mint_rejects,
+)
 
 pytestmark = [pytest.mark.story("O1"),pytest.mark.phone, pytest.mark.slow, pytest.mark.timeout(300), pytest.mark.requires_wifi]
 
@@ -72,7 +76,16 @@ def reset_after_block(router):
     yield
     output = router.ssh("iptables -L OUTPUT -n 2>/dev/null")
     if "REJECT" in output:
-        router.ssh("iptables -D OUTPUT -j REJECT 2>/dev/null || true")
+        # #298 class: the old single "-D OUTPUT -j REJECT" matched no
+        # installed spec (rules carry -d/-p/--dport) — a silent no-op that
+        # left the debris in place. Sweep the mint specs only (a blind
+        # line-number sweep would eat unrelated operator policy); if the
+        # mint map cannot be derived, leave the rules for the runner's
+        # file-boundary sweep.
+        try:
+            sweep_mint_rejects(router, _get_mint_ip_map(router))
+        except Exception:
+            pass
     code = router.api_status("/")
     if code != 200:
         router.restart_backend()
