@@ -106,7 +106,7 @@ Kernel tunnel creation may auto-load the host-shared `ip6_tunnel` module;
 cleanup does not unload it. No host routes/firewall or hardware are touched.
 No spoof tests, FIPS daemon, NDS or paid-service claim are included.
 
-### Tunnel down/up regression (currently failing)
+### Original tunnel down/up regression (RED evidence preserved)
 
 [`evidence/fips-exit-ipip6-down-up.log`](evidence/fips-exit-ipip6-down-up.log)
 records the real exit-1 run on 2026-11-25. Initial roundtrip passed and the
@@ -119,6 +119,42 @@ not return on link-up. The recovery assertion intentionally fails; no route
 repair or planner replay hides the regression. Cleanup confirmed an empty
 private namespace registry. Module code and topology are unchanged.
 This does **not** prove direct-WAN no-fallback: this mode has no WAN decoy.
+
+### Narrow fixture recovery integration
+
+Current pin is `3a0077e67be67c23c520978b42be274f3cad9b84` (including
+`recovery.go`). The earlier RED log above is unchanged. The current ipip6 lane
+reads complete table-200 routes through `fips-exit-routes.py`, snapshots actual
+links (including tunnel parameters and ifindex), addresses, IPv4 rules, IPv6
+routes, forwarding and stateless nft guards. It compares these with its own
+successful installation in fresh private namespaces, before planning and again
+immediately before execution. This is fixture ownership, not a general-purpose
+collector or a name-based production ownership assertion.
+
+The existing JSON bridge calls actual `BuildRecoveryPlan`; the lane executes
+only its returned operation, verbatim, in consumer. No manual default repair,
+replace, or whole-plan replay occurs. The parser confirms unreachable safety
+survives; guest ping and the source-matched peer counter confirm recovery; a
+fresh second planner call must return no operations.
+
+`evidence/fips-exit-ipip6-recovery.log` records exit 0, recovery with one route
+add, ping return 0, peer counter delta 1, healthy no-op, and empty namespace
+cleanup. `evidence/fips-exit-recovery-helpers.log` records 13 passing tests
+(8 parser, 5 bridge). Attempt 1 is retained separately: it failed on the
+harness expecting integer rather than observed string rule table `"200"`.
+Attempt 2 passed; the final run adds exact tunnel/rule/address assertions.
+Automatic consumer veth link-local generation is disabled before link-up so
+DAD cannot introduce unrelated inventory transitions; no inventory fields are
+silently dropped to make comparison pass.
+
+DNS and NDS/portal readiness remain **synthetic fixture assumptions**; no DNS
+or NDS service exists here. Native IPv6/MSS guards are installed and checked
+unchanged, not packet-validated here. IPv6 veth substitutes for FIPS transport.
+This is not full FIPS readiness, NDS interoperability, or WAN no-fallback proof.
+
+Reproduce with Go 1.26.10 on PATH, `GOTOOLCHAIN=go1.26.10`, the module checkout
+above, and `--mode ipip6`. Helper tests:
+`FIPS_EXIT_MODULE_REPO=/path/to/module python3 -m unittest discover -s scripts -p 'test_fips_exit*.py' -v`.
 
 ## Deliberate limits / next lane (original veth mode)
 

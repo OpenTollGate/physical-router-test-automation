@@ -16,6 +16,7 @@ import tempfile
 Runner = runpy.run_path(str(Path(__file__).with_name('hwsim-netns-poc.py')))['Runner']
 PIN = '3a0077e67be67c23c520978b42be274f3cad9b84'
 NAMES = ('consumer', 'guest', 'peer', 'wan', 'other')
+parse_routes = runpy.run_path(str(Path(__file__).with_name('fips-exit-routes.py')))['parse_routes']
 
 
 class Lane(Runner):
@@ -75,7 +76,8 @@ func main() {
  ops, err := f.BuildPlan(c,e,g); if err != nil { panic(err) }
  if err := f.ValidateOperations(c,g,ops); err != nil { panic(err) }
  json.NewEncoder(os.Stdout).Encode(map[string]interface{}{"fragment":fragment,"inner":inner.String(),
- "outer":outer.String(),"peer_outer":peerOuter.String(),"peer_inner":peerInner.String(),"operations":ops})
+ "outer":outer.String(),"peer_outer":peerOuter.String(),"peer_inner":peerInner.String(),"operations":ops,
+ "config":c,"fixture_guards":g})
 }
 ''')
         command = ['go', 'run', '.']
@@ -84,13 +86,15 @@ func main() {
         return json.loads(subprocess.check_output(command, cwd=root, input=recovery_json))
 
 
-def ipip6(r, payload):
+def ipip6(r, payload, module_repo):
     """Kernel-only fixture: exact consumer plan, IPv6 veth replacing FIPS."""
     def ns(name, *argv):
         return r.ns(name, list(argv))
     for name, iface in (('guest', 'guest-test'), ('peer', 'mesh-test')):
         ns('consumer', 'ip', 'link', 'add', iface, 'type', 'veth', 'peer', 'name', 'remote')
         ns('consumer', 'ip', 'link', 'set', 'remote', 'netns', name)
+        # No automatic link-local/DAD transitions in the observed fixture inventory.
+        ns('consumer', 'ip', 'link', 'set', iface, 'addrgenmode', 'none')
         ns('consumer', 'ip', 'link', 'set', iface, 'up')
         ns(name, 'ip', 'link', 'set', 'remote', 'up')
     ns('consumer', 'ip', 'addr', 'add', '10.73.1.1/24', 'dev', 'guest-test')
@@ -130,6 +134,67 @@ def ipip6(r, payload):
                 for expr in item.get('rule', {}).get('expr', []) if 'counter' in expr)
     assert count > 0, 'peer did not observe derived inner IPv4 source'
     print(json.dumps({'peer_observed_snat_source': payload['inner'], 'echo_requests': count}), flush=True)
+    # Ownership is this process's successful installation in fresh isolated netns,
+    # not an inference from matching names. No concurrent fixture writer exists.
+    def snapshot():
+        queries = {
+            'links': ['ip', '-d', '-j', 'link', 'show'],
+            'addresses': ['ip', '-j', 'addr', 'show'],
+            'rules': ['ip', '-j', '-4', 'rule', 'show'],
+            'outer_routes': ['ip', '-j', '-6', 'route', 'show', 'table', 'all'],
+        }
+        data = {key: json.loads(ns('consumer', *argv).stdout) for key, argv in queries.items()}
+        data['guards'] = ns('consumer', 'nft', '-s', 'list', 'table', 'inet', 'fw4').stdout
+        data['forwarding'] = ns('consumer', 'sysctl', '-n', 'net.ipv4.ip_forward').stdout
+        return data
+
+    installed = snapshot()
+    print(json.dumps({'installed_fixture_state': installed}), flush=True)
+    assert installed['forwarding'].strip() == '1'
+    guest_rules = [rule for rule in installed['rules'] if rule.get('priority') == 10000]
+    assert guest_rules == [dict(priority=10000, src='all', iif='guest-test', table='200')], guest_rules
+    tunnel = next(link for link in installed['links'] if link['ifname'] == 'exit-test')
+    assert tunnel['mtu'] == 1240 and 'UP' in tunnel['flags'], tunnel
+    assert tunnel['linkinfo'] == dict(info_kind='ip6tnl', info_data=dict(
+        proto='ipip6', remote=payload['peer_outer'], local=payload['outer'],
+        link='mesh-test', ttl=64, ip6_tnl_f_ign_encap_limit=True,
+        tclass='0x00', flowlabel='0x00000')), tunnel
+    tunnel_addresses = next(link['addr_info'] for link in installed['addresses']
+                            if link['ifname'] == 'exit-test')
+    assert tunnel_addresses == [dict(family='inet', local=payload['inner'], prefixlen=32,
+        scope='global', label='exit-test', valid_life_time=4294967295,
+        preferred_life_time=4294967295)], tunnel_addresses
+    assert installed['rules'] == [dict(priority=0, src='all', table='local'),
+        *guest_rules, dict(priority=32766, src='all', table='main'),
+        dict(priority=32767, src='all', table='default')], installed['rules']
+    # All tunnel parameters/addresses are the exact successfully installed plan;
+    # compare complete inventories (including ifindex) rather than selecting fields.
+    def recovery():
+        current = snapshot()
+        assert current == installed, ('fixture state changed beyond private routes', current)
+        routes = parse_routes(ns('consumer', 'ip', '-j', '-4', 'route', 'show', 'table', '200').stdout,
+                              query_table=200)
+        c = payload['config']
+        evidence = dict(Verified=True, OwnershipVerified=True, OwnedConfig=c,
+            Environment=dict(Verified=True,
+                Interfaces={link['ifname']: link['mtu'] for link in current['links']},
+                LocalPublicKey=c['LocalPublicKey'], LocalFIPSAddress=payload['outer'],
+                AddressesConflictFree=True, PolicyOrderSafe=True, OuterRouteVerified=True),
+            Tunnel=dict(Name='exit-test', Mode='ipip6', Device='mesh-test',
+                Local=payload['outer'], Remote=payload['peer_outer'],
+                Inner=payload['inner']+'/32', MTU=tunnel['mtu'], Up=True, ExactParameters=True),
+            GuestRule=dict(Priority=guest_rules[0]['priority'], Table=int(guest_rules[0]['table']),
+                InputInterface=guest_rules[0]['iif'], Exact=True), Routes=routes)
+        request = dict(Config=c, RecoveryEvidence=evidence, GuardReadiness=payload['fixture_guards'])
+        print(json.dumps({'recovery_fixture_evidence': request}), flush=True)
+        ops = render(module_repo, json.dumps(request).encode())['operations'] or []
+        # Revalidate after compilation, immediately before caller executes the plan.
+        assert snapshot() == current
+        assert parse_routes(ns('consumer', 'ip', '-j', '-4', 'route', 'show', 'table', '200').stdout,
+                            query_table=200) == routes
+        return ops
+
+    print('FIXTURE ASSUMPTIONS: DNS/NDS/portal readiness synthetic; no DNS or NDS service; IPv6 veth is not FIPS transport', flush=True)
     ns('consumer', 'ip', 'link', 'set', 'exit-test', 'down')
     failed = r.ns('guest', ['ping', '-n', '-c', '1', '-W', '2', payload['peer_inner']], check=False)
     print(failed.stdout, flush=True)
@@ -143,6 +208,15 @@ def ipip6(r, payload):
     ns('consumer', 'ip', 'link', 'set', 'exit-test', 'up')
     print(json.dumps({'tunnel_state': 'up', 'table_200_routes': json.loads(
         ns('consumer', 'ip', '-j', '-4', 'route', 'show', 'table', '200').stdout)}), flush=True)
+    operations = recovery()
+    assert len(operations) == 1, ('expected missing-default recovery', operations)
+    for op in operations:
+        print(json.dumps({'recovery_operation': op}), flush=True)
+        r.ns('consumer', [op['Program'], *op['Args']])
+    # Parser refuses missing safety; inspect again after execution, never repair manually.
+    restored = parse_routes(ns('consumer', 'ip', '-j', '-4', 'route', 'show', 'table', '200').stdout,
+                            query_table=200)
+    assert len(restored) == 2, restored
     recovered = ns('guest', 'ping', '-n', '-c', '1', '-W', '2', payload['peer_inner'])
     print(recovered.stdout, flush=True)
     observed = json.loads(ns('peer', 'nft', '-j', 'list', 'chain', 'inet', 'observation', 'observed').stdout)
@@ -151,10 +225,12 @@ def ipip6(r, payload):
     assert recovered_count > count, 'peer did not observe recovered roundtrip source'
     print(json.dumps({'tunnel_state': 'up', 'guest_ping_returncode': recovered.returncode,
                       'peer_echo_request_delta': recovered_count - count}), flush=True)
-    print('PASS: kernel ipip6 roundtrip/down/up; no direct-WAN fallback proof (no decoy), FIPS transport, NDS, or paid service', flush=True)
+    assert recovery() == [], 'healthy second recovery must be no-op'
+    print('PASS: healthy second BuildRecoveryPlan call returned no operations', flush=True)
+    print('PASS: kernel ipip6 roundtrip/down/up with planner recovery; no direct-WAN fallback proof (no decoy), FIPS transport, NDS, or paid service', flush=True)
 
 
-def inside(payload, host_net, host_mount, mode='veth'):
+def inside(payload, host_net, host_mount, mode='veth', module_repo=None):
     # Refuse direct execution or a namespace connected to a host interface.
     assert os.geteuid() == 0
     assert os.readlink('/proc/self/ns/net') != host_net
@@ -200,7 +276,7 @@ def inside(payload, host_net, host_mount, mode='veth'):
             r.run(['ip', 'netns', 'add', name])
             ns(name, 'ip', 'link', 'set', 'lo', 'up')
         if mode == 'ipip6':
-            ipip6(r, payload)
+            ipip6(r, payload, module_repo)
             return
         for index, (name, iface) in enumerate((('guest', 'guest-test'), ('peer', 'exit-test'), ('wan', 'wan-test'), ('other', 'other-test')), 1):
             ns('consumer', 'ip', 'link', 'add', iface, 'type', 'veth', 'peer', 'name', 'remote')
@@ -251,7 +327,7 @@ def main():
     if args.recovery_json is not None and args.inside:
         parser.error('--recovery-json cannot be combined with --inside')
     if args.inside:
-        inside(json.load(sys.stdin), *args.inside, mode=args.mode)
+        inside(json.load(sys.stdin), *args.inside, mode=args.mode, module_repo=args.module_repo)
         return
     if not args.module_repo:
         parser.error('--module-repo is required')
@@ -263,7 +339,9 @@ def main():
     print(json.dumps({'module_sha': PIN, 'fragment_sha256': hashlib.sha256(payload['fragment'].encode()).hexdigest(), 'inner': payload['inner']}), flush=True)
     # Private mount namespace prevents named-netns bind mounts escaping to the host.
     subprocess.run(['sudo', '-n', 'unshare', '--mount', '--net', '--propagation', 'private',
-                    'env', 'TMPDIR=' + tempfile.gettempdir(), 'python3', str(Path(__file__).resolve()),
+                    'env', 'TMPDIR=' + tempfile.gettempdir(), 'PATH=' + os.environ['PATH'],
+                    'GOTOOLCHAIN=' + os.environ.get('GOTOOLCHAIN', 'auto'), 'python3', str(Path(__file__).resolve()),
+                    '--module-repo', str(Path(args.module_repo).resolve()),
                     '--mode', args.mode, '--inside', os.readlink('/proc/self/ns/net'), os.readlink('/proc/self/ns/mnt')],
                    input=json.dumps(payload), text=True, check=True)
 
