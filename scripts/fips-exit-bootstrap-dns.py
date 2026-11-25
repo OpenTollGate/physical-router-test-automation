@@ -80,13 +80,19 @@ def parse_only(config, dnsmasq):
 
 
 # Standard-library wire probe, no resolver libraries or host DNS calls.
-PROBE = '''import socket,struct,json,sys
+PROBE = '''import socket,struct,json,sys,time
 name=sys.argv[1]
 q=struct.pack('!6H',1234,256,1,0,0,0)+b''.join(bytes([len(x)])+x.encode() for x in name.split('.'))+b'\\0'+struct.pack('!2H',1,1)
-s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(2)
-s.sendto(q,('10.73.1.1',5353)); data,addr=s.recvfrom(4096)
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(float(sys.argv[2]) if len(sys.argv)>2 else 2)
+started=time.monotonic()
+s.sendto(q,('10.73.1.1',5353))
+try:
+ data,addr=s.recvfrom(4096)
+except socket.timeout:
+ print(json.dumps(dict(name=name,outcome='timeout',elapsed_seconds=time.monotonic()-started)))
+ sys.exit(0)
 h=struct.unpack('!6H',data[:12]); assert h[0]==1234 and h[1]&32768
-print(json.dumps(dict(name=name,rcode=h[1]&15,answers=h[3],wire=data.hex(),last_ipv4=socket.inet_ntoa(data[-4:]) if h[3] else None)))
+print(json.dumps(dict(name=name,outcome='SERVFAIL' if h[1]&15==2 else 'response',elapsed_seconds=time.monotonic()-started,rcode=h[1]&15,answers=h[3],wire=data.hex(),last_ipv4=socket.inet_ntoa(data[-4:]) if h[3] else None)))
 '''
 
 
@@ -95,7 +101,7 @@ DNS_FIXTURE = '''import socket,struct,json,sys
 from pathlib import Path
 ip,port,source,name,answer,count_path=sys.argv[1:]
 s=socket.socket(socket.AF_INET6 if ':' in ip else socket.AF_INET,socket.SOCK_DGRAM)
-s.bind((ip,int(port))); s.settimeout(10)
+s.bind((ip,int(port))); s.settimeout(30)  # outlive the 15-second exit-down probe
 count=0
 Path(count_path).write_text('0')
 print('READY labelled UDP DNS fixture',flush=True)
@@ -159,6 +165,15 @@ def exit_probe(r, ns, config, path, dnsmasq):
     print(json.dumps(dict(portal_fixture_order=['exit', 'fips'], portal_counts_before=portal_before, portal_counts_after=portal_after)), flush=True)
     print(json.dumps(dict(expected_router_source=router_ip, exit_listener=exit_ip + ':53')), flush=True)
     print('PASS exit DNS runtime: public A query/source verified; one unique .fips query answered by loopback; exit count unchanged', flush=True)
+    # Stop only the exit fixture; do not alter routes, firewall or resolver config.
+    fixture.terminate()
+    fixture.wait(timeout=3)
+    down_name = 'exit-down-' + os.urandom(16).hex() + '.example.com'
+    response = json.loads(ns('dns-guest', 'python3', '-c', PROBE, down_name, '15').stdout)
+    print(json.dumps(dict(case='exit-down', observation_window_seconds=15, **response)), flush=True)
+    assert response['outcome'] in ('SERVFAIL', 'timeout'), response
+    assert response.get('answers', 0) == 0, response
+    print('PASS exit-down: unique uncached public A returned SERVFAIL or timed out; no successful answer within 15-second query deadline; no WAN-decoy proof', flush=True)
 
 
 def inside(config, host_net, host_mount, dnsmasq, exit_runtime=False):

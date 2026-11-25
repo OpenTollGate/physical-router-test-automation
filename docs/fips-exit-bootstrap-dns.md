@@ -26,9 +26,16 @@ The successful run exits 0, reaps all three children and verifies the private na
 registry and temporary paths are empty. It reuses the existing Runner and isolated
 mount/network harness; host resolver/network and module sources are unchanged.
 
+After those successful probes, only the exit fixture is stopped. One unique
+`exit-down-<random>.example.com` A query has a 15-second deadline; the probe
+records SERVFAIL separately from timeout and rejects successful answers.
+[Exit-down evidence](evidence/fips-exit-dns-exit-down.log) records a timeout.
+No local-continuity checks or topology/firewall changes are added.
+
 This is IPv6 veth plus **synthetic UDP DNS fixtures, not real FIPS**. No
-portal HTTP, down-state, exhaustive leakage, payment, hardware or production tests run in
-this mode. It does not run the bootstrap probes or WAN counter controls below.
+portal HTTP, exhaustive leakage, payment, hardware or production tests run in
+this mode. It does not run the bootstrap probes or WAN counter controls below;
+**this is not WAN-decoy proof**.
 
 
 ## Exit composer: parse-only check (no service)
