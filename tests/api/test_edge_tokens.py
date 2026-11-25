@@ -4,7 +4,9 @@ import pytest
 from lib.helpers import is_session_event, require_client_identity, is_degraded
 
 pytestmark = [
-    pytest.mark.story("M4"),
+    # story("M4") removed (#295): edge-token rejection shape — asserts
+    # nothing about swap fees or payout accounting. TIP-02 kept (the
+    # wire-format conformance of these tokens IS what it tests).
     pytest.mark.tip("TIP-02"),pytest.mark.api, pytest.mark.extended]
 
 

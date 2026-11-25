@@ -263,9 +263,16 @@ assert_venue_config() {
       2>/dev/null || true
   fi
   cur=$(sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${OPENWRT_IP}" \
-    "jq -r '.accepted_mints[0].url' /etc/tollgate/config.json 2>/dev/null" 2>/dev/null || echo "")
-  if [ "${cur}" != "${MINT_URL}" ]; then
-    log "Venue config drifted (accepted_mints[0]=${cur:-none}) — re-asserting local mint"
+    "jq -c '[.accepted_mints[] | {url,min_balance,balance_tolerance_percent,price_per_step,price_unit,purchase_min_steps}]' /etc/tollgate/config.json 2>/dev/null" 2>/dev/null || echo "")
+  # #299: comparing only accepted_mints[0].url let a hard-killed pytest
+  # pass the gate with an extra mint appended or pricing fields changed —
+  # the runner then continued on the contaminated multi-mint/pricing
+  # config this guard exists to repair. Compare the FULL singleton
+  # fixture (list membership + pricing) against what configure_mint
+  # writes.
+  expected=$(jq -nc "[{url:\"${MINT_URL}\",min_balance:0,balance_tolerance_percent:0,price_per_step:1,price_unit:\"sats\",purchase_min_steps:1}]")
+  if [ "${cur}" != "${expected}" ]; then
+    log "Venue config drifted (accepted_mints/pricing: ${cur:-none}) — re-asserting local mint singleton"
     configure_mint
   fi
 }
@@ -273,10 +280,28 @@ assert_venue_config() {
 run_tests() {
   local targets=() flags=()
   local arg
-  for arg in "$@"; do
+  # #285: value-taking options must stay PAIRED through this wrapper. The
+  # old split ('-prefixed -> flags, bare -> targets) dropped the value of
+  # '-m EXPR' / '--story LIST' into the target list — pytest then got -m
+  # with no expression (usage error) plus bogus target paths, and the
+  # extensive-test sweep could not run any tier. The space-separated forms
+  # of every known value-taking option (both conftest addoption sets) are
+  # consumed as pairs; '='-forms are single words and pass untouched.
+  while [ $# -gt 0 ]; do
+    arg="$1"
     case "$arg" in
-      -*) flags+=("$arg") ;;
-      *) targets+=("$arg") ;;
+      -m|-k|--story|--tip|--client|--backend|--lab-type|--results|\
+--binary|--expected-pr|--tollgate-branch|--tollgate-run-id|\
+--tollgate-arch|--lock-phase|--preflight)
+        if [ $# -lt 2 ]; then
+          echo "run-local-tests: $arg needs a value" >&2
+          exit 64
+        fi
+        flags+=("$arg" "$2")
+        shift 2
+        ;;
+      -*) flags+=("$arg"); shift ;;
+      *) targets+=("$arg"); shift ;;
     esac
   done
   if [ "${#targets[@]}" -eq 0 ]; then
@@ -287,7 +312,12 @@ run_tests() {
   for t in "${targets[@]}"; do
     if [ -d "${t}" ]; then
       local dir_files
-      dir_files=$(find "${t}" -maxdepth 1 -name 'test_*.py' | sort)
+      # #285: -maxdepth 1 selected only root-level files — a 'tests/'
+      # target ran 4 root files and silently excluded tests/api,
+      # tests/conformance, tests/unit, tests/phone, tests/web…; the
+      # "extensive" sweep reported results for a tiny unrelated subset.
+      # Recurse the whole target tree (sorted, deterministic).
+      dir_files=$(find "${t}" -name 'test_*.py' | sort)
       if [ -n "${dir_files}" ]; then
         while IFS= read -r dir_files; do expanded+=("${dir_files}"); done <<< "${dir_files}"
       else

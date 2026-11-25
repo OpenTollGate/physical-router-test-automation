@@ -33,7 +33,9 @@ import requests
 from lib.constants import BACKEND_PORT
 
 pytestmark = [
-    pytest.mark.story("M2"),
+    # story("M2") removed (#295): these are invoice-state checks — the
+    # double-spend story's acceptance (same token twice never grants a
+    # second session) is proven by test_sentinel_error.py's replay test.
     pytest.mark.tip("TIP-02"),pytest.mark.api, pytest.mark.go_only, pytest.mark.extended]
 
 
