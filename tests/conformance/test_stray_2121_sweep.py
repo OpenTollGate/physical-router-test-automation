@@ -115,13 +115,26 @@ def _checkout() -> Path | None:
 
 @pytest.mark.skipif(_checkout() is None, reason="no tbmg checkout (TBMG_CHECKOUT or ~/src default)")
 def test_vendored_init_script_has_not_drifted(tmp_path):
+    # #301: this rail had never run in an executed lane; its first run
+    # (2026-11-25) caught the vendored script matching NO reachable ref —
+    # an off-branch assembly. The source is now PINNED to the exact SHA
+    # (PROVENANCE.md); a moving-ref comparison could not fail loudly
+    # about its own ambiguity. Skips where the pinned object is absent
+    # (host without the tbmg checkout / PR ref fetched).
+    pin = "b25d92ae"  # OpenTollGate/tollgate-module-basic-go PR #1250 head
+    have = subprocess.run(
+        ["git", "-C", str(_checkout()), "cat-file", "-e", f"{pin}^{{tree}}"],
+        capture_output=True, timeout=30,
+    )
+    if have.returncode != 0:
+        pytest.skip(f"checkout lacks the pinned object {pin} — fetch origin pull/1250/head:pr-1250")
     source = subprocess.run(
-        ["git", "-C", str(_checkout()), "show", "fork/main:packaging/files/etc/init.d/tollgate-wrt"],
+        ["git", "-C", str(_checkout()), "show", f"{pin}:packaging/files/etc/init.d/tollgate-wrt"],
         capture_output=True, text=True, timeout=30,
     )
     if source.returncode != 0:
-        pytest.skip("checkout has no fork/main ref — drift check needs the fork remote fetched")
+        pytest.skip(f"pinned ref {pin} lacks the init script path")
     assert source.stdout == VENDORED.read_text(), (
-        "vendored init.d.tollgate-wrt differs from fork/main — refresh it "
-        "(see tests/conformance/tbmg/PROVENANCE.md)"
+        f"vendored init.d.tollgate-wrt differs from the pinned source {pin} — "
+        "refresh it (see tests/conformance/tbmg/PROVENANCE.md)"
     )

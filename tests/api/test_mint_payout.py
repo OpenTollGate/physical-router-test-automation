@@ -4,7 +4,10 @@ import pytest
 
 from lib.helpers import require_client_identity
 
-pytestmark = [pytest.mark.story("M4"),pytest.mark.api, pytest.mark.extended]
+# story("M4") removed (#295): the payout COMMAND succeeding and balance
+# increasing is not fee accounting — no test here asserts what the mint
+# charged or that the payout reconciles with it.
+pytestmark = [pytest.mark.api, pytest.mark.extended]
 
 PAYMENT_AMOUNT = 4
 

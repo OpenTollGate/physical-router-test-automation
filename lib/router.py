@@ -239,8 +239,10 @@ class Router:
         NOT self.host: on split-plane DUTs (owner topology 2026-09-28,
         x1860 alpha/bravo) the SSH/mgmt plane is OOB-only and must stay out
         of the experiment; portal clients live on br-lan. Env override
-        TOLLGATE_PORTAL_HOST wins; uci network.lan.ipaddr next; falls back
-        to self.host for single-bridge DUTs (NR7101-era shape).
+        TOLLGATE_PORTAL_HOST wins; uci network.lan.ipaddr next; then the
+        LIVE br-lan interface address (br-lan can be dynamic or the UCI
+        section not named `lan` — the WiFi._get_portal_host() pattern,
+        #303); self.host only as the single-bridge last resort.
         """
         env = os.environ.get("TOLLGATE_PORTAL_HOST")
         if env:
@@ -248,6 +250,14 @@ class Router:
         lan = self.uci_get("network.lan.ipaddr")
         if lan:
             return lan
+        try:
+            ip = self.ssh(
+                "ip addr show br-lan | grep 'inet ' | awk '{print $2}' | cut -d/ -f1"
+            ).strip()
+            if ip:
+                return ip
+        except Exception:
+            pass
         return self.host
 
     @property
@@ -998,17 +1008,39 @@ class Router:
     # All state under /tmp on the router: RAM-backed, zero flash writes,
     # fresh mint every boot — a feature for tests.
     DEVICE_MINT_PORT = 8487
-    DEVICE_MINT_URL = f"http://127.0.0.1:{DEVICE_MINT_PORT}"
+    # On-box loopback: always correct ON the router (readiness probes).
+    DEVICE_MINT_LOOPBACK_URL = f"http://127.0.0.1:{DEVICE_MINT_PORT}"
+    DEVICE_MINT_URL_ENV = "TOLLGATE_DEVICE_MINT_URL"
     DEVICE_MINT_WORKDIR = "/tmp/mintd-work"
     DEVICE_MINT_MNEMONIC_ENV = "TOLLGATE_DEVICE_MINT_MNEMONIC"
+
+    @property
+    def device_mint_url(self) -> str:
+        """The URL CALLERS (the test machine) use to reach the device mint.
+
+        #297: the old class constant advertised 127.0.0.1 — from any other
+        machine that resolves to the CALLER's loopback, so the advertised
+        self-contained payment tier silently skipped (no forward existed
+        anywhere). Precedence: an explicit TOLLGATE_DEVICE_MINT_URL (e.g.
+        behind an ``ssh -L`` forward), else the router's own address — the
+        same plane the caller reaches SSH on. NOTE: the router-LAN form
+        requires the settings template to bind the mint on non-loopback;
+        the quote probe here validates on-box, verify reachability from
+        the caller side before relying on it.
+        """
+        env = os.environ.get(self.DEVICE_MINT_URL_ENV, "")
+        if env:
+            return env
+        return f"http://{self.host}:{self.DEVICE_MINT_PORT}"
 
     @_mutating
     def start_device_mint(self, local_binary: str, local_settings: str) -> bool:
         """Sideload and start the on-device fakewallet mint.
 
         Requires TOLLGATE_DEVICE_MINT_MNEMONIC in the environment (the
-        mint refuses to start without one; pin per-bench). Returns True if
-        /v1/info answers on loopback after startup.
+        mint refuses to start without one; pin per-bench). Returns True
+        if a 1-sat quote settles to PAID after startup (a live
+        FakeWallet — /v1/info alone is not health, #297).
         """
         mnemonic = os.environ.get(self.DEVICE_MINT_MNEMONIC_ENV, "")
         if not mnemonic:
@@ -1017,15 +1049,23 @@ class Router:
             )
             return False
         self.ssh(f"mkdir -p {self.DEVICE_MINT_WORKDIR}")
+        # #297: kill BEFORE the copy — scp'ing over a running binary hits
+        # ETXTBSY and aborts the restart. (The start line below repeats
+        # the killall; kept for its own retry path — idempotent.)
+        self.ssh("killall cdk-mintd 2>/dev/null; sleep 1; true", timeout=10)
         self.scp_to(local_binary, "/tmp/cdk-mintd")
         self.ssh("chmod +x /tmp/cdk-mintd")
         self.scp_to(local_settings, "/tmp/mint-settings.toml")
-        # One-time init when the workdir has never served a mint (fresh /tmp).
+        # One-time init when the workdir has never served a mint (fresh
+        # /tmp). #297: CDK 0.18 creates cdk-mintd.sqlite — checking only
+        # the legacy cdk-mintd.db re-ran config init against an already-
+        # initialized DB and silently ignored new settings/mnemonics.
         self.ssh(
-            "cd /tmp && [ -f mintd-work/cdk-mintd.db ] || "
+            "cd /tmp && { [ -f mintd-work/cdk-mintd.db ] || "
+            "[ -f mintd-work/cdk-mintd.sqlite ] || "
             f"CDK_MINTD_MNEMONIC={shlex.quote(mnemonic)} /tmp/cdk-mintd "
             f"-w {self.DEVICE_MINT_WORKDIR} config init --new-mint "
-            "--file /tmp/mint-settings.toml",
+            "--file /tmp/mint-settings.toml; }",
             timeout=30,
         )
         self.ssh(
@@ -1043,8 +1083,47 @@ class Router:
                 ).strip()
                 == "200"
             ):
-                log.info("device mint up at %s", self.DEVICE_MINT_URL)
-                return True
+                # #297: /v1/info answering is NOT proof of health — a
+                # wedged FakeWallet accepts quotes but never settles them,
+                # and every payment test then hangs until its outer
+                # timeout. Probe the quote->PAID path (the local runner's
+                # verify_mint_fakewallet shape): a healthy FakeWallet
+                # settles a 1-sat probe in ~1s.
+                base = f"http://127.0.0.1:{self.DEVICE_MINT_PORT}"
+                quote = self.ssh(
+                    f"curl -sf -m 5 -X POST {base}/v1/mint/quote/bolt11 "
+                    "-H 'Content-Type: application/json' "
+                    "-d '{\"amount\":1,\"unit\":\"sat\"}'",
+                    timeout=10,
+                )
+                m = re.search(r'"quote"\s*:\s*"([^"]+)"', quote or "")
+                if not m:
+                    log.warning(
+                        "device mint /v1/info answers but no probe quote "
+                        "(%r); see /tmp/cdk-mintd.log", (quote or "")[:120],
+                    )
+                    return False
+                qid = m.group(1)
+                state_match = None
+                for _ in range(6):
+                    state = self.ssh(
+                        f"curl -sf -m 5 {base}/v1/mint/quote/bolt11/{qid}",
+                        timeout=10,
+                    )
+                    state_match = re.search(r'"state"\s*:\s*"([^"]+)"', state or "")
+                    if state_match and state_match.group(1) == "PAID":
+                        log.info(
+                            "device mint up and settling quotes at %s",
+                            self.device_mint_url,
+                        )
+                        return True
+                    time.sleep(2)
+                log.warning(
+                    "device mint FakeWallet did not settle the probe quote "
+                    "(state=%s) — the wedged-mint class; see /tmp/cdk-mintd.log",
+                    state_match.group(1) if state_match else "none",
+                )
+                return False
             time.sleep(1)
         log.warning("device mint did not answer /v1/info; see /tmp/cdk-mintd.log")
         return False

@@ -21,6 +21,7 @@ from lib.helpers import (
     get_mint_ip_map,
     block_mints,
     unblock_mints,
+    sweep_mint_rejects,
 )
 
 pytestmark = [
@@ -43,8 +44,10 @@ def ensure_full_merchant_and_cleanup(router, mint_ip_map):
     yield
     output = router.ssh("iptables -L OUTPUT -n 2>/dev/null")
     if "REJECT" in output:
-        for url, ip in mint_ip_map.items():
-            router.ssh(f"while iptables -C OUTPUT -d {ip} -p tcp --dport 443 -j REJECT 2>/dev/null; do iptables -D OUTPUT -d {ip} -p tcp --dport 443 -j REJECT; done 2>/dev/null || true")
+        # #298: match the URL's REAL port (the block_mints insert spec) —
+        # the old hardcoded --dport 443 missed plain-http/custom-port mints
+        # (e.g. :8383) and left duplicate rules / a degraded router behind.
+        sweep_mint_rejects(router, mint_ip_map)
         wait_for_full_merchant(router, timeout=120)
 
 

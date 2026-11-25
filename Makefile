@@ -1243,6 +1243,9 @@ device-identity-verify: ## Fail-closed preflight: is the box on this address the
 device-identity-tests: ## Offline suite for the device pin: 28 tests, no router, PATH doubles + non-vacuity and mutation controls
 	@bash tests/bench-device-identity/run-tests.sh
 
+extensive-shell-tests: ## Offline suite for the extensive-test/run-local-tests wrapper: flag pairing, recursion, PATHS join, ipk version, venue probes, lease-wrapped deploy (no lab, PATH doubles)
+	@bash tests/extensive-test/run-tests.sh
+
 pytest-hardware-smoke: ## Migrated smoke-* scenario subset
 	$(call require_hardware_lock)
 	@TOLLGATE_USE_HARDWARE_LOCK=1 ./scripts/pymake.py smoke-degraded --router $(ROUTER)

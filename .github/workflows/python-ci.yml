@@ -46,6 +46,14 @@ jobs:
       - name: Run unit tests
         run: pytest tests/unit -q
 
+      - name: Run conformance rails (#301 — they were never in an executed lane)
+        # tests/conformance was outside testpaths and no CI step ran it:
+        # the O3/O4 rails (stray-2121 sweep, tbmg parser contract) and the
+        # faultproxy request-log contract were dead coverage that could
+        # not fail CI. The tbmg/Go-gated tests skip cleanly where the
+        # checkout/toolchain is absent; the faultproxy rails run hosted.
+        run: pytest tests/conformance -q
+
       - name: Story/TIP coverage report
         run: |
           python3 scripts/story-coverage.py
