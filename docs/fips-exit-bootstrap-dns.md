@@ -1,5 +1,44 @@
 # Bootstrap DNS: real dnsmasq, isolated namespace
 
+## Exit composer: parse-only check (no service)
+
+```sh
+python3 scripts/test_fips_exit_dns_parse.py
+python3 scripts/fips-exit-bootstrap-dns.py --parse-only \
+  --module-repo "$HOME/worktrees/tollgate-fips-exit-consumer" \
+  --go "$HOME/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go"
+```
+
+Use an existing **native Go 1.26.10 binary**: an older Go launcher that normally
+selects 1.26.10 via `GOTOOLCHAIN` is refused because this helper disables downloads
+and toolchain switching. Requires existing dnsmasq, no sudo. Temporary files use
+`TMPDIR`; the two explicit `--conf-file` paths prevent default config inheritance.
+
+The exit mode extracts unchanged `bootstrap_dns.go`, `exit_dns.go`,
+`upstream_dns.go` and `address.go` from module commit
+`3dcbe79462a827731c0e751cc3719d7a3c2e0481` into a standalone temporary Go module.
+It calls actual `RenderExitDNS` with public secp256k1 G/2G fixture x-coordinates,
+portal 10.73.1.1:5353 and loopback FIPS resolver 127.0.0.1:5354. It writes the
+returned config unchanged, then tests a separate copy with one invalid directive.
+Both exact argv/status/diagnostics and config SHA256 are logged. A rejected original
+is reported as a module defect; it is never patched to get a green parser result.
+
+[Real parser evidence](evidence/fips-exit-dns-parse.log): dnsmasq 2.91 accepted
+unchanged output (rc **0**), rejected invalid-directive control (rc **1**), and the
+harness exited **0**. Generated SHA256:
+`3203c06773cf6d441837961028ba973782050dc08e61b5049a88fbee2262f71d`.
+Three offline harness contract tests pass (including failure controls).
+[Bounded bootstrap regression](evidence/fips-exit-bootstrap-dns-regression.log)
+also exited 0 with the original pinned bootstrap source, expected answers,
+unchanged WAN counters and successful cleanup.
+
+**What this does not prove:** parse-only starts no DNS service, creates no packet
+topology and tests no FIPS transport, forwarding, source binding, leakage, payment,
+or deployment. The separately invoked bootstrap regression remains bootstrap-only.
+Full hardware/deployment suites are outside this bounded verification slice.
+
+## Existing bootstrap runtime regression
+
 Run from this checkout (requires existing dnsmasq, ip, nft, ss, sudo/unshare and Go 1.26.10; installs nothing):
 
 ```sh
