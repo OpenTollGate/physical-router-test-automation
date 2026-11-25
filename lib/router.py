@@ -239,8 +239,10 @@ class Router:
         NOT self.host: on split-plane DUTs (owner topology 2026-09-28,
         x1860 alpha/bravo) the SSH/mgmt plane is OOB-only and must stay out
         of the experiment; portal clients live on br-lan. Env override
-        TOLLGATE_PORTAL_HOST wins; uci network.lan.ipaddr next; falls back
-        to self.host for single-bridge DUTs (NR7101-era shape).
+        TOLLGATE_PORTAL_HOST wins; uci network.lan.ipaddr next; then the
+        LIVE br-lan interface address (br-lan can be dynamic or the UCI
+        section not named `lan` — the WiFi._get_portal_host() pattern,
+        #303); self.host only as the single-bridge last resort.
         """
         env = os.environ.get("TOLLGATE_PORTAL_HOST")
         if env:
@@ -248,6 +250,14 @@ class Router:
         lan = self.uci_get("network.lan.ipaddr")
         if lan:
             return lan
+        try:
+            ip = self.ssh(
+                "ip addr show br-lan | grep 'inet ' | awk '{print $2}' | cut -d/ -f1"
+            ).strip()
+            if ip:
+                return ip
+        except Exception:
+            pass
         return self.host
 
     @property

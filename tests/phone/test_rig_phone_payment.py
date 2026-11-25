@@ -108,7 +108,8 @@ def preconnected(u2phone, wifi):
     return connected
 
 
-def _pay_through_portal(u2phone, wifi, token: str, timeout: int = 75) -> str:
+def _pay_through_portal(u2phone, wifi, token: str, portal_url: str = "",
+                        timeout: int = 75) -> str:
     """Drive the portal to an authenticated state.
 
     TIP-03 prehydration should auto-pay; if the SPA stalls, tap the submit
@@ -118,7 +119,12 @@ def _pay_through_portal(u2phone, wifi, token: str, timeout: int = 75) -> str:
     TollGate portals on air, the phone can roam mid-take (2026-09-29:
     TollGate-charlie — a parallel lane's DUT — stole the client between
     join and payment; symptom was 75s of silent stall ending in a
-    misleading 'payment did not reach the backend' verdict)."""
+    misleading 'payment did not reach the backend' verdict). On rejoin
+    the browser document is whatever survived the roam — an error page or
+    the parallel DUT's portal (#303) — so the original portal URL (with
+    its prehydrated token) is REOPENED and the tap/type interaction state
+    is reset; otherwise the take can time out or submit the token to the
+    wrong DUT."""
     start = time.time()
     tapped = typed = False
     roams = 0
@@ -132,6 +138,12 @@ def _pay_through_portal(u2phone, wifi, token: str, timeout: int = 75) -> str:
             )
             u2phone.wifi_connect(wifi.ssid, "open")
             time.sleep(3)
+            if portal_url:
+                log.info("Reopening portal URL after roam rejoin #%d "
+                         "(stale/foreign DOM reset)", roams)
+                u2phone.open_url(portal_url)
+                u2phone.wait_web_input(timeout=10)
+                tapped = typed = False
             continue
         state = u2phone.portal_state()
         if state in AUTHED_STATES:
@@ -221,7 +233,7 @@ def test_rig_phone_payment_e2e(evidence, preconnected, u2phone, router, adb,
         "covering the page",
     )
 
-    state = _pay_through_portal(u2phone, wifi, token)
+    state = _pay_through_portal(u2phone, wifi, token, portal_url)
     if state not in AUTHED_STATES:
         # Some portals complete payment before the SPA state reaches the
         # uiautomator tree (TIP-03 auto-pay + Chrome a11y staleness); the

@@ -14,10 +14,7 @@ import time
 
 import pytest
 
-pytestmark = [pytest.mark.story("R7")]
-
-
-pytestmark = pytest.mark.api
+pytestmark = [pytest.mark.story("R7"), pytest.mark.api]
 
 
 def test_embedded_discovery_returns_kind_10021(rust_basic_server):
