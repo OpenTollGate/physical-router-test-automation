@@ -1,5 +1,29 @@
 # Bootstrap DNS: real dnsmasq, isolated namespace
 
+## Single-query exit runtime fixture
+
+```sh
+python3 scripts/fips-exit-bootstrap-dns.py --exit-runtime \
+  --module-repo "$HOME/worktrees/tollgate-fips-exit-consumer" \
+  --go "$HOME/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go"
+```
+
+[Runtime evidence](evidence/fips-exit-dns-runtime.log) records unchanged
+`RenderExitDNS` output, module source SHA and config SHA256. Real dnsmasq forwards
+one guest `public.example` A query to a labelled UDP fixture at derived exit IPv6
+port 53; the guest gets NOERROR / 192.0.2.73, and the fixture asserts the observed
+source is derived router IPv6 `fd13:2f39:a98c:31ba:addb:a652:5f5d:43f2`.
+The fixture handles dnsmasq's appended EDNS OPT without echoing it as an answer
+(an initial run rejected that OPT record, then cleaned up successfully).
+The successful run exits 0, reaps both children and verifies the private namespace
+registry and temporary paths are empty. It reuses the existing Runner and isolated
+mount/network harness; host resolver/network and module sources are unchanged.
+
+This is IPv6 veth plus a **synthetic UDP DNS fixture, not real FIPS**. No `.fips`
+split, portal, down-state, leakage, payment, hardware or production tests run in
+this mode. It does not run the bootstrap probes or WAN counter controls below.
+
+
 ## Exit composer: parse-only check (no service)
 
 ```sh

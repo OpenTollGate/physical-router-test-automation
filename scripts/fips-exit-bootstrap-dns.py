@@ -90,7 +90,48 @@ print(json.dumps(dict(name=name,rcode=h[1]&15,answers=h[3],wire=data.hex(),last_
 '''
 
 
-def inside(config, host_net, host_mount, dnsmasq):
+# Labelled UDP fixture, not a FIPS daemon or an external recursive resolver.
+DNS_FIXTURE = '''import socket,struct,json,sys
+s=socket.socket(socket.AF_INET6,socket.SOCK_DGRAM)
+s.bind((sys.argv[1],53)); s.settimeout(10)
+print('READY labelled UDP DNS fixture',flush=True)
+q,peer=s.recvfrom(4096)
+# dnsmasq adds an EDNS OPT record; echo only the validated question.
+question=b'\\x06public\\x07example\\0\\0\\x01\\0\\x01'
+assert q[12:12+len(question)]==question,q.hex()
+print(json.dumps(dict(fixture='UDP DNS, not FIPS',source=peer[0],query=q.hex())),flush=True)
+a=q[:2]+struct.pack('!5H',0x8180,1,1,0,0)+question+b'\\xc0\\x0c'+struct.pack('!HHIH',1,1,60,4)+socket.inet_aton('192.0.2.73')
+s.sendto(a,peer)
+assert peer[0]==sys.argv[2],peer
+'''
+
+
+def exit_probe(r, ns, config, path, dnsmasq):
+    upstream = next(line for line in config.splitlines() if line.startswith('server=fd'))
+    exit_ip, router_ip = upstream.removeprefix('server=').split('#53@')
+    ns('bootstrap', 'ip', '-6', 'addr', 'add', router_ip + '/128', 'dev', 'v3', 'nodad')
+    ns('dns-wan', 'ip', '-6', 'addr', 'add', exit_ip + '/128', 'dev', 'remote', 'nodad')
+    ns('bootstrap', 'ip', '-6', 'route', 'add', exit_ip + '/128', 'dev', 'v3')
+    ns('dns-wan', 'ip', '-6', 'route', 'add', router_ip + '/128', 'dev', 'remote')
+    fixture = r.popen_ns('dns-wan', ['python3', '-u', '-c', DNS_FIXTURE, exit_ip, router_ip])
+    daemon = r.popen_ns('bootstrap', [dnsmasq, '--keep-in-foreground', '--conf-file=' + str(path), '--user=nobody', '--group=nogroup', '--pid-file='])
+    for attempt in range(30):
+        assert fixture.poll() is None and daemon.poll() is None, 'DNS process exited before readiness'
+        if ':53 ' in ns('dns-wan', 'ss', '-lun').stdout and '10.73.1.1:5353' in ns('bootstrap', 'ss', '-lun').stdout:
+            break
+        time.sleep(0.1)
+    else:
+        raise RuntimeError('DNS listeners not ready within 3 seconds')
+    print('FIXTURE: IPv6 veth; labelled UDP DNS exit; no real FIPS transport', flush=True)
+    response = json.loads(ns('dns-guest', 'python3', '-c', PROBE, 'public.example').stdout)
+    print(json.dumps(response), flush=True)
+    assert response['rcode'] == 0 and response['answers'] == 1 and response['last_ipv4'] == '192.0.2.73', response
+    assert fixture.wait(timeout=3) == 0, 'fixture query/source assertion failed'
+    print(json.dumps(dict(expected_router_source=router_ip, exit_listener=exit_ip + ':53')), flush=True)
+    print('PASS exit DNS runtime: one guest public A query answered; fixture verified derived router source', flush=True)
+
+
+def inside(config, host_net, host_mount, dnsmasq, exit_runtime=False):
     assert os.geteuid() == 0
     assert os.readlink('/proc/self/ns/net') != host_net
     assert os.readlink('/proc/self/ns/mnt') != host_mount
@@ -121,6 +162,9 @@ def inside(config, host_net, host_mount, dnsmasq):
             ns('bootstrap', 'ip', 'link', 'set', iface, 'up')
             ns(n, 'ip', 'addr', 'add', f'10.73.{i}.2/24', 'dev', 'remote')
             ns(n, 'ip', 'link', 'set', 'remote', 'up')
+        if exit_runtime:
+            exit_probe(r, ns, config, path, dnsmasq)
+            return
         ns('bootstrap', 'ip', 'route', 'add', 'default', 'via', '10.73.3.2')
         rule = 'table inet observe { chain incoming { type filter hook input priority 0; policy accept; udp dport 53 counter; tcp dport 53 counter; }; }'
         subprocess.run(['ip', 'netns', 'exec', 'dns-wan', 'nft', '-f', '-'], input=rule, text=True, check=True)
@@ -179,15 +223,18 @@ def main():
     mode = p.add_mutually_exclusive_group()
     mode.add_argument('--inside', nargs=2)
     mode.add_argument('--parse-only', action='store_true', help='test pinned RenderExitDNS output; no sudo, service or network setup')
+    p.add_argument('--exit-runtime', action='store_true', help='one public A query through unchanged exit config to labelled IPv6 UDP fixture')
     args = p.parse_args()
+    if args.exit_runtime and args.parse_only:
+        p.error('--exit-runtime and --parse-only are mutually exclusive')
     dnsmasq = shutil.which('dnsmasq')
     if not dnsmasq:
         raise RuntimeError('BLOCKED: dnsmasq missing; no install attempted')
     if args.inside:
-        inside(sys.stdin.read(), args.inside[0], args.inside[1], dnsmasq)
+        inside(sys.stdin.read(), args.inside[0], args.inside[1], dnsmasq, args.exit_runtime)
         return
-    config = render(args.module_repo, args.go, exit_dns=args.parse_only)
-    print(json.dumps(dict(module_sha=EXIT_PIN if args.parse_only else PIN, config_sha256=hashlib.sha256(config.encode()).hexdigest(), config=config)), flush=True)
+    config = render(args.module_repo, args.go, exit_dns=args.parse_only or args.exit_runtime)
+    print(json.dumps(dict(module_sha=EXIT_PIN if args.parse_only or args.exit_runtime else PIN, config_sha256=hashlib.sha256(config.encode()).hexdigest(), config=config)), flush=True)
     if args.parse_only:
         print(subprocess.check_output([dnsmasq, '--version'], text=True), flush=True)
         parse_only(config, dnsmasq)
@@ -195,7 +242,7 @@ def main():
     subprocess.run(['sudo', '-n', 'unshare', '--mount', '--net', '--propagation', 'private',
                     'env', 'TMPDIR=' + tempfile.gettempdir(), 'PATH=' + os.environ['PATH'],
                     'python3', str(Path(__file__).resolve()), '--module-repo', args.module_repo,
-                    '--go', args.go, '--inside', os.readlink('/proc/self/ns/net'), os.readlink('/proc/self/ns/mnt')],
+                    '--go', args.go, '--inside', os.readlink('/proc/self/ns/net'), os.readlink('/proc/self/ns/mnt')] + (['--exit-runtime'] if args.exit_runtime else []),
                    input=config, text=True, check=True, timeout=60)
 
 
