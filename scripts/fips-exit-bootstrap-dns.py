@@ -130,7 +130,8 @@ def exit_probe(r, ns, config, path, dnsmasq):
     loop_ip, loop_port = loopback.removeprefix('server=/fips/').split('#')
     fips_name = 'split-' + os.urandom(8).hex() + '.fips'
     exit_count, loop_count = r.tmp / 'exit-count', r.tmp / 'loop-count'
-    fixture = r.popen_ns('dns-wan', ['python3', '-u', '-c', DNS_FIXTURE, exit_ip, '53', router_ip, 'public.example', '192.0.2.73', str(exit_count)])
+    public_name = 'public-' + os.urandom(16).hex() + '.example.com'
+    fixture = r.popen_ns('dns-wan', ['python3', '-u', '-c', DNS_FIXTURE, exit_ip, '53', router_ip, public_name, '192.0.2.73', str(exit_count)])
     local = r.popen_ns('bootstrap', ['python3', '-u', '-c', DNS_FIXTURE, loop_ip, loop_port, loop_ip, fips_name, '192.0.2.74', str(loop_count)])
     wan_count = r.tmp / 'wan-count'
     wan = r.popen_ns('dns-wan', ['python3', '-u', '-c', DNS_FIXTURE, '10.73.3.2', '53', '10.73.3.1', 'wan-control.example', '192.0.2.75', str(wan_count)])
@@ -147,11 +148,13 @@ def exit_probe(r, ns, config, path, dnsmasq):
     assert response['rcode'] == 0 and response['answers'] == 1 and response['last_ipv4'] == '192.0.2.75', response
     wan_control_count = int(wan_count.read_text())
     assert wan.poll() is None and wan_before == 0 and wan_control_count == wan_before + 1, 'WAN positive control not counted'
-    print(json.dumps(dict(case='WAN positive-control-only; not no-fallback proof', wan_queries_before=wan_before, wan_queries_after=wan_control_count, **response)), flush=True)
+    print(json.dumps(dict(case='WAN IPv4 UDP positive control', wan_queries_before=wan_before, wan_queries_after=wan_control_count, **response)), flush=True)
     print('FIXTURE: IPv6 veth; labelled UDP DNS exit; no real FIPS transport', flush=True)
-    response = json.loads(ns('dns-guest', 'python3', '-c', PROBE, 'public.example').stdout)
+    response = json.loads(ns('dns-guest', 'python3', '-c', PROBE, public_name).stdout)
     print(json.dumps(response), flush=True)
     assert response['rcode'] == 0 and response['answers'] == 1 and response['last_ipv4'] == '192.0.2.73', response
+    assert wan.poll() is None and int(wan_count.read_text()) == wan_control_count
+    print(json.dumps(dict(case='exit-up IPv4 UDP WAN fallback', wan_before=wan_control_count, wan_after=int(wan_count.read_text()))), flush=True)
     before = int(exit_count.read_text())
     assert before == 1, before
     response = json.loads(ns('dns-guest', 'python3', '-c', PROBE, fips_name).stdout)
@@ -181,7 +184,9 @@ def exit_probe(r, ns, config, path, dnsmasq):
     print(json.dumps(dict(case='exit-down', observation_window_seconds=15, **response)), flush=True)
     assert response['outcome'] in ('SERVFAIL', 'timeout'), response
     assert response.get('answers', 0) == 0, response
-    print('PASS exit-down: unique uncached public A returned SERVFAIL or timed out; no successful answer within 15-second query deadline; no WAN-decoy proof', flush=True)
+    assert wan.poll() is None and int(wan_count.read_text()) == wan_control_count
+    print(json.dumps(dict(case='exit-down IPv4 UDP WAN fallback', wan_before=wan_control_count, wan_after=int(wan_count.read_text()))), flush=True)
+    print('PASS bounded IPv4 UDP WAN-decoy fallback test: no successful exit-down answer; decoy count unchanged', flush=True)
 
 
 def inside(config, host_net, host_mount, dnsmasq, exit_runtime=False):
@@ -190,6 +195,8 @@ def inside(config, host_net, host_mount, dnsmasq, exit_runtime=False):
     assert os.readlink('/proc/self/ns/mnt') != host_mount
     links = json.loads(subprocess.check_output(['ip', '-j', 'link']))
     assert all(x['ifname'] == 'lo' or (x['ifname'] == 'ip6tnl0' and 'UP' not in x['flags']) for x in links)
+    print(json.dumps(dict(host_net=host_net, private_net=os.readlink('/proc/self/ns/net'), host_mount=host_mount, private_mount=os.readlink('/proc/self/ns/mnt'))), flush=True)
+    subprocess.run(['mount', '--make-rprivate', '/'], check=True)
     subprocess.run(['mount', '-t', 'tmpfs', 'tmpfs', '/run/netns'], check=True)
     r = Runner()
     names = ('bootstrap', 'dns-guest', 'dns-wan')
@@ -198,7 +205,15 @@ def inside(config, host_net, host_mount, dnsmasq, exit_runtime=False):
     def interrupted(signum, frame):
         raise RuntimeError(f'interrupted {signum}')
     signal.signal(signal.SIGTERM, interrupted)
+    resolver_mounted = False
     try:
+        if exit_runtime:
+            resolver = r.tmp / 'resolv.conf'
+            resolver.write_text('nameserver 10.73.3.2\n')
+            subprocess.run(['mount', '--bind', str(resolver), '/etc/resolv.conf'], check=True)
+            resolver_mounted = True
+            assert Path('/etc/resolv.conf').read_text() == resolver.read_text()
+            print(json.dumps(dict(resolver_fixture=resolver.read_text(), resolver_mount='private bind; host symlink target not written')), flush=True)
         path = r.tmp / 'dnsmasq.conf'
         path.write_text(config)
         result = r.run([dnsmasq, '--test', '--conf-file=' + str(path)], check=False)
@@ -261,6 +276,8 @@ def inside(config, host_net, host_mount, dnsmasq, exit_runtime=False):
             print(json.dumps(dict(dnsmasq_exit=proc.returncode, stdout=out, stderr=err)), flush=True)
         for n in reversed(names):
             r.run(['ip', 'netns', 'delete', n], check=False)
+        if resolver_mounted:
+            subprocess.run(['umount', '/etc/resolv.conf'], check=True)
         shutil.rmtree(r.tmp)
         assert not r.run(['ip', 'netns', 'list']).stdout.strip()
         assert not r.tmp.exists()
@@ -292,6 +309,21 @@ def main():
         print(subprocess.check_output([dnsmasq, '--version'], text=True), flush=True)
         parse_only(config, dnsmasq)
         return
+    def resolver_state():
+        return dict(sha256=hashlib.sha256(Path('/etc/resolv.conf').read_bytes()).hexdigest(),
+                    symlink=os.readlink('/etc/resolv.conf') if Path('/etc/resolv.conf').is_symlink() else None,
+                    target=str(Path('/etc/resolv.conf').resolve()))
+    before = resolver_state()
+    print(json.dumps(dict(host_resolver_before=before)), flush=True)
+    try:
+        run_isolated(config, args)
+    finally:
+        after = resolver_state()
+        print(json.dumps(dict(host_resolver_after=after)), flush=True)
+        assert after == before, 'host resolver changed'
+
+
+def run_isolated(config, args):
     subprocess.run(['sudo', '-n', 'unshare', '--mount', '--net', '--propagation', 'private',
                     'env', 'TMPDIR=' + tempfile.gettempdir(), 'PATH=' + os.environ['PATH'],
                     'python3', str(Path(__file__).resolve()), '--module-repo', args.module_repo,

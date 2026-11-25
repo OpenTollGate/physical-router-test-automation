@@ -35,14 +35,27 @@ No local-continuity checks or topology/firewall changes are added.
 [WAN positive-control evidence](evidence/fips-exit-dns-wan-control.log) adds one
 reused UDP fixture at `10.73.3.2:53`. A direct router-side query returns
 NOERROR / one A answer / `192.0.2.75`, incrementing its count from 0 to 1.
-The live process handle, count path and control count remain available for later
-fallback assertions. This is **positive-control-only, not no-fallback proof**:
-no `resolv.conf` changes or new exit-down assertions are included.
+That earlier run was positive-control-only. The current lane extends the same decoy
+without adding another DNS fixture; [bounded fallback evidence](evidence/fips-exit-dns-wan-fallback.log)
+records a successful run with unchanged generated config SHA256 `3203c06773cf6d441837961028ba973782050dc08e61b5049a88fbee2262f71d`.
+Before any mount it asserts and logs distinct host/private mount and network namespace
+IDs, makes propagation recursively private, then bind-mounts a temporary resolver file
+containing only `nameserver 10.73.3.2` over `/etc/resolv.conf`. It never writes through
+the host resolver path or replaces its symlink. The direct decoy positive control
+still answers `192.0.2.75` and increments its count **0 → 1**. A fresh random public
+query succeeds through the exit while the decoy remains **1 → 1**; after stopping
+only the exit, another fresh uncached public query times out at the 15-second socket
+deadline (15.015 s measured), with no answer and decoy count still **1 → 1**.
+The decoy process is asserted alive at both observations. Cleanup reaps all processes,
+deletes private network namespaces, unmounts the resolver fixture and removes temporary
+files. Host resolver checksum before/after is identical:
+`64b0d7946467fd1442274f02b4c8d52d872ef0291ff8a8aac648d81f5e01124e`;
+the symlink `../run/systemd/resolve/stub-resolv.conf` and resolved target also match.
 
-This is IPv6 veth plus **synthetic UDP DNS fixtures, not real FIPS**. No
-portal HTTP, exhaustive leakage, payment, hardware or production tests run in
-this mode. It does not run the bootstrap probes or WAN counter controls below;
-**this is not WAN-decoy proof**.
+The fallback claim covers **IPv4 UDP DNS to this decoy only**, not TCP or IPv6 WAN
+fallback or exhaustive leakage. Exit forwarding uses IPv6 veth plus **synthetic UDP
+DNS fixtures, not real FIPS**. No portal HTTP, payment, hardware or production tests
+run in this mode. It does not run the bootstrap probes or WAN counter controls below.
 
 
 ## Exit composer: parse-only check (no service)

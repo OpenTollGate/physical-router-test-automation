@@ -1,0 +1,25 @@
+go version go1.26.10 linux/amd64
+{"module_sha": "3dcbe79462a827731c0e751cc3719d7a3c2e0481", "config_sha256": "3203c06773cf6d441837961028ba973782050dc08e61b5049a88fbee2262f71d", "config": "no-resolv\nno-hosts\nno-poll\nedns-packet-max=1232\nlisten-address=10.73.1.1\nport=5353\nbind-interfaces\nhost-record=portal.example,10.73.1.1\nserver=fd01:35da:2f8a:cf7b:9e30:9093:9432:e476#53@fd13:2f39:a98c:31ba:addb:a652:5f5d:43f2\nserver=/fips/127.0.0.1#5354\n"}
+{"host_resolver_before": {"sha256": "64b0d7946467fd1442274f02b4c8d52d872ef0291ff8a8aac648d81f5e01124e", "symlink": "../run/systemd/resolve/stub-resolv.conf", "target": "/run/systemd/resolve/stub-resolv.conf"}}
+{"host_net": "net:[4026531833]", "private_net": "net:[4026532653]", "host_mount": "mnt:[4026531832]", "private_mount": "mnt:[4026532570]"}
+{"resolver_fixture": "nameserver 10.73.3.2\n", "resolver_mount": "private bind; host symlink target not written"}
+{"parser_rc": 0, "stdout": "", "stderr": "dnsmasq: syntax check OK.\n"}
+{"case": "WAN IPv4 UDP positive control", "wan_queries_before": 0, "wan_queries_after": 1, "name": "wan-control.example", "outcome": "response", "elapsed_seconds": 0.00038617406971752644, "rcode": 0, "answers": 1, "wire": "04d2818000010001000000000b77616e2d636f6e74726f6c076578616d706c650000010001c00c000100010000003c0004c000024b", "last_ipv4": "192.0.2.75"}
+FIXTURE: IPv6 veth; labelled UDP DNS exit; no real FIPS transport
+{"name": "public-323db7b70409e7853d0388add584685f.example.com", "outcome": "response", "elapsed_seconds": 0.000549317104741931, "rcode": 0, "answers": 1, "wire": "04d281800001000100000000277075626c69632d3332336462376237303430396537383533643033383861646435383436383566076578616d706c6503636f6d0000010001c00c000100010000003c0004c0000249", "last_ipv4": "192.0.2.73"}
+{"case": "exit-up IPv4 UDP WAN fallback", "wan_before": 1, "wan_after": 1}
+{"name": "split-0aa5ae990114e2cc.fips", "outcome": "response", "elapsed_seconds": 0.000544385053217411, "rcode": 0, "answers": 1, "wire": "04d2818000010001000000001673706c69742d3061613561653939303131346532636304666970730000010001c00c000100010000003c0004c000024a", "last_ipv4": "192.0.2.74"}
+{"loopback_listener": "127.0.0.1:5354", "loopback_queries": 1, "exit_queries_before": 1, "exit_queries_after": 1}
+{"name": "portal.example", "outcome": "response", "elapsed_seconds": 0.00018028891645371914, "rcode": 0, "answers": 1, "wire": "04d28580000100010000000006706f7274616c076578616d706c650000010001c00c000100010000000000040a490101", "last_ipv4": "10.73.1.1"}
+{"portal_fixture_order": ["exit", "fips"], "portal_counts_before": [1, 1], "portal_counts_after": [1, 1]}
+{"expected_router_source": "fd13:2f39:a98c:31ba:addb:a652:5f5d:43f2", "exit_listener": "fd01:35da:2f8a:cf7b:9e30:9093:9432:e476:53"}
+PASS exit DNS runtime: public A query/source verified; one unique .fips query answered by loopback; exit count unchanged
+{"case": "exit-down", "observation_window_seconds": 15, "name": "exit-down-44f3c0a04378a07c6c5400e8ab5f5a4c.example.com", "outcome": "timeout", "elapsed_seconds": 15.0154326739721}
+{"case": "exit-down IPv4 UDP WAN fallback", "wan_before": 1, "wan_after": 1}
+PASS bounded IPv4 UDP WAN-decoy fallback test: no successful exit-down answer; decoy count unchanged
+{"dnsmasq_exit": 0, "stdout": "", "stderr": ""}
+{"dnsmasq_exit": -15, "stdout": "READY labelled UDP DNS fixture\n{\"fixture\": \"UDP DNS, not FIPS\", \"source\": \"10.73.3.1\", \"query\": \"04d2010000010000000000000b77616e2d636f6e74726f6c076578616d706c650000010001\", \"count\": 1}\n", "stderr": ""}
+{"dnsmasq_exit": -15, "stdout": "READY labelled UDP DNS fixture\n{\"fixture\": \"UDP DNS, not FIPS\", \"source\": \"127.0.0.1\", \"query\": \"1382010000010000000000011673706c69742d306161356165393930313134653263630466697073000001000100002904d0000000000000\", \"count\": 1}\n", "stderr": ""}
+{"dnsmasq_exit": -15, "stdout": "READY labelled UDP DNS fixture\n{\"fixture\": \"UDP DNS, not FIPS\", \"source\": \"fd13:2f39:a98c:31ba:addb:a652:5f5d:43f2\", \"query\": \"7f6501000001000000000001277075626c69632d3332336462376237303430396537383533643033383861646435383436383566076578616d706c6503636f6d000001000100002904d0000000000000\", \"count\": 1}\n", "stderr": ""}
+CLEANUP: child reaped; private registry empty; temporary files removed
+{"host_resolver_after": {"sha256": "64b0d7946467fd1442274f02b4c8d52d872ef0291ff8a8aac648d81f5e01124e", "symlink": "../run/systemd/resolve/stub-resolv.conf", "target": "/run/systemd/resolve/stub-resolv.conf"}}
