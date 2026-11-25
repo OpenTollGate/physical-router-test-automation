@@ -1,0 +1,10 @@
+go version go1.26.10 linux/amd64
+{"module_sha": "9320319f05da69a2f13e78c8f0d78b16ab3fa376", "config_sha256": "6cc250648892e8d03dab45d091e55f0fde7a0bb2472be1d7d416557ac83d321c", "config": "no-resolv\nno-hosts\nno-poll\nlocal=/#/\nlisten-address=10.73.1.1\nport=5353\nbind-interfaces\nhost-record=portal.example,10.73.1.1\n"}
+{"parser_rc": 0, "stdout": "", "stderr": "dnsmasq: syntax check OK.\n"}
+{"name": "portal.example", "rcode": 0, "answers": 1, "wire": "04d28580000100010000000006706f7274616c076578616d706c650000010001c00c000100010000000000040a490101", "last_ipv4": "10.73.1.1"}
+{"name": "unrelated.example", "rcode": 3, "answers": 0, "wire": "04d28183000100000000000009756e72656c61746564076578616d706c650000010001", "last_ipv4": null}
+{"name": "random-9320319f.portal.example", "rcode": 3, "answers": 0, "wire": "04d2818300010000000000000f72616e646f6d2d393332303331396606706f7274616c076578616d706c650000010001", "last_ipv4": null}
+{"wan_dns_before": [1, 0], "wan_dns_after": [1, 0]}
+PASS bootstrap only: real DNS replies; no paid DNS, FIPS transport or deployment claim
+{"dnsmasq_exit": 0, "stdout": "", "stderr": ""}
+CLEANUP: child reaped; private registry empty; temporary files removed
