@@ -105,7 +105,28 @@ def ipip6(r, payload):
                 for expr in item.get('rule', {}).get('expr', []) if 'counter' in expr)
     assert count > 0, 'peer did not observe derived inner IPv4 source'
     print(json.dumps({'peer_observed_snat_source': payload['inner'], 'echo_requests': count}), flush=True)
-    print('PASS: kernel ipip6 guest roundtrip only; not FIPS transport, NDS, or paid service', flush=True)
+    ns('consumer', 'ip', 'link', 'set', 'exit-test', 'down')
+    failed = r.ns('guest', ['ping', '-n', '-c', '1', '-W', '2', payload['peer_inner']], check=False)
+    print(failed.stdout, flush=True)
+    assert failed.returncode == 1, (failed.returncode, failed.stdout, failed.stderr)
+    routes = json.loads(ns('consumer', 'ip', '-j', '-4', 'route', 'show', 'table', '200').stdout)
+    assert any(route.get('type') == 'unreachable' and route.get('dst') == 'default'
+               for route in routes), ('dedicated unreachable default missing', routes)
+    print(json.dumps({'tunnel_state': 'down', 'guest_ping_returncode': failed.returncode,
+                      'table_200_routes': routes}), flush=True)
+    # Restore the same interface; do not recreate the tunnel or reapply the plan.
+    ns('consumer', 'ip', 'link', 'set', 'exit-test', 'up')
+    print(json.dumps({'tunnel_state': 'up', 'table_200_routes': json.loads(
+        ns('consumer', 'ip', '-j', '-4', 'route', 'show', 'table', '200').stdout)}), flush=True)
+    recovered = ns('guest', 'ping', '-n', '-c', '1', '-W', '2', payload['peer_inner'])
+    print(recovered.stdout, flush=True)
+    observed = json.loads(ns('peer', 'nft', '-j', 'list', 'chain', 'inet', 'observation', 'observed').stdout)
+    recovered_count = sum(expr['counter']['packets'] for item in observed['nftables']
+                          for expr in item.get('rule', {}).get('expr', []) if 'counter' in expr)
+    assert recovered_count > count, 'peer did not observe recovered roundtrip source'
+    print(json.dumps({'tunnel_state': 'up', 'guest_ping_returncode': recovered.returncode,
+                      'peer_echo_request_delta': recovered_count - count}), flush=True)
+    print('PASS: kernel ipip6 roundtrip/down/up; no direct-WAN fallback proof (no decoy), FIPS transport, NDS, or paid service', flush=True)
 
 
 def inside(payload, host_net, host_mount, mode='veth'):

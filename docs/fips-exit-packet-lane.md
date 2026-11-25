@@ -104,7 +104,21 @@ automatically created `ip6tnl0` fallback; both harness issues were corrected.
 No planner error occurred. The original veth lane was also rerun successfully.
 Kernel tunnel creation may auto-load the host-shared `ip6_tunnel` module;
 cleanup does not unload it. No host routes/firewall or hardware are touched.
-No spoof/down tests, FIPS daemon, NDS or paid-service claim are included.
+No spoof tests, FIPS daemon, NDS or paid-service claim are included.
+
+### Tunnel down/up regression (currently failing)
+
+[`evidence/fips-exit-ipip6-down-up.log`](evidence/fips-exit-ipip6-down-up.log)
+records the real exit-1 run on 2026-11-25. Initial roundtrip passed and the
+peer observed the derived SNAT source. Bringing consumer `exit-test` down
+made guest ping return 1; table 200 retained its unreachable default (metric
+42760). Bringing that same tunnel up did **not** restore roundtrip: guest ping
+still returned 1 (`Destination Host Unreachable`). Table 200 still contained
+only the unreachable default: the tunnel default removed on link-down did
+not return on link-up. The recovery assertion intentionally fails; no route
+repair or planner replay hides the regression. Cleanup confirmed an empty
+private namespace registry. Module code and topology are unchanged.
+This does **not** prove direct-WAN no-fallback: this mode has no WAN decoy.
 
 ## Deliberate limits / next lane (original veth mode)
 
