@@ -1,0 +1,19 @@
+go version go1.26.10 linux/amd64
+{"module_sha": "3dcbe79462a827731c0e751cc3719d7a3c2e0481", "config_sha256": "3203c06773cf6d441837961028ba973782050dc08e61b5049a88fbee2262f71d", "config": "no-resolv\nno-hosts\nno-poll\nedns-packet-max=1232\nlisten-address=10.73.1.1\nport=5353\nbind-interfaces\nhost-record=portal.example,10.73.1.1\nserver=fd01:35da:2f8a:cf7b:9e30:9093:9432:e476#53@fd13:2f39:a98c:31ba:addb:a652:5f5d:43f2\nserver=/fips/127.0.0.1#5354\n"}
+{"parser_rc": 0, "stdout": "", "stderr": "dnsmasq: syntax check OK.\n"}
+{"case": "WAN positive-control-only; not no-fallback proof", "wan_queries_before": 0, "wan_queries_after": 1, "name": "wan-control.example", "outcome": "response", "elapsed_seconds": 0.00042710592970252037, "rcode": 0, "answers": 1, "wire": "04d2818000010001000000000b77616e2d636f6e74726f6c076578616d706c650000010001c00c000100010000003c0004c000024b", "last_ipv4": "192.0.2.75"}
+FIXTURE: IPv6 veth; labelled UDP DNS exit; no real FIPS transport
+{"name": "public.example", "outcome": "response", "elapsed_seconds": 0.0006284948904067278, "rcode": 0, "answers": 1, "wire": "04d281800001000100000000067075626c6963076578616d706c650000010001c00c000100010000003c0004c0000249", "last_ipv4": "192.0.2.73"}
+{"name": "split-2cd96521556a42af.fips", "outcome": "response", "elapsed_seconds": 0.000574544770643115, "rcode": 0, "answers": 1, "wire": "04d2818000010001000000001673706c69742d3263643936353231353536613432616604666970730000010001c00c000100010000003c0004c000024a", "last_ipv4": "192.0.2.74"}
+{"loopback_listener": "127.0.0.1:5354", "loopback_queries": 1, "exit_queries_before": 1, "exit_queries_after": 1}
+{"name": "portal.example", "outcome": "response", "elapsed_seconds": 0.00018441886641085148, "rcode": 0, "answers": 1, "wire": "04d28580000100010000000006706f7274616c076578616d706c650000010001c00c000100010000000000040a490101", "last_ipv4": "10.73.1.1"}
+{"portal_fixture_order": ["exit", "fips"], "portal_counts_before": [1, 1], "portal_counts_after": [1, 1]}
+{"expected_router_source": "fd13:2f39:a98c:31ba:addb:a652:5f5d:43f2", "exit_listener": "fd01:35da:2f8a:cf7b:9e30:9093:9432:e476:53"}
+PASS exit DNS runtime: public A query/source verified; one unique .fips query answered by loopback; exit count unchanged
+{"case": "exit-down", "observation_window_seconds": 15, "name": "exit-down-20fa421cdc52f0d4446ef9d47229d4b6.example.com", "outcome": "timeout", "elapsed_seconds": 15.009498069994152}
+PASS exit-down: unique uncached public A returned SERVFAIL or timed out; no successful answer within 15-second query deadline; no WAN-decoy proof
+{"dnsmasq_exit": 0, "stdout": "", "stderr": ""}
+{"dnsmasq_exit": -15, "stdout": "READY labelled UDP DNS fixture\n{\"fixture\": \"UDP DNS, not FIPS\", \"source\": \"10.73.3.1\", \"query\": \"04d2010000010000000000000b77616e2d636f6e74726f6c076578616d706c650000010001\", \"count\": 1}\n", "stderr": ""}
+{"dnsmasq_exit": -15, "stdout": "READY labelled UDP DNS fixture\n{\"fixture\": \"UDP DNS, not FIPS\", \"source\": \"127.0.0.1\", \"query\": \"99f2010000010000000000011673706c69742d326364393635323135353661343261660466697073000001000100002904d0000000000000\", \"count\": 1}\n", "stderr": ""}
+{"dnsmasq_exit": -15, "stdout": "READY labelled UDP DNS fixture\n{\"fixture\": \"UDP DNS, not FIPS\", \"source\": \"fd13:2f39:a98c:31ba:addb:a652:5f5d:43f2\", \"query\": \"564401000001000000000001067075626c6963076578616d706c65000001000100002904d0000000000000\", \"count\": 1}\n", "stderr": ""}
+CLEANUP: child reaped; private registry empty; temporary files removed

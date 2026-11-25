@@ -85,7 +85,7 @@ name=sys.argv[1]
 q=struct.pack('!6H',1234,256,1,0,0,0)+b''.join(bytes([len(x)])+x.encode() for x in name.split('.'))+b'\\0'+struct.pack('!2H',1,1)
 s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(float(sys.argv[2]) if len(sys.argv)>2 else 2)
 started=time.monotonic()
-s.sendto(q,('10.73.1.1',5353))
+s.sendto(q,(sys.argv[3],int(sys.argv[4])) if len(sys.argv)>4 else ('10.73.1.1',5353))
 try:
  data,addr=s.recvfrom(4096)
 except socket.timeout:
@@ -132,14 +132,22 @@ def exit_probe(r, ns, config, path, dnsmasq):
     exit_count, loop_count = r.tmp / 'exit-count', r.tmp / 'loop-count'
     fixture = r.popen_ns('dns-wan', ['python3', '-u', '-c', DNS_FIXTURE, exit_ip, '53', router_ip, 'public.example', '192.0.2.73', str(exit_count)])
     local = r.popen_ns('bootstrap', ['python3', '-u', '-c', DNS_FIXTURE, loop_ip, loop_port, loop_ip, fips_name, '192.0.2.74', str(loop_count)])
+    wan_count = r.tmp / 'wan-count'
+    wan = r.popen_ns('dns-wan', ['python3', '-u', '-c', DNS_FIXTURE, '10.73.3.2', '53', '10.73.3.1', 'wan-control.example', '192.0.2.75', str(wan_count)])
     daemon = r.popen_ns('bootstrap', [dnsmasq, '--keep-in-foreground', '--conf-file=' + str(path), '--user=nobody', '--group=nogroup', '--pid-file='])
     for attempt in range(30):
-        assert fixture.poll() is None and local.poll() is None and daemon.poll() is None, 'DNS process exited before readiness'
-        if exit_count.exists() and loop_count.exists() and '10.73.1.1:5353' in ns('bootstrap', 'ss', '-lun').stdout:
+        assert fixture.poll() is None and local.poll() is None and wan.poll() is None and daemon.poll() is None, 'DNS process exited before readiness'
+        if exit_count.exists() and loop_count.exists() and wan_count.exists() and '10.73.1.1:5353' in ns('bootstrap', 'ss', '-lun').stdout:
             break
         time.sleep(0.1)
     else:
         raise RuntimeError('DNS listeners not ready within 3 seconds')
+    wan_before = int(wan_count.read_text())
+    response = json.loads(ns('bootstrap', 'python3', '-c', PROBE, 'wan-control.example', '2', '10.73.3.2', '53').stdout)
+    assert response['rcode'] == 0 and response['answers'] == 1 and response['last_ipv4'] == '192.0.2.75', response
+    wan_control_count = int(wan_count.read_text())
+    assert wan.poll() is None and wan_before == 0 and wan_control_count == wan_before + 1, 'WAN positive control not counted'
+    print(json.dumps(dict(case='WAN positive-control-only; not no-fallback proof', wan_queries_before=wan_before, wan_queries_after=wan_control_count, **response)), flush=True)
     print('FIXTURE: IPv6 veth; labelled UDP DNS exit; no real FIPS transport', flush=True)
     response = json.loads(ns('dns-guest', 'python3', '-c', PROBE, 'public.example').stdout)
     print(json.dumps(response), flush=True)

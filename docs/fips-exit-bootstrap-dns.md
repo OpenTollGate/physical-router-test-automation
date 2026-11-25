@@ -22,7 +22,7 @@ count is 1; the still-running exit fixture count stays 1 before/after that query
 A subsequent exact `portal.example` A query receives NOERROR / one answer /
 10.73.1.1 locally; both live fixture counts remain `[1, 1]` before/after the query
 (exit, `.fips` order, including a bounded 200 ms observation).
-The successful run exits 0, reaps all three children and verifies the private namespace
+The successful run exits 0, reaps all children and verifies the private namespace
 registry and temporary paths are empty. It reuses the existing Runner and isolated
 mount/network harness; host resolver/network and module sources are unchanged.
 
@@ -31,6 +31,13 @@ After those successful probes, only the exit fixture is stopped. One unique
 records SERVFAIL separately from timeout and rejects successful answers.
 [Exit-down evidence](evidence/fips-exit-dns-exit-down.log) records a timeout.
 No local-continuity checks or topology/firewall changes are added.
+
+[WAN positive-control evidence](evidence/fips-exit-dns-wan-control.log) adds one
+reused UDP fixture at `10.73.3.2:53`. A direct router-side query returns
+NOERROR / one A answer / `192.0.2.75`, incrementing its count from 0 to 1.
+The live process handle, count path and control count remain available for later
+fallback assertions. This is **positive-control-only, not no-fallback proof**:
+no `resolv.conf` changes or new exit-down assertions are included.
 
 This is IPv6 veth plus **synthetic UDP DNS fixtures, not real FIPS**. No
 portal HTTP, exhaustive leakage, payment, hardware or production tests run in
