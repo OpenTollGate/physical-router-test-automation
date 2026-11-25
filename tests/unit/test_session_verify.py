@@ -35,6 +35,13 @@ IP = "192.168.1.100"
 # --------------------------------------------------------------------------- #
 
 
+# #301: this is the sole story("P1") file and it is MockRouter-only — the
+# story's subject is the LIVE commissioned read-only battery
+# (tests/api/test_discovery_mints.py's read-path node IDs under
+# --no-deploy, per the narrative P1 row). The map must not render P1
+# Covered on mock-level evidence alone.
+STORY_PARTIAL = "mock-only probes; the live commissioned read-only battery (discovery read-path, --no-deploy) is the story's subject"
+
 pytestmark = [pytest.mark.story("P1")]
 
 class MockRouter:

@@ -39,6 +39,11 @@ PERSONA_ORDER = list(PERSONA_TITLES)
 
 STORY_RE = re.compile(r'pytest\.mark\.story\("([A-Z]+\d+)"\)')
 TIP_RE = re.compile(r'pytest\.mark\.tip\("(TIP-\d+)"\)')
+# Module-level partial-evidence declaration (#301): a marked file that
+# proves only PART of its stories' acceptance (mock-level, driver-level,
+# offline-only) declares so, and the map renders those stories Partial
+# instead of Covered — the citation stays, the claim is honest.
+STORY_PARTIAL_RE = re.compile(r'^STORY_PARTIAL\s*=\s*"([^"]*)"', re.MULTILINE)
 
 
 def collects_tests(text: str) -> bool:
@@ -78,7 +83,7 @@ def collects_tests(text: str) -> bool:
 
 
 def scan_tests() -> tuple[dict[str, dict[str, list[str]]], dict[str, dict[str, list[str]]]]:
-    """(collectable, uncollectable): file -> {"stories": [...], "tips": [...]}"""
+    """(collectable, uncollectable): file -> {"stories", "tips", "partial"}"""
     found: dict[str, dict[str, list[str]]] = {}
     dead: dict[str, dict[str, list[str]]] = {}
     for root in TEST_ROOTS:
@@ -91,10 +96,17 @@ def scan_tests() -> tuple[dict[str, dict[str, list[str]]], dict[str, dict[str, l
             stories = sorted(set(STORY_RE.findall(text)))
             tips = sorted(set(TIP_RE.findall(text)))
             if stories or tips:
+                info = {
+                    "stories": stories,
+                    "tips": tips,
+                    "partial": STORY_PARTIAL_RE.search(text).group(1)
+                    if STORY_PARTIAL_RE.search(text)
+                    else "",
+                }
                 if collects_tests(text):
-                    found[rel] = {"stories": stories, "tips": tips}
+                    found[rel] = info
                 else:
-                    dead[rel] = {"stories": stories, "tips": tips}
+                    dead[rel] = info
     return found, dead
 
 
@@ -116,9 +128,12 @@ def main() -> int:
 
     story_tests: dict[str, list[str]] = defaultdict(list)
     tip_tests: dict[str, list[str]] = defaultdict(list)
+    story_partial: dict[str, list[tuple[str, str]]] = defaultdict(list)
     for rel, info in marks.items():
         for story in info["stories"]:
             story_tests[story].append(rel)
+            if info["partial"]:
+                story_partial[story].append((rel, info["partial"]))
         for tip in info["tips"]:
             tip_tests[tip].append(rel)
 
@@ -147,7 +162,14 @@ def main() -> int:
         lines += [f"## {PERSONA_TITLES[persona]}", "", "| ID | Story | Proving tests | Status |", "|----|-------|---------------|--------|"]
         for story in stories:
             tests = story_tests.get(story, [])
-            status = "Covered" if tests else "Gap"
+            if tests and story_partial.get(story):
+                # #301: a proving file declared partial evidence — the
+                # citation stands, the claim does not claim too much.
+                status = "Partial*"
+            elif tests:
+                status = "Covered"
+            else:
+                status = "Gap"
             test_cell = "<br>".join(f"`{t}`" for t in tests) if tests else "—"
             lines.append(f"| {story} | {catalog[story]['title']} | {test_cell} | {status} |")
         lines.append("")
@@ -156,6 +178,20 @@ def main() -> int:
         lines += ["## TIP conformance matrix", "", "| TIP | Proving tests |", "|-----|---------------|"]
         for tip in sorted(tip_tests):
             lines.append(f"| {tip} | {'<br>'.join(f'`{t}`' for t in tip_tests[tip])} |")
+        lines.append("")
+
+    if story_partial:
+        lines += [
+            "## Partial-evidence declarations (* rows)",
+            "",
+            "A proving file declared STORY_PARTIAL — it proves only part of the",
+            "story's acceptance (mock-level / driver-level / offline-only); the",
+            "story's remaining evidence is the declared gap (#301):",
+            "",
+        ]
+        for story in sorted(story_partial):
+            for rel, reason in story_partial[story]:
+                lines.append(f"- **{story}** `({rel})`: {reason}")
         lines.append("")
 
     if unmarked:

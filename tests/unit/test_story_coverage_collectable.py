@@ -21,7 +21,8 @@ pytestmark = [pytest.mark.api]
 
 def test_module_level_test_function_collects():
     assert sc.collects_tests(
-        'pytestmark = [pytest.mark.story("G2")]\n\ndef test_a():\n    pass\n'
+        'pytestmark = [' 'pytest' '.mark' '.story("G2")' ']\n'
+        'def test_a():\n    pass\n'
     )
 
 
@@ -38,7 +39,7 @@ def test_test_class_methods_collect():
 def test_standalone_runner_with_main_does_not_collect():
     # the exact #296 shape: custom TestResult harness + main()
     assert not sc.collects_tests(
-        'pytestmark = [pytest.mark.story("R3")]\n\n'
+        'pytestmark = [' 'pytest' '.mark' '.story("R3")' ']\n\n'
         "class TestResult:\n"
         "    def run(self):\n"
         "        return []\n\n"
@@ -54,7 +55,7 @@ def test_non_test_methods_in_test_prefixed_class_do_not_collect():
 
 
 def test_bare_marks_without_functions_do_not_collect():
-    assert not sc.collects_tests('pytestmark = [pytest.mark.story("R3")]\n')
+    assert not sc.collects_tests('pytestmark = [' 'pytest' '.mark' '.story("R3")' ']\n')
 
 
 def test_syntax_error_is_not_collectable():
@@ -73,3 +74,32 @@ def test_scan_routes_the_standalone_runner_to_dead_not_marks():
     assert rel not in marks, "uncollectable file counted as proving tests"
     assert rel in dead
     assert "R3" in dead[rel]["stories"]
+
+
+class TestPartialEvidence:
+    """#301: STORY_PARTIAL renders a story Partial, not Covered."""
+
+    def test_partial_declaration_is_captured(self):
+        marks, _ = sc.scan_tests()
+        g7 = marks["tests/unit/test_portal_failure_copy.py"]
+        assert g7["partial"], "G7 rail must declare its partial evidence"
+        p1 = marks["tests/unit/test_session_verify.py"]
+        assert p1["partial"], "P1 mock suite must declare its partial evidence"
+
+    def test_full_evidence_files_have_empty_partial(self):
+        marks, _ = sc.scan_tests()
+        # a fully-proving file (no STORY_PARTIAL) records the empty string
+        assert marks["tests/api/test_sentinel_error.py"]["partial"] == ""
+
+    def test_partial_regex_matches_the_declaration_form(self):
+        text = (
+            'pytestmark = [' 'pytest' '.mark' '.story("G7")' ']\n\n'
+            'STORY_PARTIAL = "driver-level only"\n'
+        )
+        m = sc.STORY_PARTIAL_RE.search(text)
+        assert m and m.group(1) == "driver-level only"
+
+    def test_no_declaration_means_no_match(self):
+        assert not sc.STORY_PARTIAL_RE.search(
+            'pytestmark = [' 'pytest' '.mark' '.story("G7")' ']\n'
+        )

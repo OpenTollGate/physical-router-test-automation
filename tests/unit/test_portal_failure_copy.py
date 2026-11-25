@@ -17,6 +17,12 @@ from lib.portal_payment import pay_cashu_via_portal
 
 pytestmark = [pytest.mark.failure, pytest.mark.story("G7"), pytest.mark.api, pytest.mark.critical]
 
+# #301: this rail pins the DRIVER-side contract (bounded, named, staged
+# failures); the story's guest-visible remainder — the portal UI copy a
+# user actually sees — is gap-register entry #1. The map must not render
+# G7 Covered on the driver contract alone.
+STORY_PARTIAL = "driver-level failure contract only; the guest-visible portal copy is the story's remainder (gap register #1)"
+
 TOKEN = "cashuAeyJwcm9vZiI6MTIzfQ"
 PORTAL_URL = "http://192.168.1.1:2050/"
 
@@ -48,6 +54,51 @@ class BackendDownPage:
         raise AssertionError("backend-down portal must not reach locator()")
 
 
+class _FakeElement:
+    """Minimal locator stand-in: fill/click-adjacent surface."""
+
+    def fill(self, value: str) -> None:
+        pass
+
+    def is_visible(self) -> bool:
+        return True
+
+    def inner_text(self) -> str:
+        return "You have 500 MB remaining"
+
+
+class StagedPortalPage:
+    """Stage-correct fake (#301): every stage RENDERS except the target.
+
+    The old parametrized rail reused BackendDownPage — its wait always
+    raised on the FIRST selector with a blanket 'startswith(Timeout)'
+    escape, so a regression that dropped a LATER stage's wait still
+    passed. This fake answers all earlier selectors (progress is
+    provable) and times out only at the target, naming it.
+    """
+
+    def __init__(self, fail_selector: str) -> None:
+        self.fail_selector = fail_selector
+        self.waited: list[str] = []
+        self.clicked: list[str] = []
+
+    def goto(self, url: str, **kwargs) -> None:
+        pass
+
+    def wait_for_selector(self, selector: str, timeout: int | None = None) -> None:
+        self.waited.append(selector)
+        if selector == self.fail_selector:
+            raise FakePlaywrightTimeout(
+                f"Timeout {timeout}ms exceeded waiting for selector {selector!r}"
+            )
+
+    def click(self, selector: str) -> None:
+        self.clicked.append(selector)
+
+    def locator(self, selector: str) -> _FakeElement:
+        return _FakeElement()
+
+
 def test_backend_down_at_goto_propagates_bounded_timeout():
     page = BackendDownPage(fail_at="goto")
     with pytest.raises(Exception, match="networkidle"):
@@ -61,18 +112,23 @@ def test_backend_down_at_goto_propagates_bounded_timeout():
     [pp.SEL_CASHU_TAB, pp.SEL_TOKEN_INPUT, pp.SEL_SUBMIT_READY, pp.SEL_CHECKMARK],
 )
 def test_backend_down_at_every_stage_names_the_missing_selector(stage_selector):
-    page = BackendDownPage()
+    # #301: the stage-correct fake — all earlier stages render, the target
+    # stage times out. A dropped or reordered stage wait FAILS here (the
+    # old first-stage-failing fake + blanket Timeout escape let it pass).
+    page = StagedPortalPage(fail_selector=stage_selector)
 
     with pytest.raises(Exception) as excinfo:
         pay_cashu_via_portal(page, TOKEN, PORTAL_URL)
 
-    # The propagated error must name the selector that never rendered —
-    # "clear failure copy" at the driver level means the failing stage is
-    # diagnosable from the exception alone.
-    assert stage_selector in str(excinfo.value) or str(
-        excinfo.value
-    ).startswith("Timeout"), excinfo.value
-    assert page.calls, "failure must come from the staged waits, not instantly"
+    # STRICT: the propagated error must name the selector that never
+    # rendered — "clear failure copy" at the driver level means the
+    # failing stage is diagnosable from the exception alone. No escape.
+    assert stage_selector in str(excinfo.value), excinfo.value
+    # Progress proof: every stage BEFORE the target actually ran — the
+    # failure is from the staged waits, in order, not an instant failure.
+    order = [pp.SEL_CASHU_TAB, pp.SEL_TOKEN_INPUT, pp.SEL_SUBMIT_READY, pp.SEL_CHECKMARK]
+    prior = order[: order.index(stage_selector)]
+    assert page.waited == prior + [stage_selector], page.waited
 
 
 def test_all_stage_timeouts_are_finite_defaults():
