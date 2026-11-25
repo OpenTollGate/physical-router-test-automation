@@ -525,6 +525,29 @@ def unblock_mints(router, rules):
     _mint_blocks_installed = False
 
 
+def sweep_mint_rejects(router, mint_ip_map):
+    """Scoped REJECT sweep for cleanup paths WITHOUT recorded rules (#298).
+
+    Loop-deletes only the OUTPUT REJECT specs this mint map implies (mint
+    IP + the URL's real port — exactly the block_mints insert spec). Two
+    hazards this replaces: the unscoped line-number sweep removed an
+    operator's unrelated REJECT policy along with the debris, and a
+    hardcoded --dport 443 cleanup missed plain-http/custom-port mint
+    rules entirely (duplicates left the router degraded). An empty map
+    sweeps NOTHING and says so — blind deletion is exactly the hazard.
+    """
+    if not mint_ip_map:
+        log.warning("sweep_mint_rejects: no mint map — leaving REJECT rules untouched")
+        return
+    for url, ip in mint_ip_map.items():
+        port = _mint_url_port(url)
+        spec = f"-d {ip} -p tcp --dport {port} -j REJECT"
+        router.ssh(
+            f"while iptables -C OUTPUT {spec} 2>/dev/null; do"
+            f" iptables -D OUTPUT {spec}; done 2>/dev/null || true"
+        )
+
+
 def skip_if_no_ssl_cli(router):
     result = router.ssh("tollgate ssl status 2>&1 || true")
     if "unknown command" in result.lower() or "not found" in result.lower():
