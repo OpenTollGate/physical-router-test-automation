@@ -4,8 +4,8 @@
      on the tests. Do not edit by hand; regenerate instead.
      Hand-written narrative version: docs/user-stories.md -->
 
-- test files carrying marks: **225**
-- stories with at least one proving test: **38/40**
+- test files carrying marks: **223**
+- stories with at least one proving test: **37/40**
 - TIPs exercised: **3** (TIP-01, TIP-02, TIP-03)
 
 Selection: `pytest --story G2` · `pytest --tip TIP-01` · both combine (AND)
@@ -15,7 +15,7 @@ Selection: `pytest --story G2` · `pytest --tip TIP-01` · both combine (AND)
 | ID | Story | Proving tests | Status |
 |----|-------|---------------|--------|
 | G1 | Captive portal appears on join | `tests/api/test_captive_api.py`<br>`tests/api/test_portal_verify.py`<br>`tests/phone/test_hostname.py`<br>`tests/scenarios/stories/test_portal_tabs.py`<br>`tests/scenarios/test_captive_portal_browser.py` | Covered |
-| G2 | Pay with a Cashu token, get internet | `tests/api/test_e2e_payment_auth_delay.py`<br>`tests/api/test_e2e_portal_payment.py`<br>`tests/api/test_lightning_portal.py`<br>`tests/api/test_local_payment.py`<br>`tests/api/test_payment_regression.py`<br>`tests/api/test_pending_token_cgi.py`<br>`tests/api/test_post_payment_redirect.py`<br>`tests/api/test_wrong_mint.py`<br>`tests/phone/test_auto.py`<br>`tests/phone/test_edge.py`<br>`tests/phone/test_post_payment_redirect.py`<br>`tests/phone/test_post_payment_redirect_delay.py`<br>`tests/scenarios/stories/test_edge_cases.py`<br>`tests/scenarios/stories/test_payment_latency.py`<br>`tests/scenarios/stories/test_user_pays_and_gets_internet.py`<br>`tests/scenarios/test_captive_portal_cashu_payment.py`<br>`tests/unit/test_portal_payment.py` | Covered |
+| G2 | Pay with a Cashu token, get internet | `tests/api/test_e2e_payment_auth_delay.py`<br>`tests/api/test_e2e_portal_payment.py`<br>`tests/api/test_lightning_portal.py`<br>`tests/api/test_local_payment.py`<br>`tests/api/test_payment_regression.py`<br>`tests/api/test_pending_token_cgi.py`<br>`tests/api/test_post_payment_redirect.py`<br>`tests/api/test_wrong_mint.py`<br>`tests/phone/test_auto.py`<br>`tests/phone/test_edge.py`<br>`tests/phone/test_post_payment_redirect.py`<br>`tests/phone/test_post_payment_redirect_delay.py`<br>`tests/scenarios/stories/test_edge_cases.py`<br>`tests/scenarios/stories/test_payment_latency.py`<br>`tests/scenarios/stories/test_user_pays_and_gets_internet.py`<br>`tests/scenarios/test_captive_portal_cashu_payment.py`<br>`tests/unit/test_portal_payment.py`<br>`tests/unit/test_story_coverage_collectable.py` | Covered |
 | G3 | v0.6 portal generation stays supported | `tests/scenarios/test_net4sats_ux.py`<br>`tests/unit/test_portal_markers.py` | Covered |
 | G4 | Expired session offers honest renewal | `tests/api/test_session_endpoint.py`<br>`tests/api/test_session_expiry_and_scan.py`<br>`tests/phone/test_expiry_kick.py`<br>`tests/phone/test_extend_session.py`<br>`tests/phone/test_session_persistence.py`<br>`tests/phone/test_short_session.py`<br>`tests/scenarios/stories/test_session_expiry_and_repayment.py` | Covered |
 | G5 | Portal works on a real phone | `tests/phone/test_camera_captive.py`<br>`tests/phone/test_captive_portal_auto.py`<br>`tests/phone/test_paste.py`<br>`tests/phone/test_rig_phone_payment.py`<br>`tests/phone/test_rig_wallet_payment.py`<br>`tests/phone/test_token_input.py`<br>`tests/phone/test_url_param.py` | Covered |
@@ -41,9 +41,9 @@ Selection: `pytest --story G2` · `pytest --tip TIP-01` · both combine (AND)
 | ID | Story | Proving tests | Status |
 |----|-------|---------------|--------|
 | M1 | Charged in the advertised denomination | `tests/api/test_access_denominated.py`<br>`tests/api/test_minimum_token.py`<br>`tests/api/test_portal_pricing.py` | Covered |
-| M2 | Double-spend never grants twice | `tests/api/test_double_spend.py`<br>`tests/api/test_sentinel_error.py` | Covered |
+| M2 | Double-spend never grants twice | `tests/api/test_sentinel_error.py` | Covered |
 | M3 | Concurrent purchases serialize | `tests/api/test_concurrent_payments.py`<br>`tests/scenarios/stories/test_concurrent_payments.py` | Covered |
-| M4 | Swap fees accounted in payouts | `tests/api/test_edge_tokens.py`<br>`tests/api/test_mint_payout.py`<br>`tests/api/test_swap_regression.py` | Covered |
+| M4 | Swap fees accounted in payouts | — | Gap |
 | M5 | Errors never leak internals | `tests/api/test_error_sanitization.py`<br>`tests/api/test_pr202_error_sanitization.py` | Covered |
 | M6 | Profit-share identities round-trip | `tests/api/test_config_save_identities.py`<br>`tests/api/test_merchant_provider.py`<br>`tests/api/test_profit_share_validation.py`<br>`tests/scenarios/test_reseller_mode.py` | Covered |
 
@@ -69,7 +69,7 @@ Selection: `pytest --story G2` · `pytest --tip TIP-01` · both combine (AND)
 |----|-------|---------------|--------|
 | R1 | Go and Rust modules behave identically | `tests/api/test_go_rust_basic_parity.py`<br>`tests/api/test_rust_basic_balance.py`<br>`tests/api/test_rust_basic_cli.py`<br>`tests/api/test_rust_basic_discovery.py`<br>`tests/api/test_rust_basic_e2e_payment.py`<br>`tests/api/test_rust_basic_integration.py`<br>`tests/api/test_rust_basic_pay_balance_chain.py`<br>`tests/api/test_rust_basic_payment.py`<br>`tests/api/test_rust_basic_usage.py`<br>`tests/api/test_rust_v1_api.py` | Covered |
 | R2 | Cashu/NUT matrix enforced | `tests/api/test_cashu_compat_matrix.py`<br>`tests/api/test_keyset_id_versions.py`<br>`tests/api/test_mint_url_fuzzy.py`<br>`tests/api/test_mint_wallet_compat.py`<br>`tests/api/test_nut18_payment.py`<br>`tests/api/test_nut24.py`<br>`tests/api/test_token_formats.py`<br>`tests/phone/test_token_formats.py`<br>`tests/scenarios/stories/test_v4_token.py` | Covered |
-| R3 | Wire formats stable across releases | `tests/api/test_gateway_token_format.py`<br>`tests/api/test_pay_response_structure.py` | Covered |
+| R3 | Wire formats stable across releases | `tests/api/test_pay_response_structure.py`<br>`tests/unit/test_story_coverage_collectable.py` | Covered |
 | R4 | FIPS exit path exercised | `tests/api/test_fips_exit_node.py` | Covered |
 | R5 | Conformance green before publish | — | Gap |
 | R6 | Real RNG everywhere | `tests/api/test_crypto_rand_password.py`<br>`tests/api/test_pr193_identity_endpoints.py`<br>`tests/scenarios/test_router_identity_script.py` | Covered |
@@ -80,6 +80,22 @@ Selection: `pytest --story G2` · `pytest --tip TIP-01` · both combine (AND)
 | TIP | Proving tests |
 |-----|---------------|
 | TIP-01 | `tests/api/test_discovery_mints.py`<br>`tests/interop/test_meshlink_seller.py` |
-| TIP-02 | `tests/api/test_access_denominated.py`<br>`tests/api/test_cashu_compat_matrix.py`<br>`tests/api/test_concurrent_payments.py`<br>`tests/api/test_double_spend.py`<br>`tests/api/test_dual_mint.py`<br>`tests/api/test_e2e_portal_payment.py`<br>`tests/api/test_edge_tokens.py`<br>`tests/api/test_gateway_token_format.py`<br>`tests/api/test_local_payment.py`<br>`tests/api/test_minimum_token.py`<br>`tests/api/test_nut24.py`<br>`tests/api/test_token_formats.py`<br>`tests/api/test_wrong_mint.py`<br>`tests/interop/test_meshlink_seller.py`<br>`tests/phone/test_auto.py`<br>`tests/phone/test_token_formats.py`<br>`tests/scenarios/test_captive_portal_cashu_payment.py` |
+| TIP-02 | `tests/api/test_access_denominated.py`<br>`tests/api/test_cashu_compat_matrix.py`<br>`tests/api/test_concurrent_payments.py`<br>`tests/api/test_double_spend.py`<br>`tests/api/test_dual_mint.py`<br>`tests/api/test_e2e_portal_payment.py`<br>`tests/api/test_edge_tokens.py`<br>`tests/api/test_local_payment.py`<br>`tests/api/test_minimum_token.py`<br>`tests/api/test_nut24.py`<br>`tests/api/test_token_formats.py`<br>`tests/api/test_wrong_mint.py`<br>`tests/interop/test_meshlink_seller.py`<br>`tests/phone/test_auto.py`<br>`tests/phone/test_token_formats.py`<br>`tests/scenarios/test_captive_portal_cashu_payment.py` |
 | TIP-03 | `tests/phone/test_url_param.py` |
+
+## Tip-marked files with no story
+
+Spec coverage without a user story — assign one or accept as pure conformance:
+
+- `tests/api/test_double_spend.py`
+- `tests/api/test_edge_tokens.py`
+
+## Marked files pytest cannot collect
+
+These carry story/tip marker text but would yield ZERO test items to
+`pytest --collect-only` (standalone-runner harnesses) — marker text alone
+is not coverage (#296), so they are excluded from the tables above.
+Register real tests in them or drop the marks:
+
+- `tests/api/test_gateway_token_format.py` (carries: R3, TIP-02)
 

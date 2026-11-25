@@ -26,7 +26,9 @@ import requests
 
 from lib.constants import BACKEND_PORT
 
-pytestmark = [pytest.mark.story("M4"),pytest.mark.api, pytest.mark.go_only, pytest.mark.critical]
+# story("M4") removed (#295): swap-path mechanics (invoice counters,
+# quote uniqueness) — not swap-fee accounting in payouts.
+pytestmark = [pytest.mark.api, pytest.mark.go_only, pytest.mark.critical]
 
 
 # ---------------------------------------------------------------------------
