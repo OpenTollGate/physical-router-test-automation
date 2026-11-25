@@ -263,9 +263,16 @@ assert_venue_config() {
       2>/dev/null || true
   fi
   cur=$(sshpass -p "${PASSWORD}" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@${OPENWRT_IP}" \
-    "jq -r '.accepted_mints[0].url' /etc/tollgate/config.json 2>/dev/null" 2>/dev/null || echo "")
-  if [ "${cur}" != "${MINT_URL}" ]; then
-    log "Venue config drifted (accepted_mints[0]=${cur:-none}) — re-asserting local mint"
+    "jq -c '[.accepted_mints[] | {url,min_balance,balance_tolerance_percent,price_per_step,price_unit,purchase_min_steps}]' /etc/tollgate/config.json 2>/dev/null" 2>/dev/null || echo "")
+  # #299: comparing only accepted_mints[0].url let a hard-killed pytest
+  # pass the gate with an extra mint appended or pricing fields changed —
+  # the runner then continued on the contaminated multi-mint/pricing
+  # config this guard exists to repair. Compare the FULL singleton
+  # fixture (list membership + pricing) against what configure_mint
+  # writes.
+  expected=$(jq -nc "[{url:\"${MINT_URL}\",min_balance:0,balance_tolerance_percent:0,price_per_step:1,price_unit:\"sats\",purchase_min_steps:1}]")
+  if [ "${cur}" != "${expected}" ]; then
+    log "Venue config drifted (accepted_mints/pricing: ${cur:-none}) — re-asserting local mint singleton"
     configure_mint
   fi
 }

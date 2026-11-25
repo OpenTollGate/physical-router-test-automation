@@ -202,6 +202,56 @@ v=$(ipk_version "$TMP/run_tests.fn")
   && ok "non-ipk input yields empty (caller fails loud)" \
   || bad "non-ipk input yielded '$v'"
 
+echo "suite: assert_venue_config full-fixture drift gate (#299)"
+
+sed -n '/^assert_venue_config()/,/^}/p' scripts/run-local-tests.sh > "$TMP/avc.fn"
+# shellcheck source=/dev/null
+. "$TMP/avc.fn"
+
+# sshpass double: iptables legs see 0 REJECTs; the jq projection leg
+# returns the scripted router-side value (AVC_CUR).
+cat > "$TMP/bin/sshpass" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *iptables*) echo 0 ;;
+  *jq*)       echo "${AVC_CUR:-}" ;;
+esac
+exit 0
+EOF
+chmod +x "$TMP/bin/sshpass"
+
+configure_mint() { echo "reasserted" >> "${CFGREC:?}"; }
+
+export MINT_URL="http://10.99.99.2:8383"
+export CFGREC="$TMP/configure_mint.calls"
+expected=$(jq -nc "[{url:\"${MINT_URL}\",min_balance:0,balance_tolerance_percent:0,price_per_step:1,price_unit:\"sats\",purchase_min_steps:1}]")
+
+: > "$CFGREC"
+AVC_CUR="" assert_venue_config "t"
+[ -s "$CFGREC" ] \
+  && ok "unreadable/empty config drifts and re-asserts" \
+  || bad "empty-config drift was NOT caught"
+
+: > "$CFGREC"
+extra_cur=$(jq -nc "${expected}[0:1] + [{url:\"https://other.example\",min_balance:0,balance_tolerance_percent:0,price_per_step:1,price_unit:\"sats\",purchase_min_steps:1}]")
+AVC_CUR="$extra_cur" assert_venue_config "t"
+[ -s "$CFGREC" ] \
+  && ok "extra-mint append drift caught (the #299 shape: local mint first)" \
+  || bad "extra-mint drift passed the gate"
+
+: > "$CFGREC"
+price_cur=$(jq -nc "${expected} | map(.price_per_step = 2)")
+AVC_CUR="$price_cur" assert_venue_config "t"
+[ -s "$CFGREC" ] \
+  && ok "pricing-field drift caught" \
+  || bad "pricing drift passed the gate"
+
+: > "$CFGREC"
+AVC_CUR="$expected" assert_venue_config "t"
+[ ! -s "$CFGREC" ] \
+  && ok "the singleton fixture passes with no re-assert (no false positive)" \
+  || bad "false-positive drift on the exact fixture"
+
 echo "suite: venue-virtual flow under the #286 trap (pgrep 0 + exit 1)"
 
 # ssh double: dispatches on the remote command text.
