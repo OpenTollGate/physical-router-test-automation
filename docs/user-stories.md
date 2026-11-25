@@ -77,7 +77,7 @@ direct user) · **Maintainer** (release + upstream).
 |----|-------|-------|--------|
 | P11 | As an operator, the framework's own machinery — locks, runners, collectors, redactors, fixtures — is unit-tested so the bench tooling doesn't rot under me. | `tests/unit/` framework rails | Covered |
 | R1 | As a maintainer, the Go and Rust basic modules behave identically where both exist. | `tests/api/test_go_rust_basic_parity.py` | Covered |
-| R2 | As a maintainer, the Cashu/NUT compatibility matrix is enforced, not aspirational. | `tests/api/test_cashu_compat_matrix.py`, `docs/cashu-compatibility-matrix.md` | Covered |
+| R2 | As a maintainer, the Cashu/NUT compatibility matrix is enforced, not aspirational. | `tests/api/test_cashu_compat_matrix.py` (matrix reconciled 2026-11, #294: the Go column's V4-reject/V2-fatal cells were stale — fixed in gonuts v0.8.0 + tbmg#167), `test_token_formats.py` (the V4/V2 live regressions), AGENTS.md "Cashu Token Version Compatibility" + "Keyset ID compatibility" | Covered |
 | R3 | As a maintainer, token/gateway wire formats stay stable across releases. | `tests/api/test_gateway_token_format.py`, `test_quotes_wireformat*` (rust side) | Covered |
 | R4 | As a maintainer, the FIPS exit-node path is exercised so compliance claims are backed. | `tests/api/test_fips_exit_node.py`, `fips-exit-e2e/` | Covered |
 | R5 | As a maintainer, releases have a green conformance re-run before publish (rc gate). | `conformance/`; rc1 verdict 2026-10-05 (fork-tag handoff pending) | Partial — process gate |

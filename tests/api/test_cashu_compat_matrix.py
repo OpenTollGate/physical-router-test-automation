@@ -9,14 +9,22 @@ The matrix documents expected behavior for every combination of:
   - Backend: Go (gonuts), Rust (cdk-rs)
 
 Existing tests cover individual cells:
-  - test_token_formats.py: V3 structure, V4 rejection, base64 padding
+  - test_token_formats.py: V3 structure, V4 acceptance + V4/V2 regression
   - test_keyset_id_versions.py: V1/V2 format, derivation, discovery
   - test_edge_tokens.py: garbage/empty/duplicate tokens
   - test_wrong_mint.py: wrong-mint token rejection
 
-This file adds the CROSS-PRODUCT view: what happens when you send a V3 token
-with a V2 keyset to the Go backend? (Answer: FATAL CRASH — documented in
-AGENTS.md). The matrix below is the definitive reference.
+This file adds the CROSS-PRODUCT view. Reconciled 2026-11 (#294): the
+Go column previously recorded the GONUTS-ERA failure modes (V4 → reject,
+V2 keyset → fatal startup crash) long after they were fixed — V2-keyset
+support via tollgate-module-basic-go PR #167 (the 'Got invalid keyset'
+crash was a multi-mint wallet registration bug, not a V2-keyset issue)
+and V4 support via gonuts-tollgate v0.8.0's resolveShortKeysetIds (PR
+#286). The current Go backend on main (gonuts-tollgate v0.11.2) accepts
+every token×keyset combination — clean-room verified 2026-09-19 ("V4+V2
+pays fine everywhere"; see AGENTS.md "Lessons Learned" and the live
+verdicts in test_token_formats.py). Field note: pre-v0.8.0 builds (the
+v0.5.0 field fleet) still fail V4+V2 only.
 """
 from __future__ import annotations
 
@@ -57,12 +65,26 @@ V2_PATTERN = re.compile(r"^01[0-9a-f]{64}$")
 #: References: AGENTS.md, issue #26, issue #35
 MATRIX = {
     # ── Go backend (gonuts) ──────────────────────────────────────────
+    # Reconciled 2026-11 (#294) with the observed current behavior:
+    #   * V2 keysets: full support since tollgate-module-basic-go PR #167
+    #     (the historical 'fatal' startup crash — 'Got invalid keyset.
+    #     Derived id: ... but got ...' — was a multi-mint wallet
+    #     registration bug, NOT a V2-keyset issue; AGENTS.md "Keyset ID
+    #     compatibility" table: V1 and V2 both 'Full support', verified
+    #     end-to-end kind=1022).
+    #   * V4 tokens: accepted since gonuts-tollgate v0.8.0
+    #     (resolveShortKeysetIds, PR #286); main pins v0.11.2. V4+V1
+    #     verified e2e (kind=1022, allotment=176160768); V4+V2 pays after
+    #     the 2026-09-19 clean-room retest ("V4+V2 pays fine everywhere").
+    #   * Field caveat: pre-v0.8.0 field builds (v0.5.0 fleet) still fail
+    #     V4+V2 only — V4+V1 needs no short-ID resolution and pays even
+    #     there.
     ("V1_token", "V1_keyset", "go"): "accept",
     ("V3_token", "V1_keyset", "go"): "accept",
-    ("V4_token", "V1_keyset", "go"): "reject",
-    ("V1_token", "V2_keyset", "go"): "fatal",
-    ("V3_token", "V2_keyset", "go"): "fatal",
-    ("V4_token", "V2_keyset", "go"): "fatal",
+    ("V4_token", "V1_keyset", "go"): "accept",
+    ("V1_token", "V2_keyset", "go"): "accept",
+    ("V3_token", "V2_keyset", "go"): "accept",
+    ("V4_token", "V2_keyset", "go"): "accept",
 
     # ── Rust backend (cdk-rs) ────────────────────────────────────────
     ("V1_token", "V1_keyset", "rust"): "accept",
@@ -174,23 +196,31 @@ class TestMatrixDocumentation:
         for key, behavior in MATRIX.items():
             assert behavior in valid, f"Invalid behavior '{behavior}' for {key}"
 
-    def test_go_backend_rejects_v4(self):
-        """Go backend must reject V4 tokens (not crash)."""
-        for ks in self.KEYSET_VERSIONS:
-            behavior = MATRIX[("V4_token", ks, "go")]
-            assert behavior in ("reject", "fatal"), \
-                f"Go+V4+{ks} should be reject/fatal, got {behavior}"
+    def test_go_backend_accepts_all_combinations_on_main(self):
+        """Go on main (gonuts v0.11.2) accepts every token×keyset cell (#294).
 
-    def test_go_backend_fatal_on_v2_keyset(self):
-        """Go backend FATAL on V2 keysets (AGENTS.md documented crash).
-
-        Configuring the Go backend with a V2 keyset mint causes a startup
-        crash: 'Got invalid keyset. Derived id: ... but got ...'.
+        The historical failures are fixed and recorded: V4 acceptance
+        since gonuts-tollgate v0.8.0 (resolveShortKeysetIds, PR #286) and
+        V2-keyset full support since tollgate-module-basic-go PR #167
+        (the 'fatal' startup crash was a multi-mint registration bug).
+        Pre-v0.8.0 field builds remain V4+V2-only failures.
         """
-        for tok in ["V1_token", "V3_token", "V4_token"]:
-            behavior = MATRIX[(tok, "V2_keyset", "go")]
-            assert behavior == "fatal", \
-                f"Go+{tok}+V2_keyset should be fatal (startup crash), got {behavior}"
+        for tok in self.TOKEN_FORMATS:
+            for ks in self.KEYSET_VERSIONS:
+                behavior = MATRIX[(tok, ks, "go")]
+                assert behavior == "accept", \
+                    f"Go+{tok}+{ks} on main should accept (reconciled 2026-11, #294), got {behavior}"
+
+    def test_v2_keyset_fatal_cells_are_gone(self):
+        """No 'fatal' cell may return without a live crash record (#294).
+
+        A 'fatal' claim must be backed by a reproduced startup crash; the
+        V2-keyset crash was root-caused to a multi-mint wallet
+        registration bug (tbmg #167) and does not reproduce on main.
+        """
+        fatal = [key for key, behavior in MATRIX.items() if behavior == "fatal"]
+        assert not fatal, \
+            f"'fatal' cells reappeared without a live crash record: {fatal}"
 
     def test_rust_backend_accepts_v1_and_v3(self):
         """Rust backend accepts V1/V3 tokens with V1 keysets."""
@@ -222,8 +252,8 @@ class TestLiveMatrix:
         """The minted token format must match what the matrix expects for this backend."""
         token = cashu.mint(amount=4)
         token_version = _classify_token_version(token)
-        assert token_version in ("V1", "V3"), \
-            f"Minter produced {token_version} token — matrix expects V1/V3 for compat"
+        assert token_version in ("V1", "V3", "V4"), \
+            f"Minter produced {token_version} token — matrix expects V1/V3/V4 (V4 accepted since gonuts v0.8.0, #294)"
 
     def test_minted_token_keyset_matches_matrix(self, cashu, backend_type, mint_keysets):
         """The keyset version in the minted token must be compatible with the backend."""
@@ -236,11 +266,13 @@ class TestLiveMatrix:
         keyset_version = _classify_keyset_id(keyset_id)
 
         if backend_type.is_go:
-            expected = "V1"
+            # Regression guard (#294): a 'fatal' cell here would mean the
+            # multi-mint registration crash class returned — V2 keysets
+            # are fully supported on main (tbmg #167).
             behavior = MATRIX.get(("V3_token", f"{keyset_version}_keyset", "go"), "unknown")
             assert behavior != "fatal", \
-                f"Go backend would FATAL on {keyset_version} keyset ({keyset_id}). " \
-                f"Mint must provide V1 keysets for Go backend. " \
+                f"Matrix records a FATAL Go cell for {keyset_version} keysets ({keyset_id}) — " \
+                f"a live crash record must back any 'fatal' claim. " \
                 f"See AGENTS.md 'Keyset ID compatibility'."
         log.info("Backend=%s, keyset=%s (%s) — compatible", backend_type.type, keyset_id, keyset_version)
 
@@ -274,7 +306,12 @@ class TestLiveMatrix:
                 f"Matrix says reject but backend accepted: {resp}"
 
     def test_v4_token_rejected(self, router, backend_type):
-        """V4 (cashuB) token is rejected — never accepted by either backend."""
+        """A SYNTHETIC cashuB blob is rejected — garbage CBOR, not a minted V4.
+
+        #294 note: real V4 tokens (cdk-cli minted) are ACCEPTED by the Go
+        backend since gonuts v0.8.0 — this rail pins the garbage-rejection
+        path (the backend must not 500 or accept nonsense), not V4 policy.
+        """
         require_client_identity(router)
 
         synthetic_b64 = base64.urlsafe_b64encode(b"\x82\x01\x02").decode()
@@ -287,7 +324,7 @@ class TestLiveMatrix:
             or resp.get("success") is True
         )
         assert not accepted, \
-            f"V4 token was ACCEPTED — backend should reject cashuB format: {resp}"
+            f"Synthetic garbage cashuB token was ACCEPTED: {resp}"
 
     def test_wrong_mint_token_rejected(self, router, cashu):
         """Token from unconfigured mint is rejected."""
