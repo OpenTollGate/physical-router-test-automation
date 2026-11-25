@@ -3,11 +3,13 @@ go version go1.26.10 linux/amd64
 {"parser_rc": 0, "stdout": "", "stderr": "dnsmasq: syntax check OK.\n"}
 FIXTURE: IPv6 veth; labelled UDP DNS exit; no real FIPS transport
 {"name": "public.example", "rcode": 0, "answers": 1, "wire": "04d281800001000100000000067075626c6963076578616d706c650000010001c00c000100010000003c0004c0000249", "last_ipv4": "192.0.2.73"}
-{"name": "split-1d1a18541bff23ce.fips", "rcode": 0, "answers": 1, "wire": "04d2818000010001000000001673706c69742d3164316131383534316266663233636504666970730000010001c00c000100010000003c0004c000024a", "last_ipv4": "192.0.2.74"}
+{"name": "split-edace52e9630ce25.fips", "rcode": 0, "answers": 1, "wire": "04d2818000010001000000001673706c69742d6564616365353265393633306365323504666970730000010001c00c000100010000003c0004c000024a", "last_ipv4": "192.0.2.74"}
 {"loopback_listener": "127.0.0.1:5354", "loopback_queries": 1, "exit_queries_before": 1, "exit_queries_after": 1}
+{"name": "portal.example", "rcode": 0, "answers": 1, "wire": "04d28580000100010000000006706f7274616c076578616d706c650000010001c00c000100010000000000040a490101", "last_ipv4": "10.73.1.1"}
+{"portal_fixture_order": ["exit", "fips"], "portal_counts_before": [1, 1], "portal_counts_after": [1, 1]}
 {"expected_router_source": "fd13:2f39:a98c:31ba:addb:a652:5f5d:43f2", "exit_listener": "fd01:35da:2f8a:cf7b:9e30:9093:9432:e476:53"}
 PASS exit DNS runtime: public A query/source verified; one unique .fips query answered by loopback; exit count unchanged
 {"dnsmasq_exit": 0, "stdout": "", "stderr": ""}
-{"dnsmasq_exit": -15, "stdout": "READY labelled UDP DNS fixture\n{\"fixture\": \"UDP DNS, not FIPS\", \"source\": \"127.0.0.1\", \"query\": \"2732010000010000000000011673706c69742d316431613138353431626666323363650466697073000001000100002904d0000000000000\", \"count\": 1}\n", "stderr": ""}
-{"dnsmasq_exit": -15, "stdout": "READY labelled UDP DNS fixture\n{\"fixture\": \"UDP DNS, not FIPS\", \"source\": \"fd13:2f39:a98c:31ba:addb:a652:5f5d:43f2\", \"query\": \"e08b01000001000000000001067075626c6963076578616d706c65000001000100002904d0000000000000\", \"count\": 1}\n", "stderr": ""}
+{"dnsmasq_exit": -15, "stdout": "READY labelled UDP DNS fixture\n{\"fixture\": \"UDP DNS, not FIPS\", \"source\": \"127.0.0.1\", \"query\": \"1fc2010000010000000000011673706c69742d656461636535326539363330636532350466697073000001000100002904d0000000000000\", \"count\": 1}\n", "stderr": ""}
+{"dnsmasq_exit": -15, "stdout": "READY labelled UDP DNS fixture\n{\"fixture\": \"UDP DNS, not FIPS\", \"source\": \"fd13:2f39:a98c:31ba:addb:a652:5f5d:43f2\", \"query\": \"292f01000001000000000001067075626c6963076578616d706c65000001000100002904d0000000000000\", \"count\": 1}\n", "stderr": ""}
 CLEANUP: child reaped; private registry empty; temporary files removed

@@ -19,12 +19,15 @@ One unique `split-<random>.fips` A query then receives 192.0.2.74 from the same
 UDP fixture bound to the generated loopback endpoint `127.0.0.1:5354`. Its query
 count is 1; the still-running exit fixture count stays 1 before/after that query
 (including a bounded 200 ms observation after the response).
+A subsequent exact `portal.example` A query receives NOERROR / one answer /
+10.73.1.1 locally; both live fixture counts remain `[1, 1]` before/after the query
+(exit, `.fips` order, including a bounded 200 ms observation).
 The successful run exits 0, reaps all three children and verifies the private namespace
 registry and temporary paths are empty. It reuses the existing Runner and isolated
 mount/network harness; host resolver/network and module sources are unchanged.
 
 This is IPv6 veth plus **synthetic UDP DNS fixtures, not real FIPS**. No
-portal, down-state, exhaustive leakage, payment, hardware or production tests run in
+portal HTTP, down-state, exhaustive leakage, payment, hardware or production tests run in
 this mode. It does not run the bootstrap probes or WAN counter controls below.
 
 

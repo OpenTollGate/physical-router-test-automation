@@ -148,6 +148,15 @@ def exit_probe(r, ns, config, path, dnsmasq):
     assert fixture.poll() is None and local.poll() is None, 'fixture assertion failed'
     assert int(loop_count.read_text()) == 1 and after == before, 'split query reached exit or missed loopback'
     print(json.dumps(dict(loopback_listener=loop_ip + ':' + loop_port, loopback_queries=1, exit_queries_before=before, exit_queries_after=after)), flush=True)
+    portal_before = [int(p.read_text()) for p in (exit_count, loop_count)]
+    response = json.loads(ns('dns-guest', 'python3', '-c', PROBE, 'portal.example').stdout)
+    print(json.dumps(response), flush=True)
+    assert response['rcode'] == 0 and response['answers'] == 1 and response['last_ipv4'] == '10.73.1.1', response
+    time.sleep(0.2)  # bounded observation after the local portal response
+    portal_after = [int(p.read_text()) for p in (exit_count, loop_count)]
+    assert fixture.poll() is None and local.poll() is None, 'fixture assertion failed'
+    assert portal_after == portal_before, 'portal query reached exit or loopback fixture'
+    print(json.dumps(dict(portal_fixture_order=['exit', 'fips'], portal_counts_before=portal_before, portal_counts_after=portal_after)), flush=True)
     print(json.dumps(dict(expected_router_source=router_ip, exit_listener=exit_ip + ':53')), flush=True)
     print('PASS exit DNS runtime: public A query/source verified; one unique .fips query answered by loopback; exit count unchanged', flush=True)
 
