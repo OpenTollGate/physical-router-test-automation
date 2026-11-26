@@ -1,0 +1,13 @@
+go version go1.26.10 linux/amd64
+{"module_sha": "3dcbe79462a827731c0e751cc3719d7a3c2e0481", "config_sha256": "3203c06773cf6d441837961028ba973782050dc08e61b5049a88fbee2262f71d", "config": "no-resolv\nno-hosts\nno-poll\nedns-packet-max=1232\nlisten-address=10.73.1.1\nport=5353\nbind-interfaces\nhost-record=portal.example,10.73.1.1\nserver=fd01:35da:2f8a:cf7b:9e30:9093:9432:e476#53@fd13:2f39:a98c:31ba:addb:a652:5f5d:43f2\nserver=/fips/127.0.0.1#5354\n"}
+Dnsmasq version 2.91  Copyright (c) 2000-2025 Simon Kelley
+Compile time options: IPv6 GNU-getopt DBus no-UBus i18n IDN2 DHCP DHCPv6 no-Lua TFTP conntrack ipset nftset auth DNSSEC loop-detect inotify dumpfile
+
+This software comes with ABSOLUTELY NO WARRANTY.
+Dnsmasq is free software, and you are welcome to redistribute it
+under the terms of the GNU General Public License, version 2 or 3.
+
+{"case": "generated", "argv": ["/usr/sbin/dnsmasq", "--test", "--conf-file=/home/c08r4d0r/.tmp/prta-exit-dns-parse-3ykagymk/generated.conf"], "config_sha256": "3203c06773cf6d441837961028ba973782050dc08e61b5049a88fbee2262f71d", "parser_rc": 0, "stdout": "", "stderr": "dnsmasq: syntax check OK.\n"}
+{"case": "invalid-control", "argv": ["/usr/sbin/dnsmasq", "--test", "--conf-file=/home/c08r4d0r/.tmp/prta-exit-dns-parse-3ykagymk/invalid-control.conf"], "config_sha256": "b73579e14901215a2f3942999858e3f9826f2d566e1459181e69d000b988c8b1", "parser_rc": 1, "stdout": "", "stderr": "\ndnsmasq: bad option at line 11 of /home/c08r4d0r/.tmp/prta-exit-dns-parse-3ykagymk/invalid-control.conf\n"}
+PASS parse-only: generated exit config accepted; invalid directive rejected; no service started
+harness_exit=0

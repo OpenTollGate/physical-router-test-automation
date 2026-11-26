@@ -1,0 +1,30 @@
+test_cli_plan_only (test_fips_exit_recovery_bridge.RecoveryBridge.test_cli_plan_only) ... ok
+test_missing_default_synthetic (test_fips_exit_recovery_bridge.RecoveryBridge.test_missing_default_synthetic) ... ok
+test_normal_generation (test_fips_exit_recovery_bridge.RecoveryBridge.test_normal_generation) ... ok
+test_refuses_bad_input (test_fips_exit_recovery_bridge.RecoveryBridge.test_refuses_bad_input) ... unexpected EOF
+exit status 1
+Config, RecoveryEvidence and GuardReadiness required
+exit status 1
+Config, RecoveryEvidence and GuardReadiness required
+exit status 1
+expected one JSON object
+exit status 1
+json: unknown field "unknown"
+exit status 1
+ok
+test_refuses_missing_safety (test_fips_exit_recovery_bridge.RecoveryBridge.test_refuses_missing_safety) ... unreachable safety default missing; refuse recovery
+exit status 1
+ok
+test_complete_inventory_with_tunnel (test_fips_exit_routes.RecoveryRoutes.test_complete_inventory_with_tunnel) ... ok
+test_observed_empty_flags_safety (test_fips_exit_routes.RecoveryRoutes.test_observed_empty_flags_safety) ... ok
+test_refuses_duplicate_json_attributes (test_fips_exit_routes.RecoveryRoutes.test_refuses_duplicate_json_attributes) ... ok
+test_refuses_every_unknown_or_changed_attribute (test_fips_exit_routes.RecoveryRoutes.test_refuses_every_unknown_or_changed_attribute) ... ok
+test_refuses_malformed_inventory (test_fips_exit_routes.RecoveryRoutes.test_refuses_malformed_inventory) ... ok
+test_refuses_missing_safety_duplicates_and_foreign_routes (test_fips_exit_routes.RecoveryRoutes.test_refuses_missing_safety_duplicates_and_foreign_routes) ... ok
+test_refuses_noninteger_metric (test_fips_exit_routes.RecoveryRoutes.test_refuses_noninteger_metric) ... ok
+test_trusted_query_context_required (test_fips_exit_routes.RecoveryRoutes.test_trusted_query_context_required) ... ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 3.185s
+
+OK

@@ -1,0 +1,18 @@
+{"module_sha": "b2e4f615cff9fa369eb3918406be7d559001f9ad", "fragment_sha256": "6698227e8f5bc49a1741c5654a044ce930ae48bc405c7eb474800caf7b232b3a", "inner": "100.65.208.250"}
+{"planner_operation": {"Kind": "unreachable-default", "Program": "ip", "Args": ["-4", "route", "add", "unreachable", "default", "table", "200", "metric", "42760", "proto", "static"]}}
+{"planner_operation": {"Kind": "create-tunnel", "Program": "ip", "Args": ["-6", "tunnel", "add", "exit-test", "mode", "ipip6", "local", "fd01:d0fa:bd25:1fcb:be2b:93b4:b927:b26a", "remote", "fd57:78f9:85db:754c:6628:691f:56fa:dae5", "dev", "mesh-test", "encaplimit", "none", "hoplimit", "64"]}}
+{"planner_operation": {"Kind": "set-mtu", "Program": "ip", "Args": ["link", "set", "dev", "exit-test", "mtu", "1240"]}}
+{"planner_operation": {"Kind": "assign-address", "Program": "ip", "Args": ["-4", "address", "add", "100.65.208.250/32", "dev", "exit-test"]}}
+{"planner_operation": {"Kind": "link-up", "Program": "ip", "Args": ["link", "set", "dev", "exit-test", "up"]}}
+{"planner_operation": {"Kind": "tunnel-default", "Program": "ip", "Args": ["-4", "route", "add", "default", "dev", "exit-test", "table", "200", "metric", "100", "proto", "static"]}}
+{"planner_operation": {"Kind": "guest-rule", "Program": "ip", "Args": ["-4", "rule", "add", "priority", "10000", "iif", "guest-test", "lookup", "200"]}}
+PING 100.87.120.249 (100.87.120.249) 56(84) bytes of data.
+64 bytes from 100.87.120.249: icmp_seq=1 ttl=63 time=0.097 ms
+
+--- 100.87.120.249 ping statistics ---
+1 packets transmitted, 1 received, 0% packet loss, time 0ms
+rtt min/avg/max/mdev = 0.097/0.097/0.097/0.000 ms
+
+{"peer_observed_snat_source": "100.65.208.250", "echo_requests": 1}
+PASS: kernel ipip6 guest roundtrip only; not FIPS transport, NDS, or paid service
+CLEANUP: private namespace registry empty

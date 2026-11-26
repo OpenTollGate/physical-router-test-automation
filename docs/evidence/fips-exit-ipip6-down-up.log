@@ -1,0 +1,61 @@
+{"module_sha": "b2e4f615cff9fa369eb3918406be7d559001f9ad", "fragment_sha256": "6698227e8f5bc49a1741c5654a044ce930ae48bc405c7eb474800caf7b232b3a", "inner": "100.65.208.250"}
+{"planner_operation": {"Kind": "unreachable-default", "Program": "ip", "Args": ["-4", "route", "add", "unreachable", "default", "table", "200", "metric", "42760", "proto", "static"]}}
+{"planner_operation": {"Kind": "create-tunnel", "Program": "ip", "Args": ["-6", "tunnel", "add", "exit-test", "mode", "ipip6", "local", "fd01:d0fa:bd25:1fcb:be2b:93b4:b927:b26a", "remote", "fd57:78f9:85db:754c:6628:691f:56fa:dae5", "dev", "mesh-test", "encaplimit", "none", "hoplimit", "64"]}}
+{"planner_operation": {"Kind": "set-mtu", "Program": "ip", "Args": ["link", "set", "dev", "exit-test", "mtu", "1240"]}}
+{"planner_operation": {"Kind": "assign-address", "Program": "ip", "Args": ["-4", "address", "add", "100.65.208.250/32", "dev", "exit-test"]}}
+{"planner_operation": {"Kind": "link-up", "Program": "ip", "Args": ["link", "set", "dev", "exit-test", "up"]}}
+{"planner_operation": {"Kind": "tunnel-default", "Program": "ip", "Args": ["-4", "route", "add", "default", "dev", "exit-test", "table", "200", "metric", "100", "proto", "static"]}}
+{"planner_operation": {"Kind": "guest-rule", "Program": "ip", "Args": ["-4", "rule", "add", "priority", "10000", "iif", "guest-test", "lookup", "200"]}}
+PING 100.87.120.249 (100.87.120.249) 56(84) bytes of data.
+64 bytes from 100.87.120.249: icmp_seq=1 ttl=63 time=0.101 ms
+
+--- 100.87.120.249 ping statistics ---
+1 packets transmitted, 1 received, 0% packet loss, time 0ms
+rtt min/avg/max/mdev = 0.101/0.101/0.101/0.000 ms
+
+{"peer_observed_snat_source": "100.65.208.250", "echo_requests": 1}
+PING 100.87.120.249 (100.87.120.249) 56(84) bytes of data.
+From 10.73.1.1 icmp_seq=1 Destination Host Unreachable
+
+--- 100.87.120.249 ping statistics ---
+1 packets transmitted, 0 received, +1 errors, 100% packet loss, time 0ms
+
+
+{"tunnel_state": "down", "guest_ping_returncode": 1, "table_200_routes": [{"type": "unreachable", "dst": "default", "protocol": "static", "metric": 42760, "flags": []}]}
+{"tunnel_state": "up", "table_200_routes": [{"type": "unreachable", "dst": "default", "protocol": "static", "metric": 42760, "flags": []}]}
+CLEANUP: private namespace registry empty
+Traceback (most recent call last):
+  File "/home/c08r4d0r/worktrees/prta-fips-exit-consumer/scripts/fips-exit-packet-lane.py", line 239, in <module>
+    main()
+  File "/home/c08r4d0r/worktrees/prta-fips-exit-consumer/scripts/fips-exit-packet-lane.py", line 225, in main
+    inside(json.load(sys.stdin), *args.inside, mode=args.mode)
+  File "/home/c08r4d0r/worktrees/prta-fips-exit-consumer/scripts/fips-exit-packet-lane.py", line 178, in inside
+    ipip6(r, payload)
+  File "/home/c08r4d0r/worktrees/prta-fips-exit-consumer/scripts/fips-exit-packet-lane.py", line 121, in ipip6
+    recovered = ns('guest', 'ping', '-n', '-c', '1', '-W', '2', payload['peer_inner'])
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/c08r4d0r/worktrees/prta-fips-exit-consumer/scripts/fips-exit-packet-lane.py", line 65, in ns
+    return r.ns(name, list(argv))
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/c08r4d0r/worktrees/prta-fips-exit-consumer/scripts/hwsim-netns-poc.py", line 53, in ns
+    return self.run(["ip", "netns", "exec", namespace, *command], timeout=timeout, check=check)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/c08r4d0r/worktrees/prta-fips-exit-consumer/scripts/hwsim-netns-poc.py", line 46, in run
+    raise PocError(
+<run_path>.PocError: command failed rc=1: ip netns exec guest ping -n -c 1 -W 2 100.87.120.249
+stdout=PING 100.87.120.249 (100.87.120.249) 56(84) bytes of data.
+From 10.73.1.1 icmp_seq=1 Destination Host Unreachable
+
+--- 100.87.120.249 ping statistics ---
+1 packets transmitted, 0 received, +1 errors, 100% packet loss, time 0ms
+
+
+stderr=
+Traceback (most recent call last):
+  File "/home/c08r4d0r/worktrees/prta-fips-exit-consumer/scripts/fips-exit-packet-lane.py", line 239, in <module>
+    main()
+  File "/home/c08r4d0r/worktrees/prta-fips-exit-consumer/scripts/fips-exit-packet-lane.py", line 232, in main
+    subprocess.run(['sudo', '-n', 'unshare', '--mount', '--net', '--propagation', 'private',
+  File "/home/c08r4d0r/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['sudo', '-n', 'unshare', '--mount', '--net', '--propagation', 'private', 'env', 'TMPDIR=/home/c08r4d0r/.hermes/profiles/manager/cache/scratch', 'python3', '/home/c08r4d0r/worktrees/prta-fips-exit-consumer/scripts/fips-exit-packet-lane.py', '--mode', 'ipip6', '--inside', 'net:[4026531833]', 'mnt:[4026531832]']' returned non-zero exit status 1.
