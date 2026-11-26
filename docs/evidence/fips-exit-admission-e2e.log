@@ -1,0 +1,382 @@
+# Paid-exit admission chain, proven on real packets
+
+Lane: scripts/fips-exit-admission-lane.py
+Lane sha256: 18268ea4a371e713cfedd507d880057fdd88cb8133a0806e3fd7c72cced3fac2
+PRTA commit: 768b6316b0a9e8aa0e9904018dd1f24aac425f94
+Module commit: 80ab20faf45615ee8bb8021d0b784fbecfcbc70f
+Exit commit:   4080051fc61a2f90a10973ca773ee30aa083f1cf
+Go: go version go1.26.10 linux/amd64
+
+Scope: one isolated root network namespace (sudo -n unshare -nm, private
+propagation, tmpfs on /run). Real fips-exitd, real packets, real kernel.
+Nothing here ran against a live production exit or the fleet node.
+
+```
+=== provenance
+module repo /home/c08r4d0r/worktrees/tollgate-fips-exit-consumer
+module sha 80ab20faf45615ee8bb8021d0b784fbecfcbc70f
+module branch pr/fips-exit-consumer
+module status clean
+exit repo /home/c08r4d0r/worktrees/fips-exit-accounting
+exit sha 4080051fc61a2f90a10973ca773ee30aa083f1cf
+exit branch pr/per-client-accounting
+exit status clean
+shim repo /home/c08r4d0r/worktrees/prta-fips-exit-consumer
+shim sha 768b6316b0a9e8aa0e9904018dd1f24aac425f94
+go go version go1.26.10 linux/amd64
+kernel 7.0.0-42-generic
+nft nftables v1.0.9 (Old Doc Yak #3)
+python 3.11.15
+$ /home/c08r4d0r/.cache/tollgate-tools/go/bin/go build -o /home/c08r4d0r/.tmp/prta-admission-bin-sbrpt7gk/admissionctl .
+shim binary sha256 698973147a1d05400d2753d2b9be098edc4f541c657e570602303e475e923c53
+daemon binary /home/c08r4d0r/worktrees/fips-exit-accounting/target/release/fips-exitd
+daemon binary sha256 90eee002aa82dffcc8800cd6a5ed2c1dd53afd6893fe03a226cbe9389ef50e86
+host /run surveyed before: 1839 entries
+$ sudo -n unshare -nm --propagation private sh -c mount -t tmpfs tmpfs /run && exec python3 "/home/c08r4d0r/worktrees/prta-fips-exit-consumer/scripts/fips-exit-admission-lane.py" --inside "net:[4026531833]" "mnt:[4026531832]" "/home/c08r4d0r/.tmp/prta-admission-tqzwtoc_" --parent-pid 4183319 --shim "/home/c08r4d0r/.tmp/prta-admission-bin-sbrpt7gk/admissionctl" --daemon "/home/c08r4d0r/worktrees/fips-exit-accounting/target/release/fips-exitd"
+$ /home/c08r4d0r/.tmp/prta-admission-bin-sbrpt7gk/admissionctl grant 89fc0c504333b52461bdda61a60bd0e632d698b03a1b7831300a0fd179f5e48f 60 0
+key 89fc0c504333b52461bdda61a60bd0e632d698b03a1b7831300a0fd179f5e48f
+outer fd91:1634:6b:b519:f507:507d:500a:f229
+inner 100.81.22.52
+mode time ttl 60s byte_budget 0
+expires_at 2026-11-26T15:42:37Z
+expires_epoch 1795707757
+revision 2
+clients-file-begin (53 bytes)
+fd91:1634:6b:b519:f507:507d:500a:f229 # admissionctl
+clients-file-end
+# c1: key 89fc0c504333b52461bdda61a60bd0e632d698b03a1b7831300a0fd179f5e48f
+# c1: outer fd91:1634:6b:b519:f507:507d:500a:f229 inner 100.81.22.52
+$ /home/c08r4d0r/.tmp/prta-admission-bin-sbrpt7gk/admissionctl grant d8d06d602817518501f15516de06796fa5acd6670dabeed33dee75165111ebba 60 0
+key d8d06d602817518501f15516de06796fa5acd6670dabeed33dee75165111ebba
+outer fd37:4779:95de:ece4:a306:a36b:8700:d1f1
+inner 100.119.71.121
+mode time ttl 60s byte_budget 0
+expires_at 2026-11-26T15:42:37Z
+expires_epoch 1795707757
+revision 4
+clients-file-begin (108 bytes)
+fd91:1634:6b:b519:f507:507d:500a:f229 # admissionctl
+fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # admissionctl
+clients-file-end
+# c2: key d8d06d602817518501f15516de06796fa5acd6670dabeed33dee75165111ebba
+# c2: outer fd37:4779:95de:ece4:a306:a36b:8700:d1f1 inner 100.119.71.121
+$ /home/c08r4d0r/.tmp/prta-admission-bin-sbrpt7gk/admissionctl grant e6bb80d3c81a12b529ff3962f0a644ed8c664cec66e436150466ca20e1a60a5c 60 0
+key e6bb80d3c81a12b529ff3962f0a644ed8c664cec66e436150466ca20e1a60a5c
+outer fd36:d720:afa1:7c2d:2953:aa9c:24aa:91ee
+inner 100.118.215.32
+mode time ttl 60s byte_budget 0
+expires_at 2026-11-26T15:42:37Z
+expires_epoch 1795707757
+revision 6
+clients-file-begin (163 bytes)
+fd91:1634:6b:b519:f507:507d:500a:f229 # admissionctl
+fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # admissionctl
+fd36:d720:afa1:7c2d:2953:aa9c:24aa:91ee # admissionctl
+clients-file-end
+# c3: key e6bb80d3c81a12b529ff3962f0a644ed8c664cec66e436150466ca20e1a60a5c
+# c3: outer fd36:d720:afa1:7c2d:2953:aa9c:24aa:91ee inner 100.118.215.32
+$ /home/c08r4d0r/.tmp/prta-admission-bin-sbrpt7gk/admissionctl grant 2e76ec0c713a3de66db89a50f1117742e39a37ce153606452bfdcf676762380c 60 0
+key 2e76ec0c713a3de66db89a50f1117742e39a37ce153606452bfdcf676762380c
+outer fdcf:5084:bcf7:496f:b09c:a2e9:ab82:6bde
+inner 100.79.80.132
+mode time ttl 60s byte_budget 0
+expires_at 2026-11-26T15:42:37Z
+expires_epoch 1795707757
+revision 8
+clients-file-begin (218 bytes)
+fd91:1634:6b:b519:f507:507d:500a:f229 # admissionctl
+fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # admissionctl
+fd36:d720:afa1:7c2d:2953:aa9c:24aa:91ee # admissionctl
+fdcf:5084:bcf7:496f:b09c:a2e9:ab82:6bde # admissionctl
+clients-file-end
+# c4: key 2e76ec0c713a3de66db89a50f1117742e39a37ce153606452bfdcf676762380c
+# c4: outer fdcf:5084:bcf7:496f:b09c:a2e9:ab82:6bde inner 100.79.80.132
++ ip link set lo up
++ ip link add fips0 type bridge
++ ip link set fips0 mtu 1280 up
++ ip -6 addr add fd0e::1/128 dev fips0 nodad
++ ip -6 route add fd00::/8 dev fips0
++ sysctl -qw net.ipv4.ip_forward=1
++ ip link add wan type veth peer name eth0
++ ip link set wan up
++ ip addr add 8.8.8.1/24 dev wan
++ ip netns add inet
++ ip link set eth0 netns inet
++ ip netns exec inet ip link set lo up
++ ip netns exec inet ip link set eth0 up
++ ip netns exec inet ip addr add 8.8.8.2/24 dev eth0
+$ nft -f - <<< '\ntable inet admission_lane {\n  chain nat {\n    type nat hook postrouting priority srcnat; policy accept;\n    iifname "fipsexit0" oifname "wan" masquerade\n  }\n}\n'
++ ip netns add c1
++ ip netns exec c1 ip link set lo up
++ ip link add vc1 type veth peer name fips0 netns c1
++ ip link set vc1 mtu 1280 master fips0 up
++ ip netns exec c1 ip link set fips0 mtu 1280 up
++ ip netns exec c1 ip -6 addr add fd91:1634:6b:b519:f507:507d:500a:f229/128 dev fips0 nodad
++ ip netns exec c1 ip -6 route add fd00::/8 dev fips0
++ ip netns exec c1 ip link add tun0 type ip6tnl mode any local fd91:1634:6b:b519:f507:507d:500a:f229 remote fd0e::1 encaplimit none
++ ip netns exec c1 ip link set tun0 mtu 1280 up
++ ip netns exec c1 ip addr add 100.81.22.52/32 dev tun0
++ ip netns exec c1 ip route add default dev tun0
++ ip netns exec c1 ip -6 route add default dev tun0 src fd91:1634:6b:b519:f507:507d:500a:f229
++ ip netns exec c1 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/no_offload.py fips0 tun0
++ ip netns add c2
++ ip netns exec c2 ip link set lo up
++ ip link add vc2 type veth peer name fips0 netns c2
++ ip link set vc2 mtu 1280 master fips0 up
++ ip netns exec c2 ip link set fips0 mtu 1280 up
++ ip netns exec c2 ip -6 addr add fd37:4779:95de:ece4:a306:a36b:8700:d1f1/128 dev fips0 nodad
++ ip netns exec c2 ip -6 route add fd00::/8 dev fips0
++ ip netns exec c2 ip link add tun0 type ip6tnl mode any local fd37:4779:95de:ece4:a306:a36b:8700:d1f1 remote fd0e::1 encaplimit none
++ ip netns exec c2 ip link set tun0 mtu 1280 up
++ ip netns exec c2 ip addr add 100.119.71.121/32 dev tun0
++ ip netns exec c2 ip route add default dev tun0
++ ip netns exec c2 ip -6 route add default dev tun0 src fd37:4779:95de:ece4:a306:a36b:8700:d1f1
++ ip netns exec c2 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/no_offload.py fips0 tun0
++ ip netns add c3
++ ip netns exec c3 ip link set lo up
++ ip link add vc3 type veth peer name fips0 netns c3
++ ip link set vc3 mtu 1280 master fips0 up
++ ip netns exec c3 ip link set fips0 mtu 1280 up
++ ip netns exec c3 ip -6 addr add fd36:d720:afa1:7c2d:2953:aa9c:24aa:91ee/128 dev fips0 nodad
++ ip netns exec c3 ip -6 route add fd00::/8 dev fips0
++ ip netns exec c3 ip link add tun0 type ip6tnl mode any local fd36:d720:afa1:7c2d:2953:aa9c:24aa:91ee remote fd0e::1 encaplimit none
++ ip netns exec c3 ip link set tun0 mtu 1280 up
++ ip netns exec c3 ip addr add 100.118.215.32/32 dev tun0
++ ip netns exec c3 ip route add default dev tun0
++ ip netns exec c3 ip -6 route add default dev tun0 src fd36:d720:afa1:7c2d:2953:aa9c:24aa:91ee
++ ip netns exec c3 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/no_offload.py fips0 tun0
++ ip netns add c4
++ ip netns exec c4 ip link set lo up
++ ip link add vc4 type veth peer name fips0 netns c4
++ ip link set vc4 mtu 1280 master fips0 up
++ ip netns exec c4 ip link set fips0 mtu 1280 up
++ ip netns exec c4 ip -6 addr add fdcf:5084:bcf7:496f:b09c:a2e9:ab82:6bde/128 dev fips0 nodad
++ ip netns exec c4 ip -6 route add fd00::/8 dev fips0
++ ip netns exec c4 ip link add tun0 type ip6tnl mode any local fdcf:5084:bcf7:496f:b09c:a2e9:ab82:6bde remote fd0e::1 encaplimit none
++ ip netns exec c4 ip link set tun0 mtu 1280 up
++ ip netns exec c4 ip addr add 100.79.80.132/32 dev tun0
++ ip netns exec c4 ip route add default dev tun0
++ ip netns exec c4 ip -6 route add default dev tun0 src fdcf:5084:bcf7:496f:b09c:a2e9:ab82:6bde
++ ip netns exec c4 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/no_offload.py fips0 tun0
+$ ip netns exec inet python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/responder.py /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/responder.log
++ ip netns exec inet python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/responder.py /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/responder.log
+$ USAGE_REPORT=/home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/usage.json USAGE_REPORT_INTERVAL_MS=200 DNS_UPSTREAMS=off /home/c08r4d0r/worktrees/fips-exit-accounting/target/release/fips-exitd --clients /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/adm/clients --mesh-if fips0 --tun fipsexit0
++ ip link show fipsexit0
++ ip route replace 100.81.22.52/32 dev fipsexit0
++ ip route replace 100.119.71.121/32 dev fipsexit0
++ ip route replace 100.118.215.32/32 dev fipsexit0
++ ip route replace 100.79.80.132/32 dev fipsexit0
+OBSERVED daemon pid and TUN: 4184041 / fipsexit0 present
+OBSERVED clients file given to the daemon: ''
+OBSERVED usage report at start: []
+
+=== (a) UNPAID: an absent clients-file line gets no answer
+$ ip netns exec c1 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
++ ip netns exec c1 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
+OBSERVED a.unpaid ask from c1: attempts=timeout,timeout,timeout result=timeout
+OBSERVED a.unpaid verdict: timeout
+OBSERVED a.unpaid usage report: []
+OBSERVED a.unpaid billed rows for c1: none
+
+=== (b) GRANT: a shim grant answers and is billed
+$ /home/c08r4d0r/.tmp/prta-admission-bin-sbrpt7gk/admissionctl grant 89fc0c504333b52461bdda61a60bd0e632d698b03a1b7831300a0fd179f5e48f 3600 200000
+key 89fc0c504333b52461bdda61a60bd0e632d698b03a1b7831300a0fd179f5e48f
+outer fd91:1634:6b:b519:f507:507d:500a:f229
+inner 100.81.22.52
+mode bytes ttl 3600s byte_budget 200000
+expires_at 2026-11-26T16:41:44Z
+expires_epoch 1795711304
+revision 2
+clients-file-begin (53 bytes)
+fd91:1634:6b:b519:f507:507d:500a:f229 # admissionctl
+clients-file-end
+OBSERVED b.grant mode: bytes ttl 3600s byte_budget 200000
+OBSERVED b.clients-file sha256: e5a5785d5171f2dcdec13a48502da423999629e672ef30e92e1f42689253819f
+OBSERVED b.clients-file bytes: 'fd91:1634:6b:b519:f507:507d:500a:f229 # admissionctl\n'
+$ kill -HUP 4184041
+OBSERVED daemon reload line: client list reloaded, 1 client(s)
+$ ip netns exec c1 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
++ ip netns exec c1 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
+OBSERVED b.grant ask from c1: attempts=100 result=100
+OBSERVED b.grant verdict: 100
+OBSERVED b.grant usage row: {"client": "fd91:1634:6b:b519:f507:507d:500a:f229", "from_client_bytes": 31, "to_client_bytes": 128, "packets": 2}
+OBSERVED b.grant from_client_bytes > 0: 31
+OBSERVED b.state revision: 2
+OBSERVED b.grant expires_epoch: 1795711304
+
+=== (c) REVOKE: an already-working path must stop
+OBSERVED c.revoke now used / expires_epoch: 1795711305 / 1795711304
+$ /home/c08r4d0r/.tmp/prta-admission-bin-sbrpt7gk/admissionctl verdict 1795711305 0
+verdict revoke-expired 89fc0c504333b52461bdda61a60bd0e632d698b03a1b7831300a0fd179f5e48f
+revision 3
+clients-file-begin (0 bytes)
+
+clients-file-end
+OBSERVED c.verdict line: verdict revoke-expired 89fc0c504333b52461bdda61a60bd0e632d698b03a1b7831300a0fd179f5e48f
+OBSERVED c.clients-file bytes after revoke: ''
+$ kill -HUP 4184041
+OBSERVED daemon reload line: client list reloaded, 0 client(s)
+$ ip netns exec c1 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
++ ip netns exec c1 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
+OBSERVED c.revoke ask from c1: attempts=timeout,timeout,timeout result=timeout
+OBSERVED c.revoke verdict: timeout
+OBSERVED c.revoke attempts: timeout,timeout,timeout
+OBSERVED c.revoke blocked on the first post-revoke attempt: True
+OBSERVED c.revoke usage report: [{"client": "fd91:1634:6b:b519:f507:507d:500a:f229", "from_client_bytes": 31, "to_client_bytes": 128, "packets": 2}]
+OBSERVED c.revoke meter for the revoked peer: {"client": "fd91:1634:6b:b519:f507:507d:500a:f229", "from_client_bytes": 31, "to_client_bytes": 128, "packets": 2}
+
+=== (d) UNMANAGED: an operator line survives reconcile
+OBSERVED d.clients-file with the operator line: 'fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan\n'
+$ /home/c08r4d0r/.tmp/prta-admission-bin-sbrpt7gk/admissionctl reconcile /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/adm/clients
+revision 3
+preserved-unmanaged 1
+  preserved fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan
+dropped-revoked 0
+needs-grant 1
+  needs-grant fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan
+clients-file-begin (55 bytes)
+fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan
+clients-file-end
+OBSERVED d.reconcile preserved lines: ["  preserved fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan"]
+OBSERVED d.reconcile needs-grant lines: ["  needs-grant fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan"]
+OBSERVED d.reconcile rendered file: 'fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan\n'
+$ kill -HUP 4184041
+OBSERVED daemon reload line: client list reloaded, 1 client(s)
+$ ip netns exec c2 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
++ ip netns exec c2 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
+OBSERVED d.unmanaged ask from c2: attempts=100 result=100
+OBSERVED d.unmanaged verdict (a line with no grant is still admitted): 100
+
+=== (e) RESTART: a valid grant survives, an expired one does not
+$ /home/c08r4d0r/.tmp/prta-admission-bin-sbrpt7gk/admissionctl grant 89fc0c504333b52461bdda61a60bd0e632d698b03a1b7831300a0fd179f5e48f 3600 0
+key 89fc0c504333b52461bdda61a60bd0e632d698b03a1b7831300a0fd179f5e48f
+outer fd91:1634:6b:b519:f507:507d:500a:f229
+inner 100.81.22.52
+mode time ttl 3600s byte_budget 0
+expires_at 2026-11-26T16:41:50Z
+expires_epoch 1795711310
+revision 5
+clients-file-begin (108 bytes)
+fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan
+fd91:1634:6b:b519:f507:507d:500a:f229 # admissionctl
+clients-file-end
+$ /home/c08r4d0r/.tmp/prta-admission-bin-sbrpt7gk/admissionctl grant e6bb80d3c81a12b529ff3962f0a644ed8c664cec66e436150466ca20e1a60a5c 5 0
+key e6bb80d3c81a12b529ff3962f0a644ed8c664cec66e436150466ca20e1a60a5c
+outer fd36:d720:afa1:7c2d:2953:aa9c:24aa:91ee
+inner 100.118.215.32
+mode time ttl 5s byte_budget 0
+expires_at 2026-11-26T15:41:55Z
+expires_epoch 1795707715
+revision 7
+clients-file-begin (163 bytes)
+fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan
+fd91:1634:6b:b519:f507:507d:500a:f229 # admissionctl
+fd36:d720:afa1:7c2d:2953:aa9c:24aa:91ee # admissionctl
+clients-file-end
+OBSERVED e.short-grant expires_epoch: 1795707715
+$ kill -HUP 4184041
+OBSERVED daemon reload line: client list reloaded, 3 client(s)
+$ ip netns exec c3 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
++ ip netns exec c3 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
+OBSERVED e.running-grant ask from c3: attempts=100 result=100
+OBSERVED e.running-grant c3 verdict: 100
+$ ip netns exec c3 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
++ ip netns exec c3 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
+OBSERVED e.expired-line-still-present ask from c3: attempts=100 result=100
+OBSERVED e.expired-line-still-present c3 verdict: 100
+$ ip netns exec c4 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
++ ip netns exec c4 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
+OBSERVED e.never-granted (control) ask from c4: attempts=timeout,timeout,timeout result=timeout
+OBSERVED e.never-granted c4 verdict: timeout
+$ kill -TERM 4184041
++ ip link show fipsexit0
++ ip link show fipsexit0
+OBSERVED daemon stopped, tunnel gone: True
+$ USAGE_REPORT=/home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/usage.json USAGE_REPORT_INTERVAL_MS=200 DNS_UPSTREAMS=off /home/c08r4d0r/worktrees/fips-exit-accounting/target/release/fips-exitd --clients /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/adm/clients --mesh-if fips0 --tun fipsexit0
++ ip link show fipsexit0
++ ip route replace 100.81.22.52/32 dev fipsexit0
++ ip route replace 100.119.71.121/32 dev fipsexit0
++ ip route replace 100.118.215.32/32 dev fipsexit0
++ ip route replace 100.79.80.132/32 dev fipsexit0
+OBSERVED daemon pid and TUN: 4185774 / fipsexit0 present
+OBSERVED e1.restart clients file (untouched): 'fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan\nfd91:1634:6b:b519:f507:507d:500a:f229 # admissionctl\nfd36:d720:afa1:7c2d:2953:aa9c:24aa:91ee # admissionctl\n'
+$ ip netns exec c1 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
++ ip netns exec c1 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
+OBSERVED e1.after-restart (valid grant, no recovery) ask from c1: attempts=100 result=100
+OBSERVED e1.after-restart c1 verdict: 100
+$ ip netns exec c4 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
++ ip netns exec c4 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
+OBSERVED e1.after-restart (never granted) ask from c4: attempts=timeout,timeout,timeout result=timeout
+OBSERVED e1.after-restart c4 verdict: timeout
+$ ip netns exec c3 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
++ ip netns exec c3 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
+OBSERVED e1.after-restart (expired grant, line still in file) ask from c3: attempts=100 result=100
+OBSERVED e1.after-restart c3 verdict: 100
+$ kill -TERM 4185774
++ ip link show fipsexit0
++ ip link show fipsexit0
+OBSERVED daemon stopped, tunnel gone: True
+$ /home/c08r4d0r/.tmp/prta-admission-bin-sbrpt7gk/admissionctl reconcile /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/adm/clients
+revision 8
+preserved-unmanaged 1
+  preserved fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan
+dropped-revoked 1
+  dropped fd36:d720:afa1:7c2d:2953:aa9c:24aa:91ee
+needs-grant 1
+  needs-grant fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan
+clients-file-begin (108 bytes)
+fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan
+fd91:1634:6b:b519:f507:507d:500a:f229 # admissionctl
+clients-file-end
+OBSERVED e.restart reconcile dropped lines: ["  dropped fd36:d720:afa1:7c2d:2953:aa9c:24aa:91ee"]
+OBSERVED e.restart clients file: 'fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan\nfd91:1634:6b:b519:f507:507d:500a:f229 # admissionctl\n'
+$ USAGE_REPORT=/home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/usage.json USAGE_REPORT_INTERVAL_MS=200 DNS_UPSTREAMS=off /home/c08r4d0r/worktrees/fips-exit-accounting/target/release/fips-exitd --clients /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/adm/clients --mesh-if fips0 --tun fipsexit0
++ ip link show fipsexit0
++ ip route replace 100.81.22.52/32 dev fipsexit0
++ ip route replace 100.119.71.121/32 dev fipsexit0
++ ip route replace 100.118.215.32/32 dev fipsexit0
++ ip route replace 100.79.80.132/32 dev fipsexit0
+OBSERVED daemon pid and TUN: 4186156 / fipsexit0 present
+OBSERVED e.restart usage report as inherited from the previous run: [{"client": "fd91:1634:6b:b519:f507:507d:500a:f229", "from_client_bytes": 31, "to_client_bytes": 128, "packets": 2}]
+$ ip netns exec c1 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
++ ip netns exec c1 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
+OBSERVED e.after-restart (valid grant) ask from c1: attempts=100 result=100
+OBSERVED e.after-restart c1 verdict: 100
+$ ip netns exec c3 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
++ ip netns exec c3 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
+OBSERVED e.after-restart (expired grant) ask from c3: attempts=timeout,timeout,timeout result=timeout
+OBSERVED e.after-restart c3 verdict: timeout
+$ ip netns exec c4 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
++ ip netns exec c4 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
+OBSERVED e.after-restart (never granted) ask from c4: attempts=timeout,timeout,timeout result=timeout
+OBSERVED e.after-restart c4 verdict: timeout
+$ ip netns exec c2 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
++ ip netns exec c2 python3 /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_/ask.py 8.8.8.2 1.5 3 100
+OBSERVED e.after-restart (operator line) ask from c2: attempts=100 result=100
+OBSERVED e.after-restart c2 verdict: 100
+OBSERVED e.after-restart usage report: [{"client": "fd91:1634:6b:b519:f507:507d:500a:f229", "from_client_bytes": 31, "to_client_bytes": 128, "packets": 2}]
+OBSERVED responder saw these source addresses: ["8.8.8.1"]
+OBSERVED final clients file: 'fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan\nfd91:1634:6b:b519:f507:507d:500a:f229 # admissionctl\n'
+OBSERVED final state revision: 8
+OBSERVED final state entitlements: [{"name": "admissionctl", "mode": "time", "expires_at": "2026-11-26T17:41:50.386320659+01:00", "revision": 8}]
+OBSERVED final state unmanaged: ["fd37:4779:95de:ece4:a306:a36b:8700:d1f1 # operator-lan"]
+
+PASS: (a) through (e) observed as recorded above
++ ip netns delete inet
++ ip netns delete c4
++ ip netns delete c3
++ ip netns delete c2
++ ip netns delete c1
++ ip netns list
+OBSERVED namespaces left in the private registry: ''
++ pgrep -a -f fips-exitd --clients /home/c08r4d0r/.tmp/prta-admission-tqzwtoc_
+OBSERVED lane processes left: ''
+CLEANUP: private namespace registry empty, no daemon, no lane process
+$ # launcher exit status 0
+host /run surveyed after: 1837 entries
+OBSERVED host /run entries this lane could have made: []
+OBSERVED host /run entries that changed at all (live host, systemd churn): ["/run/systemd/journal/kernel-seqnum", "/run/systemd/journal/seqnum", "/run/systemd/journal/streams", "/run/systemd/journal/streams/10:215433424", "/run/systemd/sessions", "/run/systemd/sessions/199073", "/run/systemd/sessions/199073.ref", "/run/systemd/transient", "/run/systemd/transient/session-199073.scope", "/run/systemd/units/invocation:hermes-egress-fallback.service", "/run/systemd/units/invocation:session-199073.scope", "/run/systemd/users/1000"]
+OBSERVED host /run mount identity unchanged: True
+OBSERVED lane processes left behind: []
+PASS: host /run carries no lane artefact and its mount identity is unchanged; no lane process left behind
+```

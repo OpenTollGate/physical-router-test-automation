@@ -87,9 +87,12 @@ class Lane(Runner):
 # ---------------------------------------------------------------------------
 # Recording and reading
 
+LANE_START = time.time()
+
+
 def record(title: str, value) -> None:
-    """One OBSERVED fact, as a line a log can be diffed on."""
-    print(f'OBSERVED {title}: {value}', flush=True)
+    """One OBSERVED fact, as a line a log can be diffed on, with its moment."""
+    print(f'OBSERVED [{time.time() - LANE_START:7.2f}s] {title}: {value}', flush=True)
 
 
 def say(command: list[str]) -> None:
@@ -484,24 +487,47 @@ def inside(args, host_net: str, host_mount: str, lane: Path) -> None:
         print('\n=== (e) RESTART: a valid grant survives, an expired one does not',
               flush=True)
         shim(shim_bin, lane, 'grant', peers['c1']['key'], '3600', '0')
-        short = shim(shim_bin, lane, 'grant', peers['c3']['key'], '5', '0')
-        record('e.short-grant expires_epoch', field(short, 'expires_epoch'))
+        short = shim(shim_bin, lane, 'grant', peers['c3']['key'], '20', '0')
+        expires_epoch = int(field(short, 'expires_epoch'))
+        record('e.short-grant expires_epoch', f'{expires_epoch} (now {int(time.time())})')
         reload_clients(r, log)
         e_running = ask(r, 'c3', ask_script, 'e.running-grant')
         record('e.running-grant c3 verdict', e_running['result'])
         assert e_running['result'] == '100', e_running
-        # Let the short grant pass its expiry while its line stays in the file:
-        # the daemon has no notion of expiry, so the line alone still admits.
-        time.sleep(6)
+        # Wait out the short grant by the shim's own expiry, not by a guessed
+        # sleep, then ask again while its line is still in the file.
+        while time.time() <= expires_epoch + 1:
+            time.sleep(0.2)
+        record('e.short-grant seconds past expiry', round(time.time() - expires_epoch, 1))
         stale = ask(r, 'c3', ask_script, 'e.expired-line-still-present')
         record('e.expired-line-still-present c3 verdict', stale['result'])
         e_control = ask(r, 'c4', ask_script, 'e.never-granted (control)')
         record('e.never-granted c4 verdict', e_control['result'])
         assert e_control['result'] == 'timeout', e_control
 
+        # --- (e1) restart on the very same state and clients file ----------
+        # Nothing else is touched: same state.json, same clients file, one new
+        # daemon process. This is the plain "did the restart hand anyone access"
+        # question, and it is answered before any recovery step runs.
         stop_daemon(r)
-        # Restart recovery: fold the durable state into the observed file. This
-        # is the only step that drops an expired line.
+        start_daemon(r, daemon_bin, peers, clients, usage, log)
+        record('e1.restart clients file (untouched)',
+               repr(clients.read_text()))
+        e1_live = ask(r, 'c1', ask_script, 'e1.after-restart (valid grant, no recovery)')
+        record('e1.after-restart c1 verdict', e1_live['result'])
+        e1_never = ask(r, 'c4', ask_script, 'e1.after-restart (never granted)')
+        record('e1.after-restart c4 verdict', e1_never['result'])
+        e1_stale = ask(r, 'c3', ask_script, 'e1.after-restart (expired grant, line still in file)')
+        record('e1.after-restart c3 verdict', e1_stale['result'])
+        assert e1_live['result'] == '100', e1_live
+        assert e1_never['result'] == 'timeout', e1_never
+
+        # --- (e2) restart recovery: reconcile, then restart -----------------
+        # The daemon has no notion of expiry, so the expired peer's line is the
+        # only thing admitting it. Folding the durable state into the observed
+        # file is what drops that line, and it is the shim's step, not the
+        # daemon's: this lane proves the chain, not a daemon feature.
+        stop_daemon(r)
         rec2 = shim(shim_bin, lane, 'reconcile', str(clients))
         dropped = [line for line in rec2.splitlines() if line.startswith('  dropped ')]
         record('e.restart reconcile dropped lines', json.dumps(dropped))
