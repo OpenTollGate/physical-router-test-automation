@@ -658,6 +658,10 @@ def main() -> None:
         subprocess.run([args.go, 'build', '-o', str(shim_bin), '.'], cwd=shim_dir, check=True,
                        env=dict(os.environ, GOTOOLCHAIN='local'))
         print(f'shim binary sha256 {sha256_file(shim_bin)}', flush=True)
+        daemon_bin = Path(args.exit_repo) / 'target/release/fips-exitd'
+        assert daemon_bin.is_file(), f'build the daemon first: {daemon_bin}'
+        print(f'daemon binary {daemon_bin}', flush=True)
+        print(f'daemon binary sha256 {sha256_file(daemon_bin)}', flush=True)
 
         before, leaked_before = host_run_snapshot(), lane_processes()
         print(f'host /run surveyed before: {len(before)} entries', flush=True)
@@ -666,7 +670,7 @@ def main() -> None:
                    f'mount -t tmpfs tmpfs /run && exec python3 "{Path(__file__).resolve()}" '
                    f'--inside "{net_ns}" "{mnt_ns}" "{lane}" --parent-pid {os.getpid()} '
                    f'--shim "{shim_bin}" '
-                   f'--daemon "{Path(args.exit_repo) / "target/release/fips-exitd"}"']
+                   f'--daemon "{daemon_bin}"']
         say(command)
         done = subprocess.run(command, text=True,
                               env=dict(os.environ, TMPDIR=tempfile.gettempdir()))
